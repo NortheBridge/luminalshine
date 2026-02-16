@@ -173,6 +173,14 @@ function toOptions() {
           </template>
         </n-select>
       </template>
+      <template #freebsd>
+        <n-input
+          id="output_name"
+          v-model:value="config.output_name"
+          type="text"
+          :placeholder="outputNamePlaceholder"
+        />
+      </template>
       <template #linux>
         <n-input
           id="output_name"
@@ -205,6 +213,16 @@ function toOptions() {
             <b>&nbsp;&nbsp;&nbsp;&nbsp;"friendly_name": "ROG PG279Q"</b>
             <b>&nbsp;&nbsp;&nbsp;&nbsp;...</b>
             <b>&nbsp;&nbsp;}</b>
+          </pre>
+        </template>
+        <template #freebsd>
+          <pre style="white-space: pre-line;">
+            Info: Detecting displays
+            Info: Detected display: DVI-D-0 (id: 0) connected: false
+            Info: Detected display: HDMI-0 (id: 1) connected: true
+            Info: Detected display: DP-0 (id: 2) connected: true
+            Info: Detected display: DP-1 (id: 3) connected: false
+            Info: Detected display: DVI-D-1 (id: 4) connected: false
           </pre>
         </template>
         <template #linux>

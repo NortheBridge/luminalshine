@@ -1,7 +1,6 @@
 ---
 name: CI-Flatpak
-permissions:
-  contents: read
+permissions: {}
 
 on:
   workflow_call:
@@ -18,8 +17,11 @@ jobs:
     name: ${{ matrix.arch }}
     env:
       APP_ID: dev.lizardbyte.app.Sunshine
+      MATRIX_ARCH: ${{ matrix.arch }}
       NODE_VERSION: "20"
-      PLATFORM_VERSION: "23.08"
+      PLATFORM_VERSION: "24.08"
+    permissions:
+      contents: read
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -32,31 +34,31 @@ jobs:
     steps:
       - name: More space
         if: matrix.arch == 'x86_64'
-        uses: LizardByte/actions/actions/more_space@v2025.917.25039
+        uses: LizardByte/actions/actions/more_space@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
         with:
           analyze-space-savings: true
           clean-all: true
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: recursive
 
       - name: Setup node
         id: node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install npm dependencies
-        run: npm install --package-lock-only
+        run: npm install --ignore-scripts --package-lock-only
 
       - name: Debug package-lock.json
         run: cat package-lock.json
 
       - name: Setup python
         id: python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.12'
 
@@ -75,9 +77,9 @@ jobs:
 
           sudo su "$(whoami)" -c "flatpak --user install -y flathub \
             org.flatpak.Builder \
-            org.freedesktop.Platform/${{ matrix.arch }}/${PLATFORM_VERSION} \
-            org.freedesktop.Sdk/${{ matrix.arch }}/${PLATFORM_VERSION} \
-            org.freedesktop.Sdk.Extension.node${NODE_VERSION}/${{ matrix.arch }}/${PLATFORM_VERSION} \
+            org.freedesktop.Platform/${MATRIX_ARCH}/${PLATFORM_VERSION} \
+            org.freedesktop.Sdk/${MATRIX_ARCH}/${PLATFORM_VERSION} \
+            org.freedesktop.Sdk.Extension.node${NODE_VERSION}/${MATRIX_ARCH}/${PLATFORM_VERSION} \
           "
 
           flatpak run org.flatpak.Builder --version
@@ -90,7 +92,7 @@ jobs:
         run: cat generated-sources.json
 
       - name: Cache Flatpak build
-        uses: actions/cache@v4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
           path: ./build/.flatpak-builder
           key: flatpak-${{ matrix.arch }}-${{ github.sha }}
@@ -99,17 +101,19 @@ jobs:
 
       - name: Configure Flatpak Manifest
         env:
-          BRANCH: ${{ github.ref }}
+          INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+          INPUT_RELEASE_COMMIT: ${{ inputs.release_commit }}
+          REPOSITORY_CLONE_URL: ${{ github.event.repository.clone_url }}
         run: |
           # variables for manifest
-          branch="${BRANCH}"
-          build_version="${{ inputs.release_version }}"
-          commit="${{ inputs.release_commit }}"
-          clone_url="${{ github.event.repository.clone_url }}"
+          branch="${GITHUB_REF}"
+          build_version="${INPUT_RELEASE_VERSION}"
+          commit="${INPUT_RELEASE_COMMIT}"
+          clone_url="${REPOSITORY_CLONE_URL}"
 
-          if [ "${{ github.event_name }}" == "push" ]; then
+          if [ "${GITHUB_EVENT_NAME}" == "push" ]; then
             echo "This is a PUSH event"
-            branch="${{ github.ref_name }}"
+            branch="${GITHUB_REF_NAME}"
           fi
 
           echo "Branch: ${branch}"
@@ -124,7 +128,7 @@ jobs:
           mkdir -p build
           mkdir -p artifacts
 
-          cmake -DGITHUB_CLONE_URL=${clone_url} \
+          cmake -DGITHUB_CLONE_URL="${clone_url}" \
             -B build \
             -S . \
             -DSUNSHINE_CONFIGURE_FLATPAK_MAN=ON \
@@ -139,14 +143,14 @@ jobs:
         run: |
           echo "::add-matcher::.github/matchers/gcc-strip3.json"
           sudo su "$(whoami)" -c "flatpak run org.flatpak.Builder \
-            --arch=${{ matrix.arch }} \
+            --arch=${MATRIX_ARCH} \
             --force-clean \
             --repo=repo \
             --sandbox \
             --stop-at=cuda build-sunshine ${APP_ID}.yml"
           cp -r .flatpak-builder copy-of-flatpak-builder
           sudo su "$(whoami)" -c "flatpak run org.flatpak.Builder \
-            --arch=${{ matrix.arch }} \
+            --arch=${MATRIX_ARCH} \
             --force-clean \
             --repo=repo \
             --sandbox \
@@ -154,20 +158,20 @@ jobs:
           rm -rf .flatpak-builder
           mv copy-of-flatpak-builder .flatpak-builder
           sudo su "$(whoami)" -c "flatpak build-bundle \
-            --arch=${{ matrix.arch }} \
+            --arch=${MATRIX_ARCH} \
             ./repo \
-            ../artifacts/sunshine_${{ matrix.arch }}.flatpak ${APP_ID}"
+            ../artifacts/sunshine_${MATRIX_ARCH}.flatpak ${APP_ID}"
           sudo su "$(whoami)" -c "flatpak build-bundle \
             --runtime \
-            --arch=${{ matrix.arch }} \
+            --arch=${MATRIX_ARCH} \
             ./repo \
-            ../artifacts/sunshine_debug_${{ matrix.arch }}.flatpak ${APP_ID}.Debug"
+            ../artifacts/sunshine_debug_${MATRIX_ARCH}.flatpak ${APP_ID}.Debug"
           echo "::remove-matcher owner=gcc-strip3::"
 
       - name: Lint Flatpak
         working-directory: build
         run: |
-          exceptions_file="${{ github.workspace }}/packaging/linux/flatpak/exceptions.json"
+          exceptions_file="${GITHUB_WORKSPACE}/packaging/linux/flatpak/exceptions.json"
 
           echo "Linting flatpak manifest"
           flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
@@ -203,7 +207,7 @@ jobs:
           tar -czf ./artifacts/flathub.tar.gz -C ./flathub .
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: build-Linux-Flatpak-${{ matrix.arch }}
           path: artifacts/

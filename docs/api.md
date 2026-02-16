@@ -56,6 +56,9 @@ See below for details on token endpoints and usage examples.
 ## POST /api/config
 @copydoc confighttp::saveConfig()
 
+## GET /api/covers/{index}
+@copydoc confighttp::getCover()
+
 ## POST /api/covers/upload
 @copydoc confighttp::uploadCover()
 
@@ -131,6 +134,12 @@ The token grants access only to the specified paths and HTTP methods.
 - **Revoke a specific session:** `DELETE /api/auth/sessions/{hash}` immediately removes the matching session from disk. If the current device is revoked, its cookie is cleared and the browser must sign in again.
 
 All session metadata is stored hashed and persisted in the same state file as API tokens so Sunshine can validate cookies across service restarts.
+
+## GET /api/vigembus/status
+@copydoc confighttp::getViGEmBusStatus()
+
+## POST /api/vigembus/install
+@copydoc confighttp::installViGEmBus()
 
 <div class="section_buttons">
 

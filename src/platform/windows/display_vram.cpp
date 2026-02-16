@@ -25,6 +25,7 @@ extern "C" {
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
 #include "src/video.h"
+#include "utf_utils.h"
 
 #include <AMF/core/Factory.h>
 #include <boost/algorithm/string/predicate.hpp>
@@ -333,7 +334,7 @@ namespace platf::dxgi {
     flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
 
-    auto wFile = from_utf8(file);
+    auto wFile = utf_utils::from_utf8(file);
     auto status = D3DCompileFromFile(wFile.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entrypoint, shader_model, flags, 0, &compiled_p, &msg_p);
 
     if (msg_p) {
@@ -450,12 +451,12 @@ namespace platf::dxgi {
     }
 
     void apply_colorspace(const ::video::sunshine_colorspace_t &colorspace) {
-      auto color_vectors = ::video::color_vectors_from_colorspace(colorspace);
+      auto color_vectors = ::video::color_vectors_from_colorspace(colorspace, true);
 
       if (format == DXGI_FORMAT_AYUV ||
           format == DXGI_FORMAT_R16_UINT ||
           format == DXGI_FORMAT_Y410) {
-        color_vectors = ::video::new_color_vectors_from_colorspace(colorspace);
+        color_vectors = ::video::color_vectors_from_colorspace(colorspace, false);
       }
 
       if (!color_vectors) {
@@ -768,7 +769,7 @@ namespace platf::dxgi {
         BOOST_LOG(warning) << "Failed to increase encoding GPU thread priority. Please run application as administrator for optimal performance.";
       }
 
-      auto default_color_vectors = ::video::color_vectors_from_colorspace(::video::colorspace_e::rec601, false);
+      auto default_color_vectors = ::video::color_vectors_from_colorspace({::video::colorspace_e::rec601, false, 8}, true);
       if (!default_color_vectors) {
         BOOST_LOG(error) << "Missing color vectors for Rec. 601"sv;
         return -1;
@@ -1848,6 +1849,12 @@ namespace platf::dxgi {
     } else if (adapter_desc.VendorId == 0x10de) {  // Nvidia
       // If it's not an NVENC encoder, it's not compatible with an Nvidia GPU
       if (!boost::algorithm::ends_with(name, "_nvenc")) {
+        return false;
+      }
+    } else if (adapter_desc.VendorId == 0x4D4F4351 ||  // Qualcomm (QCOM as MOQC reversed)
+               adapter_desc.VendorId == 0x5143) {  // Qualcomm alternate ID
+      // If it's not a MediaFoundation encoder, it's not compatible with a Qualcomm GPU
+      if (!boost::algorithm::ends_with(name, "_mf")) {
         return false;
       }
     } else {

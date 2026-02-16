@@ -7,6 +7,13 @@
 
 %undefine _hardened_build
 
+# Define _metainfodir for OpenSUSE if not already defined
+%if 0%{?suse_version}
+%if !0%{?_metainfodir:1}
+%global _metainfodir %{_datadir}/metainfo
+%endif
+%endif
+
 Name: Sunshine
 Version: %{build_version}
 Release: 1%{?dist}
@@ -15,17 +22,14 @@ License: GPLv3-only
 URL: https://github.com/LizardByte/Sunshine
 Source0: tarball.tar.gz
 
-BuildRequires: appstream
-# BuildRequires: boost-devel >= 1.86.0
+# Common BuildRequires
 BuildRequires: cmake >= 3.25.0
 BuildRequires: desktop-file-utils
-BuildRequires: libappstream-glib
-BuildRequires: libayatana-appindicator3-devel
+BuildRequires: git
 BuildRequires: libcap-devel
 BuildRequires: libcurl-devel
 BuildRequires: libdrm-devel
 BuildRequires: libevdev-devel
-BuildRequires: libgudev
 BuildRequires: libnotify-devel
 BuildRequires: libva-devel
 BuildRequires: libX11-devel
@@ -36,26 +40,59 @@ BuildRequires: libXi-devel
 BuildRequires: libXinerama-devel
 BuildRequires: libXrandr-devel
 BuildRequires: libXtst-devel
-BuildRequires: git
-BuildRequires: mesa-libGL-devel
-BuildRequires: mesa-libgbm-devel
-BuildRequires: miniupnpc-devel
-BuildRequires: npm
-BuildRequires: numactl-devel
 BuildRequires: openssl-devel
-BuildRequires: opus-devel
-BuildRequires: pulseaudio-libs-devel
+BuildRequires: pipewire-devel
 BuildRequires: rpm-build
-BuildRequires: systemd-udev
 BuildRequires: systemd-rpm-macros
-%{?sysusers_requires_compat}
 BuildRequires: wget
 BuildRequires: which
 
+%if 0%{?fedora}
+# Fedora-specific BuildRequires
+BuildRequires: appstream
+# BuildRequires: boost-devel >= 1.86.0
+BuildRequires: libappstream-glib
+%if 0%{fedora} > 43
+# needed for npm from nvm
+BuildRequires: libatomic
+%endif
+BuildRequires: libayatana-appindicator3-devel
+BuildRequires: libgudev
+BuildRequires: mesa-libGL-devel
+BuildRequires: mesa-libgbm-devel
+BuildRequires: miniupnpc-devel
+%if 0%{?fedora} < 44
+BuildRequires: nodejs-npm
+%endif
+BuildRequires: numactl-devel
+BuildRequires: opus-devel
+BuildRequires: pulseaudio-libs-devel
+BuildRequires: systemd-udev
+%{?sysusers_requires_compat}
 # for unit tests
 BuildRequires: xorg-x11-server-Xvfb
+%endif
 
-# Conditional BuildRequires for cuda-gcc based on Fedora version
+%if 0%{?suse_version}
+# OpenSUSE-specific BuildRequires
+BuildRequires: AppStream
+BuildRequires: appstream-glib
+BuildRequires: libappindicator3-devel
+BuildRequires: libgudev-1_0-devel
+BuildRequires: Mesa-libGL-devel
+BuildRequires: libgbm-devel
+BuildRequires: libminiupnpc-devel
+BuildRequires: libnuma-devel
+BuildRequires: libopus-devel
+BuildRequires: libpulse-devel
+BuildRequires: npm
+BuildRequires: udev
+# for unit tests
+BuildRequires: xvfb-run
+%endif
+
+# Conditional BuildRequires for cuda-gcc based on distribution version
+%if 0%{?fedora}
 %if 0%{?fedora} <= 41
 BuildRequires: gcc13
 BuildRequires: gcc13-c++
@@ -69,9 +106,34 @@ BuildRequires: gcc14-c++
 %global cuda_version 12.9.1
 %global cuda_build 575.57.08
 %endif
+%endif
+
+%if 0%{?suse_version}
+%if 0%{?suse_version} <= 1699
+# OpenSUSE Leap 15.x
+BuildRequires: gcc13
+BuildRequires: gcc13-c++
+%global gcc_version 13
+%global cuda_version 12.9.1
+%global cuda_build 575.57.08
+%else
+# OpenSUSE Tumbleweed
+BuildRequires: gcc14
+BuildRequires: gcc14-c++
+%global gcc_version 14
+%global cuda_version 12.9.1
+%global cuda_build 575.57.08
+%endif
+%endif
 
 %global cuda_dir %{_builddir}/cuda
 
+# Common runtime requirements
+Requires: miniupnpc >= 2.2.4
+Requires: which >= 2.21
+
+%if 0%{?fedora}
+# Fedora runtime requirements
 Requires: libayatana-appindicator3 >= 0.5.3
 Requires: libcap >= 2.22
 Requires: libcurl >= 7.0
@@ -81,11 +143,26 @@ Requires: libopusenc >= 0.2.1
 Requires: libva >= 2.14.0
 Requires: libwayland-client >= 1.20.0
 Requires: libX11 >= 1.7.3.1
-Requires: miniupnpc >= 2.2.4
 Requires: numactl-libs >= 2.0.14
 Requires: openssl >= 3.0.2
 Requires: pulseaudio-libs >= 10.0
-Requires: which >= 2.21
+%endif
+
+%if 0%{?suse_version}
+# OpenSUSE runtime requirements
+Requires: libappindicator3-1
+Requires: libcap2
+Requires: libcurl4
+Requires: libdrm2
+Requires: libevdev2
+Requires: libopusenc0
+Requires: libva2
+Requires: libwayland-client0
+Requires: libX11-6
+Requires: libnuma1
+Requires: libopenssl3
+Requires: libpulse0
+%endif
 
 %description
 Self-hosted game stream host for Moonlight.
@@ -118,9 +195,10 @@ cmake_args=(
   "-DCMAKE_INSTALL_PREFIX=%{_prefix}"
   "-DSUNSHINE_ASSETS_DIR=%{_datadir}/sunshine"
   "-DSUNSHINE_EXECUTABLE_PATH=%{_bindir}/sunshine"
+  "-DSUNSHINE_ENABLE_DRM=ON"
+  "-DSUNSHINE_ENABLE_PORTAL=ON"
   "-DSUNSHINE_ENABLE_WAYLAND=ON"
   "-DSUNSHINE_ENABLE_X11=ON"
-  "-DSUNSHINE_ENABLE_DRM=ON"
   "-DSUNSHINE_PUBLISHER_NAME=LizardByte"
   "-DSUNSHINE_PUBLISHER_WEBSITE=https://app.lizardbyte.dev"
   "-DSUNSHINE_PUBLISHER_ISSUE_URL=https://app.lizardbyte.dev/support"
@@ -161,9 +239,9 @@ function install_cuda() {
     --toolkitpath="%{cuda_dir}"
   rm "%{_builddir}/cuda.run"
 
-  # we need to patch math_functions.h on fedora 42
+  # we need to patch math_functions.h on fedora 42+
   # see https://forums.developer.nvidia.com/t/error-exception-specification-is-incompatible-for-cospi-sinpi-cospif-sinpif-with-glibc-2-41/323591/3
-  if [ "%{?fedora}" -eq 42 ]; then
+  if [ "%{?fedora}" -ge 42 ]; then
     echo "Original math_functions.h:"
     find "%{cuda_dir}" -name math_functions.h -exec cat {} \;
 
@@ -184,6 +262,39 @@ if [ -n "%{cuda_version}" ] && [[ " ${cuda_supported_architectures[@]} " =~ " ${
 else
   cmake_args+=("-DSUNSHINE_ENABLE_CUDA=OFF")
 fi
+
+# Install and setup NVM for Fedora 44+
+%if 0%{?fedora} > 43
+echo "Installing NVM for Fedora 44+..."
+export HOME=${HOME:-/builddir}
+export NVM_DIR="$HOME/.nvm"
+
+# Install NVM
+if [ ! -d "$NVM_DIR" ]; then
+  wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+fi
+
+# Load NVM
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+# Install and use Node.js
+nvm install node
+nvm use node
+
+echo "Node.js version: $(node --version)"
+echo "npm version: $(npm --version)"
+echo "npm location: $(which npm)"
+echo "node location: $(which node)"
+
+# Add npm and node path to cmake args
+NPM_PATH=$(which npm)
+NODE_PATH=$(which node)
+cmake_args+=("-DNPM=${NPM_PATH}")
+
+# Add node bin directory to PATH for make
+export PATH="$(dirname ${NODE_PATH}):${PATH}"
+%endif
 
 # setup the version
 export BRANCH=%{branch}
@@ -208,18 +319,31 @@ cd %{_builddir}/Sunshine/build
 xvfb-run ./tests/test_sunshine
 
 %install
+# Load NVM for Fedora 44+ so npm is available during make install
+%if 0%{?fedora} > 43
+export HOME=${HOME:-/builddir}
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use node
+
+# Add node bin directory to PATH for make install
+NODE_PATH=$(which node)
+export PATH="$(dirname ${NODE_PATH}):${PATH}"
+
+echo "Node.js version: $(node --version)"
+echo "npm version: $(npm --version)"
+%endif
+
 cd %{_builddir}/Sunshine/build
 %make_install
 
-# Add modules-load configuration
-# load the uhid module in initramfs even if it doesn't detect the module as being used during dracut
-# which must be run every time a new kernel is installed
-install -D -m 0644 /dev/stdin %{buildroot}/usr/lib/modules-load.d/uhid.conf <<EOF
-uhid
-EOF
-
 %post
 # Note: this is copied from the postinst script
+
+# Load uhid (DS5 emulation)
+echo "Loading uhid kernel module for DS5 emulation."
+modprobe uhid
+
 # Check if we're in an rpm-ostree environment
 if [ ! -x "$(command -v rpm-ostree)" ]; then
   echo "Not in an rpm-ostree environment, proceeding with post install steps."
@@ -239,23 +363,21 @@ else
   echo "rpm-ostree environment detected, skipping post install steps. Restart to apply the changes."
 fi
 
-%preun
-# Remove modules-load configuration
-rm -f /usr/lib/modules-load.d/uhid.conf
-
 %files
 # Executables
 %caps(cap_sys_admin+p) %{_bindir}/sunshine
 %caps(cap_sys_admin+p) %{_bindir}/sunshine-*
 
-# Systemd unit file for user services
+# Systemd unit/preset files for user services
 %{_userunitdir}/sunshine.service
+%{_userunitdir}/sunshine-kms.service
+%{_userpresetdir}/00-sunshine-kms.preset
 
 # Udev rules
 %{_udevrulesdir}/*-sunshine.rules
 
 # Modules-load configuration
-%{_modulesloaddir}/uhid.conf
+%{_modulesloaddir}/*-sunshine.conf
 
 # Desktop entries
 %{_datadir}/applications/*.desktop

@@ -23,6 +23,7 @@ const labelMap: Record<string, string> = {
 };
 
 const prioritizedByPlatform: Record<string, string[]> = {
+  freebsd: ['switch', 'xone'],
   linux: ['ds5', 'xone', 'switch', 'x360'],
   windows: ['x360', 'ds4'],
 };

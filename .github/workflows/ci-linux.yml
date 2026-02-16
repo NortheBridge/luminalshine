@@ -1,7 +1,6 @@
 ---
 name: CI-Linux
-permissions:
-  contents: read
+permissions: {}
 
 on:
   workflow_call:
@@ -18,6 +17,9 @@ jobs:
     name: ${{ matrix.name }}
     env:
       APP_ID: dev.lizardbyte.app.Sunshine
+      VERSION: ${{ inputs.release_version }}
+    permissions:
+      contents: read
     runs-on: ubuntu-${{ matrix.dist }}
     strategy:
       fail-fast: false
@@ -28,13 +30,13 @@ jobs:
             dist: 22.04
     steps:
       - name: More space
-        uses: LizardByte/actions/actions/more_space@v2025.917.25039
+        uses: LizardByte/actions/actions/more_space@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
         with:
           analyze-space-savings: true
           clean-all: true
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           submodules: recursive
 
@@ -58,7 +60,7 @@ jobs:
 
       - name: Setup python
         id: python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: '3.11'
 
@@ -89,19 +91,13 @@ jobs:
           chmod +x ./scripts/linux_build.sh
           echo "::add-matcher::.github/matchers/gcc.json"
           ./scripts/linux_build.sh \
-            --publisher-name='${{ github.repository_owner }}' \
-            --publisher-website='https://app.lizardbyte.dev' \
-            --publisher-issue-url='https://app.lizardbyte.dev/support' \
+            --publisher-name="${GITHUB_REPOSITORY_OWNER}" \
+            --publisher-website="https://app.lizardbyte.dev" \
+            --publisher-issue-url="https://app.lizardbyte.dev/support" \
             --skip-cleanup \
             --skip-package \
             --ubuntu-test-repo ${{ matrix.EXTRA_ARGS }}
           echo "::remove-matcher owner=gcc::"
-
-      - name: Set AppImage Version
-        if: matrix.name == 'AppImage'
-        run: |
-          version=${{ inputs.release_version }}
-          echo "VERSION=${version}" >> "${GITHUB_ENV}"
 
       - name: Package Linux - AppImage
         if: matrix.name == 'AppImage'
@@ -186,7 +182,7 @@ jobs:
         working-directory: build
         run: |
           ${{ steps.python.outputs.python-path }} -m pip install gcovr
-          ${{ steps.python.outputs.python-path }} -m gcovr . -r ../src \
+          ${{ steps.python.outputs.python-path }} -m gcovr --gcov-executable "gcov-${GCC_VERSION}" . -r ../src \
             --exclude-noncode-lines \
             --exclude-throw-branches \
             --exclude-unreachable-branches \
@@ -198,7 +194,7 @@ jobs:
         if: >-
           always() &&
           (steps.test_report.outcome == 'success')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: coverage-Linux-${{ matrix.name }}
           path: |
@@ -207,7 +203,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: build-Linux-${{ matrix.name }}
           path: artifacts/

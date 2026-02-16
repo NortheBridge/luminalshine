@@ -37,6 +37,8 @@ namespace VDISPLAY {
 
 namespace bp = boost_process_shim;
 
+#define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
+
 namespace proc {
   using file_t = util::safe_ptr_v2<FILE, int, fclose>;
 
@@ -226,6 +228,7 @@ namespace proc {
    */
   std::tuple<std::string, std::string> calculate_app_id(const std::string &app_name, std::string app_image_path, int index);
 
+  bool check_valid_png(const std::filesystem::path &path);
   std::string validate_app_image_path(std::string app_image_path);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);

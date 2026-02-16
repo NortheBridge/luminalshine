@@ -55,6 +55,7 @@ namespace rtsp_stream {
     std::optional<app_metadata_t> app_metadata;
     int surround_info;
     std::string surround_params;
+    bool continuous_audio;
     bool enable_hdr;
     bool enable_sops;
     bool client_display_mode_override;

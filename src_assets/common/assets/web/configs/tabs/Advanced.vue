@@ -63,6 +63,7 @@ const av1ModeOptions = [0, 1, 2, 3].map((v) => ({ labelKey: `config.av1_mode_${v
       />
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
+
   </div>
 </template>
 

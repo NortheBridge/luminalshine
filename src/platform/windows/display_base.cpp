@@ -37,6 +37,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/video.h"
+#include "utf_utils.h"
 
 namespace platf {
   using namespace std::literals;
@@ -563,8 +564,8 @@ namespace platf::dxgi {
       return -1;
     }
 
-    auto adapter_name = from_utf8(config::video.adapter_name);
-    auto output_name = from_utf8(display_name);
+    auto adapter_name = utf_utils::from_utf8(config::video.adapter_name);
+    auto output_name = utf_utils::from_utf8(display_name);
 
     const auto adapter_luid_override = dxgi::get_dxgi_adapter_luid_override();
     adapter_t::pointer adapter_p;
@@ -686,7 +687,7 @@ namespace platf::dxgi {
     DXGI_ADAPTER_DESC adapter_desc;
     adapter->GetDesc(&adapter_desc);
 
-    auto description = to_utf8(adapter_desc.Description);
+    auto description = utf_utils::to_utf8(adapter_desc.Description);
     BOOST_LOG(info)
       << std::endl
       << "Device Description : " << description << std::endl
@@ -1151,15 +1152,16 @@ namespace platf {
       return {};
     }
 
-    dxgi::adapter_t adapter;
-    for (int x = 0; factory->EnumAdapters1(x, &adapter) != DXGI_ERROR_NOT_FOUND; ++x) {
+    dxgi::adapter_t::pointer adapter_p;
+    for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+      dxgi::adapter_t adapter {adapter_p};
       DXGI_ADAPTER_DESC1 adapter_desc;
       adapter->GetDesc1(&adapter_desc);
 
       BOOST_LOG(debug)
         << std::endl
         << "====== ADAPTER ====="sv << std::endl
-        << "Device Name      : "sv << to_utf8(adapter_desc.Description) << std::endl
+        << "Device Name      : "sv << utf_utils::to_utf8(adapter_desc.Description) << std::endl
         << "Device Vendor ID : 0x"sv << util::hex(adapter_desc.VendorId).to_string_view() << std::endl
         << "Device Device ID : 0x"sv << util::hex(adapter_desc.DeviceId).to_string_view() << std::endl
         << "Device Video Mem : "sv << adapter_desc.DedicatedVideoMemory / 1048576 << " MiB"sv << std::endl
@@ -1175,7 +1177,7 @@ namespace platf {
         DXGI_OUTPUT_DESC desc;
         output->GetDesc(&desc);
 
-        auto device_name = to_utf8(desc.DeviceName);
+        auto device_name = utf_utils::to_utf8(desc.DeviceName);
 
         auto width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
         auto height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;

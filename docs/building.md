@@ -14,11 +14,55 @@ It is recommended to use one of the following compilers:
 
 ### Dependencies
 
+#### FreeBSD
+> [!CAUTION]
+> Sunshine support for FreeBSD is experimental and may be incomplete or not work as expected
+
+##### Install dependencies
+```sh
+pkg install -y \
+  audio/opus \
+  audio/pulseaudio \
+  devel/cmake \
+  devel/evdev-proto \
+  devel/git \
+  devel/libayatana-appindicator \
+  devel/libevdev \
+  devel/libnotify \
+  devel/ninja \
+  devel/pkgconf \
+  ftp/curl \
+  graphics/libdrm \
+  graphics/wayland \
+  multimedia/libva \
+  net/miniupnpc \
+  ports-mgmt/pkg \
+  security/openssl \
+  shells/bash \
+  www/npm \
+  x11/libX11 \
+  x11/libxcb \
+  x11/libXfixes \
+  x11/libXrandr \
+  x11/libXtst
+```
+
 #### Linux
 Dependencies vary depending on the distribution. You can reference our
 [linux_build.sh](https://github.com/LizardByte/Sunshine/blob/master/scripts/linux_build.sh) script for a list of
-dependencies we use in Debian-based and Fedora-based distributions. Please submit a PR if you would like to extend the
+dependencies we use in Debian-based, Fedora-based and Arch-based distributions. Please submit a PR if you would like to extend the
 script to support other distributions.
+
+##### KMS Capture
+If you are using KMS, patching the Sunshine binary with `setcap` is required. Some post-install scripts handle this. If building
+from source and using the binary directly, this will also work:
+
+```bash
+sudo cp build/sunshine /tmp
+sudo setcap cap_sys_admin+p /tmp/sunshine
+sudo getcap /tmp/sunshine
+sudo mv /tmp/sunshine build/sunshine
+```
 
 ##### CUDA Toolkit
 Sunshine requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
@@ -82,32 +126,53 @@ sudo port install "${dependencies[@]}"
 ```
 
 #### Windows
-First you need to install [MSYS2](https://www.msys2.org), then startup "MSYS2 UCRT64" and execute the following
-commands.
+
+> [!WARNING]
+> Cross-compilation is not supported on Windows. You must build on the target architecture.
+
+First, you need to install [MSYS2](https://www.msys2.org).
+
+For AMD64 startup "MSYS2 UCRT64" (or for ARM64 startup "MSYS2 CLANGARM64") then execute the following commands.
 
 ##### Update all packages
 ```bash
 pacman -Syu
 ```
 
+##### Set toolchain variable
+For UCRT64:
+```bash
+export TOOLCHAIN="ucrt-x86_64"
+```
+
+For CLANGARM64:
+```bash
+export TOOLCHAIN="clang-aarch64"
+```
+
 ##### Install dependencies
 ```bash
 dependencies=(
   "git"
-  "mingw-w64-ucrt-x86_64-boost"  # Optional
-  "mingw-w64-ucrt-x86_64-cmake"
-  "mingw-w64-ucrt-x86_64-cppwinrt"
-  "mingw-w64-ucrt-x86_64-curl-winssl"
-  "mingw-w64-ucrt-x86_64-doxygen"  # Optional, for docs... better to install official Doxygen
-  "mingw-w64-ucrt-x86_64-graphviz"  # Optional, for docs
-  "mingw-w64-ucrt-x86_64-MinHook"
-  "mingw-w64-ucrt-x86_64-miniupnpc"
-  "mingw-w64-ucrt-x86_64-nodejs"
-  "mingw-w64-ucrt-x86_64-onevpl"
-  "mingw-w64-ucrt-x86_64-openssl"
-  "mingw-w64-ucrt-x86_64-opus"
-  "mingw-w64-ucrt-x86_64-toolchain"
+  "mingw-w64-${TOOLCHAIN}-boost"  # Optional
+  "mingw-w64-${TOOLCHAIN}-cmake"
+  "mingw-w64-${TOOLCHAIN}-cppwinrt"
+  "mingw-w64-${TOOLCHAIN}-curl-winssl"
+  "mingw-w64-${TOOLCHAIN}-doxygen"  # Optional, for docs... better to install official Doxygen
+  "mingw-w64-${TOOLCHAIN}-graphviz"  # Optional, for docs
+  "mingw-w64-${TOOLCHAIN}-miniupnpc"
+  "mingw-w64-${TOOLCHAIN}-onevpl"
+  "mingw-w64-${TOOLCHAIN}-openssl"
+  "mingw-w64-${TOOLCHAIN}-opus"
+  "mingw-w64-${TOOLCHAIN}-toolchain"
 )
+if [[ "${MSYSTEM}" == "UCRT64" ]]; then
+  dependencies+=(
+    "mingw-w64-${TOOLCHAIN}-MinHook"
+    "mingw-w64-${TOOLCHAIN}-nodejs"
+    "mingw-w64-${TOOLCHAIN}-nsis"
+  )
+fi
 pacman -S "${dependencies[@]}"
 ```
 
@@ -145,6 +210,10 @@ Build steps (summary from libwebrtc):
 8. Configure Sunshine with `-DSUNSHINE_ENABLE_WEBRTC=ON` (the default `WEBRTC_ROOT` points at `build/libwebrtc`). If
    CMake still fails to find libwebrtc, pass `WEBRTC_INCLUDE_DIR` and `WEBRTC_LIBRARY` explicitly.
 
+To create a WiX installer, you also need to install [.NET](https://dotnet.microsoft.com/download).
+
+For ARM64: To build frontend, you also need to install [Node.JS](https://nodejs.org/en/download)
+
 ### Clone
 Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:
 
@@ -168,6 +237,11 @@ ninja -C build
 ### Package
 
 @tabs{
+  @tab{FreeBSD | @tabs{
+    @tab{pkg | ```bash
+      cpack -G FREEBSD --config ./build/CPackConfig.cmake
+      ```}
+  }}
   @tab{Linux | @tabs{
     @tab{deb | ```bash
       cpack -G DEB --config ./build/CPackConfig.cmake
@@ -185,6 +259,9 @@ ninja -C build
     @tab{Installer | ```bash
       cpack -G WIX --config ./build/CPackConfig.cmake
       # note: MSI packaging requires WiX Toolset v3 to be installed (e.g. `choco install wixtoolset`)
+      ```}
+    @tab{WiX Installer | ```bash
+      cpack -G WIX --config ./build/CPackConfig.cmake
       ```}
     @tab{Portable | ```bash
       cpack -G ZIP --config ./build/CPackConfig.cmake

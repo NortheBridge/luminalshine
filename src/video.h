@@ -223,9 +223,10 @@ namespace video {
 #ifdef _WIN32
   extern encoder_t amdvce;
   extern encoder_t quicksync;
+  extern encoder_t mediafoundation;
 #endif
 
-#ifdef __linux__
+#if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
   extern encoder_t vaapi;
 #endif
 

@@ -63,6 +63,8 @@ using namespace std::literals;
 
 namespace nvhttp {
 
+  static constexpr std::string_view EMPTY_PROPERTY_TREE_ERROR_MSG = "Property tree is empty. Probably, control flow got interrupted by an unexpected C++ exception. This is a bug in Sunshine. Moonlight-qt will report Malformed XML (missing root element)."sv;
+
   namespace fs = std::filesystem;
   namespace pt = boost::property_tree;
 
@@ -1118,7 +1120,7 @@ namespace nvhttp {
       }
     }
     launch_session->unique_id = (get_arg(args, "uniqueid", "unknown"));
-    launch_session->appid = util::from_view(get_arg(args, "appid", "unknown"));
+    launch_session->appid = (int) util::from_view(get_arg(args, "appid", "unknown"));
     if (launch_session->appid > 0) {
       try {
         auto apps_snapshot = proc::proc.get_apps();
@@ -1184,9 +1186,10 @@ namespace nvhttp {
       }
     }
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));
-    launch_session->surround_info = util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
+    launch_session->surround_info = (int) util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));
-    launch_session->gcmap = util::from_view(get_arg(args, "gcmap", "0"));
+    launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
+    launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
 #ifdef _WIN32
     {
@@ -1222,7 +1225,7 @@ namespace nvhttp {
     RAND_bytes((unsigned char *) &launch_session->control_connect_data, sizeof(launch_session->control_connect_data));
 
     launch_session->iv.resize(16);
-    uint32_t prepend_iv = util::endian::big<uint32_t>(util::from_view(get_arg(args, "rikeyid")));
+    uint32_t prepend_iv = util::endian::big<uint32_t>((int) util::from_view(get_arg(args, "rikeyid")));
     auto prepend_iv_p = (uint8_t *) &prepend_iv;
     std::copy(prepend_iv_p, prepend_iv_p + sizeof(prepend_iv), std::begin(launch_session->iv));
 
@@ -1824,6 +1827,10 @@ namespace nvhttp {
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
 
+      if (tree.empty()) {
+        BOOST_LOG(error) << EMPTY_PROPERTY_TREE_ERROR_MSG;
+      }
+
       pt::write_xml(data, tree);
       response->write(data.str());
       response->close_connection_after_response = true;
@@ -2045,7 +2052,7 @@ namespace nvhttp {
     }
 
     if (appid > 0) {
-      auto err = proc::proc.execute(appid, launch_session);
+      auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
         tree.put("root.<xmlattr>.status_code", err);
         tree.put("root.<xmlattr>.status_message", "Failed to start the specified application");
@@ -2090,6 +2097,10 @@ namespace nvhttp {
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
+
+      if (tree.empty()) {
+        BOOST_LOG(error) << EMPTY_PROPERTY_TREE_ERROR_MSG;
+      }
 
       pt::write_xml(data, tree);
       response->write(data.str());
@@ -2322,7 +2333,7 @@ namespace nvhttp {
     print_req<SunshineHTTPS>(request);
 
     auto args = request->parse_query_string();
-    auto app_image = proc::proc.get_app_image(util::from_view(get_arg(args, "appid")));
+    auto app_image = proc::proc.get_app_image((int) util::from_view(get_arg(args, "appid")));
 
     std::ifstream in(app_image, std::ios::binary);
     SimpleWeb::CaseInsensitiveMultimap headers;
@@ -2337,6 +2348,7 @@ namespace nvhttp {
   }
 
   void start() {
+    platf::set_thread_name("nvhttp");
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
 
     auto port_http = net::map_port(PORT_HTTP);
@@ -2454,7 +2466,7 @@ namespace nvhttp {
     https_server.resource["^/cancel$"]["GET"] = cancel;
 
     https_server.config.reuse_address = true;
-    https_server.config.address = net::af_to_any_address_string(address_family);
+    https_server.config.address = net::get_bind_address(address_family);
     https_server.config.port = port_https;
 
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
@@ -2464,11 +2476,13 @@ namespace nvhttp {
     };
 
     http_server.config.reuse_address = true;
-    http_server.config.address = net::af_to_any_address_string(address_family);
+    http_server.config.address = net::get_bind_address(address_family);
     http_server.config.port = port_http;
 
     auto accept_and_run = [&](auto *http_server) {
       try {
+        std::string name = "nvhttp::" + std::to_string(http_server->config.port);
+        platf::set_thread_name(name);
         http_server->start();
       } catch (boost::system::system_error &err) {
         // It's possible the exception gets thrown after calling http_server->stop() from a different thread

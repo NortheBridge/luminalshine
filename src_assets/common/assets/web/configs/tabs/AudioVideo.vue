@@ -235,6 +235,10 @@ function selectVirtualDisplayLayout(v: unknown) {
           <template #windows>
             <pre>tools\audio-info.exe</pre>
           </template>
+          <template #freebsd>
+            <pre>pacmd list-sinks | grep "name:"</pre>
+            <pre>pactl info | grep Source</pre>
+          </template>
           <template #linux>
             <pre>pacmd list-sinks | grep "name:"</pre>
             <pre>pactl info | grep Source</pre>

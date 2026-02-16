@@ -8,6 +8,11 @@ if(WEBRTC_RUNTIME_DLL)
     install(FILES "${WEBRTC_RUNTIME_DLL}" DESTINATION "." COMPONENT application)
 endif()
 
+# ARM64: include minhook-detours DLL (shared library for ARM64)
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64" AND DEFINED _MINHOOK_DLL)
+    install(FILES "${_MINHOOK_DLL}" DESTINATION "." COMPONENT application)
+endif()
+
 # ViGEmBus installer is no longer bundled or managed by the installer
 
 # Adding tools
@@ -53,6 +58,9 @@ install(FILES ${SUDOVDA_DRIVER_FILES}
         COMPONENT sudovda)
 
 # Mandatory scripts
+install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/sunshine-setup.ps1"
+        DESTINATION "scripts"
+        COMPONENT assets)
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/service/"
         DESTINATION "scripts"
         COMPONENT assets)

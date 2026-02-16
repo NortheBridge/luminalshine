@@ -589,6 +589,7 @@ namespace video {
     ALWAYS_REPROBE = 1 << 9,  ///< This is an encoder of last resort and we want to aggressively probe for a better one
     YUV444_SUPPORT = 1 << 10,  ///< Encoder may support 4:4:4 chroma sampling depending on hardware
     ASYNC_TEARDOWN = 1 << 11,  ///< Encoder supports async teardown on a different thread
+    FIXED_GOP_SIZE = 1 << 12,  ///< Use fixed small GOP size (encoder doesn't support on-demand IDR frames)
   };
 
   class avcodec_encode_session_t: public encode_session_t {
@@ -1114,6 +1115,63 @@ namespace video {
     },
     PARALLEL_ENCODING
   };
+
+  encoder_t mediafoundation {
+    "mediafoundation"sv,
+    std::make_unique<encoder_platform_formats_avcodec>(
+      AV_HWDEVICE_TYPE_D3D11VA,
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_D3D11,
+      AV_PIX_FMT_NV12,  // SDR 4:2:0 8-bit (only format Qualcomm supports)
+      AV_PIX_FMT_NONE,  // No HDR - Qualcomm MF only supports 8-bit
+      AV_PIX_FMT_NONE,  // No YUV444 SDR
+      AV_PIX_FMT_NONE,  // No YUV444 HDR
+      dxgi_init_avcodec_hardware_input_buffer
+    ),
+    {
+      // Common options for AV1 - Qualcomm MF encoder
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "av1_mf"s,
+    },
+    {
+      // Common options for HEVC - Qualcomm MF encoder
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "hevc_mf"s,
+    },
+    {
+      // Common options for H.264 - Qualcomm MF encoder
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "h264_mf"s,
+    },
+    PARALLEL_ENCODING | FIXED_GOP_SIZE  // MF encoder doesn't support on-demand IDR frames
+  };
 #endif
 
   encoder_t software {
@@ -1186,7 +1244,7 @@ namespace video {
     H264_ONLY | PARALLEL_ENCODING | ALWAYS_REPROBE | YUV444_SUPPORT
   };
 
-#ifdef __linux__
+#if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
   encoder_t vaapi {
     "vaapi"sv,
     std::make_unique<encoder_platform_formats_avcodec>(
@@ -1320,8 +1378,9 @@ namespace video {
 #ifdef _WIN32
     &quicksync,
     &amdvce,
+    &mediafoundation,
 #endif
-#ifdef __linux__
+#if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
     &vaapi,
 #endif
 #ifdef __APPLE__
@@ -1611,6 +1670,7 @@ namespace video {
     };
 
     // Capture takes place on this thread
+    platf::set_thread_name("video::capture");
     platf::adjust_thread_priority(platf::thread_priority_e::critical);
 
     while (capture_ctx_queue->running()) {
@@ -1920,6 +1980,11 @@ namespace video {
       ctx->height = config.height;
       ctx->time_base = AVRational {1, config.framerate};
       ctx->framerate = AVRational {config.framerate, 1};
+      if (config.framerateX100 > 0) {
+        AVRational fps = video::framerateX100_to_rational(config.framerateX100);
+        ctx->framerate = fps;
+        ctx->time_base = AVRational {fps.den, fps.num};
+      }
 
       switch (config.videoFormat) {
         case 0:
@@ -1948,11 +2013,17 @@ namespace video {
       ctx->max_b_frames = 0;
 
       // Use an infinite GOP length since I-frames are generated on demand
-      ctx->gop_size = encoder.flags & LIMITED_GOP_SIZE ?
-                        std::numeric_limits<std::int16_t>::max() :
-                        std::numeric_limits<int>::max();
-
-      ctx->keyint_min = std::numeric_limits<int>::max();
+      // Exception: encoders with FIXED_GOP_SIZE flag don't support on-demand IDR
+      if (encoder.flags & FIXED_GOP_SIZE) {
+        // Fixed GOP for encoders that don't support on-demand IDR (e.g. Media Foundation)
+        ctx->gop_size = 120;  // ~2 seconds at 60 FPS - larger to reduce oversized IDR frame frequency
+        ctx->keyint_min = 120;
+      } else {
+        ctx->gop_size = encoder.flags & LIMITED_GOP_SIZE ?
+                          std::numeric_limits<std::int16_t>::max() :
+                          std::numeric_limits<int>::max();
+        ctx->keyint_min = std::numeric_limits<int>::max();
+      }
 
       // Some client decoders have limits on the number of reference frames
       if (config.numRefFrames) {
@@ -2360,6 +2431,10 @@ namespace video {
       }
 
       session->request_normal_frame();
+
+      // While streaming check to see if the mouse is present and enable Mouse Keys to force the cursor to appear
+      // This is useful for KVM switch scenarios where mouse may disappear during streaming
+      platf::enable_mouse_keys();
     }
   }
 
@@ -2371,6 +2446,18 @@ namespace video {
     float ht = config.height;
 
     auto scalar = std::fminf(wt / wd, ht / hd);
+
+    // we initialize scalar_tpcoords and logical dimensions to default values in case they are not set (non-KMS)
+    float scalar_tpcoords = 1.0f;
+    int display_env_logical_width = 0;
+    int display_env_logical_height = 0;
+    if (display->logical_width && display->logical_height && display->env_logical_width && display->env_logical_height) {
+      float lwd = display->logical_width;
+      float lhd = display->logical_height;
+      scalar_tpcoords = std::fminf(wd / lwd, hd / lhd);
+      display_env_logical_width = display->env_logical_width;
+      display_env_logical_height = display->env_logical_height;
+    }
 
     auto w2 = scalar * wd;
     auto h2 = scalar * hd;
@@ -2390,6 +2477,9 @@ namespace video {
       offsetX,
       offsetY,
       1.0f / scalar,
+      scalar_tpcoords,
+      display_env_logical_width,
+      display_env_logical_height
     };
   }
 
@@ -2676,6 +2766,7 @@ namespace video {
     });
 
     // Encoding and capture takes place on this thread
+    platf::set_thread_name("video::capture_sync");
     platf::adjust_thread_priority(platf::thread_priority_e::high);
 
     std::vector<std::string> display_names;
@@ -2910,8 +3001,8 @@ namespace video {
     encoder.av1.capabilities.set();
 
     // First, test encoder viability
-    config_t config_max_ref_frames {1920, 1080, 60, 1000, 1, 1, 1, 0, 0, 0};
-    config_t config_autoselect {1920, 1080, 60, 1000, 1, 0, 1, 0, 0, 0};
+    config_t config_max_ref_frames {1920, 1080, 60, 6000, 1000, 1, 1, 1, 0, 0, 0};
+    config_t config_autoselect {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 0};
 
     // If the encoder isn't supported at all (not even H.264), bail early
     // Try to reuse cached display if same device type
@@ -3014,14 +3105,14 @@ namespace video {
     {
       // H.264 is special because encoders may support YUV 4:4:4 without supporting 10-bit color depth
       if (encoder.flags & YUV444_SUPPORT) {
-        config_t config_h264_yuv444 {1920, 1080, 60, 1000, 1, 0, 1, 0, 0, 1};
+        config_t config_h264_yuv444 {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 1};
         encoder.h264[encoder_t::YUV444] = disp->is_codec_supported(encoder.h264.name, config_h264_yuv444) &&
                                           validate_config(disp, encoder, config_h264_yuv444) >= 0;
       } else {
         encoder.h264[encoder_t::YUV444] = false;
       }
 
-      const config_t generic_hdr_config = {1920, 1080, 60, 1000, 1, 0, 3, 1, 1, 0};
+      const config_t generic_hdr_config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, 1, 1, 0};
 
       // Reset the display since we're switching from SDR to HDR. Keep probing on the
       // current active display without attempting a display swap.

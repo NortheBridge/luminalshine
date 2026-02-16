@@ -4,10 +4,7 @@
 # the above-mentioned repo.
 
 name: CodeQL
-permissions:
-  actions: read
-  contents: read
-  security-events: write
+permissions: {}
 
 on:
   schedule:
@@ -22,3 +19,7 @@ jobs:
     name: CodeQL
     uses: LizardByte/.github/.github/workflows/__call-codeql.yml@master
     if: ${{ github.repository != 'LizardByte/.github' }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
