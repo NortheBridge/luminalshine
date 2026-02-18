@@ -371,7 +371,6 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
-  constexpr auto kStartupEncoderProbeDelay = std::chrono::minutes(2);
   auto startup_probe = []() {
     if (video::has_attempted_encoder_probe()) {
       BOOST_LOG(debug) << "Startup encoder probe skipped; probe already attempted.";
@@ -401,8 +400,7 @@ int main(int argc, char *argv[]) {
     }
   };
 
-  BOOST_LOG(info) << "Scheduling encoder probe 2 minutes after startup.";
-  task_pool.pushDelayed(startup_probe, kStartupEncoderProbeDelay);
+  startup_probe();
 
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
