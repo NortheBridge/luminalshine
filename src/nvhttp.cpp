@@ -1964,6 +1964,10 @@ namespace nvhttp {
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
+#ifdef _WIN32
+      // Ensure a display is available for probing (creates a temporary virtual display if headless)
+      auto ensure_result = VDISPLAY::ensure_display();
+#endif
       bool encoder_probe_failed = video::probe_encoders();
 
 #ifdef _WIN32
@@ -1977,6 +1981,7 @@ namespace nvhttp {
           BOOST_LOG(warning) << "Timed out waiting for a display to become active before retrying encoder probe.";
         }
       }
+      VDISPLAY::cleanup_ensure_display(ensure_result, !encoder_probe_failed);
 #endif
 
       if (encoder_probe_failed) {
@@ -2180,6 +2185,9 @@ namespace nvhttp {
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
+#ifdef _WIN32
+      auto ensure_result = VDISPLAY::ensure_display();
+#endif
       bool encoder_probe_failed = video::probe_encoders();
 
 #ifdef _WIN32
@@ -2193,6 +2201,7 @@ namespace nvhttp {
           BOOST_LOG(warning) << "Timed out waiting for a display to become active before retrying resume encoder probe.";
         }
       }
+      VDISPLAY::cleanup_ensure_display(ensure_result, !encoder_probe_failed);
 #endif
 
       if (encoder_probe_failed) {
