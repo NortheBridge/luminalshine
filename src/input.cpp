@@ -503,8 +503,16 @@ namespace input {
     scalar_tpcoords, and be offset *inversely* proportionally to scalar_tpcoords. So you must account for both differences
     by multiplying and dividing.
     */
+    // Linux input backends expect desktop-relative coordinates here.
+    // Windows/macOS apply monitor offsets in platform code, so adding offsets here
+    // would double-apply them and clamp input to edges.
+#ifdef __linux__
     float final_x = (x + touch_port.offset_x * touch_port.scalar_tpcoords) / touch_port.scalar_tpcoords;
     float final_y = (y + touch_port.offset_y * touch_port.scalar_tpcoords) / touch_port.scalar_tpcoords;
+#else
+    float final_x = x / touch_port.scalar_tpcoords;
+    float final_y = y / touch_port.scalar_tpcoords;
+#endif
     return std::pair {final_x, final_y};
   }
 
