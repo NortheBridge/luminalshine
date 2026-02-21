@@ -460,7 +460,15 @@ namespace platf {
 
     display_t() noexcept:
         offset_x {0},
-        offset_y {0} {
+        offset_y {0},
+        env_width {0},
+        env_height {0},
+        env_logical_width {0},
+        env_logical_height {0},
+        width {0},
+        height {0},
+        logical_width {0},
+        logical_height {0} {
     }
 
     /**
