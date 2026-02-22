@@ -4,7 +4,6 @@ project(sunshine_tools)
 
 include_directories(
         "${CMAKE_SOURCE_DIR}"
-        "${FFMPEG_INCLUDE_DIRS}"  # this is included only for logging
 )
 
 set(TOOL_SOURCES
@@ -17,9 +16,7 @@ set_target_properties(dxgi-info PROPERTIES CXX_STANDARD 23)
 target_link_libraries(dxgi-info
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
-        ${FFMPEG_LIBRARIES}  # this is included only for logging
         dxgi
-        libdisplaydevice::display_device  # this is included only for logging
         ${PLATFORM_LIBRARIES}
 )
 target_compile_options(dxgi-info PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
@@ -29,8 +26,6 @@ set_target_properties(audio-info PROPERTIES CXX_STANDARD 23)
 target_link_libraries(audio-info
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
-        ${FFMPEG_LIBRARIES}  # this is included only for logging
-        libdisplaydevice::display_device  # this is included only for logging
         ksuser
         ${PLATFORM_LIBRARIES}
 )
