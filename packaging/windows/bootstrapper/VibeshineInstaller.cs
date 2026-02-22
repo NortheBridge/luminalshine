@@ -2073,6 +2073,7 @@ namespace VibeshineInstaller {
       "/f",
       "/update"
     };
+    private static readonly Version UpgradeSourcePreUninstallVersion = new Version(1, 14, 6);
 
     internal sealed class InstalledProductInfo {
       public string ProductCode { get; set; }
@@ -2513,6 +2514,18 @@ namespace VibeshineInstaller {
         };
       }
 
+      var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion("install_remove_vibeshine_1146", true, false);
+      if (uninstallUpgradeSourceResult != null) {
+        if (!uninstallUpgradeSourceResult.Succeeded) {
+          return new InstallerResult {
+            Operation = InstallerOperation.Install,
+            ExitCode = uninstallUpgradeSourceResult.ExitCode,
+            Message = BuildUpgradeSourcePreUninstallFailureMessage(uninstallUpgradeSourceResult.Message),
+            LogPath = uninstallUpgradeSourceResult.LogPath
+          };
+        }
+      }
+
       var msiPath = ResolveMsiPath(arguments.MsiPathOverride);
       var logPath = BuildLogPath("install");
       var args = new List<string> {
@@ -2686,6 +2699,23 @@ namespace VibeshineInstaller {
         }
         competingProductsRequireRestart = uninstallCompetingProductsResult.ExitCode == 3010;
       }
+
+      if (ShouldPreUninstallProblematicUpgradeSource(cliArgs)) {
+        var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion(
+          "cli_remove_vibeshine_1146",
+          arguments.IsCliQuietMode(),
+          true);
+        if (uninstallUpgradeSourceResult != null) {
+          if (!uninstallUpgradeSourceResult.Succeeded) {
+            return new InstallerResult {
+              Operation = InstallerOperation.Install,
+              ExitCode = uninstallUpgradeSourceResult.ExitCode,
+              Message = BuildUpgradeSourcePreUninstallFailureMessage(uninstallUpgradeSourceResult.Message),
+              LogPath = uninstallUpgradeSourceResult.LogPath
+            };
+          }
+        }
+      }
       if (uninstallCompetingProducts && !HasProperty(cliArgs, "SKIP_REMOVE_CONFLICTING_PRODUCTS")) {
         cliArgs.Add("SKIP_REMOVE_CONFLICTING_PRODUCTS=1");
       }
@@ -2708,6 +2738,44 @@ namespace VibeshineInstaller {
         return prefix;
       }
       return prefix + " " + uninstallMessage;
+    }
+
+    private static string BuildUpgradeSourcePreUninstallFailureMessage(string uninstallMessage) {
+      var prefix = "Failed to uninstall Vibeshine 1.14.6 before starting installation."
+        + " This version requires uninstall/reinstall to avoid web UI files being removed during upgrade.";
+      if (string.IsNullOrWhiteSpace(uninstallMessage)) {
+        return prefix;
+      }
+      return prefix + " " + uninstallMessage;
+    }
+
+    private static InstallerResult TryPreUninstallProblematicUpgradeSourceVersion(
+      string logPhase,
+      bool hiddenWindow,
+      bool requestElevationIfNeeded) {
+      var installedVibeshine = GetInstalledVibeshineProduct();
+      if (!RequiresPreUninstallUpgradeWorkaround(installedVibeshine)) {
+        return null;
+      }
+
+      return UninstallInstalledProducts(
+        logPhase,
+        hiddenWindow,
+        requestElevationIfNeeded,
+        false,
+        false,
+        false,
+        new[] { InstalledProductKind.Vibeshine });
+    }
+
+    private static bool RequiresPreUninstallUpgradeWorkaround(InstalledProductInfo installedProduct) {
+      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.Vibeshine || installedProduct.Version == null) {
+        return false;
+      }
+
+      return installedProduct.Version.Major == UpgradeSourcePreUninstallVersion.Major
+        && installedProduct.Version.Minor == UpgradeSourcePreUninstallVersion.Minor
+        && installedProduct.Version.Build == UpgradeSourcePreUninstallVersion.Build;
     }
 
     private static InstallerResult UninstallInstalledProducts(
@@ -2916,6 +2984,17 @@ namespace VibeshineInstaller {
     }
 
     private static bool ShouldPreUninstallCompetingProducts(List<string> args) {
+      var operation = args.FirstOrDefault(IsOperationSwitch);
+      if (string.IsNullOrWhiteSpace(operation)) {
+        return false;
+      }
+
+      return string.Equals(operation, "/i", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(operation, "/package", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(operation, "/a", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldPreUninstallProblematicUpgradeSource(List<string> args) {
       var operation = args.FirstOrDefault(IsOperationSwitch);
       if (string.IsNullOrWhiteSpace(operation)) {
         return false;
