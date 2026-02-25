@@ -165,13 +165,7 @@ namespace nvhttp {
       return available;
     }
 
-    bool has_any_active_display() {
-      if (VDISPLAY::has_active_physical_display()) {
-        return true;
-      }
-      if (VDISPLAY::has_retained_ensure_display()) {
-        return true;
-      }
+    bool has_active_virtual_display() {
       const auto virtual_displays = VDISPLAY::enumerateSudaVDADisplays();
       return std::any_of(
         virtual_displays.begin(),
@@ -180,6 +174,16 @@ namespace nvhttp {
           return info.is_active;
         }
       );
+    }
+
+    bool has_any_active_display() {
+      if (VDISPLAY::has_active_physical_display()) {
+        return true;
+      }
+      if (VDISPLAY::has_retained_ensure_display()) {
+        return true;
+      }
+      return has_active_virtual_display();
     }
 
     bool wait_for_display_activation(std::chrono::steady_clock::duration timeout) {
@@ -201,7 +205,11 @@ namespace nvhttp {
     std::atomic<bool> virtual_display_cleanup_pending {false};
 
     void cleanup_virtual_display_state() {
-      (void) platf::virtual_display_cleanup::run("cancel", true);
+      if (!has_active_virtual_display()) {
+        BOOST_LOG(debug) << "Skipping virtual display cleanup after cancel because no active virtual display exists.";
+        return;
+      }
+      (void) platf::virtual_display_cleanup::run("cancel", config::video.dd.config_revert_on_disconnect);
     }
 
     void schedule_virtual_display_cleanup() {
