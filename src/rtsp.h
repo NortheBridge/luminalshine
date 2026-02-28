@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <list>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -71,6 +72,10 @@ namespace rtsp_stream {
     std::string virtual_display_device_id;
     std::optional<std::chrono::steady_clock::time_point> virtual_display_ready_since;
     std::optional<std::vector<std::vector<std::string>>> virtual_display_topology_snapshot;
+
+    /// @brief Pre-virtual-display device refresh rates captured before VD creation.
+    /// Maps device_id to {numerator, denominator} of the original refresh rate.
+    std::optional<std::map<std::string, std::pair<unsigned int, unsigned int>>> pre_virtual_display_refresh_rates;
     bool gen1_framegen_fix;
     bool gen2_framegen_fix;
     bool lossless_scaling_framegen;
