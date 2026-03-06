@@ -1776,7 +1776,6 @@ namespace proc {
     stop_lossless_scaling_support();
 #endif
     // For Playnite-managed apps, request a graceful stop via Playnite first
-    std::chrono::seconds remaining_timeout = _app.exit_timeout;
 #ifdef _WIN32
     std::chrono::seconds remaining_timeout = _app.exit_timeout;
     if (had_active_app && !_app.playnite_id.empty()) {
