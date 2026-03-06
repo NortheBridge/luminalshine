@@ -8,8 +8,8 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <windows.h>
 #include <winsock2.h>
+#include <windows.h>
 
 #ifndef FILE_DEVICE_UNKNOWN
   #define FILE_DEVICE_UNKNOWN 0x00000022
