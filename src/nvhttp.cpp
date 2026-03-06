@@ -245,8 +245,56 @@ namespace nvhttp {
       bool allow_display_changes,
       std::optional<std::string> &pending_output_override
     ) {
+      std::optional<std::string> app_output_override;
+      if (launch_session->output_name_override && !launch_session->output_name_override->empty()) {
+        app_output_override = boost::algorithm::trim_copy(*launch_session->output_name_override);
+      }
+
+      if (app_output_override &&
+          boost::iequals(*app_output_override, VDISPLAY::SUDOVDA_VIRTUAL_DISPLAY_SELECTION)) {
+        launch_session->virtual_display = true;
+        app_output_override.reset();
+      }
+
+      bool config_requests_virtual = config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
+      if (launch_session->virtual_display_mode_override) {
+        config_requests_virtual =
+          *launch_session->virtual_display_mode_override != config::video_t::virtual_display_mode_e::disabled;
+      }
+      const bool client_requests_virtual = launch_session->client_requests_virtual_display;
+      const bool session_requests_virtual = launch_session->app_metadata && launch_session->app_metadata->virtual_screen;
+      bool request_virtual_display =
+        launch_session->virtual_display || config_requests_virtual || client_requests_virtual || session_requests_virtual;
+      const bool has_app_output_override = app_output_override.has_value();
+      if (has_app_output_override && !client_requests_virtual) {
+        request_virtual_display = false;
+      }
+
       if (!allow_display_changes) {
-        BOOST_LOG(debug) << "Display helper: skipping virtual display changes for resume.";
+        if (request_virtual_display) {
+          if (auto existing_device = VDISPLAY::resolveAnyVirtualDisplayDeviceId()) {
+            launch_session->virtual_display = true;
+            launch_session->virtual_display_failed = false;
+            launch_session->virtual_display_device_id = *existing_device;
+            launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            config::set_runtime_output_name_override(*existing_device);
+            pending_output_override = *existing_device;
+            BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
+                            << *existing_device << ").";
+            BOOST_LOG(debug) << "Display helper: skipping virtual display changes for resume; preserving capture target only.";
+            return;
+          }
+
+          BOOST_LOG(debug) << "Display helper: resume requested virtual display capture but no active virtual display was found to preserve.";
+        }
+
+        if (app_output_override) {
+          config::set_runtime_output_name_override(*app_output_override);
+          pending_output_override = *app_output_override;
+          BOOST_LOG(info) << "Display helper: preserving output override for resume: " << *app_output_override;
+        } else {
+          BOOST_LOG(debug) << "Display helper: skipping virtual display changes for resume.";
+        }
         return;
       }
 
@@ -259,40 +307,16 @@ namespace nvhttp {
         }
       }
 
-      std::optional<std::string> app_output_override;
-      if (launch_session->output_name_override && !launch_session->output_name_override->empty()) {
-        app_output_override = boost::algorithm::trim_copy(*launch_session->output_name_override);
-      }
-
-      if (app_output_override &&
-          boost::iequals(*app_output_override, VDISPLAY::SUDOVDA_VIRTUAL_DISPLAY_SELECTION)) {
-        launch_session->virtual_display = true;
-        app_output_override.reset();
-      }
-
       if (app_output_override) {
         config::set_runtime_output_name_override(*app_output_override);
         pending_output_override = *app_output_override;
         BOOST_LOG(info) << "App-specific display override requested: output_name=" << *app_output_override;
       }
-
-      bool config_requests_virtual = config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
-      if (launch_session->virtual_display_mode_override) {
-        config_requests_virtual =
-          *launch_session->virtual_display_mode_override != config::video_t::virtual_display_mode_e::disabled;
-      }
       BOOST_LOG(debug) << "config_requests_virtual: " << config_requests_virtual;
-      const bool client_requests_virtual = launch_session->client_requests_virtual_display;
       BOOST_LOG(debug) << "client_requests_virtual: " << client_requests_virtual;
-      const bool session_requests_virtual = launch_session->app_metadata && launch_session->app_metadata->virtual_screen;
       BOOST_LOG(debug) << "session_requests_virtual: " << session_requests_virtual;
-      bool request_virtual_display = client_requests_virtual || config_requests_virtual || session_requests_virtual;
       BOOST_LOG(debug) << "request_virtual_display: " << request_virtual_display;
       const auto requested_output_name = config::get_active_output_name();
-      const bool has_app_output_override = app_output_override.has_value();
-      if (has_app_output_override && !client_requests_virtual) {
-        request_virtual_display = false;
-      }
       if (!request_virtual_display && !requested_output_name.empty()) {
         if (!display_device::output_exists(requested_output_name)) {
           BOOST_LOG(warning) << "Requested display '" << requested_output_name
