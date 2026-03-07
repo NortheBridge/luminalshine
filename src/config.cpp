@@ -12,6 +12,7 @@
 #include <iostream>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -858,9 +859,21 @@ namespace config {
     false  // legacy_auto_detect
   };
 
+  namespace {
+    constexpr int default_min_log_level() {
+#ifdef PROJECT_VERSION_PRERELEASE
+      constexpr std::string_view prerelease = PROJECT_VERSION_PRERELEASE;
+      if (!prerelease.empty()) {
+        return 1;
+      }
+#endif
+      return 2;
+    }
+  }  // namespace
+
   sunshine_t sunshine {
     "en",  // locale
-    2,  // min_log_level
+    default_min_log_level(),  // min_log_level
     0,  // flags
     {},  // User file
     {},  // Username
