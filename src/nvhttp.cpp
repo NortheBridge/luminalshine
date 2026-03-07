@@ -272,7 +272,8 @@ namespace nvhttp {
 
       if (!allow_display_changes) {
         if (request_virtual_display) {
-          if (auto existing_device = VDISPLAY::resolveAnyVirtualDisplayDeviceId()) {
+          if (auto existing_device =
+                VDISPLAY::resolveActiveVirtualDisplayDeviceId(launch_session->virtual_display_device_id, launch_session->client_name)) {
             launch_session->virtual_display = true;
             launch_session->virtual_display_failed = false;
             launch_session->virtual_display_device_id = *existing_device;
@@ -352,7 +353,8 @@ namespace nvhttp {
         }
 
         if (!no_active_sessions) {
-          auto existing_device = VDISPLAY::resolveAnyVirtualDisplayDeviceId();
+          auto existing_device =
+            VDISPLAY::resolveActiveVirtualDisplayDeviceId(launch_session->virtual_display_device_id, launch_session->client_name);
           if (existing_device) {
             launch_session->virtual_display = true;
             launch_session->virtual_display_failed = false;
