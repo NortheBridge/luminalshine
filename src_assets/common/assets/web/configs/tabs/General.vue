@@ -1,43 +1,15 @@
 <script setup lang="ts">
-import Checkbox from '@/Checkbox.vue';
-import { ref, computed } from 'vue';
-import { useConfigStore } from '@/stores/config';
+import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
-import { NSelect, NInput, NButton, NInputNumber, NCheckbox } from 'naive-ui';
-import { useI18n } from 'vue-i18n';
+import Checkbox from '@/Checkbox.vue';
+import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
+import ConfigInputField from '@/ConfigInputField.vue';
+import { useConfigStore } from '@/stores/config';
+import { NButton } from 'naive-ui';
 
 const store = useConfigStore();
 const { config, metadata } = storeToRefs(store);
 const platform = computed(() => metadata.value?.platform || '');
-
-// Select options
-const localeOptions = [
-  { label: 'Български (Bulgarian)', value: 'bg' },
-  { label: 'Čeština (Czech)', value: 'cs' },
-  { label: 'Deutsch (German)', value: 'de' },
-  { label: 'English', value: 'en' },
-  { label: 'English, UK', value: 'en_GB' },
-  { label: 'English, US', value: 'en_US' },
-  { label: 'Español (Spanish)', value: 'es' },
-  { label: 'Français (French)', value: 'fr' },
-  { label: 'Italiano (Italian)', value: 'it' },
-  { label: '日本語 (Japanese)', value: 'ja' },
-  { label: '한국어 (Korean)', value: 'ko' },
-  { label: 'Polski (Polish)', value: 'pl' },
-  { label: 'Português (Portuguese)', value: 'pt' },
-  { label: 'Português, Brasileiro (Portuguese, Brazilian)', value: 'pt_BR' },
-  { label: 'Русский (Russian)', value: 'ru' },
-  { label: 'svenska (Swedish)', value: 'sv' },
-  { label: 'Türkçe (Turkish)', value: 'tr' },
-  { label: 'Українська (Ukranian)', value: 'uk' },
-  { label: '简体中文 (Chinese Simplified)', value: 'zh' },
-  { label: '繁體中文 (Chinese Traditional)', value: 'zh_TW' },
-];
-
-const { t } = useI18n();
-const logLevelOptions = computed(() =>
-  [0, 1, 2, 3, 4, 5, 6].map((v) => ({ label: t(`config.min_log_level_${v}`), value: v })),
-);
 
 function addCmd() {
   const template = {
@@ -49,7 +21,7 @@ function addCmd() {
   const current = Array.isArray(config.value.global_prep_cmd) ? config.value.global_prep_cmd : [];
   const next = [...current, template];
   store.updateOption('global_prep_cmd', next);
-  if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
+  store.markManualDirty?.('global_prep_cmd');
 }
 
 function removeCmd(index: number) {
@@ -60,109 +32,49 @@ function removeCmd(index: number) {
   if (index < 0 || index >= current.length) return;
   current.splice(index, 1);
   store.updateOption('global_prep_cmd', current);
-  if (store.markManualDirty) store.markManualDirty('global_prep_cmd');
+  store.markManualDirty?.('global_prep_cmd');
 }
 </script>
 
 <template>
   <div id="general" class="config-page">
-    <!-- Locale -->
-    <div class="mb-6">
-      <label for="locale" class="form-label">{{ $t('config.locale') }}</label>
+    <ConfigFieldRenderer setting-key="locale" v-model="config.locale" class="mb-6" />
 
-      <n-select
-        id="locale"
-        v-model:value="config.locale"
-        :options="localeOptions"
-        :data-search-options="localeOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.locale_desc') }}
-      </div>
+    <ConfigFieldRenderer
+      setting-key="sunshine_name"
+      v-model="config.sunshine_name"
+      class="mb-6"
+      placeholder="Vibeshine"
+    />
 
-      <select id="locale" class="form-select" v-model="config.locale">
-        <option value="bg">Български (Bulgarian)</option>
-        <option value="cs">Čeština (Czech)</option>
-        <option value="de">Deutsch (German)</option>
-        <option value="en">English</option>
-        <option value="en_GB">English, UK</option>
-        <option value="en_US">English, US</option>
-        <option value="es">Español (Spanish)</option>
-        <option value="fr">Français (French)</option>
-        <option value="hu">Magyar (Hungarian)</option>
-        <option value="it">Italiano (Italian)</option>
-        <option value="ja">日本語 (Japanese)</option>
-        <option value="ko">한국어 (Korean)</option>
-        <option value="pl">Polski (Polish)</option>
-        <option value="pt">Português (Portuguese)</option>
-        <option value="pt_BR">Português, Brasileiro (Portuguese, Brazilian)</option>
-        <option value="ru">Русский (Russian)</option>
-        <option value="sv">svenska (Swedish)</option>
-        <option value="tr">Türkçe (Turkish)</option>
-        <option value="uk">Українська (Ukranian)</option>
-        <option value="vi">Tiếng Việt (Vietnamese)</option>
-        <option value="zh">简体中文 (Chinese Simplified)</option>
-        <option value="zh_TW">繁體中文 (Chinese Traditional)</option>
-      </select>
-      <div class="form-text">{{ $t('config.locale_desc') }}</div>
-    </div>
+    <ConfigFieldRenderer setting-key="min_log_level" v-model="config.min_log_level" class="mb-6" />
 
-    <!-- Vibeshine Name -->
-    <div class="mb-6">
-      <label for="sunshine_name" class="form-label">{{ $t('config.sunshine_name') }}</label>
-      <n-input
-        id="sunshine_name"
-        v-model:value="config.sunshine_name"
-        type="text"
-        placeholder="Vibeshine"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.sunshine_name_desc') }}
-      </div>
-    </div>
-
-    <!-- Log Level -->
-    <div class="mb-6">
-      <label for="min_log_level" class="form-label">{{ $t('config.min_log_level') }}</label>
-      <n-select
-        id="min_log_level"
-        v-model:value="config.min_log_level"
-        :options="
-          logLevelOptions.map((o) => ({ ...o, label: $t(`config.min_log_level_${o.value}`) }))
-        "
-        :data-search-options="logLevelOptions.map((o) => `${o.label}::${o.value ?? ''}`).join('|')"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.min_log_level_desc') }}
-      </div>
-    </div>
-
-    <!-- Global Prep Commands -->
     <div id="global_prep_cmd" class="mb-6 flex flex-col">
-      <label class="block text-sm font-medium mb-1 text-dark dark:text-light">{{
-        $t('config.global_prep_cmd')
-      }}</label>
+      <label class="block text-sm font-medium mb-1 text-dark dark:text-light">
+        {{ $t('config.global_prep_cmd') }}
+      </label>
       <div class="text-[11px] opacity-60 mt-1">
         {{ $t('config.global_prep_cmd_desc') }}
       </div>
       <div v-if="config.global_prep_cmd.length > 0" class="mt-3 space-y-3">
         <div
-          v-for="(c, i) in config.global_prep_cmd"
-          :key="i"
-          class="rounded-md border border-dark/10 dark:border-light/10 p-2"
+          v-for="(command, index) in config.global_prep_cmd"
+          :key="index"
+          class="rounded-md border border-dark/10 dark:border-light/10 p-3 space-y-3"
         >
-          <div class="flex items-center justify-between gap-2 mb-2">
-            <div class="text-xs opacity-70">Step {{ i + 1 }}</div>
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-xs opacity-70">Step {{ index + 1 }}</div>
             <div class="flex items-center gap-2">
-              <n-checkbox
+              <Checkbox
                 v-if="platform === 'windows'"
-                v-model:checked="c.elevated"
-                size="small"
-                @update:checked="store.markManualDirty()"
-              >
-                {{ $t('_common.elevated') }}
-              </n-checkbox>
-              <n-button secondary size="small" @click="removeCmd(i)">
+                :id="`global_prep_cmd_elevated_${index}`"
+                v-model="command.elevated"
+                :label="$t('_common.elevated')"
+                desc=""
+                class="mb-0"
+                @update:model-value="store.markManualDirty()"
+              />
+              <n-button secondary size="small" @click="removeCmd(index)">
                 <i class="fas fa-trash" />
               </n-button>
               <n-button primary size="small" @click="addCmd">
@@ -170,30 +82,33 @@ function removeCmd(index: number) {
               </n-button>
             </div>
           </div>
-          <div class="grid grid-cols-1 gap-2">
-            <div>
-              <label class="text-[11px] opacity-60">{{ $t('_common.do_cmd') }}</label>
-              <n-input
-                v-model:value="c.do"
-                type="textarea"
-                :autosize="{ minRows: 1, maxRows: 3 }"
-                class="monospace"
-                @update:value="store.markManualDirty()"
-              />
-            </div>
-            <div>
-              <label class="text-[11px] opacity-60">{{ $t('_common.undo_cmd') }}</label>
-              <n-input
-                v-model:value="c.undo"
-                type="textarea"
-                :autosize="{ minRows: 1, maxRows: 3 }"
-                class="monospace"
-                @update:value="store.markManualDirty()"
-              />
-            </div>
+
+          <div class="grid grid-cols-1 gap-3">
+            <ConfigInputField
+              :id="`global_prep_cmd_do_${index}`"
+              v-model="command.do"
+              :label="$t('_common.do_cmd')"
+              desc=""
+              type="textarea"
+              monospace
+              :autosize="{ minRows: 1, maxRows: 3 }"
+              @update:model-value="store.markManualDirty()"
+            />
+
+            <ConfigInputField
+              :id="`global_prep_cmd_undo_${index}`"
+              v-model="command.undo"
+              :label="$t('_common.undo_cmd')"
+              desc=""
+              type="textarea"
+              monospace
+              :autosize="{ minRows: 1, maxRows: 3 }"
+              @update:model-value="store.markManualDirty()"
+            />
           </div>
         </div>
       </div>
+
       <div class="mt-4">
         <n-button primary class="mx-auto block" @click="addCmd">
           &plus; {{ $t('config.add') }}
@@ -201,75 +116,31 @@ function removeCmd(index: number) {
       </div>
     </div>
 
-    <!-- Session Token TTL -->
-    <div class="mb-6">
-      <label
-        for="session_token_ttl_seconds"
-        class="block text-sm font-medium mb-1 text-dark dark:text-light"
-        >{{ $t('config.session_token_ttl_seconds') }}</label
-      >
-      <n-input-number
-        id="session_token_ttl_seconds"
-        v-model:value="config.session_token_ttl_seconds"
-        :min="60"
-        :step="60"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.session_token_ttl_seconds_desc') }}
-      </div>
-    </div>
+    <ConfigFieldRenderer
+      setting-key="session_token_ttl_seconds"
+      v-model="config.session_token_ttl_seconds"
+      class="mb-6"
+    />
 
-    <!-- Remember-me Refresh Token TTL -->
-    <div class="mb-6">
-      <label
-        for="remember_me_refresh_token_ttl_seconds"
-        class="block text-sm font-medium mb-1 text-dark dark:text-light"
-        >{{ $t('config.remember_me_refresh_token_ttl_seconds') }}</label
-      >
-      <n-input-number
-        id="remember_me_refresh_token_ttl_seconds"
-        v-model:value="config.remember_me_refresh_token_ttl_seconds"
-        :min="3600"
-        :step="3600"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.remember_me_refresh_token_ttl_seconds_desc') }}
-      </div>
-    </div>
+    <ConfigFieldRenderer
+      setting-key="remember_me_refresh_token_ttl_seconds"
+      v-model="config.remember_me_refresh_token_ttl_seconds"
+      class="mb-6"
+    />
 
-    <!-- Update Check Interval (seconds) -->
-    <div class="mb-6">
-      <label for="update_check_interval" class="form-label">{{
-        $t('config.update_check_interval')
-      }}</label>
-      <n-input-number
-        id="update_check_interval"
-        v-model:value="config.update_check_interval"
-        :min="0"
-        :step="60"
-      />
-      <div class="text-[11px] opacity-60 mt-1">
-        {{ $t('config.update_check_interval_desc') }}
-      </div>
-    </div>
+    <ConfigFieldRenderer
+      setting-key="update_check_interval"
+      v-model="config.update_check_interval"
+      class="mb-6"
+    />
 
-    <!-- Notify Pre-Releases -->
-    <Checkbox
-      id="notify_pre_releases"
+    <ConfigFieldRenderer
+      setting-key="notify_pre_releases"
       v-model="config.notify_pre_releases"
       class="mb-3"
-      locale-prefix="config"
-      default="false"
     />
 
-    <!-- Enable system tray -->
-    <Checkbox
-      id="system_tray"
-      v-model="config.system_tray"
-      class="mb-3"
-      locale-prefix="config"
-      default="true"
-    />
+    <ConfigFieldRenderer setting-key="system_tray" v-model="config.system_tray" class="mb-3" />
   </div>
 </template>
 

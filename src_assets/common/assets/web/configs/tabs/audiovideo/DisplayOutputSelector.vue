@@ -216,7 +216,7 @@ function toOptions() {
           </pre>
         </template>
         <template #freebsd>
-          <pre style="white-space: pre-line;">
+          <pre style="white-space: pre-line">
             Info: Detecting displays
             Info: Detected display: DVI-D-0 (id: 0) connected: false
             Info: Detected display: HDMI-0 (id: 1) connected: true

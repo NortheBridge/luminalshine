@@ -26,14 +26,15 @@ const platform = computed(() => config.platform || '');
           <pre>tools\dxgi-info.exe</pre>
         </template>
         <template #freebsd>
-          {{ $t('config.adapter_name_desc_linux_1') }}<br>
+          {{ $t('config.adapter_name_desc_linux_1') }}<br />
           <pre>ls /dev/dri/renderD*  # {{ $t('config.adapter_name_desc_linux_2') }}</pre>
           <pre>
               vainfo --display drm --device /dev/dri/renderD129 | \
                 grep -E "((VAProfileH264High|VAProfileHEVCMain|VAProfileHEVCMain10).*VAEntrypointEncSlice)|Driver version"
-            </pre>
-          {{ $t('config.adapter_name_desc_linux_3') }}<br>
-          <i>VAProfileH264High   : VAEntrypointEncSlice</i>
+            </pre
+          >
+          {{ $t('config.adapter_name_desc_linux_3') }}<br />
+          <i>VAProfileH264High : VAEntrypointEncSlice</i>
         </template>
         <template #linux>
           {{ $t('config.adapter_name_desc_linux_1') }}<br />

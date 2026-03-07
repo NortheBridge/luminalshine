@@ -269,7 +269,10 @@
                   <span class="app-radio-card-title">{{ option.label }}</span>
                 </n-radio>
               </n-radio-group>
-              <div v-if="appVirtualDisplayModeSelection === 'global'" class="text-[11px] opacity-70">
+              <div
+                v-if="appVirtualDisplayModeSelection === 'global'"
+                class="text-[11px] opacity-70"
+              >
                 {{ t('config.app_virtual_display_mode_follow_global') }}
               </div>
 
@@ -582,7 +585,8 @@ function fromServerApp(src?: ServerApp | null, idx: number = -1): AppForm {
   const lsTarget = parseNumeric(src['lossless-scaling-target-fps']);
   const lsLimit = parseNumeric(src['lossless-scaling-rtss-limit']);
   const lsLaunchDelayRaw = parseNumeric(src['lossless-scaling-launch-delay']);
-  const lsLaunchDelay = lsLaunchDelayRaw && lsLaunchDelayRaw > 0 ? Math.round(lsLaunchDelayRaw) : null;
+  const lsLaunchDelay =
+    lsLaunchDelayRaw && lsLaunchDelayRaw > 0 ? Math.round(lsLaunchDelayRaw) : null;
   const profileKey = parseLosslessProfileKey(src['lossless-scaling-profile']);
   const losslessProfiles = emptyLosslessProfileState();
   losslessProfiles.recommended = parseLosslessOverrides(src['lossless-scaling-recommended']);
@@ -759,9 +763,7 @@ function toServerPayload(f: AppForm): Record<string, any> {
     payloadLosslessDelayRaw && payloadLosslessDelayRaw > 0
       ? Math.round(payloadLosslessDelayRaw)
       : null;
-  payload['lossless-scaling-launch-delay'] = losslessRuntimeActive
-    ? payloadLosslessDelay
-    : null;
+  payload['lossless-scaling-launch-delay'] = losslessRuntimeActive ? payloadLosslessDelay : null;
   payload['lossless-scaling-profile'] =
     f.losslessScalingProfile === 'recommended' ? 'recommended' : 'custom';
   const buildLosslessProfilePayload = (profile: LosslessProfileOverrides) => {

@@ -16,304 +16,339 @@
       </section>
 
       <n-card size="large" class="token-panel">
-      <template #header>
-        <div class="token-panel__heading">
-          <n-space align="center" size="small" class="token-panel__title">
-            <n-icon size="18"><i class="fas fa-key" /></n-icon>
-            <n-text strong>{{ t('auth.generate_new_token') }}</n-text>
-          </n-space>
-          <n-button
-            type="primary"
-            strong
-            size="small"
-            class="token-panel__action"
-            :loading="routeCatalogLoading"
-            @click="loadRouteCatalog"
-          >
-            <n-icon size="14"><i class="fas fa-rotate" /></n-icon>
-            {{ t('auth.refresh_routes') }}
-          </n-button>
-        </div>
-      </template>
-
-      <n-space vertical size="large" class="token-panel__body">
-        <n-alert type="info" secondary>
-          {{ t('auth.generate_token_help') }}
-        </n-alert>
-
-        <n-alert v-if="routeCatalogError" type="error" closable @close="routeCatalogError = ''">
-          {{ routeCatalogError }}
-        </n-alert>
-        <n-alert
-          v-else-if="!routeCatalogLoading && routeCatalog.length === 0"
-          type="warning"
-          :show-icon="true"
-        >
-          {{ t('auth.routes_empty') }}
-        </n-alert>
-
-        <n-form :model="draft" label-placement="top" size="medium" class="token-form-shell">
-          <n-grid cols="24" x-gap="12" y-gap="12" responsive="screen">
-            <n-form-item-gi :span="24" :s="12" :label="t('auth.select_api_path')" path="path">
-              <n-select
-                v-model:value="draft.path"
-                :loading="routeCatalogLoading"
-                :options="routeSelectOptions"
-                :placeholder="t('auth.select_api_path')"
-              />
-            </n-form-item-gi>
-            <n-form-item-gi :span="24" :s="8" :label="t('auth.methods')" path="selectedMethods">
-              <n-checkbox-group v-model:value="draft.selectedMethods">
-                <n-space wrap>
-                  <n-checkbox v-for="m in draftMethods" :key="m" :value="m">
-                    <n-text code>{{ m }}</n-text>
-                  </n-checkbox>
-                </n-space>
-              </n-checkbox-group>
-              <n-text v-if="draft.path && draftMethods.length === 0" size="small" depth="3">
-                {{ t('auth.no_methods_for_route') }}
-              </n-text>
-            </n-form-item-gi>
-            <n-form-item-gi :span="24" :s="4" label=" " :show-feedback="false">
-              <n-button type="primary" size="medium" class="w-full" :disabled="!canAddScope" @click="addScope">
-                <n-icon size="16"><i class="fas fa-plus" /></n-icon>
-                {{ t('auth.add_scope') }}
-              </n-button>
-            </n-form-item-gi>
-          </n-grid>
-        </n-form>
-
-        <n-space v-if="scopes.length" vertical size="small" class="token-scope-list">
-          <n-text depth="3" strong>{{ t('auth.selected_scopes') }}</n-text>
-          <div class="token-scope-grid">
-            <div v-for="(scope, idx) in scopes" :key="idx + ':' + scope.path" class="token-scope-card">
-              <div class="token-scope-card__header">
-                <n-text strong>{{ scope.path }}</n-text>
-                <n-button type="error" strong size="small" text @click="removeScope(idx)">
-                  <n-icon size="14"><i class="fas fa-times" /></n-icon>
-                  {{ t('auth.remove') }}
-                </n-button>
-              </div>
-              <n-space wrap size="small">
-                <n-tag v-for="method in scope.methods" :key="method" type="info" size="small" round>
-                  {{ method }}
-                </n-tag>
-              </n-space>
-            </div>
-          </div>
-        </n-space>
-
-        <n-space align="center" size="small" class="token-generate-row">
-          <n-button
-            type="success"
-            size="medium"
-            :disabled="!canGenerate || creating"
-            :loading="creating"
-            @click="createToken"
-          >
-            <n-icon size="16"><i class="fas fa-key" /></n-icon>
-            {{ t('auth.generate_token') }}
-          </n-button>
-          <n-text v-if="creating" size="small" depth="3">{{ t('auth.creating') }}</n-text>
-        </n-space>
-
-        <n-text v-if="!canGenerate" size="small" depth="3">{{ t('auth.generate_disabled_hint') }}</n-text>
-
-        <n-alert v-if="createError" type="error" closable @close="createError = ''">
-          {{ createError }}
-        </n-alert>
-      </n-space>
-      </n-card>
-
-      <n-modal :show="showTokenModal" @update:show="(v) => (showTokenModal = v)">
-      <n-card
-        class="token-modal-card"
-        :title="t('auth.token_created_title')"
-        :bordered="false"
-        style="max-width: 40rem; width: 100%"
-      >
-        <n-space vertical size="large">
-          <n-alert type="warning" :show-icon="true">
-            <n-icon class="mr-2" size="16"><i class="fas fa-triangle-exclamation" /></n-icon>
-            {{ t('auth.token_modal_warning') }}
-          </n-alert>
-          <n-space vertical size="small">
-            <n-text depth="3" strong>{{ t('auth.token') }}</n-text>
-            <n-code :code="createdToken" language="bash" word-wrap />
-            <n-space align="center" size="small">
-              <n-button size="small" type="primary" @click="copy(createdToken)">
-                <n-icon size="14"><i class="fas fa-copy" /></n-icon>
-                {{ t('auth.copy_token') }}
-              </n-button>
-              <n-tag v-if="copied" type="success" size="small" round>{{ t('auth.token_copied') }}</n-tag>
+        <template #header>
+          <div class="token-panel__heading">
+            <n-space align="center" size="small" class="token-panel__title">
+              <n-icon size="18"><i class="fas fa-key" /></n-icon>
+              <n-text strong>{{ t('auth.generate_new_token') }}</n-text>
             </n-space>
-          </n-space>
-        </n-space>
-        <template #footer>
-          <n-space justify="end">
-            <n-button type="primary" @click="showTokenModal = false">{{
-              $t('_common.dismiss')
-            }}</n-button>
-          </n-space>
+            <n-button
+              type="primary"
+              strong
+              size="small"
+              class="token-panel__action"
+              :loading="routeCatalogLoading"
+              @click="loadRouteCatalog"
+            >
+              <n-icon size="14"><i class="fas fa-rotate" /></n-icon>
+              {{ t('auth.refresh_routes') }}
+            </n-button>
+          </div>
         </template>
-      </n-card>
-      </n-modal>
 
-      <n-card size="large" class="token-panel">
-      <template #header>
-        <div class="token-panel__heading">
-          <n-space align="center" size="small" class="token-panel__title">
-            <n-icon size="18"><i class="fas fa-lock" /></n-icon>
-            <n-text strong>{{ t('auth.active_tokens') }}</n-text>
-          </n-space>
-          <n-button
-            type="primary"
-            strong
-            size="small"
-            :loading="tokensLoading"
-            class="token-panel__action"
-            :aria-label="t('auth.refresh')"
-            @click="loadTokens"
+        <n-space vertical size="large" class="token-panel__body">
+          <n-alert type="info" secondary>
+            {{ t('auth.generate_token_help') }}
+          </n-alert>
+
+          <n-alert v-if="routeCatalogError" type="error" closable @close="routeCatalogError = ''">
+            {{ routeCatalogError }}
+          </n-alert>
+          <n-alert
+            v-else-if="!routeCatalogLoading && routeCatalog.length === 0"
+            type="warning"
+            :show-icon="true"
           >
-            <n-icon size="14"><i class="fas fa-rotate" /></n-icon>
-            {{ t('auth.refresh') }}
-          </n-button>
-        </div>
-      </template>
+            {{ t('auth.routes_empty') }}
+          </n-alert>
 
-      <n-space vertical size="large" class="token-panel__body">
-        <n-form :model="tableControls" inline label-placement="top" class="token-toolbar">
-          <n-form-item :label="t('auth.filter')" path="filter">
-            <n-input
-              v-model:value="tableControls.filter"
-              :placeholder="t('auth.search_tokens')"
-              clearable
-            />
-          </n-form-item>
-          <n-form-item :label="t('auth.sort_field')" path="sortBy">
-            <n-select v-model:value="tableControls.sortBy" :options="sortOptions" />
-          </n-form-item>
-        </n-form>
+          <n-form :model="draft" label-placement="top" size="medium" class="token-form-shell">
+            <n-grid cols="24" x-gap="12" y-gap="12" responsive="screen">
+              <n-form-item-gi :span="24" :s="12" :label="t('auth.select_api_path')" path="path">
+                <n-select
+                  v-model:value="draft.path"
+                  :loading="routeCatalogLoading"
+                  :options="routeSelectOptions"
+                  :placeholder="t('auth.select_api_path')"
+                />
+              </n-form-item-gi>
+              <n-form-item-gi :span="24" :s="8" :label="t('auth.methods')" path="selectedMethods">
+                <n-checkbox-group v-model:value="draft.selectedMethods">
+                  <n-space wrap>
+                    <n-checkbox v-for="m in draftMethods" :key="m" :value="m">
+                      <n-text code>{{ m }}</n-text>
+                    </n-checkbox>
+                  </n-space>
+                </n-checkbox-group>
+                <n-text v-if="draft.path && draftMethods.length === 0" size="small" depth="3">
+                  {{ t('auth.no_methods_for_route') }}
+                </n-text>
+              </n-form-item-gi>
+              <n-form-item-gi :span="24" :s="4" label=" " :show-feedback="false">
+                <n-button
+                  type="primary"
+                  size="medium"
+                  class="w-full"
+                  :disabled="!canAddScope"
+                  @click="addScope"
+                >
+                  <n-icon size="16"><i class="fas fa-plus" /></n-icon>
+                  {{ t('auth.add_scope') }}
+                </n-button>
+              </n-form-item-gi>
+            </n-grid>
+          </n-form>
 
-        <n-alert v-if="tokensError" type="error" closable @close="tokensError = ''">
-          {{ tokensError }}
-        </n-alert>
-
-        <n-empty
-          v-if="filteredTokens.length === 0 && !tokensLoading"
-          :description="t('auth.no_active_tokens')"
-        />
-
-        <div v-else class="token-records">
-          <article v-for="token in filteredTokens" :key="token.hash" class="token-record">
-            <div class="token-record__header">
-              <button type="button" class="token-hash-button" @click="copy(token.hash)">
-                <span class="token-hash-button__label">{{ t('auth.hash') }}</span>
-                <span class="token-hash-button__value">{{ shortHash(token.hash) }}</span>
-              </button>
-              <n-text depth="3" class="token-record__date">
-                {{ t('auth.created') }}: {{ token.createdAt ? formatTime(token.createdAt) : '—' }}
-              </n-text>
-              <n-button
-                size="small"
-                type="error"
-                :loading="revoking === token.hash"
-                @click="promptRevoke(token)"
+          <n-space v-if="scopes.length" vertical size="small" class="token-scope-list">
+            <n-text depth="3" strong>{{ t('auth.selected_scopes') }}</n-text>
+            <div class="token-scope-grid">
+              <div
+                v-for="(scope, idx) in scopes"
+                :key="idx + ':' + scope.path"
+                class="token-scope-card"
               >
-                <n-icon size="14"><i class="fas fa-ban" /></n-icon>
-                {{ t('auth.revoke') }}
-              </n-button>
-            </div>
-
-            <div class="token-record__scopes">
-              <div v-for="(scope, idx) in token.scopes" :key="idx" class="token-record-scope">
-                <n-text strong>{{ scope.path }}</n-text>
+                <div class="token-scope-card__header">
+                  <n-text strong>{{ scope.path }}</n-text>
+                  <n-button type="error" strong size="small" text @click="removeScope(idx)">
+                    <n-icon size="14"><i class="fas fa-times" /></n-icon>
+                    {{ t('auth.remove') }}
+                  </n-button>
+                </div>
                 <n-space wrap size="small">
-                  <n-tag v-for="method in scope.methods" :key="method" size="small" type="info" round>
+                  <n-tag
+                    v-for="method in scope.methods"
+                    :key="method"
+                    type="info"
+                    size="small"
+                    round
+                  >
                     {{ method }}
                   </n-tag>
                 </n-space>
               </div>
             </div>
-          </article>
-        </div>
-      </n-space>
+          </n-space>
+
+          <n-space align="center" size="small" class="token-generate-row">
+            <n-button
+              type="success"
+              size="medium"
+              :disabled="!canGenerate || creating"
+              :loading="creating"
+              @click="createToken"
+            >
+              <n-icon size="16"><i class="fas fa-key" /></n-icon>
+              {{ t('auth.generate_token') }}
+            </n-button>
+            <n-text v-if="creating" size="small" depth="3">{{ t('auth.creating') }}</n-text>
+          </n-space>
+
+          <n-text v-if="!canGenerate" size="small" depth="3">{{
+            t('auth.generate_disabled_hint')
+          }}</n-text>
+
+          <n-alert v-if="createError" type="error" closable @close="createError = ''">
+            {{ createError }}
+          </n-alert>
+        </n-space>
+      </n-card>
+
+      <n-modal :show="showTokenModal" @update:show="(v) => (showTokenModal = v)">
+        <n-card
+          class="token-modal-card"
+          :title="t('auth.token_created_title')"
+          :bordered="false"
+          style="max-width: 40rem; width: 100%"
+        >
+          <n-space vertical size="large">
+            <n-alert type="warning" :show-icon="true">
+              <n-icon class="mr-2" size="16"><i class="fas fa-triangle-exclamation" /></n-icon>
+              {{ t('auth.token_modal_warning') }}
+            </n-alert>
+            <n-space vertical size="small">
+              <n-text depth="3" strong>{{ t('auth.token') }}</n-text>
+              <n-code :code="createdToken" language="bash" word-wrap />
+              <n-space align="center" size="small">
+                <n-button size="small" type="primary" @click="copy(createdToken)">
+                  <n-icon size="14"><i class="fas fa-copy" /></n-icon>
+                  {{ t('auth.copy_token') }}
+                </n-button>
+                <n-tag v-if="copied" type="success" size="small" round>{{
+                  t('auth.token_copied')
+                }}</n-tag>
+              </n-space>
+            </n-space>
+          </n-space>
+          <template #footer>
+            <n-space justify="end">
+              <n-button type="primary" @click="showTokenModal = false">{{
+                $t('_common.dismiss')
+              }}</n-button>
+            </n-space>
+          </template>
+        </n-card>
+      </n-modal>
+
+      <n-card size="large" class="token-panel">
+        <template #header>
+          <div class="token-panel__heading">
+            <n-space align="center" size="small" class="token-panel__title">
+              <n-icon size="18"><i class="fas fa-lock" /></n-icon>
+              <n-text strong>{{ t('auth.active_tokens') }}</n-text>
+            </n-space>
+            <n-button
+              type="primary"
+              strong
+              size="small"
+              :loading="tokensLoading"
+              class="token-panel__action"
+              :aria-label="t('auth.refresh')"
+              @click="loadTokens"
+            >
+              <n-icon size="14"><i class="fas fa-rotate" /></n-icon>
+              {{ t('auth.refresh') }}
+            </n-button>
+          </div>
+        </template>
+
+        <n-space vertical size="large" class="token-panel__body">
+          <n-form :model="tableControls" inline label-placement="top" class="token-toolbar">
+            <n-form-item :label="t('auth.filter')" path="filter">
+              <n-input
+                v-model:value="tableControls.filter"
+                :placeholder="t('auth.search_tokens')"
+                clearable
+              />
+            </n-form-item>
+            <n-form-item :label="t('auth.sort_field')" path="sortBy">
+              <n-select v-model:value="tableControls.sortBy" :options="sortOptions" />
+            </n-form-item>
+          </n-form>
+
+          <n-alert v-if="tokensError" type="error" closable @close="tokensError = ''">
+            {{ tokensError }}
+          </n-alert>
+
+          <n-empty
+            v-if="filteredTokens.length === 0 && !tokensLoading"
+            :description="t('auth.no_active_tokens')"
+          />
+
+          <div v-else class="token-records">
+            <article v-for="token in filteredTokens" :key="token.hash" class="token-record">
+              <div class="token-record__header">
+                <button type="button" class="token-hash-button" @click="copy(token.hash)">
+                  <span class="token-hash-button__label">{{ t('auth.hash') }}</span>
+                  <span class="token-hash-button__value">{{ shortHash(token.hash) }}</span>
+                </button>
+                <n-text depth="3" class="token-record__date">
+                  {{ t('auth.created') }}: {{ token.createdAt ? formatTime(token.createdAt) : '—' }}
+                </n-text>
+                <n-button
+                  size="small"
+                  type="error"
+                  :loading="revoking === token.hash"
+                  @click="promptRevoke(token)"
+                >
+                  <n-icon size="14"><i class="fas fa-ban" /></n-icon>
+                  {{ t('auth.revoke') }}
+                </n-button>
+              </div>
+
+              <div class="token-record__scopes">
+                <div v-for="(scope, idx) in token.scopes" :key="idx" class="token-record-scope">
+                  <n-text strong>{{ scope.path }}</n-text>
+                  <n-space wrap size="small">
+                    <n-tag
+                      v-for="method in scope.methods"
+                      :key="method"
+                      size="small"
+                      type="info"
+                      round
+                    >
+                      {{ method }}
+                    </n-tag>
+                  </n-space>
+                </div>
+              </div>
+            </article>
+          </div>
+        </n-space>
       </n-card>
 
       <n-card size="large" class="token-panel">
-      <template #header>
-        <n-space align="center" size="small" class="token-panel__title">
-          <n-icon size="18"><i class="fas fa-vial" /></n-icon>
-          <n-text strong>{{ t('auth.test_api_token') }}</n-text>
+        <template #header>
+          <n-space align="center" size="small" class="token-panel__title">
+            <n-icon size="18"><i class="fas fa-vial" /></n-icon>
+            <n-text strong>{{ t('auth.test_api_token') }}</n-text>
+          </n-space>
+        </template>
+        <n-space vertical size="large" class="token-panel__body">
+          <n-alert type="info" secondary>
+            {{ t('auth.testing_help') }}
+          </n-alert>
+
+          <n-form :model="test" label-placement="top" size="medium">
+            <n-grid cols="24" x-gap="12" y-gap="12" responsive="screen">
+              <n-form-item-gi :span="24" :s="12" :label="t('auth.token')" path="token">
+                <n-input
+                  v-model:value="test.token"
+                  :placeholder="t('auth.paste_token_here')"
+                  type="password"
+                />
+              </n-form-item-gi>
+              <n-form-item-gi :span="24" :s="12" :label="t('auth.api_path_get_only')" path="path">
+                <n-select
+                  v-model:value="test.path"
+                  :options="getRouteOptions"
+                  :placeholder="t('auth.select_api_path_to_test')"
+                />
+              </n-form-item-gi>
+              <n-form-item-gi :span="24" :s="12" :label="t('auth.test_query')" path="query">
+                <n-input
+                  v-model:value="test.query"
+                  :placeholder="t('auth.test_query_placeholder')"
+                />
+              </n-form-item-gi>
+            </n-grid>
+          </n-form>
+
+          <n-space align="center" size="small">
+            <n-button type="primary" :disabled="!canSendTest" :loading="testing" @click="sendTest">
+              <n-icon size="16"><i class="fas fa-paper-plane" /></n-icon>
+              {{ t('auth.test_token') }}
+            </n-button>
+            <n-text v-if="testing" size="small" depth="3">{{ t('auth.sending') }}</n-text>
+          </n-space>
+
+          <n-alert v-if="testError" type="error" closable @close="testError = ''">
+            {{ testError }}
+          </n-alert>
+
+          <n-space v-if="testResponse" vertical size="small">
+            <n-text depth="3" strong>{{ t('auth.result') }}</n-text>
+            <n-scrollbar class="token-result-shell" style="max-height: 60vh">
+              <n-code :code="testResponse" language="json" word-wrap />
+            </n-scrollbar>
+          </n-space>
         </n-space>
-      </template>
-      <n-space vertical size="large" class="token-panel__body">
-        <n-alert type="info" secondary>
-          {{ t('auth.testing_help') }}
-        </n-alert>
-
-        <n-form :model="test" label-placement="top" size="medium">
-          <n-grid cols="24" x-gap="12" y-gap="12" responsive="screen">
-            <n-form-item-gi :span="24" :s="12" :label="t('auth.token')" path="token">
-              <n-input v-model:value="test.token" :placeholder="t('auth.paste_token_here')" type="password" />
-            </n-form-item-gi>
-            <n-form-item-gi :span="24" :s="12" :label="t('auth.api_path_get_only')" path="path">
-              <n-select
-                v-model:value="test.path"
-                :options="getRouteOptions"
-                :placeholder="t('auth.select_api_path_to_test')"
-              />
-            </n-form-item-gi>
-            <n-form-item-gi :span="24" :s="12" :label="t('auth.test_query')" path="query">
-              <n-input v-model:value="test.query" :placeholder="t('auth.test_query_placeholder')" />
-            </n-form-item-gi>
-          </n-grid>
-        </n-form>
-
-        <n-space align="center" size="small">
-          <n-button type="primary" :disabled="!canSendTest" :loading="testing" @click="sendTest">
-            <n-icon size="16"><i class="fas fa-paper-plane" /></n-icon>
-            {{ t('auth.test_token') }}
-          </n-button>
-          <n-text v-if="testing" size="small" depth="3">{{ t('auth.sending') }}</n-text>
-        </n-space>
-
-        <n-alert v-if="testError" type="error" closable @close="testError = ''">
-          {{ testError }}
-        </n-alert>
-
-        <n-space v-if="testResponse" vertical size="small">
-          <n-text depth="3" strong>{{ t('auth.result') }}</n-text>
-          <n-scrollbar class="token-result-shell" style="max-height: 60vh">
-            <n-code :code="testResponse" language="json" word-wrap />
-          </n-scrollbar>
-        </n-space>
-      </n-space>
       </n-card>
 
       <n-modal :show="showRevoke" @update:show="(v) => (showRevoke = v)">
-      <n-card
-        class="token-modal-card"
-        :title="t('auth.confirm_revoke_title')"
-        :bordered="false"
-        style="max-width: 32rem; width: 100%"
-      >
-        <n-space vertical align="center" size="medium">
-          <n-text>
-            {{
-              t('auth.confirm_revoke_message_hash', { hash: shortHash(pendingRevoke?.hash || '') })
-            }}
-          </n-text>
-        </n-space>
-        <template #footer>
-          <n-space justify="end" size="small">
-            <n-button type="default" strong @click="showRevoke = false">{{
-              t('_common.cancel')
-            }}</n-button>
-            <n-button type="error" strong @click="confirmRevoke">{{ t('auth.revoke') }}</n-button>
+        <n-card
+          class="token-modal-card"
+          :title="t('auth.confirm_revoke_title')"
+          :bordered="false"
+          style="max-width: 32rem; width: 100%"
+        >
+          <n-space vertical align="center" size="medium">
+            <n-text>
+              {{
+                t('auth.confirm_revoke_message_hash', {
+                  hash: shortHash(pendingRevoke?.hash || ''),
+                })
+              }}
+            </n-text>
           </n-space>
-        </template>
-      </n-card>
+          <template #footer>
+            <n-space justify="end" size="small">
+              <n-button type="default" strong @click="showRevoke = false">{{
+                t('_common.cancel')
+              }}</n-button>
+              <n-button type="error" strong @click="confirmRevoke">{{ t('auth.revoke') }}</n-button>
+            </n-space>
+          </template>
+        </n-card>
       </n-modal>
     </n-space>
   </div>
@@ -400,7 +435,11 @@ function orderMethods(methods: string[]): string[] {
   const normalized = Array.from(
     new Set(
       methods
-        .map((method) => String(method || '').trim().toUpperCase())
+        .map((method) =>
+          String(method || '')
+            .trim()
+            .toUpperCase(),
+        )
         .filter((method) => method.length > 0),
     ),
   );
@@ -447,7 +486,10 @@ async function loadRouteCatalog(): Promise<void> {
 
   try {
     ac = makeAbortController();
-    const res = await http.get('/api/token/routes', { validateStatus: () => true, signal: ac.signal });
+    const res = await http.get('/api/token/routes', {
+      validateStatus: () => true,
+      signal: ac.signal,
+    });
 
     if (res.status >= 200 && res.status < 300) {
       const raw = Array.isArray(res.data) ? res.data : res.data?.routes;
@@ -461,7 +503,9 @@ async function loadRouteCatalog(): Promise<void> {
         .filter((entry): entry is RouteDef => !!entry)
         .sort((a, b) => a.path.localeCompare(b.path));
     } else {
-      const msg = String((res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`);
+      const msg = String(
+        (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`,
+      );
       routeCatalogError.value = withDetail(t('auth.routes_load_failed'), msg);
       routeCatalog.value = [];
     }
@@ -573,10 +617,15 @@ async function createToken(): Promise<void> {
         await loadTokens();
         showTokenModal.value = true;
       } else {
-        createError.value = withDetail(t('auth.failed_to_generate_token'), t('auth.request_failed'));
+        createError.value = withDetail(
+          t('auth.failed_to_generate_token'),
+          t('auth.request_failed'),
+        );
       }
     } else {
-      const msg = String((res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`);
+      const msg = String(
+        (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`,
+      );
       createError.value = withDetail(t('auth.failed_to_generate_token'), msg);
     }
   } catch (e: any) {
@@ -667,14 +716,21 @@ async function loadTokens(): Promise<void> {
 
     if (res.status >= 200 && res.status < 300) {
       const list = Array.isArray(res.data) ? res.data : res.data?.tokens || [];
-      tokens.value = (list as any[]).map((entry) => normalizeToken(entry)).filter(Boolean) as TokenRecord[];
+      tokens.value = (list as any[])
+        .map((entry) => normalizeToken(entry))
+        .filter(Boolean) as TokenRecord[];
     } else {
-      const msg = String((res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`);
+      const msg = String(
+        (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`,
+      );
       tokensError.value = withDetail(t('auth.request_failed'), msg);
     }
   } catch (e: any) {
     if (e?.code !== 'ERR_CANCELED') {
-      tokensError.value = withDetail(t('auth.request_failed'), e?.message || t('auth.request_failed'));
+      tokensError.value = withDetail(
+        t('auth.request_failed'),
+        e?.message || t('auth.request_failed'),
+      );
     }
   } finally {
     if (ac) {
@@ -708,12 +764,16 @@ async function confirmRevoke(): Promise<void> {
       showRevoke.value = false;
       pendingRevoke.value = null;
     } else {
-      const msg = String((res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`);
+      const msg = String(
+        (res.data && (res.data.message || res.data.error)) || `HTTP ${res.status}`,
+      );
       message.error(withDetail(t('auth.failed_to_revoke_token'), msg));
     }
   } catch (e: any) {
     if (e?.code !== 'ERR_CANCELED') {
-      message.error(withDetail(t('auth.failed_to_revoke_token'), e?.message || t('auth.request_failed')));
+      message.error(
+        withDetail(t('auth.failed_to_revoke_token'), e?.message || t('auth.request_failed')),
+      );
     }
   } finally {
     if (ac) {
@@ -743,7 +803,8 @@ const filteredTokens = computed<TokenRecord[]>(() => {
       return tb - ta;
     });
   } else {
-    const firstPath = (token: TokenRecord) => token.scopes.map((scope) => scope.path).sort()[0] || '';
+    const firstPath = (token: TokenRecord) =>
+      token.scopes.map((scope) => scope.path).sort()[0] || '';
     out = out.slice().sort((a, b) => firstPath(a).localeCompare(firstPath(b)));
   }
 
@@ -830,7 +891,10 @@ async function sendTest(): Promise<void> {
     testResponse.value = `${res.status} ${res.statusText || ''}\n\n${pretty}`;
   } catch (e: any) {
     if (e?.code !== 'ERR_CANCELED') {
-      testError.value = withDetail(t('auth.request_failed'), e?.message || t('auth.request_failed'));
+      testError.value = withDetail(
+        t('auth.request_failed'),
+        e?.message || t('auth.request_failed'),
+      );
     }
   } finally {
     if (ac) {
