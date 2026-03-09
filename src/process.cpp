@@ -1210,13 +1210,14 @@ namespace proc {
       _env[ENV_LOSSLESS_LEGACY_AUTO_DETECT] = "";
     };
 
-    const bool lossless_scaling_enabled = _app.lossless_scaling_framegen;
-    _env["SUNSHINE_FRAME_GENERATION_PROVIDER"] = lossless_scaling_enabled ? _app.frame_generation_provider : "";
+    const bool lossless_scaling_enabled = _app.lossless_scaling_enabled || _app.lossless_scaling_framegen;
+    _env["SUNSHINE_FRAME_GENERATION_PROVIDER"] =
+      _app.lossless_scaling_framegen ? _app.frame_generation_provider : "";
 
-    const bool using_lossless_provider = lossless_scaling_enabled &&
+    const bool using_lossless_provider = _app.lossless_scaling_framegen &&
                                          boost::iequals(_app.frame_generation_provider, "lossless-scaling");
     if (lossless_scaling_enabled) {
-      _env["SUNSHINE_LOSSLESS_SCALING_FRAMEGEN"] = "1";
+      _env["SUNSHINE_LOSSLESS_SCALING_FRAMEGEN"] = _app.lossless_scaling_framegen ? "1" : "";
       if (using_lossless_provider && effective_lossless_target) {
         _env["SUNSHINE_LOSSLESS_SCALING_TARGET_FPS"] = std::to_string(*effective_lossless_target);
       } else {
@@ -2271,6 +2272,7 @@ namespace proc {
         if (!gen1_framegen_fix) {
           gen1_framegen_fix = app_node.get_optional<bool>("dlss-framegen-capture-fix"s);
         }
+        auto lossless_scaling_enabled = app_node.get_optional<bool>("lossless-scaling-enabled"s);
         auto lossless_scaling_framegen = app_node.get_optional<bool>("lossless-scaling-framegen"s);
         auto lossless_scaling_launch_delay = app_node.get_optional<int>("lossless-scaling-launch-delay"s);
         auto frame_generation_provider = app_node.get_optional<std::string>("frame-generation-provider"s);
@@ -2309,7 +2311,11 @@ namespace proc {
           // ignore overrides parse errors; continue without them
         }
 
+        ctx.lossless_scaling_enabled = lossless_scaling_enabled.value_or(false);
         ctx.lossless_scaling_framegen = lossless_scaling_framegen.value_or(false);
+        if (!lossless_scaling_enabled) {
+          ctx.lossless_scaling_enabled = ctx.lossless_scaling_framegen;
+        }
         ctx.frame_generation_provider = frame_generation_provider ? normalize_frame_generation_provider(*frame_generation_provider) : "lossless-scaling";
         ctx.lossless_scaling_target_fps.reset();
         ctx.lossless_scaling_rtss_limit.reset();
