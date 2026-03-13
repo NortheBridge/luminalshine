@@ -46,9 +46,10 @@
                       Name="Vibeshine"
                       Description="Launch Vibeshine Web UI"
                       Target="[INSTALL_ROOT]sunshine.exe"
+                      Icon="ProductIcon.ico"
                       Arguments="--shortcut"
                       WorkingDirectory="INSTALL_ROOT">
-              <ShortcutProperty Key="System.AppUserModel.ID" Value="Vibeshine.Vibeshine" />
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.VibeshineAppId)" />
             </Shortcut>
             <RegistryValue Root="HKCU" Key="Software\Vibeshine\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
             <RemoveFolder Id="RemoveVibeshineMenuFolder" Directory="VIBESHINE_PROGRAM_MENU_FOLDER" On="uninstall" />
