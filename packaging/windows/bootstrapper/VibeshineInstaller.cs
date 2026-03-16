@@ -2214,27 +2214,31 @@ namespace VibeshineInstaller {
     public static PayloadMsiInfo TryGetPayloadMsiInfo(InstallerArguments arguments) {
       try {
         var msiPath = ResolveMsiPath(arguments == null ? null : arguments.MsiPathOverride);
-        if (string.IsNullOrWhiteSpace(msiPath) || !File.Exists(msiPath)) {
-          return null;
-        }
-
-        var productCode = ReadMsiProperty(msiPath, "ProductCode");
-        var upgradeCode = ReadMsiProperty(msiPath, "UpgradeCode");
-        var versionText = ReadMsiProperty(msiPath, "ProductVersion");
-        if (string.IsNullOrWhiteSpace(productCode) && string.IsNullOrWhiteSpace(versionText) && string.IsNullOrWhiteSpace(upgradeCode)) {
-          return null;
-        }
-
-        return new PayloadMsiInfo {
-          ProductCode = productCode ?? string.Empty,
-          UpgradeCode = upgradeCode ?? string.Empty,
-          VersionText = versionText ?? string.Empty,
-          Version = ParseVersion(versionText),
-          RelatedProductCodes = EnumerateRelatedProducts(upgradeCode)
-        };
+        return TryGetPayloadMsiInfo(msiPath);
       } catch {
         return null;
       }
+    }
+
+    private static PayloadMsiInfo TryGetPayloadMsiInfo(string msiPath) {
+      if (string.IsNullOrWhiteSpace(msiPath) || !File.Exists(msiPath)) {
+        return null;
+      }
+
+      var productCode = ReadMsiProperty(msiPath, "ProductCode");
+      var upgradeCode = ReadMsiProperty(msiPath, "UpgradeCode");
+      var versionText = ReadMsiProperty(msiPath, "ProductVersion");
+      if (string.IsNullOrWhiteSpace(productCode) && string.IsNullOrWhiteSpace(versionText) && string.IsNullOrWhiteSpace(upgradeCode)) {
+        return null;
+      }
+
+      return new PayloadMsiInfo {
+        ProductCode = productCode ?? string.Empty,
+        UpgradeCode = upgradeCode ?? string.Empty,
+        VersionText = versionText ?? string.Empty,
+        Version = ParseVersion(versionText),
+        RelatedProductCodes = EnumerateRelatedProducts(upgradeCode)
+      };
     }
 
     private static List<InstalledProductInfo> GetInstalledProducts(bool includeSunshine) {
@@ -2533,8 +2537,29 @@ namespace VibeshineInstaller {
         };
       }
 
+      var msiPath = ResolveMsiPath(arguments == null ? null : arguments.MsiPathOverride);
+      var restartRequired = competingProductsRequireRestart;
+
+      var uninstallDowngradeSourceResult = TryPreUninstallDowngradeSourceVersion(
+        msiPath,
+        "install_remove_vibeshine_downgrade",
+        true,
+        false);
+      if (uninstallDowngradeSourceResult != null) {
+        restartRequired |= uninstallDowngradeSourceResult.ExitCode == 3010;
+        if (!uninstallDowngradeSourceResult.Succeeded) {
+          return new InstallerResult {
+            Operation = InstallerOperation.Install,
+            ExitCode = uninstallDowngradeSourceResult.ExitCode,
+            Message = BuildDowngradeSourcePreUninstallFailureMessage(uninstallDowngradeSourceResult.Message),
+            LogPath = uninstallDowngradeSourceResult.LogPath
+          };
+        }
+      }
+
       var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion("install_remove_vibeshine_1146", true, false);
       if (uninstallUpgradeSourceResult != null) {
+        restartRequired |= uninstallUpgradeSourceResult.ExitCode == 3010;
         if (!uninstallUpgradeSourceResult.Succeeded) {
           return new InstallerResult {
             Operation = InstallerOperation.Install,
@@ -2545,13 +2570,12 @@ namespace VibeshineInstaller {
         }
       }
 
-      var msiPath = ResolveMsiPath(arguments == null ? null : arguments.MsiPathOverride);
       var installResult = RunInstallAttempt(
         msiPath,
         installDirectory,
         installVirtualDisplayDriver,
         saveInstallLogs,
-        competingProductsRequireRestart,
+        restartRequired,
         "install");
 
       if (ShouldRetryInstallWithFreshPayload(arguments, msiPath, installResult)) {
@@ -2562,7 +2586,7 @@ namespace VibeshineInstaller {
           installDirectory,
           installVirtualDisplayDriver,
           saveInstallLogs,
-          competingProductsRequireRestart,
+          restartRequired,
           "install_recovery");
         if (!retryResult.Succeeded && !string.IsNullOrWhiteSpace(installResult.LogPath)) {
           retryResult.Message += " Initial attempt log: " + installResult.LogPath;
@@ -2893,6 +2917,35 @@ namespace VibeshineInstaller {
       return prefix + " " + uninstallMessage;
     }
 
+    private static string BuildDowngradeSourcePreUninstallFailureMessage(string uninstallMessage) {
+      var prefix = "Failed to uninstall the newer Vibeshine version before starting the downgrade."
+        + " Downgrades require uninstall/reinstall because MSI blocks installing an older version over a newer one.";
+      if (string.IsNullOrWhiteSpace(uninstallMessage)) {
+        return prefix;
+      }
+      return prefix + " " + uninstallMessage;
+    }
+
+    private static InstallerResult TryPreUninstallDowngradeSourceVersion(
+      string msiPath,
+      string logPhase,
+      bool hiddenWindow,
+      bool requestElevationIfNeeded) {
+      var installedVibeshine = GetInstalledVibeshineProduct();
+      if (!RequiresPreUninstallDowngradeWorkaround(installedVibeshine, msiPath)) {
+        return null;
+      }
+
+      return UninstallInstalledProducts(
+        logPhase,
+        hiddenWindow,
+        requestElevationIfNeeded,
+        false,
+        false,
+        false,
+        new[] { InstalledProductKind.Vibeshine });
+    }
+
     private static InstallerResult TryPreUninstallProblematicUpgradeSourceVersion(
       string logPhase,
       bool hiddenWindow,
@@ -2910,6 +2963,17 @@ namespace VibeshineInstaller {
         false,
         false,
         new[] { InstalledProductKind.Vibeshine });
+    }
+
+    private static bool RequiresPreUninstallDowngradeWorkaround(InstalledProductInfo installedProduct, string msiPath) {
+      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.Vibeshine || installedProduct.Version == null) {
+        return false;
+      }
+
+      var payloadMsiInfo = TryGetPayloadMsiInfo(msiPath);
+      return payloadMsiInfo != null
+        && payloadMsiInfo.Version != null
+        && installedProduct.Version > payloadMsiInfo.Version;
     }
 
     private static bool RequiresPreUninstallUpgradeWorkaround(InstalledProductInfo installedProduct) {
