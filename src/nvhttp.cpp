@@ -1881,9 +1881,10 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
 
-    const bool no_active_sessions = (rtsp_stream::session_count() == 0);
+    const bool no_active_sessions =
+      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
     // Runtime overrides are global process state. Do not reapply them while
-    // another RTSP session is active, otherwise a second client can mutate
+    // another RTSP/WebRTC session is active, otherwise a second client can mutate
     // active stream limits (e.g. fps/encoding-related settings) mid-session.
     const bool update_runtime_overrides = no_active_sessions;
 
@@ -2158,7 +2159,9 @@ namespace nvhttp {
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_sessions {
+      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions()
+    };
     const bool allow_display_changes = config::video.dd.config_revert_on_disconnect;
     if (no_active_sessions && allow_display_changes) {
       config::set_runtime_output_name_override(std::nullopt);
