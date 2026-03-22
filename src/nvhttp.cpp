@@ -2013,7 +2013,9 @@ namespace nvhttp {
       }
 
       if (request) {
-        if (!display_helper_integration::apply(*request)) {
+        const bool applied = display_helper_integration::apply(*request);
+        launch_session->display_config_preapplied = applied;
+        if (!applied) {
           if (helper_session_available) {
             BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
           }

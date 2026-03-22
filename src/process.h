@@ -166,7 +166,7 @@ namespace proc {
     std::string get_last_run_app_name();
     bool last_run_app_frame_gen_limiter_fix() const;
     bool is_launch_deferred() const;
-    void terminate();
+    void terminate(bool skip_display_revert = false);
 
     // Hot-update app list and environment without disrupting a running app
     void update_apps(std::vector<ctx_t> &&apps, bp::environment &&env);
