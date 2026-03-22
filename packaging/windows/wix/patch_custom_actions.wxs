@@ -56,6 +56,8 @@
       <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
       <Custom Action="SetMigrateConfig" After="InstallSudovda">NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT REMOVE</Custom>
+      <Custom Action="SetRunInstallerMigrations" After="MigrateConfig">NOT REMOVE</Custom>
+      <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations">NOT REMOVE</Custom>
 
       <!-- Uninstall before file removal -->
       <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles">REMOVE="ALL"</Custom>
