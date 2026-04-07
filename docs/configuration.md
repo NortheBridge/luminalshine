@@ -2911,7 +2911,7 @@ They appear in the Frame Limiter section of the settings UI.
     </tr>
 </table>
 
-### nvenc_force_split_encode
+### nvenc_split_encode
 
 <table>
     <tr>
@@ -2942,7 +2942,7 @@ They appear in the Frame Limiter section of the settings UI.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            nvenc_force_split_encode = enabled
+            nvenc_split_encode = enabled
             @endcode</td>
     </tr>
 </table>
