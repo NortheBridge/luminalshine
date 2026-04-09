@@ -40,6 +40,7 @@ extern "C" {
 
 #ifdef _WIN32
   #include "src/platform/windows/display_helper_integration.h"
+  #include "src/platform/windows/display_vram.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
   #include "uuid.h"
@@ -221,6 +222,28 @@ namespace video {
       return true;
 #endif
     }
+
+    bool is_placeholder_capture_image(const platf::img_t &img) {
+#ifdef _WIN32
+      if (auto d3d_img = dynamic_cast<const platf::dxgi::img_d3d_t *>(&img)) {
+        return d3d_img->dummy;
+      }
+#endif
+
+      return false;
+    }
+
+    struct encode_bootstrap_state_t {
+      bool allow_placeholder_before_first_real = false;
+      bool placeholder_encoded = false;
+      bool real_frame_seen = false;
+      bool current_input_placeholder = true;
+
+      bool should_encode_placeholder() const {
+        return !real_frame_seen && current_input_placeholder &&
+               allow_placeholder_before_first_real && !placeholder_encoded;
+      }
+    };
 
     struct EncoderProbeCacheState {
       std::mutex mutex;
@@ -702,6 +725,7 @@ namespace video {
   struct sync_session_t {
     sync_session_ctx_t *ctx;
     std::unique_ptr<encode_session_t> session;
+    encode_bootstrap_state_t bootstrap;
   };
 
   using encode_session_ctx_queue_t = safe::queue_t<sync_session_ctx_t>;
@@ -2352,6 +2376,8 @@ namespace video {
       }
     }
 
+    encode_bootstrap_state_t bootstrap_state {.allow_placeholder_before_first_real = frame_nr <= 1};
+
     while (true) {
       // Break out of the encoding loop if any of the following are true:
       // a) The stream is ending
@@ -2382,23 +2408,47 @@ namespace video {
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+      bool placeholder_input = bootstrap_state.current_input_placeholder;
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
         if (auto img = images->pop(max_frametime)) {
-          frame_timestamp = img->frame_timestamp;
+          placeholder_input = is_placeholder_capture_image(*img);
+          if (!placeholder_input && bootstrap_state.current_input_placeholder) {
+            session->request_idr_frame();
+          }
+
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
           }
+
+          bootstrap_state.current_input_placeholder = placeholder_input;
+
+          if (!placeholder_input) {
+            bootstrap_state.real_frame_seen = true;
+            frame_timestamp = img->frame_timestamp;
+          } else {
+            frame_timestamp.reset();
+          }
         } else if (!images->running()) {
           break;
+        } else {
+          placeholder_input = bootstrap_state.current_input_placeholder;
         }
+      }
+
+      if (placeholder_input && !bootstrap_state.should_encode_placeholder()) {
+        continue;
       }
 
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
+      }
+
+      if (placeholder_input) {
+        bootstrap_state.placeholder_encoded = true;
       }
 
       session->request_normal_frame();
@@ -2541,6 +2591,7 @@ namespace video {
       return std::nullopt;
     }
 
+    encode_session.bootstrap.allow_placeholder_before_first_real = ctx.frame_nr <= 1;
     encode_session.session = std::move(session);
 
     return encode_session;
@@ -2670,16 +2721,35 @@ namespace video {
             ctx->idr_events->pop();
           }
 
-          if (frame_captured && pos->session->convert(*img)) {
-            BOOST_LOG(error) << "Could not convert image"sv;
-            ctx->shutdown_event->raise(true);
+          std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+          bool placeholder_input = pos->bootstrap.current_input_placeholder;
 
-            continue;
+          if (frame_captured) {
+            placeholder_input = is_placeholder_capture_image(*img);
+            if (!placeholder_input && pos->bootstrap.current_input_placeholder) {
+              pos->session->request_idr_frame();
+            }
+
+            if (pos->session->convert(*img)) {
+              BOOST_LOG(error) << "Could not convert image"sv;
+              ctx->shutdown_event->raise(true);
+
+              continue;
+            }
+
+            pos->bootstrap.current_input_placeholder = placeholder_input;
+
+            if (!placeholder_input) {
+              pos->bootstrap.real_frame_seen = true;
+              frame_timestamp = img->frame_timestamp;
+            }
+          } else {
+            placeholder_input = pos->bootstrap.current_input_placeholder;
           }
 
-          std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
-          if (img) {
-            frame_timestamp = img->frame_timestamp;
+          if (placeholder_input && !pos->bootstrap.should_encode_placeholder()) {
+            ++pos;
+            continue;
           }
 
           if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp)) {
@@ -2687,6 +2757,10 @@ namespace video {
             ctx->shutdown_event->raise(true);
 
             continue;
+          }
+
+          if (placeholder_input) {
+            pos->bootstrap.placeholder_encoded = true;
           }
 
           pos->session->request_normal_frame();
