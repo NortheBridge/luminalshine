@@ -30,9 +30,14 @@
   // standard includes
   #include <atomic>
   #include <csignal>
+  #include <condition_variable>
   #include <cwchar>
+  #include <functional>
+  #include <mutex>
+  #include <queue>
   #include <string>
   #include <thread>
+  #include <utility>
 
   // lib includes
   #include <boost/filesystem.hpp>
@@ -51,6 +56,13 @@ using namespace std::literals;
 // system_tray namespace
 namespace system_tray {
   static std::atomic<bool> tray_initialized = false;
+  static std::thread tray_thread;
+#ifdef _WIN32
+  static std::mutex tray_action_mutex;
+  static std::condition_variable tray_action_cv;
+  static std::queue<std::function<void()>> tray_actions;
+  static std::atomic<bool> tray_shutdown_requested = false;
+#endif
 
   void tray_open_ui_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Opening UI from system tray"sv;
@@ -98,6 +110,70 @@ namespace system_tray {
     .iconPathCount = 4,
     .allIconPaths = {TRAY_ICON, TRAY_ICON_LOCKED, TRAY_ICON_PLAYING, TRAY_ICON_PAUSING},
   };
+
+  // Persistent storage for tooltip/notification strings to avoid dangling pointers.
+  static std::string s_tooltip;
+  static std::string s_notification_title;
+  static std::string s_notification_text;
+
+  static void apply_tray_state(
+    const char *icon,
+    std::string tooltip,
+    std::string notification_title = {},
+    std::string notification_text = {},
+    const char *notification_icon = nullptr,
+    void (*notification_cb)() = nullptr
+  ) {
+    s_tooltip = std::move(tooltip);
+    s_notification_title = std::move(notification_title);
+    s_notification_text = std::move(notification_text);
+
+    tray.icon = icon;
+    tray.tooltip = s_tooltip.empty() ? nullptr : s_tooltip.c_str();
+    tray.notification_title = s_notification_title.empty() ? nullptr : s_notification_title.c_str();
+    tray.notification_text = s_notification_text.empty() ? nullptr : s_notification_text.c_str();
+    tray.notification_icon = notification_icon;
+    tray.notification_cb = notification_cb;
+    tray_update(&tray);
+  }
+
+#ifdef _WIN32
+  static void clear_pending_quit_messages() {
+    MSG msg {};
+    while (PeekMessageA(&msg, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
+  }
+
+  static void run_pending_tray_actions() {
+    std::queue<std::function<void()>> pending_actions;
+    {
+      std::lock_guard lock(tray_action_mutex);
+      pending_actions.swap(tray_actions);
+    }
+
+    while (!pending_actions.empty()) {
+      auto action = std::move(pending_actions.front());
+      pending_actions.pop();
+      action();
+    }
+  }
+#endif
+
+  template<typename Fn>
+  static void run_on_tray_thread(Fn &&fn) {
+    if (!tray_initialized.load()) {
+      return;
+    }
+
+#ifdef _WIN32
+    {
+      std::lock_guard lock(tray_action_mutex);
+      tray_actions.emplace(std::forward<Fn>(fn));
+    }
+    tray_action_cv.notify_one();
+#else
+    fn();
+#endif
+  }
 
   int system_tray() {
   #ifdef _WIN32
@@ -195,16 +271,19 @@ namespace system_tray {
     int attempt = 0;
     int tray_init_result = -1;
     while (tray_init_result < 0 && attempt < 30) {
+#ifdef _WIN32
+      if (tray_shutdown_requested.load()) {
+        return 0;
+      }
+#endif
       tray_init_result = tray_init(&tray);
       if (tray_init_result >= 0) {
         break;
       }
-  #ifdef _WIN32
-      auto last_error = GetLastError();
-      BOOST_LOG(warning) << "Failed to create system tray (attempt "sv << attempt + 1 << ", error " << last_error << ')';
-  #else
+#ifdef _WIN32
+      clear_pending_quit_messages();
+#endif
       BOOST_LOG(warning) << "Failed to create system tray (attempt "sv << attempt + 1 << ')';
-  #endif
       std::this_thread::sleep_for(2s);
       ++attempt;
     }
@@ -217,10 +296,28 @@ namespace system_tray {
     }
 
     tray_initialized = true;
+#ifdef _WIN32
+    while (!tray_shutdown_requested.load()) {
+      run_pending_tray_actions();
+      if (tray_loop(0) < 0) {
+        break;
+      }
+
+      std::unique_lock lock(tray_action_mutex);
+      tray_action_cv.wait_for(lock, 50ms, []() {
+        return tray_shutdown_requested.load() || !tray_actions.empty();
+      });
+    }
+
+    tray_exit();
+    clear_pending_quit_messages();
+#else
     while (tray_loop(1) == 0) {
       BOOST_LOG(debug) << "System tray loop"sv;
     }
+#endif
 
+    tray_initialized = false;
     return 0;
   }
 
@@ -236,149 +333,102 @@ namespace system_tray {
 
     BOOST_LOG(info) << "system_tray() is not yet implemented for this platform."sv;
   #else  // Windows, Linux
-    // create tray in separate thread
-    std::thread tray_thread(system_tray);
-    tray_thread.detach();
+    if (tray_thread.joinable()) {
+      return;
+    }
+#ifdef _WIN32
+    tray_shutdown_requested = false;
+#endif
+    tray_thread = std::thread(system_tray);
   #endif
   }
 
   int end_tray() {
     tray_initialized = false;
-    tray_exit();
+#ifdef _WIN32
+    tray_shutdown_requested = true;
+    tray_action_cv.notify_one();
+#else
+    if (tray_thread.joinable()) {
+      tray_exit();
+    }
+#endif
+    if (tray_thread.joinable()) {
+      tray_thread.join();
+    }
+#ifdef _WIN32
+    std::lock_guard lock(tray_action_mutex);
+    std::queue<std::function<void()>> empty;
+    tray_actions.swap(empty);
+#endif
     return 0;
   }
 
-  // Persistent storage for tooltip/notification strings to avoid dangling pointers
-  static std::string s_tooltip;
-  static std::string s_notification_text;
-
   void update_tray_playing(std::string app_name) {
-    if (!tray_initialized) {
-      return;
-    }
-
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-    tray.icon = TRAY_ICON_PLAYING;
-    tray_update(&tray);
-    tray.icon = TRAY_ICON_PLAYING;
-    tray.notification_title = "Stream Started";
-    s_notification_text = "Streaming started for " + app_name;
-    s_tooltip = s_notification_text;
-    tray.notification_text = s_notification_text.c_str();
-    tray.tooltip = s_tooltip.c_str();
-    tray.notification_icon = TRAY_ICON_PLAYING;
-    tray_update(&tray);
+    run_on_tray_thread([app_name = std::move(app_name)]() {
+      const auto notification_text = "Streaming started for " + app_name;
+      apply_tray_state(TRAY_ICON_PLAYING, PROJECT_NAME);
+      apply_tray_state(TRAY_ICON_PLAYING, notification_text, "Stream Started", notification_text, TRAY_ICON_PLAYING);
+    });
   }
 
   void update_tray_pausing(std::string app_name) {
-    if (!tray_initialized) {
-      return;
-    }
-
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-    tray.icon = TRAY_ICON_PAUSING;
-    tray_update(&tray);
-    s_notification_text = "Streaming paused for " + app_name;
-    tray.icon = TRAY_ICON_PAUSING;
-    tray.notification_title = "Stream Paused";
-    tray.notification_text = s_notification_text.c_str();
-    tray.tooltip = s_notification_text.c_str();
-    tray.notification_icon = TRAY_ICON_PAUSING;
-    tray_update(&tray);
+    run_on_tray_thread([app_name = std::move(app_name)]() {
+      const auto notification_text = "Streaming paused for " + app_name;
+      apply_tray_state(TRAY_ICON_PAUSING, PROJECT_NAME);
+      apply_tray_state(TRAY_ICON_PAUSING, notification_text, "Stream Paused", notification_text, TRAY_ICON_PAUSING);
+    });
   }
 
   void update_tray_stopped(std::string app_name) {
-    if (!tray_initialized) {
-      return;
-    }
-
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-    tray.icon = TRAY_ICON;
-    tray_update(&tray);
-    s_notification_text = "Application " + app_name + " successfully stopped";
-    tray.icon = TRAY_ICON;
-    tray.notification_icon = TRAY_ICON;
-    tray.notification_title = "Application Stopped";
-    tray.notification_text = s_notification_text.c_str();
-    tray.tooltip = PROJECT_NAME;
-    tray_update(&tray);
+    run_on_tray_thread([app_name = std::move(app_name)]() {
+      auto notification_text = "Application " + app_name + " successfully stopped";
+      apply_tray_state(TRAY_ICON, PROJECT_NAME);
+      apply_tray_state(TRAY_ICON, PROJECT_NAME, "Application Stopped", std::move(notification_text), TRAY_ICON);
+    });
   }
 
   void update_tray_require_pin() {
-    if (!tray_initialized) {
-      return;
-    }
-
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-    tray.icon = TRAY_ICON;
-    tray_update(&tray);
-    tray.icon = TRAY_ICON;
-    tray.notification_title = "Incoming Pairing Request";
-    tray.notification_text = "Click here to complete the pairing process";
-    tray.notification_icon = TRAY_ICON_LOCKED;
-    tray.tooltip = PROJECT_NAME;
-    tray.notification_cb = []() {
-      launch_ui("/clients");
-    };
-    tray_update(&tray);
+    run_on_tray_thread([]() {
+      apply_tray_state(TRAY_ICON, PROJECT_NAME);
+      apply_tray_state(
+        TRAY_ICON,
+        PROJECT_NAME,
+        "Incoming Pairing Request",
+        "Click here to complete the pairing process",
+        TRAY_ICON_LOCKED,
+        []() {
+          launch_ui("/clients");
+        }
+      );
+    });
   }
 
   void update_tray_vigem_missing() {
-    if (!tray_initialized) {
-      return;
-    }
-
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-    tray.icon = TRAY_ICON;
-    tray_update(&tray);
-
-    tray.icon = TRAY_ICON;
-    tray.notification_title = "Gamepad Input Unavailable";
-    tray.notification_text = "ViGEm is not installed. Click for setup info";
-    tray.notification_icon = TRAY_ICON;
-    tray.tooltip = PROJECT_NAME;
-    tray.notification_cb = []() {
-      // Open Dashboard for more information
-      launch_ui("/");
-    };
-    tray_update(&tray);
+    run_on_tray_thread([]() {
+      apply_tray_state(TRAY_ICON, PROJECT_NAME);
+      apply_tray_state(
+        TRAY_ICON,
+        PROJECT_NAME,
+        "Gamepad Input Unavailable",
+        "ViGEm is not installed. Click for setup info",
+        TRAY_ICON,
+        []() {
+          // Open Dashboard for more information
+          launch_ui("/");
+        }
+      );
+    });
   }
 
   void tray_notify(const char *title, const char *text, void (*cb)()) {
-    if (!tray_initialized) {
-      return;
-    }
+    const auto notification_title = title ? std::string {title} : std::string {};
+    const auto notification_text = text ? std::string {text} : std::string {};
 
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-    tray.icon = TRAY_ICON;
-    tray_update(&tray);
-
-    tray.icon = TRAY_ICON;
-    tray.notification_title = title;
-    s_notification_text = text ? std::string {text} : std::string {};
-    tray.notification_text = s_notification_text.c_str();
-    tray.notification_icon = TRAY_ICON;
-    tray.tooltip = PROJECT_NAME;
-    tray.notification_cb = cb;
-    tray_update(&tray);
+    run_on_tray_thread([notification_title, notification_text, cb]() {
+      apply_tray_state(TRAY_ICON, PROJECT_NAME);
+      apply_tray_state(TRAY_ICON, PROJECT_NAME, notification_title, notification_text, TRAY_ICON, cb);
+    });
   }
 
 }  // namespace system_tray
