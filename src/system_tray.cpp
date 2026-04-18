@@ -47,6 +47,7 @@
   #include "confighttp.h"
   #include "logging.h"
   #include "platform/common.h"
+  #include "platform/windows/service_constants.h"
   #include "process.h"
   #include "src/entry_handler.h"
   #include "update.h"
@@ -81,7 +82,7 @@ namespace system_tray {
   #ifdef _WIN32
     // If we're running in a service, return a special status to
     // tell it to terminate too, otherwise it will just respawn us.
-    if (GetConsoleWindow() == nullptr) {
+    if (GetEnvironmentVariableW(platf::service_launch::launched_by_service_env_var, nullptr, 0) != 0) {
       lifetime::exit_sunshine(ERROR_SHUTDOWN_IN_PROGRESS, true);
       return;
     }
