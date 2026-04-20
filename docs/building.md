@@ -182,7 +182,30 @@ the `third-party/libwebrtc` submodule, but you must build WebRTC separately and 
 contains `include/` and `lib/` (e.g., `libwebrtc.dll` and its import library). We use the `third-party/depot_tools`
 submodule for `gclient`/`gn`.
 
-Build steps (summary from libwebrtc):
+###### Quickstart (recommended)
+A helper script automates the full depot_tools / gclient / gn / ninja flow:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_mingw_webrtc.ps1
+```
+
+By default the script caches its working tree and output to `%LOCALAPPDATA%\Vibeshine\deps\libwebrtc\{src,out}`,
+which is **shared across every sunshine build dir, worktree, and git checkout on the machine**. This means:
+
+- Wiping `build/` does not destroy libwebrtc — the next CMake configure picks it back up.
+- Switching git branches does not require rebuilding libwebrtc unless the WebRTC branch (`m125_release` etc.) actually changed.
+- Multiple sunshine build dirs share one cached libwebrtc.
+
+`cmake/dependencies/webrtc.cmake` looks at the same default location, so no `-DWEBRTC_ROOT=...` is needed after the
+first build. To relocate the cache, set `VIBESHINE_DEPS_DIR=<path>` in your environment before invoking either the
+script or CMake.
+
+For finer control the script accepts overrides via `-BuildDir`/`-OutDir` parameters or the legacy
+`WEBRTC_BUILD_DIR` / `WEBRTC_OUT_DIR` env vars (these still take precedence if set).
+
+###### Manual build (advanced / first-time porting)
+
+If you cannot use the helper script, the underlying steps are:
 
 1. Create a checkout directory and add a `.gclient` that points to
    `https://github.com/webrtc-sdk/webrtc.git@m137_release` with `target_os = ['win']`.
@@ -205,10 +228,12 @@ Build steps (summary from libwebrtc):
    gn gen out-debug/Windows-x64 --args="target_os=\"win\" target_cpu=\"x64\" is_component_build=false is_clang=true is_debug=true rtc_use_h264=true ffmpeg_branding=\"Chrome\" rtc_include_tests=false rtc_build_examples=false libwebrtc_desktop_capture=true" --ide=vs2022
    ninja -C out-debug/Windows-x64 libwebrtc
    ```
-7. Stage the artifacts into a directory with `include/` and `lib/` subfolders inside your Sunshine build tree (for
-   example, `build/libwebrtc`). Copy `libwebrtc.dll` and `libwebrtc.dll.lib` into `lib/`.
-8. Configure Sunshine with `-DSUNSHINE_ENABLE_WEBRTC=ON` (the default `WEBRTC_ROOT` points at `build/libwebrtc`). If
-   CMake still fails to find libwebrtc, pass `WEBRTC_INCLUDE_DIR` and `WEBRTC_LIBRARY` explicitly.
+7. Stage the artifacts into a directory with `include/` and `lib/` subfolders. Either place them at the default
+   shared cache location (`%LOCALAPPDATA%\Vibeshine\deps\libwebrtc\out`) so CMake finds them automatically, or
+   point CMake at your staging directory with `-DWEBRTC_ROOT=<path>`. Copy `libwebrtc.dll` and `libwebrtc.dll.lib`
+   into `lib/`.
+8. Configure Sunshine with `-DSUNSHINE_ENABLE_WEBRTC=ON`. If CMake still fails to find libwebrtc, pass
+   `WEBRTC_INCLUDE_DIR` and `WEBRTC_LIBRARY` explicitly.
 
 To create a WiX installer, you also need to install [.NET](https://dotnet.microsoft.com/download).
 
