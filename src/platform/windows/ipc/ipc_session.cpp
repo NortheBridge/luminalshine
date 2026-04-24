@@ -1,12 +1,13 @@
 /**
  * @file src/platform/windows/ipc/ipc_session.cpp
  * @brief Implements the IPC session logic for Windows WGC capture integration.
- * Handles inter-process communication, shared texture setup, and frame synchronization
+ * Handles control IPC, shared texture setup, and event-driven frame synchronization
  * between the main process and the WGC capture helper process.
  */
 // standard includes
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -43,6 +44,42 @@ namespace platf::dxgi {
     void record_recent_wgc_desktop_switch() {
       g_last_wgc_desktop_switch_us.store(now_steady_us(), std::memory_order_relaxed);
     }
+
+    struct frame_metadata_snapshot_t {
+      LONG64 frame_id = 0;
+      LONG64 frame_qpc = 0;
+    };
+
+    bool read_frame_metadata_snapshot(const frame_metadata_t *metadata, frame_metadata_snapshot_t &snapshot) {
+      if (!metadata) {
+        return false;
+      }
+
+      constexpr int max_attempts = 64;
+      for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        const auto sequence_start = metadata->sequence;
+        if ((sequence_start & 1) != 0) {
+          std::this_thread::yield();
+          continue;
+        }
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+        const auto frame_id = metadata->frame_id;
+        const auto frame_qpc = metadata->frame_qpc;
+        std::atomic_thread_fence(std::memory_order_acquire);
+
+        const auto sequence_end = metadata->sequence;
+        if (sequence_start == sequence_end && (sequence_end & 1) == 0) {
+          snapshot.frame_id = frame_id;
+          snapshot.frame_qpc = frame_qpc;
+          return true;
+        }
+
+        std::this_thread::yield();
+      }
+
+      return false;
+    }
   }  // namespace
 
   bool recent_wgc_desktop_switch_grace_active() {
@@ -75,13 +112,15 @@ namespace platf::dxgi {
         _pipe.reset();
       }
 
-      if (_frame_queue_pipe) {
-        _frame_queue_pipe->disconnect();
-        _frame_queue_pipe.reset();
+      if (_frame_metadata) {
+        UnmapViewOfFile(_frame_metadata);
+        _frame_metadata = nullptr;
       }
 
       _shared_texture = nullptr;
       _keyed_mutex = nullptr;
+      _frame_ready_event.close();
+      _frame_metadata_mapping.close();
 
       stop_helper_process();
     } catch (...) {
@@ -140,10 +179,15 @@ namespace platf::dxgi {
       _pipe->stop();
       _pipe.reset();
     }
-    _frame_queue_pipe.reset();
+    if (_frame_metadata) {
+      UnmapViewOfFile(_frame_metadata);
+      _frame_metadata = nullptr;
+    }
+    _frame_ready_event.close();
+    _frame_metadata_mapping.close();
     _shared_texture = nullptr;
     _keyed_mutex = nullptr;
-    _frame_ready = false;
+    _last_frame_id = 0;
     _frame_qpc = 0;
     _force_reinit = false;
     _should_swap_to_dxgi = false;
@@ -175,11 +219,9 @@ namespace platf::dxgi {
     exePathBuffer.resize(wcslen(exePathBuffer.data()));
     std::filesystem::path mainExeDir = std::filesystem::path(exePathBuffer).parent_path();
     std::string pipe_guid = generate_guid();
-    std::string frame_queue_pipe_guid = generate_guid();
 
     std::filesystem::path exe_path = mainExeDir / L"tools" / L"sunshine_wgc_capture.exe";
-    // Pass both GUIDs as arguments, space-separated
-    std::wstring arguments = platf::from_utf8(pipe_guid + " " + frame_queue_pipe_guid);
+    std::wstring arguments = platf::from_utf8(pipe_guid);
 
     if (!_process_helper->start(exe_path.wstring(), arguments)) {
       auto err = GetLastError();
@@ -206,23 +248,15 @@ namespace platf::dxgi {
     auto anon_connector = std::make_unique<AnonymousPipeFactory>();
 
     auto control_pipe = anon_connector->create_server(pipe_guid);
-    auto frame_queue_pipe = anon_connector->create_server(frame_queue_pipe_guid);
-    if (!control_pipe || !frame_queue_pipe) {
+    if (!control_pipe) {
       BOOST_LOG(error) << "IPC pipe setup failed for WGC session; aborting";
       return;
     }
 
     control_pipe->wait_for_client_connection(5000);
-    frame_queue_pipe->wait_for_client_connection(5000);
 
     if (!control_pipe->is_connected()) {
       BOOST_LOG(error) << "Helper failed to connect to control pipe within timeout";
-      _process_helper->terminate();
-      return;
-    }
-
-    if (!frame_queue_pipe->is_connected()) {
-      BOOST_LOG(error) << "Helper failed to connect to frame queue pipe within timeout";
       _process_helper->terminate();
       return;
     }
@@ -281,7 +315,7 @@ namespace platf::dxgi {
         if (bytes_read == sizeof(shared_handle_data_t)) {
           shared_handle_data_t handle_data {};
           memcpy(&handle_data, control_buffer.data(), sizeof(handle_data));
-          if (setup_shared_texture_from_shared_handle(handle_data.texture_handle, handle_data.width, handle_data.height)) {
+          if (setup_shared_resources_from_shared_handles(handle_data)) {
             handle_received = true;
           } else {
             break;
@@ -316,19 +350,20 @@ namespace platf::dxgi {
         _pipe->stop();
         _pipe.reset();
       }
-      if (_frame_queue_pipe) {
-        _frame_queue_pipe->disconnect();
-        _frame_queue_pipe.reset();
+      if (_frame_metadata) {
+        UnmapViewOfFile(_frame_metadata);
+        _frame_metadata = nullptr;
       }
       _shared_texture = nullptr;
       _keyed_mutex = nullptr;
+      _frame_ready_event.close();
+      _frame_metadata_mapping.close();
       if (_process_helper) {
         _process_helper->terminate();
       }
     });
 
     _pipe = std::make_unique<AsyncNamedPipe>(std::move(control_pipe));
-    _frame_queue_pipe = std::move(frame_queue_pipe);
 
     if (!_pipe->start(on_message, on_error, on_broken_pipe)) {
       BOOST_LOG(error) << "Failed to start AsyncNamedPipe for helper communication";
@@ -340,54 +375,27 @@ namespace platf::dxgi {
   }
 
   capture_e ipc_session_t::wait_for_frame(std::chrono::milliseconds timeout) {
-    if (!_frame_queue_pipe) {
+    if (!_frame_ready_event || !_frame_metadata) {
       return capture_e::error;
     }
 
-    frame_ready_msg_t frame_msg {};
-    size_t bytesRead = 0;
-    // Use a span over the frame_msg buffer
-    auto result = _frame_queue_pipe->receive_latest(std::span<uint8_t>(reinterpret_cast<uint8_t *>(&frame_msg), sizeof(frame_msg)), bytesRead, static_cast<int>(timeout.count()));
+    const DWORD wait_ms = timeout.count() <= 0 ?
+                            0 :
+                            static_cast<DWORD>(std::min<int64_t>(timeout.count(), INFINITE - 1));
+    const DWORD wait_result = WaitForSingleObject(_frame_ready_event.get(), wait_ms);
 
-    switch (result) {
-      case PipeResult::Success:
-        {
-          if (bytesRead == sizeof(frame_ready_msg_t)) {
-            if (frame_msg.message_type == FRAME_READY_MSG) {
-              _frame_qpc = frame_msg.frame_qpc;
-              _frame_ready = true;
-              return capture_e::ok;
-            }
-
-            BOOST_LOG(warning) << "Ignoring unexpected frame queue message type ("
-                               << static_cast<int>(frame_msg.message_type) << ')';
-            return capture_e::error;
-          }
-
-          if (bytesRead == 1) {
-            // Allow desktop-switch reinit notifications to flow over either pipe.
-            handle_desktop_switch_message(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(&frame_msg), 1));
-            return capture_e::reinit;
-          }
-
-          if (bytesRead > 0) {
-            BOOST_LOG(warning) << "Ignoring unexpected frame queue payload (" << bytesRead << " bytes)";
-          }
-          return capture_e::error;
-        }
-
-      case PipeResult::Timeout:
-        return capture_e::timeout;
-
-      case PipeResult::BrokenPipe:
-      case PipeResult::Disconnected:
-      case PipeResult::Error:
-      default:
-        BOOST_LOG(warning) << "Frame queue pipe error (" << static_cast<int>(result) << "); forcing re-init";
-        _force_reinit = true;
-        _initialized = false;
-        return capture_e::reinit;
+    if (wait_result == WAIT_TIMEOUT) {
+      return capture_e::timeout;
     }
+
+    if (wait_result != WAIT_OBJECT_0) {
+      BOOST_LOG(warning) << "Frame-ready event wait failed (" << GetLastError() << "); forcing re-init";
+      _force_reinit = true;
+      _initialized = false;
+      return capture_e::reinit;
+    }
+
+    return capture_e::ok;
   }
 
   bool ipc_session_t::try_get_adapter_luid(LUID &luid_out) {
@@ -463,6 +471,22 @@ namespace platf::dxgi {
       return capture_e::reinit;
     }
 
+    // The helper publishes metadata while holding this same keyed mutex, so the
+    // snapshot below belongs to the shared texture we just acquired.
+    frame_metadata_snapshot_t snapshot;
+    if (!read_frame_metadata_snapshot(_frame_metadata, snapshot)) {
+      (void) _keyed_mutex->ReleaseSync(0);
+      return capture_e::timeout;
+    }
+
+    if (snapshot.frame_id <= _last_frame_id) {
+      (void) _keyed_mutex->ReleaseSync(0);
+      return capture_e::timeout;
+    }
+
+    _last_frame_id = snapshot.frame_id;
+    _frame_qpc = static_cast<uint64_t>(snapshot.frame_qpc);
+
     // Set output parameters
     gpu_tex_out = _shared_texture;
     frame_qpc_out = _frame_qpc;
@@ -479,14 +503,16 @@ namespace platf::dxgi {
     }
   }
 
-  bool ipc_session_t::setup_shared_texture_from_shared_handle(HANDLE shared_handle, UINT width, UINT height) {
+  bool ipc_session_t::setup_shared_resources_from_shared_handles(const shared_handle_data_t &handle_data) {
     if (!_device) {
-      BOOST_LOG(error) << "No D3D11 device available for setup_shared_texture_from_shared_handle";
+      BOOST_LOG(error) << "No D3D11 device available for WGC shared-resource setup";
       return false;
     }
 
-    if (!shared_handle || shared_handle == INVALID_HANDLE_VALUE) {
-      BOOST_LOG(error) << "Invalid shared handle provided";
+    if (!handle_data.texture_handle || handle_data.texture_handle == INVALID_HANDLE_VALUE ||
+        !handle_data.frame_event_handle || handle_data.frame_event_handle == INVALID_HANDLE_VALUE ||
+        !handle_data.frame_metadata_handle || handle_data.frame_metadata_handle == INVALID_HANDLE_VALUE) {
+      BOOST_LOG(error) << "Invalid WGC shared handle data provided";
       return false;
     }
 
@@ -497,29 +523,32 @@ namespace platf::dxgi {
       return false;
     }
 
-    // Duplicate the handle from the helper process into this process
-    // We copy from the helper process because it runs at a lower integrity level
-    HANDLE duplicated_handle = nullptr;
-    BOOL dup_result = DuplicateHandle(
-      helper_process_handle,  // Source process (helper process)
-      shared_handle,  // Source handle
-      GetCurrentProcess(),  // Target process (this process)
-      &duplicated_handle,  // Target handle
-      0,  // Desired access (0 = same as source)
-      FALSE,  // Don't inherit
-      DUPLICATE_SAME_ACCESS  // Same access rights
-    );
+    // Duplicate handles from the helper process into this process. We copy from
+    // the helper because it runs at a lower integrity level.
+    auto duplicate_helper_handle = [&](HANDLE source, const char *name) -> winrt::handle {
+      HANDLE duplicated = nullptr;
+      if (!DuplicateHandle(
+            helper_process_handle,
+            source,
+            GetCurrentProcess(),
+            &duplicated,
+            0,
+            FALSE,
+            DUPLICATE_SAME_ACCESS
+          )) {
+        BOOST_LOG(error) << "Failed to duplicate WGC " << name << " handle from helper process: " << GetLastError();
+        return {};
+      }
 
-    if (!dup_result) {
-      BOOST_LOG(error) << "Failed to duplicate handle from helper process: " << GetLastError();
+      return winrt::handle {duplicated};
+    };
+
+    auto duplicated_texture_handle = duplicate_helper_handle(handle_data.texture_handle, "texture");
+    auto duplicated_event_handle = duplicate_helper_handle(handle_data.frame_event_handle, "frame event");
+    auto duplicated_metadata_handle = duplicate_helper_handle(handle_data.frame_metadata_handle, "frame metadata");
+    if (!duplicated_texture_handle || !duplicated_event_handle || !duplicated_metadata_handle) {
       return false;
     }
-
-    auto fg = util::fail_guard([&]() {
-      if (duplicated_handle) {
-        CloseHandle(duplicated_handle);
-      }
-    });
 
     auto device1 = _device.try_as<ID3D11Device1>();
     if (!device1) {
@@ -528,7 +557,7 @@ namespace platf::dxgi {
     }
 
     winrt::com_ptr<IUnknown> unknown;
-    HRESULT hr = device1->OpenSharedResource1(duplicated_handle, __uuidof(IUnknown), winrt::put_abi(unknown));
+    HRESULT hr = device1->OpenSharedResource1(duplicated_texture_handle.get(), __uuidof(IUnknown), winrt::put_abi(unknown));
     if (FAILED(hr) || !unknown) {
       BOOST_LOG(error) << "Failed to open shared texture from duplicated handle: 0x" << std::hex << hr << " (decimal: " << std::dec << (int32_t) hr << ")";
       return false;
@@ -544,14 +573,30 @@ namespace platf::dxgi {
     // Verify texture properties
     D3D11_TEXTURE2D_DESC desc;
     texture->GetDesc(&desc);
-    if (desc.Width != width || desc.Height != height) {
-      BOOST_LOG(warning) << "Shared texture size mismatch (expected " << width << "x" << height
+    if (desc.Width != handle_data.width || desc.Height != handle_data.height) {
+      BOOST_LOG(warning) << "Shared texture size mismatch (expected " << handle_data.width << "x" << handle_data.height
                          << ", got " << desc.Width << "x" << desc.Height << ")";
     }
 
+    auto *metadata = static_cast<frame_metadata_t *>(MapViewOfFile(
+      duplicated_metadata_handle.get(),
+      FILE_MAP_READ,
+      0,
+      0,
+      sizeof(frame_metadata_t)
+    ));
+    if (!metadata) {
+      BOOST_LOG(error) << "Failed to map WGC frame metadata view: " << GetLastError();
+      return false;
+    }
+
+    auto metadata_guard = util::fail_guard([&]() {
+      UnmapViewOfFile(metadata);
+    });
+
     _shared_texture = texture;
-    _width = width;
-    _height = height;
+    _width = handle_data.width;
+    _height = handle_data.height;
 
     // Get keyed mutex interface for synchronization
     _keyed_mutex = _shared_texture.try_as<IDXGIKeyedMutex>();
@@ -560,6 +605,13 @@ namespace platf::dxgi {
       _shared_texture = nullptr;
       return false;
     }
+
+    _frame_ready_event = std::move(duplicated_event_handle);
+    _frame_metadata_mapping = std::move(duplicated_metadata_handle);
+    _frame_metadata = metadata;
+    frame_metadata_snapshot_t snapshot;
+    _last_frame_id = read_frame_metadata_snapshot(_frame_metadata, snapshot) ? snapshot.frame_id : 0;
+    metadata_guard.disable();
     return true;
   }
 

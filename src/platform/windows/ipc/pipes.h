@@ -36,18 +36,27 @@ namespace platf::dxgi {
 
   constexpr uint8_t SECURE_DESKTOP_MSG = 0x01;  ///< Message type for WGC desktop-switch reinit notifications
   constexpr uint8_t ACK_MSG = 0x02;  ///< Message type for acknowledgment responses
-  constexpr uint8_t FRAME_READY_MSG = 0x03;  ///< Message type for frame ready notifications
 
   /**
    * @brief Structure for sharing handle and texture metadata via IPC.
    * @param texture_handle Shared texture handle.
+   * @param frame_event_handle Auto-reset event signaled when a new frame is ready.
+   * @param frame_metadata_handle File-mapping handle containing latest frame metadata.
    * @param width Width of the texture.
    * @param height Height of the texture.
    */
   struct shared_handle_data_t {
     HANDLE texture_handle;
+    HANDLE frame_event_handle;
+    HANDLE frame_metadata_handle;
     UINT width;
     UINT height;
+  };
+
+  struct alignas(8) frame_metadata_t {
+    volatile LONG64 sequence;
+    volatile LONG64 frame_id;
+    volatile LONG64 frame_qpc;
   };
 
   /**
@@ -63,19 +72,6 @@ namespace platf::dxgi {
     wchar_t display_name[32];
     LUID adapter_luid;
   };
-
-/**
- * @brief Message structure for frame ready notifications with QPC timing data.
- * This is sent by the WGC helper to the main process with a high-resolution timestamp.
- */
-#pragma pack(push, 1)  // required to remove padding from compiler
-
-  struct frame_ready_msg_t {
-    uint8_t message_type = FRAME_READY_MSG;
-    uint64_t frame_qpc = 0;
-  };
-
-#pragma pack(pop)  // required to remove padding from compiler
 
   /**
    * @brief Result codes for pipe operations.

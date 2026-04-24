@@ -33,9 +33,9 @@ namespace platf::dxgi {
    */
   bool recent_wgc_desktop_switch_grace_active();
   /**
-   * @brief Shared WGC IPC session encapsulating helper process, pipes, shared texture and sync primitives.
+   * @brief Shared WGC IPC session encapsulating helper process, control pipe, shared texture and sync primitives.
    * Manages lifecycle & communication with the helper process, duplication of shared textures, keyed mutex
-   * coordination and frame availability signaling for both RAM & VRAM capture paths.
+   * coordination and event-driven frame availability signaling for both RAM & VRAM capture paths.
    */
   class ipc_session_t {
   public:
@@ -115,13 +115,11 @@ namespace platf::dxgi {
 
   private:
     /**
-     * @brief Set up shared texture from a shared handle by duplicating it.
-     * @param shared_handle Shared handle from the helper process to duplicate.
-     * @param width Width of the texture.
-     * @param height Height of the texture.
+     * @brief Set up shared texture and frame signaling handles by duplicating them from the helper.
+     * @param handle_data Shared handles and texture metadata from the helper process.
      * @return `true` if setup was successful, `false` otherwise.
      */
-    bool setup_shared_texture_from_shared_handle(HANDLE shared_handle, UINT width, UINT height);
+    bool setup_shared_resources_from_shared_handles(const shared_handle_data_t &handle_data);
 
     /**
      * @brief Handle a desktop-switch notification from the helper process.
@@ -130,7 +128,7 @@ namespace platf::dxgi {
     void handle_desktop_switch_message(std::span<const uint8_t> msg);
 
     /**
-     * @brief Wait for a new frame to become available or until timeout expires.
+     * @brief Wait for a new frame event or until timeout expires.
      * @param timeout Maximum duration to wait for a frame.
      * @return Capture result enum indicating success, timeout, reinit, or failure.
      */
@@ -151,11 +149,13 @@ namespace platf::dxgi {
     // --- members ---
     std::unique_ptr<ProcessHandler> _process_helper;  ///< Helper process owner.
     std::unique_ptr<AsyncNamedPipe> _pipe;  ///< Async control/message pipe.
-    std::unique_ptr<INamedPipe> _frame_queue_pipe;  ///< Pipe providing frame ready notifications.
     winrt::com_ptr<IDXGIKeyedMutex> _keyed_mutex;  ///< Keyed mutex for shared texture.
     winrt::com_ptr<ID3D11Texture2D> _shared_texture;  ///< Shared texture duplicated from helper.
     winrt::com_ptr<ID3D11Device> _device;  ///< D3D11 device pointer (not owned).
-    bool _frame_ready {false};  ///< Flag set when a new frame is ready.
+    winrt::handle _frame_ready_event;  ///< Duplicated auto-reset event signaled by the helper per frame.
+    winrt::handle _frame_metadata_mapping;  ///< Duplicated shared-memory mapping for frame metadata.
+    frame_metadata_t *_frame_metadata = nullptr;  ///< Mapped frame metadata view.
+    LONG64 _last_frame_id {0};  ///< Last frame id consumed from shared metadata.
     uint64_t _frame_qpc {0};  ///< QPC timestamp of latest frame.
     std::atomic<bool> _initializing {false};  ///< True while an initialization attempt is in progress.
     std::atomic<bool> _initialized {false};  ///< True once the most recent initialization attempt succeeded.
