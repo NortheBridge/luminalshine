@@ -108,9 +108,9 @@ namespace stream {
   namespace {
     std::atomic_uint64_t g_paused_display_cleanup_generation {0};
 
-    void schedule_paused_display_cleanup(std::chrono::seconds timeout, std::string reason) {
+    void schedule_paused_display_cleanup(std::chrono::seconds timeout, std::string reason, bool enforce_display_restore) {
       const auto generation = g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
-      std::thread([timeout, generation, reason = std::move(reason)]() {
+      std::thread([timeout, generation, reason = std::move(reason), enforce_display_restore]() {
         std::this_thread::sleep_for(timeout);
 
         if (g_paused_display_cleanup_generation.load(std::memory_order_acquire) != generation) {
@@ -127,7 +127,7 @@ namespace stream {
 
         BOOST_LOG(info) << "Display cleanup: paused stream timeout reached; removing virtual display(s) (reason="
                         << reason << ").";
-        const auto cleanup = platf::virtual_display_cleanup::run("paused_session_timeout", true);
+        const auto cleanup = platf::virtual_display_cleanup::run("paused_session_timeout", enforce_display_restore);
         if (cleanup.helper_revert_dispatched) {
           display_helper_integration::stop_watchdog();
         }
@@ -135,6 +135,12 @@ namespace stream {
     }
   }  // namespace
 #endif
+
+  void cancel_paused_display_cleanup() {
+#ifdef _WIN32
+    g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
+#endif
+  }
 
 #pragma pack(push, 1)
 
@@ -2184,34 +2190,34 @@ namespace stream {
 
         const bool webrtc_active = webrtc_stream::has_active_sessions();
         const int paused_timeout_secs = std::max(0, config::video.dd.paused_virtual_display_timeout_secs);
-
-        const bool skip_teardown_due_to_pause = is_paused && !revert_display_config;
+        const bool delay_virtual_display_cleanup_due_to_pause = is_paused && !revert_display_config && paused_timeout_secs > 0;
+        const bool keep_virtual_display_due_to_pause = is_paused && !revert_display_config && paused_timeout_secs == 0;
 
 #ifdef _WIN32
-        if (!skip_teardown_due_to_pause) {
-          g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
-        }
         if (webrtc_active) {
           BOOST_LOG(debug) << "Display cleanup: WebRTC session is still active; skipping RTSP-triggered teardown.";
-        } else if (skip_teardown_due_to_pause) {
-          if (paused_timeout_secs > 0) {
-            BOOST_LOG(info) << "Display cleanup: session paused with revert-on-disconnect disabled; "
-                            << "scheduling virtual display cleanup in " << paused_timeout_secs << "s.";
-            schedule_paused_display_cleanup(std::chrono::seconds(paused_timeout_secs), "rtsp_session_paused");
-          } else {
-            BOOST_LOG(debug) << "Display cleanup: session is paused; keeping virtual display alive (config_revert_on_disconnect=false).";
-          }
+        } else if (delay_virtual_display_cleanup_due_to_pause) {
+          BOOST_LOG(info) << "Display cleanup: session paused with revert-on-disconnect disabled; "
+                          << "scheduling virtual display removal without display restore in " << paused_timeout_secs << "s.";
+          schedule_paused_display_cleanup(std::chrono::seconds(paused_timeout_secs), "rtsp_session_paused", false);
+        } else if (keep_virtual_display_due_to_pause) {
+          BOOST_LOG(debug) << "Display cleanup: session is paused; keeping virtual display alive (config_revert_on_disconnect=false, paused timeout disabled).";
         } else {
-          const auto cleanup = platf::virtual_display_cleanup::run("rtsp_session_end", revert_display_config);
+          g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
+          const auto cleanup_reason = is_paused && !revert_display_config ? "rtsp_session_paused" : "rtsp_session_end";
+          const auto cleanup = platf::virtual_display_cleanup::run(cleanup_reason, revert_display_config);
           if (cleanup.helper_revert_dispatched) {
             // If we reverted the display configuration, the helper watchdog is no longer needed.
             display_helper_integration::stop_watchdog();
           } else if (revert_display_config) {
             BOOST_LOG(debug) << "Display helper: revert dispatch failed; leaving watchdog running.";
+          } else if (is_paused) {
+            BOOST_LOG(info) << "Display cleanup: session paused with revert-on-disconnect disabled; "
+                            << "removed virtual display(s) without restoring physical display configuration.";
           }
         }
 #else
-        if (revert_display_config && !skip_teardown_due_to_pause && !webrtc_active) {
+        if (revert_display_config && !webrtc_active) {
           (void) display_helper_integration::revert();
         }
 #endif

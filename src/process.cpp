@@ -51,6 +51,7 @@
   #include "platform/windows/lossless_scaling_paths.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/playnite_integration.h"
+  #include "platform/windows/virtual_display_cleanup.h"
   #include "tools/playnite_launcher/focus_utils.h"
   #include "tools/playnite_launcher/lossless_scaling.h"
 
@@ -1874,12 +1875,24 @@ namespace proc {
 
     _pipe.reset();
 
+    const bool other_streaming_session_active =
+      rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions();
+
 #ifdef _WIN32
     if (_virtual_display_active) {
-      if (!VDISPLAY::removeVirtualDisplay(_virtual_display_guid)) {
-        BOOST_LOG(warning) << "Failed to remove virtual display.";
+      if (!other_streaming_session_active) {
+        const auto cleanup = platf::virtual_display_cleanup::run("app_termination", false);
+        if (!cleanup.virtual_displays_removed) {
+          BOOST_LOG(warning) << "Failed to remove virtual display after app termination.";
+        } else {
+          BOOST_LOG(info) << "Virtual display cleanup completed after app termination.";
+        }
       } else {
-        BOOST_LOG(info) << "Virtual display removed.";
+        if (!VDISPLAY::removeVirtualDisplay(_virtual_display_guid)) {
+          BOOST_LOG(warning) << "Failed to remove virtual display.";
+        } else {
+          BOOST_LOG(info) << "Virtual display removed.";
+        }
       }
       std::memset(&_virtual_display_guid, 0, sizeof(_virtual_display_guid));
       _virtual_display_active = false;
@@ -1893,9 +1906,6 @@ namespace proc {
       system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
 #endif
     }
-
-    const bool other_streaming_session_active =
-      rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions();
 
     if (should_dispatch_revert && skip_display_revert) {
 #ifdef _WIN32

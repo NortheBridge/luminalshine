@@ -93,6 +93,7 @@ namespace webrtc_stream {
   std::vector<SessionState> list_sessions();
   void shutdown_all_sessions();
 
+  void cancel_paused_display_cleanup();
   void submit_video_packet(video::packet_raw_t &packet);
   void submit_audio_packet(const audio::buffer_t &packet);
   void submit_video_frame(const std::shared_ptr<platf::img_t> &frame);

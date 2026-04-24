@@ -65,5 +65,6 @@ namespace stream {
     state_e state(session_t &session);
   }  // namespace session
 
+  void cancel_paused_display_cleanup();
   void request_idr_for_all_sessions();
 }  // namespace stream

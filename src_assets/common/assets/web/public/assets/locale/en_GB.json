@@ -179,7 +179,7 @@
     "dd_config_revert_on_disconnect": "Config revert on disconnect",
     "dd_config_revert_on_disconnect_desc": "Revert configuration upon disconnect of all clients instead of app close or last session termination.",
     "dd_paused_virtual_display_timeout_secs": "Paused session virtual display timeout (seconds)",
-    "dd_paused_virtual_display_timeout_secs_desc": "Optional timeout while a session is paused and revert-on-disconnect is disabled. 0 keeps current behavior (no timeout).",
+    "dd_paused_virtual_display_timeout_secs_desc": "Optional grace delay before removing virtual displays while a session is paused and revert-on-disconnect is disabled. 0 keeps the virtual display alive until resume or app exit.",
     "dd_paused_virtual_display_timeout_secs_warning": "Removing a virtual display while a game is still running can cause crashes regardless of trigger (timeout, hotkey, or manual restore). This option helps prevent returning to a stuck virtual screen after inactivity.",
     "dd_paused_virtual_display_timeout_secs_hotkey_hint": "Alternative: use the restore hotkey to immediately terminate and restore display state when needed.",
     "dd_always_restore_from_golden": "Always restore from snapshot",

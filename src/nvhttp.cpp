@@ -53,6 +53,7 @@
 #endif
 #include "process.h"
 #include "rtsp.h"
+#include "stream.h"
 #include "system_tray.h"
 #include "update.h"
 #include "utility.h"
@@ -243,6 +244,7 @@ namespace nvhttp {
         app_output_override.reset();
       }
       launch_session->virtual_display_recreated_on_demand = false;
+      launch_session->virtual_display_needs_resume_apply = false;
 
       bool config_requests_virtual = config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
       if (launch_session->virtual_display_mode_override) {
@@ -274,11 +276,12 @@ namespace nvhttp {
             launch_session->virtual_display_failed = false;
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            launch_session->virtual_display_needs_resume_apply = true;
             config::set_runtime_output_name_override(*existing_device);
             pending_output_override = *existing_device;
             BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
                             << *existing_device << ").";
-            BOOST_LOG(debug) << "Display helper: skipping virtual display changes for resume; preserving capture target only.";
+            BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
             return;
           }
 
@@ -1867,7 +1870,8 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
 
-    const bool no_active_sessions = (rtsp_stream::session_count() == 0);
+    const bool no_active_sessions =
+      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
     // Runtime overrides are global process state. Do not reapply them while
     // another RTSP session is active, otherwise a second client can mutate
     // active stream limits (e.g. fps/encoding-related settings) mid-session.
@@ -1930,7 +1934,7 @@ namespace nvhttp {
         runtime_overrides_applied = true;
       }
     } else {
-      BOOST_LOG(debug) << "Launch while an RTSP session is already active; preserving current runtime overrides.";
+      BOOST_LOG(debug) << "Launch while an RTSP/WebRTC session is already active; preserving current runtime overrides.";
     }
 
     // Prevent interleaving with hot-apply while we prep/start a session
@@ -1952,6 +1956,10 @@ namespace nvhttp {
     });
     if (no_active_sessions) {
       config::set_runtime_output_name_override(std::nullopt);
+#ifdef _WIN32
+      stream::cancel_paused_display_cleanup();
+      webrtc_stream::cancel_paused_display_cleanup();
+#endif
     }
 
 #ifdef _WIN32
@@ -2146,7 +2154,9 @@ namespace nvhttp {
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_sessions {
+      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions()
+    };
     const bool allow_display_changes = config::video.dd.config_revert_on_disconnect;
     if (no_active_sessions && allow_display_changes) {
       config::set_runtime_output_name_override(std::nullopt);
@@ -2154,6 +2164,12 @@ namespace nvhttp {
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
+#ifdef _WIN32
+    if (no_active_sessions) {
+      stream::cancel_paused_display_cleanup();
+      webrtc_stream::cancel_paused_display_cleanup();
+    }
+#endif
     // Prevent interleaving with hot-apply while we prep/resume a session
     auto _hot_apply_gate = config::acquire_apply_read_gate();
 
@@ -2196,10 +2212,15 @@ namespace nvhttp {
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
       const bool should_apply_display_request =
-        allow_display_changes || launch_session->virtual_display_recreated_on_demand;
+        allow_display_changes ||
+        launch_session->virtual_display_recreated_on_demand ||
+        launch_session->virtual_display_needs_resume_apply;
       if (should_apply_display_request) {
         BOOST_LOG(debug) << "Display helper: applying session display request on "
-                         << (allow_display_changes ? "normal start/resume" : "resume virtual-display recreation")
+                         << (allow_display_changes ? "normal start/resume" :
+                                                       (launch_session->virtual_display_recreated_on_demand ?
+                                                          "resume virtual-display recreation" :
+                                                          "resume virtual-display refresh"))
                          << " for client '" << launch_session->client_name << "'.";
         revert_display_configuration = allow_display_changes;
 
