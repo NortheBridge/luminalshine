@@ -149,14 +149,14 @@ $RootDir = (Resolve-Path $RootDir).Path
 
 # Resolve a per-user shared cache root for libwebrtc build artifacts so the
 # multi-hour build is not coupled to any single sunshine build directory.
-# Override priority: VIBESHINE_DEPS_DIR env var > WEBRTC_BUILD_DIR/WEBRTC_OUT_DIR
-# (legacy, unchanged) > %LOCALAPPDATA%\Vibeshine\deps default.
-$DepsRoot = $env:VIBESHINE_DEPS_DIR
+# Override priority: LUMINALSHINE_DEPS_DIR env var > WEBRTC_BUILD_DIR/WEBRTC_OUT_DIR
+# (legacy, unchanged) > %LOCALAPPDATA%\LuminalShine\deps default.
+$DepsRoot = $env:LUMINALSHINE_DEPS_DIR
 if (-not $DepsRoot) {
   if ($env:LOCALAPPDATA) {
-    $DepsRoot = Join-Path $env:LOCALAPPDATA "Vibeshine\deps"
+    $DepsRoot = Join-Path $env:LOCALAPPDATA "LuminalShine\deps"
   } else {
-    $DepsRoot = Join-Path $RootDir ".vibeshine-deps"
+    $DepsRoot = Join-Path $RootDir ".luminalshine-deps"
   }
 }
 

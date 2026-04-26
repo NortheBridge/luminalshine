@@ -19,11 +19,11 @@ Function AskUninstallLegacySunshine()
     
     ' Ask user if they want to uninstall legacy Sunshine
     resp = MsgBox("A legacy Sunshine installation was detected on this system." & vbCrLf & vbCrLf & _
-                  "It must be removed before Vibeshine can be installed. " & _
+                  "It must be removed before LuminalShine can be installed. " & _
                   "Your existing configuration will be preserved." & vbCrLf & vbCrLf & _
                   "Click OK to uninstall legacy Sunshine and continue, or Cancel to abort.", _
                   vbQuestion + vbOKCancel + vbDefaultButton1 + vbMsgBoxSetForeground, _
-                  "Vibeshine Installer")
+                  "LuminalShine Installer")
     
     If resp = vbOK Then
         ' Launch the uninstaller with elevation

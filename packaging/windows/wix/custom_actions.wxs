@@ -40,19 +40,19 @@
   <Fragment>
     <DirectoryRef Id="TARGETDIR">
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="VIBESHINE_PROGRAM_MENU_FOLDER" Name="Vibeshine">
+        <Directory Id="LUMINALSHINE_PROGRAM_MENU_FOLDER" Name="LuminalShine">
           <Component Id="StartMenuShortcut" Guid="{A3B4C5D6-E7F8-4A5B-9C2D-3E4F5A6B7C8D}">
-            <Shortcut Id="VibeshineStartMenuShortcut"
-                      Name="Vibeshine"
-                      Description="Launch Vibeshine Web UI"
+            <Shortcut Id="LuminalShineStartMenuShortcut"
+                      Name="LuminalShine"
+                      Description="Launch LuminalShine Web UI"
                       Target="[INSTALL_ROOT]sunshine.exe"
                       Icon="ProductIcon.ico"
                       Arguments="--shortcut"
                       WorkingDirectory="INSTALL_ROOT">
-              <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.VibeshineAppId)" />
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
             </Shortcut>
-            <RegistryValue Root="HKCU" Key="Software\Vibeshine\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
-            <RemoveFolder Id="RemoveVibeshineMenuFolder" Directory="VIBESHINE_PROGRAM_MENU_FOLDER" On="uninstall" />
+            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+            <RemoveFolder Id="RemoveLuminalShineMenuFolder" Directory="LUMINALSHINE_PROGRAM_MENU_FOLDER" On="uninstall" />
           </Component>
         </Directory>
       </Directory>
@@ -67,7 +67,7 @@
         <CreateFolder/>
         <!-- Legacy service name cleanup (best-effort) -->
         <ServiceControl Id="SC_StopLegacy" Name="sunshinesvc" Stop="both" Remove="uninstall" Wait="yes" />
-        <ServiceControl Id="SC_StopLegacyVibeshine" Name="VibeshineService" Stop="both" Remove="uninstall" Wait="yes" />
+        <ServiceControl Id="SC_StopLegacyLuminalShine" Name="LuminalShineService" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </DirectoryRef>
   </Fragment>
@@ -92,7 +92,7 @@
         <ServiceInstall
             Id="SunshineServiceInstall"
             Name="SunshineService"
-            DisplayName="Vibeshine Service"
+            DisplayName="LuminalShine Service"
             Type="ownProcess"
             Start="auto"
             ErrorControl="normal"
@@ -162,10 +162,10 @@
     <!-- Immediate setter for quiet stop service -->
     <CustomAction Id="SetStopSvcQuietImmediate"
                  Property="StopSvcQuietImmediate"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <!-- Immediate setter to prune everything except the config directory -->
     <CustomAction Id="SetPruneButConfig"
                  Property="PruneButConfig"
@@ -174,7 +174,7 @@
     <!-- Immediate setter for quiet start service -->
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','VibeshineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="KillProcsQuietImmediate"
@@ -184,14 +184,14 @@
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
-                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete VibeshineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
 
     <!-- Legacy Sunshine handling actions -->
     <CustomAction Id="AskUninstallLegacySunshine" BinaryKey="AskUninstallLegacySunshineVbs" VBScriptCall="AskUninstallLegacySunshine" Execute="immediate" Return="check" />
     <CustomAction Id="WaitForLegacyUninstall" BinaryKey="WaitForLegacyUninstallVbs" VBScriptCall="WaitForLegacyUninstall" Execute="immediate" Return="check" />
     
-    <CustomAction Id="BlockLegacySunshineStillPresent" Error="Legacy Sunshine is still installed. In order to install Vibeshine it must be uninstalled first, click OK to start the uninstallation." />
-    <CustomAction Id="BlockUserCancelledLegacy" Error="Installation cancelled. Legacy Sunshine must be removed before installing Vibeshine." />
+    <CustomAction Id="BlockLegacySunshineStillPresent" Error="Legacy Sunshine is still installed. In order to install LuminalShine it must be uninstalled first, click OK to start the uninstallation." />
+    <CustomAction Id="BlockUserCancelledLegacy" Error="Installation cancelled. Legacy Sunshine must be removed before installing LuminalShine." />
 
     <!-- UI-only prompt at end of a successful Repair to inform no reboot is required -->
     <CustomAction Id="RepairCompletePrompt" BinaryKey="RepairCompleteVbs" VBScriptCall="ShowRepairComplete" Execute="immediate" Return="ignore" />
@@ -201,8 +201,8 @@
   <Fragment>
     <DirectoryRef Id="INSTALL_ROOT">
       <Component Id="ArpCustomUninstallEntry" Guid="*" Win64="yes">
-        <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Vibeshine">
-          <RegistryValue Name="DisplayName" Type="string" Value="Vibeshine" KeyPath="yes" />
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\LuminalShine">
+          <RegistryValue Name="DisplayName" Type="string" Value="LuminalShine" KeyPath="yes" />
           <RegistryValue Name="DisplayVersion" Type="string" Value="[ProductVersion]" />
           <RegistryValue Name="Publisher" Type="string" Value="Nonary" />
           <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALL_ROOT]" />
@@ -228,13 +228,13 @@
         <CreateFolder />
         <Firewall:FirewallException xmlns:Firewall="http://schemas.microsoft.com/wix/FirewallExtension"
                                     Id="FE_SunshineExe"
-                                    Name="Vibeshine"
+                                    Name="LuminalShine"
                                     Program="[INSTALL_ROOT]sunshine.exe"
                                     Profile="all"
                                     Scope="any" />
         <Firewall:FirewallException xmlns:Firewall="http://schemas.microsoft.com/wix/FirewallExtension"
                                     Id="FE_SunshineSvcExe"
-                                    Name="Vibeshine Service"
+                                    Name="LuminalShine Service"
                                     Program="[INSTALL_ROOT]tools\sunshinesvc.exe"
                                     Profile="all"
                                     Scope="any" />

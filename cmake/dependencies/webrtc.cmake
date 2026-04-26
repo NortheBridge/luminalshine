@@ -7,26 +7,26 @@ endif()
 # Resolve a default shared cache for libwebrtc artifacts so the multi-hour
 # build is not coupled to any one CMake build directory. Priority:
 #   1. Explicit -DWEBRTC_ROOT=...        (user override)
-#   2. $ENV{VIBESHINE_DEPS_DIR}/libwebrtc/out
-#   3. $ENV{LOCALAPPDATA}/Vibeshine/deps/libwebrtc/out  (Windows default)
+#   2. $ENV{LUMINALSHINE_DEPS_DIR}/libwebrtc/out
+#   3. $ENV{LOCALAPPDATA}/LuminalShine/deps/libwebrtc/out  (Windows default)
 #   4. ${CMAKE_BINARY_DIR}/libwebrtc                    (legacy fallback)
 # build_mingw_webrtc.ps1 uses the same defaults so a single rebuild populates
 # the location every sunshine build dir / worktree on this machine sees.
-set(_vibeshine_default_webrtc_root "")
-if(DEFINED ENV{VIBESHINE_DEPS_DIR} AND NOT "$ENV{VIBESHINE_DEPS_DIR}" STREQUAL "")
-    set(_vibeshine_default_webrtc_root "$ENV{VIBESHINE_DEPS_DIR}/libwebrtc/out")
+set(_luminalshine_default_webrtc_root "")
+if(DEFINED ENV{LUMINALSHINE_DEPS_DIR} AND NOT "$ENV{LUMINALSHINE_DEPS_DIR}" STREQUAL "")
+    set(_luminalshine_default_webrtc_root "$ENV{LUMINALSHINE_DEPS_DIR}/libwebrtc/out")
 elseif(WIN32 AND DEFINED ENV{LOCALAPPDATA} AND NOT "$ENV{LOCALAPPDATA}" STREQUAL "")
-    set(_vibeshine_default_webrtc_root "$ENV{LOCALAPPDATA}/Vibeshine/deps/libwebrtc/out")
+    set(_luminalshine_default_webrtc_root "$ENV{LOCALAPPDATA}/LuminalShine/deps/libwebrtc/out")
 endif()
 
-if(_vibeshine_default_webrtc_root AND EXISTS "${_vibeshine_default_webrtc_root}/include")
-    set(WEBRTC_ROOT "${_vibeshine_default_webrtc_root}"
+if(_luminalshine_default_webrtc_root AND EXISTS "${_luminalshine_default_webrtc_root}/include")
+    set(WEBRTC_ROOT "${_luminalshine_default_webrtc_root}"
             CACHE PATH "Path to libwebrtc root (contains include/ and lib/).")
 else()
     set(WEBRTC_ROOT "${CMAKE_BINARY_DIR}/libwebrtc"
             CACHE PATH "Path to libwebrtc root (contains include/ and lib/).")
 endif()
-unset(_vibeshine_default_webrtc_root)
+unset(_luminalshine_default_webrtc_root)
 set(WEBRTC_LIBRARY "" CACHE FILEPATH "Path to libwebrtc library file.")
 set(WEBRTC_INCLUDE_DIR "" CACHE PATH "Path to libwebrtc include directory.")
 set(WEBRTC_EXTRA_LIBRARIES "" CACHE STRING "Extra libraries required by libwebrtc.")
@@ -173,9 +173,9 @@ if(NOT WEBRTC_INCLUDE_DIR OR NOT WEBRTC_LIBRARY)
                 "libwebrtc not found.\n"
                 "  Build it once with:\n"
                 "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_mingw_webrtc.ps1\n"
-                "  By default this caches artifacts to %LOCALAPPDATA%\\Vibeshine\\deps\\libwebrtc,\n"
+                "  By default this caches artifacts to %LOCALAPPDATA%\\LuminalShine\\deps\\libwebrtc,\n"
                 "  shared across every sunshine build dir / worktree on this machine.\n"
-                "  Override the cache root with the VIBESHINE_DEPS_DIR env var, or set\n"
+                "  Override the cache root with the LUMINALSHINE_DEPS_DIR env var, or set\n"
                 "  WEBRTC_ROOT (or WEBRTC_INCLUDE_DIR / WEBRTC_LIBRARY) explicitly.\n"
                 "  See docs/building.md for full prerequisites.")
     else()

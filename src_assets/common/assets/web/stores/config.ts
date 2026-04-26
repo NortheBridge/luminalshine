@@ -159,7 +159,7 @@ const defaultGroups = [
       pkey: '',
       cert: '',
       file_state: '',
-      vibeshine_file_state: '',
+      luminalshine_file_state: '',
     },
   },
   {

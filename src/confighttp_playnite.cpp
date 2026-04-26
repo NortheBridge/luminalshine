@@ -592,7 +592,7 @@ namespace confighttp {
 
     std::optional<CrashDismissalState> load_crash_dismissal_state() {
       statefile::migrate_recent_state_keys();
-      const std::string &path_str = statefile::vibeshine_state_path();
+      const std::string &path_str = statefile::luminalshine_state_path();
       if (path_str.empty()) {
         return std::nullopt;
       }
@@ -628,7 +628,7 @@ namespace confighttp {
 
     bool save_crash_dismissal_state(const CrashDismissalState &state) {
       statefile::migrate_recent_state_keys();
-      const std::string &path_str = statefile::vibeshine_state_path();
+      const std::string &path_str = statefile::luminalshine_state_path();
       if (path_str.empty()) {
         return false;
       }
@@ -1114,7 +1114,7 @@ namespace confighttp {
       std::time_t tt = std::time(nullptr);
       std::tm tm {};
       localtime_s(&tm, &tt);
-      std::snprintf(fname, sizeof(fname), "vibeshine_logs-%04d%02d%02d-%02d%02d%02d.zip", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+      std::snprintf(fname, sizeof(fname), "luminalshine_logs-%04d%02d%02d-%02d%02d%02d.zip", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", "application/zip");

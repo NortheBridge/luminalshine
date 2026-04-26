@@ -707,7 +707,7 @@ namespace nvhttp {
   void save_state() {
     statefile::migrate_recent_state_keys();
     const auto &sunshine_path = statefile::sunshine_state_path();
-    const auto &vibeshine_path = statefile::vibeshine_state_path();
+    const auto &luminalshine_path = statefile::luminalshine_state_path();
 
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
 
@@ -779,7 +779,7 @@ namespace nvhttp {
       return;
     }
 
-    if (!vibeshine_path.empty()) {
+    if (!luminalshine_path.empty()) {
       auto ensure_root = [](pt::ptree &tree) -> pt::ptree & {
         auto it = tree.find("root");
         if (it == tree.not_found()) {
@@ -789,17 +789,17 @@ namespace nvhttp {
         return it->second;
       };
 
-      pt::ptree vibeshine_tree;
-      if (fs::exists(vibeshine_path)) {
+      pt::ptree luminalshine_tree;
+      if (fs::exists(luminalshine_path)) {
         try {
-          pt::read_json(vibeshine_path, vibeshine_tree);
+          pt::read_json(luminalshine_path, luminalshine_tree);
         } catch (std::exception &e) {
-          BOOST_LOG(error) << "Couldn't read "sv << vibeshine_path << ": "sv << e.what();
-          vibeshine_tree = {};
+          BOOST_LOG(error) << "Couldn't read "sv << luminalshine_path << ": "sv << e.what();
+          luminalshine_tree = {};
         }
       }
 
-      auto &vibe_root = ensure_root(vibeshine_tree);
+      auto &vibe_root = ensure_root(luminalshine_tree);
       vibe_root.put("last_notified_version", update::state.last_notified_version);
 
 #ifdef _WIN32
@@ -819,9 +819,9 @@ namespace nvhttp {
       }
 
       try {
-        pt::write_json(vibeshine_path, vibeshine_tree);
+        pt::write_json(luminalshine_path, luminalshine_tree);
       } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't write "sv << vibeshine_path << ": "sv << e.what();
+        BOOST_LOG(error) << "Couldn't write "sv << luminalshine_path << ": "sv << e.what();
       }
     }
   }
@@ -829,7 +829,7 @@ namespace nvhttp {
   void load_state() {
     statefile::migrate_recent_state_keys();
     const auto &sunshine_path = statefile::sunshine_state_path();
-    const auto &vibeshine_path = statefile::vibeshine_state_path();
+    const auto &luminalshine_path = statefile::luminalshine_state_path();
 
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
 
@@ -857,16 +857,16 @@ namespace nvhttp {
     }
     http::unique_id = std::move(*unique_id_p);
 
-    if (!vibeshine_path.empty() && fs::exists(vibeshine_path)) {
+    if (!luminalshine_path.empty() && fs::exists(luminalshine_path)) {
       try {
-        pt::ptree vibeshine_tree;
-        pt::read_json(vibeshine_path, vibeshine_tree);
-        update::state.last_notified_version = vibeshine_tree.get("root.last_notified_version", "");
+        pt::ptree luminalshine_tree;
+        pt::read_json(luminalshine_path, luminalshine_tree);
+        update::state.last_notified_version = luminalshine_tree.get("root.last_notified_version", "");
 #ifdef _WIN32
-        http::shared_virtual_display_guid = vibeshine_tree.get("root.shared_virtual_display_guid", "");
+        http::shared_virtual_display_guid = luminalshine_tree.get("root.shared_virtual_display_guid", "");
 #endif
       } catch (const std::exception &e) {
-        BOOST_LOG(warning) << "Couldn't read "sv << vibeshine_path << " for notification state: "sv << e.what();
+        BOOST_LOG(warning) << "Couldn't read "sv << luminalshine_path << " for notification state: "sv << e.what();
         update::state.last_notified_version.clear();
 #ifdef _WIN32
         http::shared_virtual_display_guid.clear();

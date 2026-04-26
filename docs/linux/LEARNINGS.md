@@ -1,15 +1,15 @@
-# Vibeshine Linux Build & Setup - Learnings
+# LuminalShine Linux Build & Setup - Learnings
 
 ## Overview
 
-This document captures all learnings from building and configuring Vibeshine (a Sunshine fork) on Arch Linux with Boost 1.89+, NVIDIA GPU, and Wayland.
+This document captures all learnings from building and configuring LuminalShine (a Sunshine fork) on Arch Linux with Boost 1.89+, NVIDIA GPU, and Wayland.
 
 ---
 
 ## 1. Build Fixes for Linux (Boost 1.89+)
 
 ### Problem
-Vibeshine/Sunshine fails to build on Linux with Boost 1.89+ due to API changes and Windows-only code not properly guarded.
+LuminalShine/Sunshine fails to build on Linux with Boost 1.89+ due to API changes and Windows-only code not properly guarded.
 
 ### Files Modified
 
@@ -31,8 +31,8 @@ sudo pacman -S cmake ninja gcc cuda nvidia-utils libva libvdpau \
     libevdev libcap libnotify libayatana-appindicator
 
 # Clone and build
-git clone https://github.com/Nonary/vibeshine.git
-cd vibeshine
+git clone https://github.com/Nonary/luminalshine.git
+cd luminalshine
 git checkout vibe
 git checkout -b fix/linux-build-boost-1.89
 # Apply patches...
@@ -47,7 +47,7 @@ cmake --install .
 ## 2. Network Configuration
 
 ### Problem
-Vibeshine not discoverable on other devices - no video streaming working.
+LuminalShine not discoverable on other devices - no video streaming working.
 
 ### Root Causes
 1. **UFW Firewall** was blocking required ports
@@ -245,7 +245,7 @@ groups $USER | grep -E "input|video|render"
 ## 10. References
 
 - [Sunshine Documentation](https://docs.lizardbyte.dev/projects/sunshine/latest/)
-- [Vibeshine GitHub](https://github.com/Nonary/vibeshine)
+- [LuminalShine GitHub](https://github.com/Nonary/luminalshine)
 - [Moonlight Game Streaming Ports](https://portforward.com/moonlight-game-streaming/)
 - [Sunshine Getting Started](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html)
 
@@ -375,7 +375,7 @@ After all steps, you should have:
 
 | Component | Status | Verification |
 |-----------|--------|--------------|
-| Vibeshine binary | Installed | `which sunshine` |
+| LuminalShine binary | Installed | `which sunshine` |
 | UDP ports | Open | `sudo ufw status` |
 | CAP_SYS_ADMIN | Set | `getcap $(which sunshine)` |
 | User groups | Added | `groups $USER` |
@@ -563,7 +563,7 @@ ExecStopPost=/bin/bash -c 'export WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run
 ## 19. Audio Crackling Fix: PipeWire Quantum Mismatch
 
 ### Root Cause
-Vibeshine reads audio using PulseAudio's `pa_simple` API with `fragsize = frame_size * channels * sizeof(float)`.
+LuminalShine reads audio using PulseAudio's `pa_simple` API with `fragsize = frame_size * channels * sizeof(float)`.
 
 - Sunshine's audio frame size = `packetDuration * sampleRate / 1000` = `5ms * 48000 / 1000` = **240 samples**
 - PipeWire's default quantum was **1024 samples** (~21ms)
@@ -608,7 +608,7 @@ virtual_sink = sink-sunshine-stereo
 ```
 Sunshine will create `sink-sunshine-stereo` (float32le, 2ch, 48kHz) via PulseAudio's `module-null-sink` and manage its lifecycle. No manual sink setup needed.
 
-### How Vibeshine creates the sink (source reference)
+### How LuminalShine creates the sink (source reference)
 In `src/platform/linux/audio.cpp`:
 ```cpp
 // Format: PA_SAMPLE_FLOAT32, 48000 Hz, 2ch (stereo) or 6/8ch (surround)

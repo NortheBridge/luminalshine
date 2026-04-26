@@ -1906,11 +1906,11 @@ async function refreshFrameGenHealth(options: FrameGenHealthOptions = {}): Promi
           rtssRunning = !!data?.process_running;
           if (rtssInstalled && rtssHooks) {
             rtssStatus = 'pass';
-            rtssMessage = 'RTSS hooks detected. Vibeshine can control the frame limiter.';
+            rtssMessage = 'RTSS hooks detected. LuminalShine can control the frame limiter.';
           } else if (rtssInstalled) {
             rtssStatus = 'warn';
             rtssMessage =
-              'RTSS is installed but hooks were not detected. Launch RTSS and ensure the Vibeshine profile is active.';
+              'RTSS is installed but hooks were not detected. Launch RTSS and ensure the LuminalShine profile is active.';
           } else {
             rtssStatus = 'fail';
             rtssMessage = 'Install RTSS to avoid microstutter when frame generation is enabled.';
@@ -1929,7 +1929,7 @@ async function refreshFrameGenHealth(options: FrameGenHealthOptions = {}): Promi
       const tolerance = 0.5;
       let displayStatus: FrameGenHealth['display']['status'] = 'unknown';
       let displayMessage = 'Unable to determine display refresh capabilities.';
-      let displayLabel = usingVirtual ? 'Vibeshine Virtual Screen' : 'Active display';
+      let displayLabel = usingVirtual ? 'LuminalShine Virtual Screen' : 'Active display';
       let displayId = usingVirtual ? VIRTUAL_DISPLAY_SELECTION : '';
       let displayHz: number | null = null;
       let displayError: string | null = null;
@@ -2090,55 +2090,55 @@ async function refreshFrameGenHealth(options: FrameGenHealthOptions = {}): Promi
                 displayStatus = 'pass';
                 if (only144Fails) {
                   const baseHz = hasActive ? (activeRefresh ?? evaluationHz) : evaluationHz;
-                  displayMessage = `Current refresh is ${Math.round(baseHz)} Hz. Streams up to 120 FPS are covered. Only 144 FPS streams require the Vibeshine virtual screen or a higher-refresh display.`;
+                  displayMessage = `Current refresh is ${Math.round(baseHz)} Hz. Streams up to 120 FPS are covered. Only 144 FPS streams require the LuminalShine virtual screen or a higher-refresh display.`;
                   if (!hasActive && highestSupported !== null) {
-                    displayMessage = `Display supports up to ${Math.round(highestSupported)} Hz. Streams up to 120 FPS are covered. Only 144 FPS streams require the Vibeshine virtual screen or a higher-refresh display.`;
+                    displayMessage = `Display supports up to ${Math.round(highestSupported)} Hz. Streams up to 120 FPS are covered. Only 144 FPS streams require the LuminalShine virtual screen or a higher-refresh display.`;
                   } else if (deltaSupported && highestSupported !== null) {
-                    displayMessage += ` Vibeshine can switch to ${Math.round(highestSupported)} Hz when a stream starts if Display Device Step 1 keeps that monitor active.`;
+                    displayMessage += ` LuminalShine can switch to ${Math.round(highestSupported)} Hz when a stream starts if Display Device Step 1 keeps that monitor active.`;
                   }
                 } else if (!hasActive && highestSupported !== null) {
-                  displayMessage = `Display supports up to ${Math.round(highestSupported)} Hz. Vibeshine can double 120 FPS streams.`;
+                  displayMessage = `Display supports up to ${Math.round(highestSupported)} Hz. LuminalShine can double 120 FPS streams.`;
                 } else if (deltaSupported && highestSupported !== null) {
-                  displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. Vibeshine can switch to ${Math.round(highestSupported)} Hz during streams to keep frame generation smooth.`;
+                  displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. LuminalShine can switch to ${Math.round(highestSupported)} Hz during streams to keep frame generation smooth.`;
                 } else {
                   displayMessage = 'Display refresh is high enough to double 120 FPS streams.';
                 }
               } else if (evaluationHz >= 180 - tolerance) {
                 displayStatus = 'warn';
                 if (!hasActive && highestSupported !== null) {
-                  displayMessage = `Display supports up to ${Math.round(evaluationHz)} Hz. Configure Display Device Step 1 to enforce the higher refresh or use the display override below to switch to the Vibeshine virtual display.`;
+                  displayMessage = `Display supports up to ${Math.round(evaluationHz)} Hz. Configure Display Device Step 1 to enforce the higher refresh or use the display override below to switch to the LuminalShine virtual display.`;
                 } else if (hasActive) {
                   if (highestFailUnder144 !== null) {
-                    displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. Streams targeting up to ${highestFailUnder144} FPS need the Vibeshine virtual screen or a higher-refresh display.`;
+                    displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. Streams targeting up to ${highestFailUnder144} FPS need the LuminalShine virtual screen or a higher-refresh display.`;
                   } else {
-                    displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. 120 FPS frame generation may stutter without a higher refresh display. Use the display override below to switch to the Vibeshine virtual display or move the stream to a higher-refresh monitor.`;
+                    displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. 120 FPS frame generation may stutter without a higher refresh display. Use the display override below to switch to the LuminalShine virtual display or move the stream to a higher-refresh monitor.`;
                   }
                   if (deltaSupported && highestSupported !== null) {
-                    displayMessage += ` Vibeshine can switch up to ${Math.round(highestSupported)} Hz if Display Device Step 1 keeps only that monitor active.`;
+                    displayMessage += ` LuminalShine can switch up to ${Math.round(highestSupported)} Hz if Display Device Step 1 keeps only that monitor active.`;
                   }
                 } else {
                   displayMessage =
-                    'Unable to read the current refresh rate, but the display may not reach the required 240 Hz. Use the display override below to switch to the Vibeshine virtual display or move the stream to a higher-refresh monitor.';
+                    'Unable to read the current refresh rate, but the display may not reach the required 240 Hz. Use the display override below to switch to the LuminalShine virtual display or move the stream to a higher-refresh monitor.';
                 }
               } else {
                 displayStatus = 'fail';
                 if (!hasActive && highestSupported !== null) {
-                  displayMessage = `Display tops out at ${Math.round(evaluationHz)} Hz. Use the display override below to switch to the Vibeshine virtual display or switch to a 240 Hz display for frame generation.`;
+                  displayMessage = `Display tops out at ${Math.round(evaluationHz)} Hz. Use the display override below to switch to the LuminalShine virtual display or switch to a 240 Hz display for frame generation.`;
                 } else if (hasActive) {
                   const mention = highestFailUnder144 ?? 120;
-                  displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. Streams targeting up to ${mention} FPS need the Vibeshine virtual screen or a higher-refresh display.`;
+                  displayMessage = `Current refresh is ${Math.round(activeRefresh ?? evaluationHz)} Hz. Streams targeting up to ${mention} FPS need the LuminalShine virtual screen or a higher-refresh display.`;
                   if (deltaSupported && highestSupported !== null) {
-                    displayMessage += ` Vibeshine can switch up to ${Math.round(highestSupported)} Hz if configured in Display Device Step 1.`;
+                    displayMessage += ` LuminalShine can switch up to ${Math.round(highestSupported)} Hz if configured in Display Device Step 1.`;
                   }
                 } else {
                   displayMessage =
-                    'Display refresh information was unavailable. Use the display override below to switch to the Vibeshine virtual display or switch to a 240 Hz display for frame generation.';
+                    'Display refresh information was unavailable. Use the display override below to switch to the LuminalShine virtual display or switch to a 240 Hz display for frame generation.';
                 }
               }
             } else {
               displayStatus = 'unknown';
               displayMessage =
-                'No display devices were returned by Vibeshine’s helper. Frame generation may not be able to enforce refresh changes.';
+                'No display devices were returned by LuminalShine’s helper. Frame generation may not be able to enforce refresh changes.';
               displayError = 'Display helper returned no devices.';
             }
           } else {
@@ -2154,7 +2154,7 @@ async function refreshFrameGenHealth(options: FrameGenHealthOptions = {}): Promi
       } else {
         displayStatus = 'pass';
         displayMessage =
-          'Vibeshine virtual screen guarantees a high refresh surface for frame generation.';
+          'LuminalShine virtual screen guarantees a high refresh surface for frame generation.';
       }
 
       if (usingVirtual) {
@@ -2194,7 +2194,7 @@ async function refreshFrameGenHealth(options: FrameGenHealthOptions = {}): Promi
 
       if (highestFailUnder144 !== null) {
         health.suggestion = {
-          message: `Use the display override above to switch to the Vibeshine virtual display or configure Display Device Step 1 to target the virtual display so ${highestFailUnder144} FPS streams stay smooth.`,
+          message: `Use the display override above to switch to the LuminalShine virtual display or configure Display Device Step 1 to target the virtual display so ${highestFailUnder144} FPS streams stay smooth.`,
           emphasis: 'warning',
         };
       } else if (captureStatus === 'warn' || captureStatus === 'fail') {
@@ -2265,7 +2265,7 @@ function warnIfHealthIssues(reason: FrameGenHealthReason) {
     );
     if (requiresHigh) {
       message.warning(
-        'Use the display override to switch to the Vibeshine virtual display or adjust Display Device Step 1 to keep only the high-refresh monitor active.',
+        'Use the display override to switch to the LuminalShine virtual display or adjust Display Device Step 1 to keep only the high-refresh monitor active.',
         { duration: 8000 },
       );
     }
@@ -2360,18 +2360,18 @@ watch(
       return;
     }
     message?.info(
-      "Frame Generation Capture Fix requires Windows Graphics Capture (WGC), RTSS, and a display capable of 240 Hz or higher. Vibeshine's virtual screen or any display that satisfies the doubled refresh requirement will work.",
+      "Frame Generation Capture Fix requires Windows Graphics Capture (WGC), RTSS, and a display capable of 240 Hz or higher. LuminalShine's virtual screen or any display that satisfies the doubled refresh requirement will work.",
       { duration: 8000 },
     );
     if (!skipDisplayWarnings.value) {
       if (!ddConfigOption.value || ddConfigOption.value === 'disabled') {
         message?.warning(
-          'Configure Step 1 for Vibeshine\'s virtual screen or enable Display Device and set it to "Deactivate all other displays" so the doubled refresh requirement is met during the stream.',
+          'Configure Step 1 for LuminalShine\'s virtual screen or enable Display Device and set it to "Deactivate all other displays" so the doubled refresh requirement is met during the stream.',
           { duration: 8000 },
         );
       } else if (ddConfigOption.value !== 'ensure_only_display') {
         message?.warning(
-          'Set Step 1 to use Vibeshine\'s virtual screen or adjust Display Device to "Deactivate all other displays" so only the high-refresh monitor stays active.',
+          'Set Step 1 to use LuminalShine\'s virtual screen or adjust Display Device to "Deactivate all other displays" so only the high-refresh monitor stays active.',
           { duration: 8000 },
         );
       }
@@ -2560,7 +2560,7 @@ function onNamePicked(val: string | null) {
   }
 }
 
-// Cover preview logic removed; Vibeshine no longer fetches or proxies images
+// Cover preview logic removed; LuminalShine no longer fetches or proxies images
 async function save() {
   saving.value = true;
   try {

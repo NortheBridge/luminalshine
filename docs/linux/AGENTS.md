@@ -1,6 +1,6 @@
-# Vibeshine Linux Agent Guide
+# LuminalShine Linux Agent Guide
 
-This file is automatically loaded by AI coding assistants (OpenCode, Claude Code, etc.) when working in this repository. It contains authoritative knowledge about building, configuring, and troubleshooting Vibeshine on Linux — specifically Arch Linux / CachyOS with NVIDIA GPU and Wayland.
+This file is automatically loaded by AI coding assistants (OpenCode, Claude Code, etc.) when working in this repository. It contains authoritative knowledge about building, configuring, and troubleshooting LuminalShine on Linux — specifically Arch Linux / CachyOS with NVIDIA GPU and Wayland.
 
 For full details on every topic, see **`LEARNINGS.md`**. This file is the quick-reference distillation.
 
@@ -8,10 +8,10 @@ For full details on every topic, see **`LEARNINGS.md`**. This file is the quick-
 
 ## Repository Context
 
-- **What**: Vibeshine — a Sunshine fork by Nonary with CUDA/NVENC, virtual display, WebRTC, and Playnite integration
+- **What**: LuminalShine — a Sunshine fork by Nonary with CUDA/NVENC, virtual display, WebRTC, and Playnite integration
 - **Branch**: `vibe` (main development), `fix/linux-build-boost-1.89` (Linux build fixes)
 - **Binary**: Installed at `~/.local/bin/sunshine` (symlink → versioned binary)
-- **Build dir**: `~/vibeshine-build/build/`
+- **Build dir**: `~/luminalshine-build/build/`
 - **Config**: `~/.config/sunshine/sunshine.conf`
 
 ---
@@ -27,7 +27,7 @@ sudo pacman -S cmake ninja gcc cuda nvidia-utils libva libdrm \
 
 ### Build commands
 ```bash
-cd ~/vibeshine-build
+cd ~/luminalshine-build
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_INSTALL_PREFIX=~/.local \
@@ -59,7 +59,7 @@ If building on a fresh clone and seeing Boost errors:
 
 ## 2. Virtual Display Setup
 
-Vibeshine streams to a **virtual display** on HDMI-A-2 (a physically disconnected port) using a custom EDID loaded by the kernel at boot.
+LuminalShine streams to a **virtual display** on HDMI-A-2 (a physically disconnected port) using a custom EDID loaded by the kernel at boot.
 
 ### How it works
 1. A custom EDID binary is embedded in the initramfs
@@ -269,7 +269,7 @@ avahi-browse -r _nvstream._tcp -t
 | `/etc/kernel/cmdline` | Persistent kernel boot params (Limine) |
 | `/usr/lib/firmware/edid/samsung-q800t-hdmi2.1` | Patched EDID (2560x1600@120 as DTD2) |
 | `/etc/mkinitcpio.conf` | Must include EDID in `FILES=` |
-| `~/vibeshine-build/LEARNINGS.md` | Full detailed learnings log |
+| `~/luminalshine-build/LEARNINGS.md` | Full detailed learnings log |
 
 ---
 

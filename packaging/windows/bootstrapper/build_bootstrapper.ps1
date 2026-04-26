@@ -148,7 +148,7 @@ if (-not $UninstallOnly) {
     }
 }
 
-$sourceFile = Resolve-PathStrict (Join-Path $scriptDir "VibeshineInstaller.cs")
+$sourceFile = Resolve-PathStrict (Join-Path $scriptDir "LuminalShineInstaller.cs")
 $manifestFile = Resolve-PathStrict (Join-Path $scriptDir "app.manifest")
 # Keep the branded product icon on the bootstrapper; the installer now uses
 # explicit process/window shell metadata to stay distinct from the installed app.
@@ -166,7 +166,7 @@ if ([string]::IsNullOrWhiteSpace($OutputName)) {
     if ($UninstallOnly) {
         $OutputName = "uninstall.exe"
     } else {
-        $OutputName = "VibeshineSetup.exe"
+        $OutputName = "LuminalShineSetup.exe"
     }
 }
 
@@ -201,11 +201,11 @@ if ([string]::IsNullOrWhiteSpace($informationalVersion)) {
     $informationalVersion = $assemblyVersion
 }
 if ($UninstallOnly) {
-    $assemblyInfoPath = Join-Path $artifactDir "VibeshineUninstall.AssemblyInfo.cs"
-    $assemblyTitle = "Vibeshine Uninstaller"
+    $assemblyInfoPath = Join-Path $artifactDir "LuminalShineUninstall.AssemblyInfo.cs"
+    $assemblyTitle = "LuminalShine Uninstaller"
 } else {
-    $assemblyInfoPath = Join-Path $artifactDir "VibeshineInstaller.AssemblyInfo.cs"
-    $assemblyTitle = "Vibeshine Installer"
+    $assemblyInfoPath = Join-Path $artifactDir "LuminalShineInstaller.AssemblyInfo.cs"
+    $assemblyTitle = "LuminalShine Installer"
 }
 $assemblyInfoContent = @(
     "using System.Reflection;",

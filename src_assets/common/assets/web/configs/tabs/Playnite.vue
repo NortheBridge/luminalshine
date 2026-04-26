@@ -312,7 +312,7 @@
                 <div class="form-text">
                   {{
                     $t('playnite.policy_explainer') ||
-                    'Choose how Vibeshine removes old auto-synced games.'
+                    'Choose how LuminalShine removes old auto-synced games.'
                   }}
                 </div>
               </div>
@@ -355,7 +355,7 @@
                 :default="store.defaults.playnite_fullscreen_entry_enabled"
                 :localePrefix="'playnite'"
                 label="Add 'Playnite (Fullscreen)' to Applications"
-                desc="When enabled, Vibeshine adds a launcher entry that opens Playnite in fullscreen desktop mode."
+                desc="When enabled, LuminalShine adds a launcher entry that opens Playnite in fullscreen desktop mode."
               />
             </div>
             <div>
@@ -1362,7 +1362,7 @@ const policySummary = computed<string>(() => {
   if (syncAll) {
     parts.push(
       (t('playnite.summary_all_installed') as any) ||
-        'All installed Playnite games will be kept in Vibeshine.',
+        'All installed Playnite games will be kept in LuminalShine.',
     );
   } else if (includePluginCount > 0) {
     parts.push(

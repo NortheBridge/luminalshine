@@ -27,7 +27,7 @@ jobs:
             const labelName = 'logs requested';
             const marker = '<!-- logs-needed-reminder -->';
             const foundMarker = '<!-- logs-needed-detected -->';
-            const logFileRegex = /(?:vibeshine_logs-\d{8}-\d{6}(?:-part\d+)?\.zip|sunshine-logs-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:-\d+)?\.log)/i;
+            const logFileRegex = /(?:luminalshine_logs-\d{8}-\d{6}(?:-part\d+)?\.zip|sunshine-logs-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:-\d+)?\.log)/i;
             const crashBundleRegex = /sunshine_crashbundle-\d{8}-\d{6}(?:-part\d+)?\.zip/i;
 
             const { owner, repo } = context.repo;
@@ -95,8 +95,8 @@ jobs:
 
             Thank you for the report. We need logs in order to troubleshoot this issue.
 
-            Please collect them from Vibeshine:
-            1. Open the system tray icon for Vibeshine.
+            Please collect them from LuminalShine:
+            1. Open the system tray icon for LuminalShine.
             2. Click **Open Sunshine**.
             3. If required, log into the Web UI.
             4. Open the **Troubleshooting** tab.

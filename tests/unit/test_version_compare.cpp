@@ -1,6 +1,6 @@
 /**
  * @file tests/unit/test_version_compare.cpp
- * @brief Unit tests for Vibeshine's semver comparison rules.
+ * @brief Unit tests for LuminalShine's semver comparison rules.
  */
 
 #include "../tests_common.h"

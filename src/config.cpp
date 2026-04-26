@@ -846,7 +846,7 @@ namespace config {
 
     platf::get_host_name(),  // sunshine_name,
     "sunshine_state.json"s,  // file_state
-    "vibeshine_state.json"s,  // vibeshine_file_state
+    "luminalshine_state.json"s,  // luminalshine_file_state
     {},  // external_ip
   };
 
@@ -1595,7 +1595,7 @@ namespace config {
     string_f(vars, "sunshine_name", nvhttp.sunshine_name);
     path_f(vars, "log_path", config::sunshine.log_file);
     path_f(vars, "file_state", nvhttp.file_state);
-    path_f(vars, "vibeshine_file_state", nvhttp.vibeshine_file_state);
+    path_f(vars, "luminalshine_file_state", nvhttp.luminalshine_file_state);
 
     // Must be run after "file_state"
     config::sunshine.credentials_file = config::nvhttp.file_state;
@@ -1893,7 +1893,7 @@ namespace config {
       apply_config(std::move(vars));
       config_loaded = true;
 
-      // Persist snapshot exclusion devices to vibeshine_state.json on startup so the display
+      // Persist snapshot exclusion devices to luminalshine_state.json on startup so the display
       // helper can read them directly without depending on IPC from Sunshine.
       statefile::save_snapshot_exclude_devices(video.dd.snapshot_exclude_devices);
     } catch (const std::filesystem::filesystem_error &err) {
@@ -2288,7 +2288,7 @@ namespace config {
         logging::reconfigure_min_log_level(sunshine.min_log_level);
       }
 
-      // Persist snapshot exclusion devices to vibeshine_state.json so the display helper
+      // Persist snapshot exclusion devices to luminalshine_state.json so the display helper
       // can read them directly without depending on IPC from Sunshine.
       // This is done unconditionally to ensure the state file is always up-to-date.
       statefile::save_snapshot_exclude_devices(video.dd.snapshot_exclude_devices);

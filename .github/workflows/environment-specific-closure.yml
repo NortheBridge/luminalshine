@@ -39,7 +39,7 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                body: `${marker}\nThank you for the report. Based on the information available, this appears to be specific to your local environment rather than a reproducible application bug affecting multiple users.\n\nGitHub issues are used to track actionable, reproducible bugs that can be confirmed and fixed in Vibeshine. Since there is not enough corroborating evidence from other users or a clear reproduction path that points to a shared defect, we are closing this as not planned.\n\nIf additional reports, logs, crash bundles, or reliable reproduction steps later show that this affects more users, please open a new issue with that information so it can be reviewed.`,
+                body: `${marker}\nThank you for the report. Based on the information available, this appears to be specific to your local environment rather than a reproducible application bug affecting multiple users.\n\nGitHub issues are used to track actionable, reproducible bugs that can be confirmed and fixed in LuminalShine. Since there is not enough corroborating evidence from other users or a clear reproduction path that points to a shared defect, we are closing this as not planned.\n\nIf additional reports, logs, crash bundles, or reliable reproduction steps later show that this affects more users, please open a new issue with that information so it can be reviewed.`,
               });
             }
 

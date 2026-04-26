@@ -15,7 +15,7 @@
     <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes"/>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
     <Condition Message="Administrator privileges are required.">Privileged</Condition>
-    <Feature Id="VibeshineExtras" Title="Vibeshine Components" Level="1" Absent="disallow">
+    <Feature Id="LuminalShineExtras" Title="LuminalShine Components" Level="1" Absent="disallow">
       <ComponentRef Id="CtlStopSunshine"/>
       <ComponentRef Id="SunshineSvc"/>
       <ComponentRef Id="Env_Path"/>

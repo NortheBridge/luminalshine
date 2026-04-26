@@ -239,7 +239,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File ../packaging/windows/bootstrapper/build_bootstrapper.ps1 -BuildDir "$(cygpath -w "$(pwd)")"
 
           msi_file=$(ls -1 ./cpack_artifacts/*.msi | head -n 1)
-          installer_exe=$(ls -1 ./cpack_artifacts/VibeshineSetup.exe ./cpack_artifacts/*-installer.exe 2>/dev/null | head -n 1)
+          installer_exe=$(ls -1 ./cpack_artifacts/LuminalShineSetup.exe ./cpack_artifacts/*-installer.exe 2>/dev/null | head -n 1)
           portable_zip=$(ls -1 ./cpack_artifacts/*.zip | head -n 1)
 
           # move

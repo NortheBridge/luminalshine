@@ -189,7 +189,7 @@ A helper script automates the full depot_tools / gclient / gn / ninja flow:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_mingw_webrtc.ps1
 ```
 
-By default the script caches its working tree and output to `%LOCALAPPDATA%\Vibeshine\deps\libwebrtc\{src,out}`,
+By default the script caches its working tree and output to `%LOCALAPPDATA%\LuminalShine\deps\libwebrtc\{src,out}`,
 which is **shared across every sunshine build dir, worktree, and git checkout on the machine**. This means:
 
 - Wiping `build/` does not destroy libwebrtc — the next CMake configure picks it back up.
@@ -197,7 +197,7 @@ which is **shared across every sunshine build dir, worktree, and git checkout on
 - Multiple sunshine build dirs share one cached libwebrtc.
 
 `cmake/dependencies/webrtc.cmake` looks at the same default location, so no `-DWEBRTC_ROOT=...` is needed after the
-first build. To relocate the cache, set `VIBESHINE_DEPS_DIR=<path>` in your environment before invoking either the
+first build. To relocate the cache, set `LUMINALSHINE_DEPS_DIR=<path>` in your environment before invoking either the
 script or CMake.
 
 For finer control the script accepts overrides via `-BuildDir`/`-OutDir` parameters or the legacy
@@ -229,7 +229,7 @@ If you cannot use the helper script, the underlying steps are:
    ninja -C out-debug/Windows-x64 libwebrtc
    ```
 7. Stage the artifacts into a directory with `include/` and `lib/` subfolders. Either place them at the default
-   shared cache location (`%LOCALAPPDATA%\Vibeshine\deps\libwebrtc\out`) so CMake finds them automatically, or
+   shared cache location (`%LOCALAPPDATA%\LuminalShine\deps\libwebrtc\out`) so CMake finds them automatically, or
    point CMake at your staging directory with `-DWEBRTC_ROOT=<path>`. Copy `libwebrtc.dll` and `libwebrtc.dll.lib`
    into `lib/`.
 8. Configure Sunshine with `-DSUNSHINE_ENABLE_WEBRTC=ON`. If CMake still fails to find libwebrtc, pass

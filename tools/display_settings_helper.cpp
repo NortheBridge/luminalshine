@@ -115,7 +115,7 @@ namespace {
   }
 
   std::wstring build_restore_task_name(const std::wstring &username) {
-    return L"VibeshineDisplayRestore";
+    return L"LuminalShineDisplayRestore";
   }
 
   // Trigger a more robust Explorer/shell refresh so that desktop/taskbar icons
@@ -4166,7 +4166,7 @@ namespace {
     std::filesystem::path golden;
     std::filesystem::path session_current;
     std::filesystem::path session_previous;
-    std::filesystem::path vibeshine_state;
+    std::filesystem::path luminalshine_state;
   };
 
   SnapshotPaths make_snapshot_paths(const std::filesystem::path &root) {
@@ -4174,7 +4174,7 @@ namespace {
       .golden = root / L"display_golden_restore.json",
       .session_current = root / L"display_session_current.json",
       .session_previous = root / L"display_session_previous.json",
-      .vibeshine_state = root / L"vibeshine_state.json",
+      .luminalshine_state = root / L"luminalshine_state.json",
     };
   }
 
@@ -4230,7 +4230,7 @@ namespace {
   }
 
   bool create_restore_scheduled_task() {
-    BOOST_LOG(info) << "Attempting to create scheduled task 'VibeshineDisplayRestore'...";
+    BOOST_LOG(info) << "Attempting to create scheduled task 'LuminalShineDisplayRestore'...";
 
     const DWORD active_session_id = WTSGetActiveConsoleSessionId();
 
@@ -4644,17 +4644,17 @@ namespace {
   }
 
   /**
-   * @brief Load snapshot exclusion devices from vibeshine_state.json.
+   * @brief Load snapshot exclusion devices from luminalshine_state.json.
    *
    * This reads the exclusion list that Sunshine persists to the state file,
    * allowing the display helper to know which devices to exclude without
    * depending on IPC from Sunshine.
    *
-   * @param path Path to vibeshine_state.json
+   * @param path Path to luminalshine_state.json
    * @param ids_out Output vector for device IDs
    * @return true if loaded successfully, false otherwise
    */
-  bool load_vibeshine_snapshot_exclusions(const std::filesystem::path &path, std::vector<std::string> &ids_out) {
+  bool load_luminalshine_snapshot_exclusions(const std::filesystem::path &path, std::vector<std::string> &ids_out) {
     ids_out.clear();
     if (path.empty()) {
       return false;
@@ -4678,7 +4678,7 @@ namespace {
       if (j.is_discarded()) {
         return false;
       }
-      // vibeshine_state.json format: { "root": { "snapshot_exclude_devices": [...] } }
+      // luminalshine_state.json format: { "root": { "snapshot_exclude_devices": [...] } }
       if (j.is_object() && j.contains("root")) {
         const auto &root = j["root"];
         if (root.is_object() && root.contains("snapshot_exclude_devices")) {
@@ -4687,7 +4687,7 @@ namespace {
         }
       }
     } catch (const std::exception &e) {
-      BOOST_LOG(warning) << "Failed to parse vibeshine_state.json for snapshot exclusions: " << e.what();
+      BOOST_LOG(warning) << "Failed to parse luminalshine_state.json for snapshot exclusions: " << e.what();
     } catch (...) {
     }
     return false;
@@ -5066,13 +5066,13 @@ int main(int argc, char *argv[]) {
     state.session_current_path = active_snapshots.session_current;
     state.session_previous_path = active_snapshots.session_previous;
     {
-      // Load snapshot exclusions from vibeshine_state.json (source of truth from Sunshine).
+      // Load snapshot exclusions from luminalshine_state.json (source of truth from Sunshine).
       std::vector<std::string> persisted;
       for (const auto &root : search_roots) {
-        const auto vibeshine_state_file = root / L"vibeshine_state.json";
-        if (load_vibeshine_snapshot_exclusions(vibeshine_state_file, persisted)) {
-          BOOST_LOG(info) << "Loaded snapshot exclusions from vibeshine_state.json (" << persisted.size()
-                          << ") at " << vibeshine_state_file.string();
+        const auto luminalshine_state_file = root / L"luminalshine_state.json";
+        if (load_luminalshine_snapshot_exclusions(luminalshine_state_file, persisted)) {
+          BOOST_LOG(info) << "Loaded snapshot exclusions from luminalshine_state.json (" << persisted.size()
+                          << ") at " << luminalshine_state_file.string();
           state.controller.set_snapshot_exclusions(persisted);
           break;
         }
@@ -5141,13 +5141,13 @@ int main(int argc, char *argv[]) {
   state.session_current_path = active_snapshots.session_current;
   state.session_previous_path = active_snapshots.session_previous;
   {
-    // Load snapshot exclusions from vibeshine_state.json (source of truth from Sunshine).
+    // Load snapshot exclusions from luminalshine_state.json (source of truth from Sunshine).
     std::vector<std::string> persisted;
     for (const auto &root : search_roots) {
-      const auto vibeshine_state_file = root / L"vibeshine_state.json";
-      if (load_vibeshine_snapshot_exclusions(vibeshine_state_file, persisted)) {
-        BOOST_LOG(info) << "Loaded snapshot exclusions from vibeshine_state.json (" << persisted.size()
-                        << ") at " << vibeshine_state_file.string();
+      const auto luminalshine_state_file = root / L"luminalshine_state.json";
+      if (load_luminalshine_snapshot_exclusions(luminalshine_state_file, persisted)) {
+        BOOST_LOG(info) << "Loaded snapshot exclusions from luminalshine_state.json (" << persisted.size()
+                        << ") at " << luminalshine_state_file.string();
         state.controller.set_snapshot_exclusions(persisted);
         break;
       }

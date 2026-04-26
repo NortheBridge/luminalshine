@@ -4,14 +4,14 @@ cmake_minimum_required(VERSION 3.20)
 # `cmake_path(CONVERT ... TO_NATIVE_PATH_LIST ...)` requires 3.20
 # todo - set this conditionally
 
-project(Vibeshine VERSION 0.0.0
+project(LuminalShine VERSION 0.0.0
         DESCRIPTION "Modern Self-hosted game stream host for Moonlight"
         HOMEPAGE_URL "https://github.com/NortheBridge/luminalshine")
 
 set(PROJECT_LICENSE "GPL-3.0-only")
 
 set(PROJECT_FQDN "dev.lizardbyte.app.Sunshine")
-set(WINDOWS_APP_USER_MODEL_ID "Vibeshine.Vibeshine")
+set(WINDOWS_APP_USER_MODEL_ID "LuminalShine.LuminalShine")
 
 set(PROJECT_BRIEF_DESCRIPTION "GameStream host for Moonlight")  # must be <= 35 characters
 

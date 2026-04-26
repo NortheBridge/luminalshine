@@ -135,7 +135,7 @@
                     {{
                       crashDumpMessage ||
                       $t('config.crash_dump_desc') ||
-                      'Vibeshine detected a recent crash dump. Please export a crash bundle and include it when filing an issue.'
+                      'LuminalShine detected a recent crash dump. Please export a crash bundle and include it when filing an issue.'
                     }}
                   </p>
                   <p v-if="crashDumpDetails" class="text-xs opacity-60 m-0">
@@ -149,7 +149,7 @@
                     strong
                     size="small"
                     class="w-full justify-center sm:w-auto"
-                    href="https://github.com/Nonary/vibeshine/issues/new?template=bug_report.yml"
+                    href="https://github.com/Nonary/luminalshine/issues/new?template=bug_report.yml"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -199,7 +199,7 @@
                   <p class="text-xs opacity-80 m-0">
                     {{
                       $t('config.vigem_missing_desc') ||
-                      'Vibeshine requires the ViGEmBus driver to emulate controllers on Windows. It is no longer bundled. Please download and install it manually:'
+                      'LuminalShine requires the ViGEmBus driver to emulate controllers on Windows. It is no longer bundled. Please download and install it manually:'
                     }}
                     <span v-if="vigemVersion" class="ml-2 opacity-60">
                       ({{ $t('config.vigem_detected_version') || 'Detected' }}: {{ vigemVersion }})
@@ -474,7 +474,7 @@ import { useI18n } from 'vue-i18n';
 import { NCard, NAlert, useMessage, useDialog } from 'naive-ui';
 import ResourceCard from '@/ResourceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
-import VibeshineVersion, { GitHubRelease } from '@/sunshine_version';
+import LuminalShineVersion, { GitHubRelease } from '@/sunshine_version';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { useAppsStore } from '@/stores/apps';
@@ -482,19 +482,19 @@ import { http } from '@/http';
 import type { CrashDumpStatus } from '@/utils/crashDump';
 import { isCrashDumpEligible, sanitizeCrashDumpStatus } from '@/utils/crashDump';
 
-const installedVersion = ref<VibeshineVersion>(new VibeshineVersion('0.0.0'));
+const installedVersion = ref<LuminalShineVersion>(new LuminalShineVersion('0.0.0'));
 const githubRelease = ref<GitHubRelease | null>(null);
 const preReleaseRelease = ref<GitHubRelease | null>(null);
 
 const githubVersion = computed(() =>
   githubRelease.value
-    ? VibeshineVersion.fromRelease(githubRelease.value)
-    : new VibeshineVersion('0.0.0'),
+    ? LuminalShineVersion.fromRelease(githubRelease.value)
+    : new LuminalShineVersion('0.0.0'),
 );
 const preReleaseVersion = computed(() =>
   preReleaseRelease.value
-    ? VibeshineVersion.fromRelease(preReleaseRelease.value)
-    : new VibeshineVersion('0.0.0'),
+    ? LuminalShineVersion.fromRelease(preReleaseRelease.value)
+    : new LuminalShineVersion('0.0.0'),
 );
 const notifyPreReleases = ref(false);
 const showPreNotes = ref(false);
@@ -627,14 +627,14 @@ async function runVersionChecks() {
     notifyPreReleases.value =
       cfg.notify_pre_releases === true || cfg.notify_pre_releases === 'enabled';
     const serverVersion = configStore.metadata?.version || cfg.version;
-    installedVersion.value = new VibeshineVersion(serverVersion || '0.0.0');
+    installedVersion.value = new LuminalShineVersion(serverVersion || '0.0.0');
     branch.value = cfg.branch || '';
     commit.value = cfg.commit || '';
 
     // Remote release checks (GitHub)
     try {
       githubRelease.value = await fetch(
-        'https://api.github.com/repos/Nonary/vibeshine/releases/latest',
+        'https://api.github.com/repos/Nonary/luminalshine/releases/latest',
       ).then((r) => r.json());
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -642,7 +642,7 @@ async function runVersionChecks() {
     }
     // Fetch list of releases to locate prereleases and determine installed stability
     try {
-      const releases = await fetch('https://api.github.com/repos/Nonary/vibeshine/releases').then(
+      const releases = await fetch('https://api.github.com/repos/Nonary/luminalshine/releases').then(
         (r) => r.json(),
       );
       if (Array.isArray(releases)) {
@@ -650,10 +650,10 @@ async function runVersionChecks() {
         const prereleases = releases.filter((r: any) => r && r.prerelease && !r.draft);
         if (prereleases.length > 0) {
           let best = prereleases[0];
-          let bestV = VibeshineVersion.fromRelease(best);
+          let bestV = LuminalShineVersion.fromRelease(best);
           for (let i = 1; i < prereleases.length; i++) {
             const cand = prereleases[i];
-            const candV = VibeshineVersion.fromRelease(cand);
+            const candV = LuminalShineVersion.fromRelease(cand);
             if (candV.isGreater(bestV)) {
               best = cand;
               bestV = candV;
@@ -679,7 +679,7 @@ async function runVersionChecks() {
       // eslint-disable-next-line no-console
       console.warn('[Dashboard] releases list fetch failed', e);
     }
-    // Tag-based comparison handled below via VibeshineVersion
+    // Tag-based comparison handled below via LuminalShineVersion
 
     const plat = (configStore.metadata?.platform || '').toLowerCase();
     // ViGEm health (Windows only)
@@ -1046,7 +1046,7 @@ const playniteMissingPluginBannerText = computed(() => {
   }
   const detected =
     details.length > 1 ? `${details[0]} and ${details[1]}` : (details[0] ?? 'Playnite entries');
-  return `Detected ${detected}, but the Playnite plugin is no longer installed. Reinstall the plugin to restore integration, or purge Playnite games to remove all Playnite entries from Vibeshine.`;
+  return `Detected ${detected}, but the Playnite plugin is no longer installed. Reinstall the plugin to restore integration, or purge Playnite games to remove all Playnite entries from LuminalShine.`;
 });
 
 async function resolvePlaynitePluginIssue() {
@@ -1117,7 +1117,7 @@ function openPurgePlayniteGamesConfirm() {
   dialog.warning({
     title: 'Purge Playnite games?',
     content:
-      'This removes all Playnite entries from Vibeshine, including auto-synced games and the Playnite (Fullscreen) launcher.',
+      'This removes all Playnite entries from LuminalShine, including auto-synced games and the Playnite (Fullscreen) launcher.',
     positiveText: 'Purge',
     negativeText: 'Cancel',
     onPositiveClick: async () => {

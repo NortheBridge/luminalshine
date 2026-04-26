@@ -20,7 +20,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace VibeshineInstaller {
+namespace LuminalShineInstaller {
   internal static class BuildFlavor {
 #if UNINSTALL_ONLY
     public static readonly bool IsUninstallOnly = true;
@@ -158,14 +158,14 @@ namespace VibeshineInstaller {
       // read-only package inspection can trigger Windows Installer self-repair.
       _payloadMsiInfo = null;
       _licenseText = LoadEmbeddedLicenseText();
-      _installedProduct = InstallerRunner.GetInstalledVibeshineProduct();
+      _installedProduct = InstallerRunner.GetInstalledLuminalShineProduct();
       _legacySunshineProduct = InstallerRunner.GetInstalledSunshineProduct();
       _legacySunshineRegistration = InstallerRunner.GetLegacySunshineRegistration();
       _preferredInstallDirectory = ResolvePreferredInstallDirectory();
       _uninstallUiRequested = BuildFlavor.IsUninstallOnly || arguments.UninstallUiRequested;
       var showInstallOptions = !BuildFlavor.IsUninstallOnly && _installedProduct == null;
       var displayVersion = GetTargetVersionText();
-      Title = (BuildFlavor.IsUninstallOnly ? "Vibeshine Uninstaller v" : "Vibeshine Installer v") + displayVersion;
+      Title = (BuildFlavor.IsUninstallOnly ? "LuminalShine Uninstaller v" : "LuminalShine Installer v") + displayVersion;
       Width = 720;
       Height = showInstallOptions ? 560 : 460;
       MinWidth = 690;
@@ -429,7 +429,7 @@ namespace VibeshineInstaller {
       });
 
       installStack.Children.Add(new TextBlock {
-        Text = "Choose where Vibeshine will be installed. The default is recommended.",
+        Text = "Choose where LuminalShine will be installed. The default is recommended.",
         FontSize = 12.5,
         Foreground = new SolidColorBrush(Color.FromRgb(209, 222, 241)),
         Margin = new Thickness(0, 0, 0, 10),
@@ -451,7 +451,7 @@ namespace VibeshineInstaller {
         Foreground = new SolidColorBrush(Color.FromRgb(245, 249, 255)),
         BorderBrush = new SolidColorBrush(Color.FromRgb(96, 111, 171)),
         CaretBrush = new SolidColorBrush(Color.FromRgb(245, 249, 255)),
-        ToolTip = "Used when installing or updating Vibeshine"
+        ToolTip = "Used when installing or updating LuminalShine"
       };
       pathGrid.Children.Add(_installPathTextBox);
 
@@ -514,7 +514,7 @@ namespace VibeshineInstaller {
       });
 
       tipsStack.Children.Add(new TextBlock {
-        Text = "You can install or upgrade Vibeshine while actively streaming. No system restart is required. "
+        Text = "You can install or upgrade LuminalShine while actively streaming. No system restart is required. "
           + "After you click Install or Upgrade, the current streaming session will end, then you can usually "
           + "start streaming again after about 1–2 minutes without issues.",
         FontSize = 12.5,
@@ -532,7 +532,7 @@ namespace VibeshineInstaller {
       });
 
       tipsStack.Children.Add(new TextBox {
-        Text = "VibeshineSetup.exe /qn /norestart",
+        Text = "LuminalShineSetup.exe /qn /norestart",
         IsReadOnly = true,
         FontFamily = new FontFamily("Consolas"),
         FontSize = 12.5,
@@ -658,7 +658,7 @@ namespace VibeshineInstaller {
       buttonRow.Children.Add(_continueButton);
 
       _uninstallButton = new Button {
-        Content = "Uninstall Vibeshine",
+        Content = "Uninstall LuminalShine",
         Height = 40,
         MinWidth = 152,
         Margin = new Thickness(10, 0, 0, 0),
@@ -712,13 +712,13 @@ namespace VibeshineInstaller {
       Grid.SetColumn(_closeButton, 4);
       buttonRow.Children.Add(_closeButton);
 
-      _continueButton.Content = BuildFlavor.IsUninstallOnly ? "Uninstall Vibeshine" : BuildInstallButtonLabel();
+      _continueButton.Content = BuildFlavor.IsUninstallOnly ? "Uninstall LuminalShine" : BuildInstallButtonLabel();
       if (_uninstallUiRequested && _installedProduct == null) {
         SetStatus(
-          "Vibeshine is not installed.",
+          "LuminalShine is not installed.",
           BuildFlavor.IsUninstallOnly
             ? "No uninstall action is required."
-            : "Uninstall is unavailable. Choose Install Vibeshine to continue.",
+            : "Uninstall is unavailable. Choose Install LuminalShine to continue.",
           _statusNormalBrush);
       } else {
         SetStatus("Ready.", string.Empty, _statusNormalBrush);
@@ -810,7 +810,7 @@ namespace VibeshineInstaller {
       // installed app or temporary generic taskbar identities while WPF loads.
       ShellIdentity.TryApplyInstallerWindowIdentity(
         new WindowInteropHelper(this).Handle,
-        BuildFlavor.IsUninstallOnly ? "Vibeshine Uninstaller" : "Vibeshine Installer"
+        BuildFlavor.IsUninstallOnly ? "LuminalShine Uninstaller" : "LuminalShine Installer"
       );
     }
 
@@ -921,7 +921,7 @@ namespace VibeshineInstaller {
         currentPath = _preferredInstallDirectory;
       }
 
-      var selectedPath = ModernFolderPicker.TryPickFolder(this, "Select the Vibeshine install folder", currentPath);
+      var selectedPath = ModernFolderPicker.TryPickFolder(this, "Select the LuminalShine install folder", currentPath);
       if (!string.IsNullOrWhiteSpace(selectedPath)) {
         _installPathTextBox.Text = selectedPath;
       }
@@ -937,8 +937,8 @@ namespace VibeshineInstaller {
 
     private async void UninstallNowClicked(object sender, RoutedEventArgs e) {
       if (_installedProduct == null) {
-        SetStatus("Uninstall not started.", "No Vibeshine installation was found on this PC.", _statusNormalBrush);
-        await ShowOverlayInfoAsync("Nothing to uninstall", "Vibeshine is not currently installed on this PC.");
+        SetStatus("Uninstall not started.", "No LuminalShine installation was found on this PC.", _statusNormalBrush);
+        await ShowOverlayInfoAsync("Nothing to uninstall", "LuminalShine is not currently installed on this PC.");
         return;
       }
 
@@ -983,7 +983,7 @@ namespace VibeshineInstaller {
         var proceed = await ShowOverlayConfirmAsync(
           "Apollo ecosystem detected",
           warningMessage,
-          "Continue with Vibeshine",
+          "Continue with LuminalShine",
           "Cancel",
           false);
         if (!proceed) {
@@ -1009,13 +1009,13 @@ namespace VibeshineInstaller {
           selectedPath,
           installVirtualDisplayDriver,
           false));
-      }, "Install", "Installing or updating Vibeshine...", "Vibeshine installation completed.");
+      }, "Install", "Installing or updating LuminalShine...", "LuminalShine installation completed.");
     }
 
     private async Task RunUninstallFlow() {
       if (_installedProduct == null) {
-        SetStatus("Uninstall not started.", "No Vibeshine installation was found on this PC.", _statusNormalBrush);
-        await ShowOverlayInfoAsync("Nothing to uninstall", "Vibeshine is not currently installed on this PC.");
+        SetStatus("Uninstall not started.", "No LuminalShine installation was found on this PC.", _statusNormalBrush);
+        await ShowOverlayInfoAsync("Nothing to uninstall", "LuminalShine is not currently installed on this PC.");
         return;
       }
 
@@ -1031,8 +1031,8 @@ namespace VibeshineInstaller {
           uninstallOptions.Value.DeleteInstallDirectory,
           uninstallOptions.Value.RemoveVirtualDisplayDriver)),
         "Uninstall",
-        "Removing Vibeshine...",
-        "Vibeshine uninstall completed.");
+        "Removing LuminalShine...",
+        "LuminalShine uninstall completed.");
     }
 
     private async Task RunOperationAsync(Func<Task<InstallerResult>> actionFactory, string actionLabel, string inProgressText, string successText) {
@@ -1048,7 +1048,7 @@ namespace VibeshineInstaller {
             if (!string.IsNullOrWhiteSpace(result.UserDetail)) {
               warningDetail += "\n" + result.UserDetail;
             }
-            SetStatus("Vibeshine installation completed with warnings.", warningDetail, _statusWarningBrush);
+            SetStatus("LuminalShine installation completed with warnings.", warningDetail, _statusWarningBrush);
             await ShowInstallPartialSuccessDialogAsync(result);
             Close();
             return;
@@ -1077,10 +1077,10 @@ namespace VibeshineInstaller {
         if (result.Operation == InstallerOperation.Uninstall && result.ExitCode == 1605) {
           ProcessExitCode = 0;
           SetStatus(
-            "Vibeshine is not installed.",
+            "LuminalShine is not installed.",
             "Nothing needed to be removed.",
             _statusNormalBrush);
-          await ShowOverlayInfoAsync("Nothing to uninstall", "Vibeshine is not currently installed on this PC.");
+          await ShowOverlayInfoAsync("Nothing to uninstall", "LuminalShine is not currently installed on this PC.");
           return;
         }
 
@@ -1148,7 +1148,7 @@ namespace VibeshineInstaller {
 
       // Block UNC / network paths — Windows services cannot reliably run from network locations
       if (fullPath.StartsWith(@"\\", StringComparison.Ordinal)) {
-        throw new InvalidOperationException("Network paths (UNC) are not supported. Vibeshine runs as a Windows service and must be installed on a local drive.");
+        throw new InvalidOperationException("Network paths (UNC) are not supported. LuminalShine runs as a Windows service and must be installed on a local drive.");
       }
 
       // Verify the drive exists
@@ -1193,23 +1193,23 @@ namespace VibeshineInstaller {
 
       if (hasApollo && hasVibepollo) {
         return "Apollo and Vibepollo were detected on this PC.\n\n"
-          + "Vibeshine does not carry over Apollo/Vibepollo settings.\n"
+          + "LuminalShine does not carry over Apollo/Vibepollo settings.\n"
           + "If you intend to stay in the Apollo ecosystem, Vibepollo is recommended instead.\n\n"
-          + "If this is intentional, continue with Vibeshine.\n"
+          + "If this is intentional, continue with LuminalShine.\n"
           + "Continuing will uninstall Apollo and Vibepollo before MSI installation starts.";
       }
 
       if (hasApollo) {
         return "Apollo was detected on this PC.\n\n"
-          + "Vibeshine does not carry over Apollo settings.\n"
+          + "LuminalShine does not carry over Apollo settings.\n"
           + "If you intend to stay in the Apollo ecosystem, Vibepollo is recommended instead.\n\n"
-          + "If this is intentional, continue with Vibeshine.\n"
+          + "If this is intentional, continue with LuminalShine.\n"
           + "Continuing will uninstall Apollo before MSI installation starts.";
       }
 
       return "Vibepollo was detected on this PC.\n\n"
-        + "Vibeshine does not carry over Vibepollo settings.\n"
-        + "If this is intentional, continue with Vibeshine.\n"
+        + "LuminalShine does not carry over Vibepollo settings.\n"
+        + "If this is intentional, continue with LuminalShine.\n"
         + "Continuing will uninstall Vibepollo before MSI installation starts.";
     }
 
@@ -1222,7 +1222,7 @@ namespace VibeshineInstaller {
       }
 
       return "Legacy Sunshine" + versionSuffix + " was detected on this PC.\n\n"
-        + "Vibeshine replaces Sunshine. The bootstrapper will uninstall Sunshine first, then start MSI installation.\n"
+        + "LuminalShine replaces Sunshine. The bootstrapper will uninstall Sunshine first, then start MSI installation.\n"
         + "No settings will be lost during this migration.\n\n"
         + "Click Continue to proceed.";
     }
@@ -1275,13 +1275,13 @@ namespace VibeshineInstaller {
     private string BuildInstallButtonLabel() {
       switch (GetInstallActionKind()) {
         case InstallActionKind.Install:
-          return "Install Vibeshine";
+          return "Install LuminalShine";
         case InstallActionKind.Upgrade:
-          return "Upgrade Vibeshine";
+          return "Upgrade LuminalShine";
         case InstallActionKind.Downgrade:
-          return "Downgrade Vibeshine";
+          return "Downgrade LuminalShine";
         default:
-          return "Reinstall Vibeshine";
+          return "Reinstall LuminalShine";
       }
     }
 
@@ -1312,7 +1312,7 @@ namespace VibeshineInstaller {
 
       await ShowOverlayAsync(
         "License",
-        "Vibeshine software license terms:",
+        "LuminalShine software license terms:",
         "Close",
         string.Empty,
         new SolidColorBrush(Color.FromRgb(99, 102, 241)),
@@ -1562,10 +1562,10 @@ namespace VibeshineInstaller {
       };
 
       var message = "Choose what to remove during uninstall.\n\n"
-        + "Uninstall always removes the Vibeshine service, firewall rules, and program files.";
+        + "Uninstall always removes the LuminalShine service, firewall rules, and program files.";
 
       var result = await ShowOverlayAsync(
-        "Uninstall Vibeshine",
+        "Uninstall LuminalShine",
         message,
         "Uninstall",
         "Cancel",
@@ -1639,7 +1639,7 @@ namespace VibeshineInstaller {
         DefaultExt = ".txt",
         AddExtension = true,
         OverwritePrompt = true,
-        FileName = "vibeshine-install-logs-" + timestamp + ".txt",
+        FileName = "luminalshine-install-logs-" + timestamp + ".txt",
         InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
       };
 
@@ -1662,8 +1662,8 @@ namespace VibeshineInstaller {
         return;
       }
 
-      var nextStep = "Attach this file on GitHub: https://github.com/Nonary/Vibeshine/issues\n"
-        + "Or Discord (#vibeshine): https://discord.com/invite/CGg5JxN";
+      var nextStep = "Attach this file on GitHub: https://github.com/Nonary/LuminalShine/issues\n"
+        + "Or Discord (#luminalshine): https://discord.com/invite/CGg5JxN";
       SetStatus("Support logs saved.", outputPath, _statusSuccessBrush);
       await ShowOverlayInfoAsync(
         "Logs saved",
@@ -1678,7 +1678,7 @@ namespace VibeshineInstaller {
         DefaultExt = ".txt",
         AddExtension = true,
         OverwritePrompt = true,
-        FileName = "vibeshine-install-warnings-" + timestamp + ".txt",
+        FileName = "luminalshine-install-warnings-" + timestamp + ".txt",
         InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
       };
 
@@ -1701,8 +1701,8 @@ namespace VibeshineInstaller {
         return;
       }
 
-      var nextStep = "Attach this file on GitHub: https://github.com/Nonary/Vibeshine/issues\n"
-        + "Or Discord (#vibeshine): https://discord.com/invite/CGg5JxN";
+      var nextStep = "Attach this file on GitHub: https://github.com/Nonary/LuminalShine/issues\n"
+        + "Or Discord (#luminalshine): https://discord.com/invite/CGg5JxN";
       SetStatus("Support logs saved.", outputPath, _statusSuccessBrush);
       await ShowOverlayInfoAsync(
         "Logs saved",
@@ -1711,10 +1711,10 @@ namespace VibeshineInstaller {
 
     private void WriteInstallFailureSupportReport(string outputPath, string failureDetail, InstallerResult installResult) {
       var candidateLogs = CollectSupportLogFiles(installResult == null ? null : installResult.LogPath);
-      var destination = "GitHub issue or Discord #vibeshine";
+      var destination = "GitHub issue or Discord #luminalshine";
       var executionVersion = _bundleVersion.ToString(3);
       using (var writer = new StreamWriter(outputPath, false)) {
-        writer.WriteLine(BuildSupportSummary(destination, executionVersion, failureDetail, installResult, candidateLogs.Count, "Vibeshine install failure report", "Failure detail:"));
+        writer.WriteLine(BuildSupportSummary(destination, executionVersion, failureDetail, installResult, candidateLogs.Count, "LuminalShine install failure report", "Failure detail:"));
         writer.WriteLine();
 
         if (candidateLogs.Count == 0) {
@@ -1739,10 +1739,10 @@ namespace VibeshineInstaller {
 
     private void WriteInstallWarningSupportReport(string outputPath, string warningDetail, InstallerResult installResult) {
       var candidateLogs = CollectSupportLogFiles(installResult == null ? null : installResult.LogPath);
-      var destination = "GitHub issue or Discord #vibeshine";
+      var destination = "GitHub issue or Discord #luminalshine";
       var executionVersion = _bundleVersion.ToString(3);
       using (var writer = new StreamWriter(outputPath, false)) {
-        writer.WriteLine(BuildSupportSummary(destination, executionVersion, warningDetail, installResult, candidateLogs.Count, "Vibeshine install warning report", "Warning detail:"));
+        writer.WriteLine(BuildSupportSummary(destination, executionVersion, warningDetail, installResult, candidateLogs.Count, "LuminalShine install warning report", "Warning detail:"));
         writer.WriteLine();
 
         if (candidateLogs.Count == 0) {
@@ -1772,9 +1772,9 @@ namespace VibeshineInstaller {
       TryAddLogFile(collected, seen, preferredLogPath);
 
       var tempPath = Path.GetTempPath();
-      TryAddRecentLogs(collected, seen, tempPath, "vibeshine_install_*.log", 8);
-      TryAddRecentLogs(collected, seen, tempPath, "vibeshine_preinstall_remove_*.log", 8);
-      TryAddRecentLogs(collected, seen, tempPath, "vibeshine_uninstall_*.log", 4);
+      TryAddRecentLogs(collected, seen, tempPath, "luminalshine_install_*.log", 8);
+      TryAddRecentLogs(collected, seen, tempPath, "luminalshine_preinstall_remove_*.log", 8);
+      TryAddRecentLogs(collected, seen, tempPath, "luminalshine_uninstall_*.log", 4);
 
       var programFilesLogs = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
@@ -1859,8 +1859,8 @@ namespace VibeshineInstaller {
         detail ?? "Unknown error",
         string.Empty,
         "Next step:",
-        "Attach this file on GitHub: https://github.com/Nonary/Vibeshine/issues",
-        "Or Discord (#vibeshine): https://discord.com/invite/CGg5JxN"
+        "Attach this file on GitHub: https://github.com/Nonary/LuminalShine/issues",
+        "Or Discord (#luminalshine): https://discord.com/invite/CGg5JxN"
       };
       return string.Join(Environment.NewLine, lines);
     }
@@ -1875,12 +1875,12 @@ namespace VibeshineInstaller {
 
       block.Inlines.Add(new Run("Open an issue on "));
       var githubLink = new Hyperlink(new Run("GitHub")) {
-        NavigateUri = new Uri("https://github.com/Nonary/Vibeshine/issues")
+        NavigateUri = new Uri("https://github.com/Nonary/LuminalShine/issues")
       };
-      githubLink.Click += (sender, args) => OpenExternalUrl("https://github.com/Nonary/Vibeshine/issues");
+      githubLink.Click += (sender, args) => OpenExternalUrl("https://github.com/Nonary/LuminalShine/issues");
       block.Inlines.Add(githubLink);
       block.Inlines.Add(new Run(" or join "));
-      var discordLink = new Hyperlink(new Run("Discord (#vibeshine)")) {
+      var discordLink = new Hyperlink(new Run("Discord (#luminalshine)")) {
         NavigateUri = new Uri("https://discord.com/invite/CGg5JxN")
       };
       discordLink.Click += (sender, args) => OpenExternalUrl("https://discord.com/invite/CGg5JxN");
@@ -2053,8 +2053,8 @@ namespace VibeshineInstaller {
 
     public static void WriteHelp() {
 #if UNINSTALL_ONLY
-      Console.WriteLine("Vibeshine Uninstaller");
-      Console.WriteLine("  Self-contained graphical uninstaller for Vibeshine.");
+      Console.WriteLine("LuminalShine Uninstaller");
+      Console.WriteLine("  Self-contained graphical uninstaller for LuminalShine.");
       Console.WriteLine();
       Console.WriteLine("Usage:");
       Console.WriteLine("  uninstall.exe          Launch graphical uninstall UI");
@@ -2067,12 +2067,12 @@ namespace VibeshineInstaller {
       Console.WriteLine("  uninstall.exe");
       Console.WriteLine("  uninstall.exe /quiet");
 #else
-      Console.WriteLine("Vibeshine Installer");
+      Console.WriteLine("LuminalShine Installer");
       Console.WriteLine("  Self-hosted game streaming server — stream your PC to any device.");
       Console.WriteLine();
       Console.WriteLine("Usage:");
-      Console.WriteLine("  VibeshineSetup.exe                Launch graphical installer UI");
-      Console.WriteLine("  VibeshineSetup.exe [MSI options]  Pass options to msiexec");
+      Console.WriteLine("  LuminalShineSetup.exe                Launch graphical installer UI");
+      Console.WriteLine("  LuminalShineSetup.exe [MSI options]  Pass options to msiexec");
       Console.WriteLine();
       Console.WriteLine("Wrapper options:");
       Console.WriteLine("  --msi <path>    Use a specific MSI payload instead of the embedded one");
@@ -2087,13 +2087,13 @@ namespace VibeshineInstaller {
       Console.WriteLine("  INSTALL_SUDOVDA=0    Skip Virtual Display Driver installation");
       Console.WriteLine();
       Console.WriteLine("Examples:");
-      Console.WriteLine("  VibeshineSetup.exe /qn");
-      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_ROOT=\"D:\\Vibeshine\"");
-      Console.WriteLine("  VibeshineSetup.exe /x {PRODUCT-CODE} /qn");
-      Console.WriteLine("  VibeshineSetup.exe /qn INSTALL_SUDOVDA=0");
-      Console.WriteLine("  VibeshineSetup.exe /uninstall");
-      Console.WriteLine("  VibeshineSetup.exe /uninstall /quiet");
-      Console.WriteLine("  VibeshineSetup.exe --msi C:\\temp\\Vibeshine.msi /passive");
+      Console.WriteLine("  LuminalShineSetup.exe /qn");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_ROOT=\"D:\\LuminalShine\"");
+      Console.WriteLine("  LuminalShineSetup.exe /x {PRODUCT-CODE} /qn");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_SUDOVDA=0");
+      Console.WriteLine("  LuminalShineSetup.exe /uninstall");
+      Console.WriteLine("  LuminalShineSetup.exe /uninstall /quiet");
+      Console.WriteLine("  LuminalShineSetup.exe --msi C:\\temp\\LuminalShine.msi /passive");
 #endif
     }
 
@@ -2153,7 +2153,7 @@ namespace VibeshineInstaller {
 
     internal enum InstalledProductKind {
       Unknown,
-      Vibeshine,
+      LuminalShine,
       Vibepollo,
       Apollo,
       Sunshine
@@ -2167,9 +2167,9 @@ namespace VibeshineInstaller {
       }
     }
 
-    public static InstalledProductInfo GetInstalledVibeshineProduct() {
+    public static InstalledProductInfo GetInstalledLuminalShineProduct() {
       return GetInstalledProducts(false)
-        .Where(product => product.Kind == InstalledProductKind.Vibeshine)
+        .Where(product => product.Kind == InstalledProductKind.LuminalShine)
         .OrderByDescending(product => product.Version ?? new Version(0, 0, 0, 0))
         .FirstOrDefault();
     }
@@ -2436,8 +2436,8 @@ namespace VibeshineInstaller {
         return InstalledProductKind.Unknown;
       }
 
-      if (displayName.StartsWith("Vibeshine", StringComparison.OrdinalIgnoreCase)) {
-        return InstalledProductKind.Vibeshine;
+      if (displayName.StartsWith("LuminalShine", StringComparison.OrdinalIgnoreCase)) {
+        return InstalledProductKind.LuminalShine;
       }
       if (displayName.StartsWith("Vibepollo", StringComparison.OrdinalIgnoreCase)) {
         return InstalledProductKind.Vibepollo;
@@ -2752,7 +2752,7 @@ namespace VibeshineInstaller {
 
       var uninstallDowngradeSourceResult = TryPreUninstallDowngradeSourceVersion(
         msiPath,
-        "install_remove_vibeshine_downgrade",
+        "install_remove_luminalshine_downgrade",
         true,
         false);
       if (uninstallDowngradeSourceResult != null) {
@@ -2767,7 +2767,7 @@ namespace VibeshineInstaller {
         }
       }
 
-      var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion("install_remove_vibeshine_1146", true, false);
+      var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion("install_remove_luminalshine_1146", true, false);
       if (uninstallUpgradeSourceResult != null) {
         restartRequired |= uninstallUpgradeSourceResult.ExitCode == 3010;
         if (!uninstallUpgradeSourceResult.Succeeded) {
@@ -2905,7 +2905,7 @@ namespace VibeshineInstaller {
 
       try {
         var fullPath = Path.GetFullPath(msiPath);
-        var tempRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "VibeshineInstaller"));
+        var tempRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "LuminalShineInstaller"));
         return fullPath.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase);
       } catch {
         return false;
@@ -3089,7 +3089,7 @@ namespace VibeshineInstaller {
         deleteInstallDirectory,
         removeVirtualDisplayDriver,
         true,
-        new[] { InstalledProductKind.Vibeshine });
+        new[] { InstalledProductKind.LuminalShine });
       uninstallResult.Operation = InstallerOperation.Uninstall;
       return uninstallResult;
     }
@@ -3144,7 +3144,7 @@ namespace VibeshineInstaller {
 
       if (ShouldPreUninstallProblematicUpgradeSource(cliArgs)) {
         var uninstallUpgradeSourceResult = TryPreUninstallProblematicUpgradeSourceVersion(
-          "cli_remove_vibeshine_1146",
+          "cli_remove_luminalshine_1146",
           arguments.IsCliQuietMode(),
           true);
         if (uninstallUpgradeSourceResult != null) {
@@ -3193,7 +3193,7 @@ namespace VibeshineInstaller {
     }
 
     private static string BuildCompetingProductUninstallFailureMessage(string uninstallMessage) {
-      var prefix = "Failed to uninstall Apollo, Vibepollo, or Sunshine before starting Vibeshine installation.";
+      var prefix = "Failed to uninstall Apollo, Vibepollo, or Sunshine before starting LuminalShine installation.";
       if (string.IsNullOrWhiteSpace(uninstallMessage)) {
         return prefix;
       }
@@ -3201,7 +3201,7 @@ namespace VibeshineInstaller {
     }
 
     private static string BuildUpgradeSourcePreUninstallFailureMessage(string uninstallMessage) {
-      var prefix = "Failed to uninstall Vibeshine 1.14.6 before starting installation."
+      var prefix = "Failed to uninstall LuminalShine 1.14.6 before starting installation."
         + " This version requires uninstall/reinstall to avoid web UI files being removed during upgrade.";
       if (string.IsNullOrWhiteSpace(uninstallMessage)) {
         return prefix;
@@ -3210,7 +3210,7 @@ namespace VibeshineInstaller {
     }
 
     private static string BuildDowngradeSourcePreUninstallFailureMessage(string uninstallMessage) {
-      var prefix = "Failed to uninstall the newer Vibeshine version before starting the downgrade."
+      var prefix = "Failed to uninstall the newer LuminalShine version before starting the downgrade."
         + " Downgrades require uninstall/reinstall because MSI blocks installing an older version over a newer one.";
       if (string.IsNullOrWhiteSpace(uninstallMessage)) {
         return prefix;
@@ -3223,8 +3223,8 @@ namespace VibeshineInstaller {
       string logPhase,
       bool hiddenWindow,
       bool requestElevationIfNeeded) {
-      var installedVibeshine = GetInstalledVibeshineProduct();
-      if (!RequiresPreUninstallDowngradeWorkaround(installedVibeshine, msiPath)) {
+      var installedLuminalShine = GetInstalledLuminalShineProduct();
+      if (!RequiresPreUninstallDowngradeWorkaround(installedLuminalShine, msiPath)) {
         return null;
       }
 
@@ -3235,15 +3235,15 @@ namespace VibeshineInstaller {
         false,
         false,
         false,
-        new[] { InstalledProductKind.Vibeshine });
+        new[] { InstalledProductKind.LuminalShine });
     }
 
     private static InstallerResult TryPreUninstallProblematicUpgradeSourceVersion(
       string logPhase,
       bool hiddenWindow,
       bool requestElevationIfNeeded) {
-      var installedVibeshine = GetInstalledVibeshineProduct();
-      if (!RequiresPreUninstallUpgradeWorkaround(installedVibeshine)) {
+      var installedLuminalShine = GetInstalledLuminalShineProduct();
+      if (!RequiresPreUninstallUpgradeWorkaround(installedLuminalShine)) {
         return null;
       }
 
@@ -3254,11 +3254,11 @@ namespace VibeshineInstaller {
         false,
         false,
         false,
-        new[] { InstalledProductKind.Vibeshine });
+        new[] { InstalledProductKind.LuminalShine });
     }
 
     private static bool RequiresPreUninstallDowngradeWorkaround(InstalledProductInfo installedProduct, string msiPath) {
-      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.Vibeshine || installedProduct.Version == null) {
+      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.LuminalShine || installedProduct.Version == null) {
         return false;
       }
 
@@ -3269,7 +3269,7 @@ namespace VibeshineInstaller {
     }
 
     private static bool RequiresPreUninstallUpgradeWorkaround(InstalledProductInfo installedProduct) {
-      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.Vibeshine || installedProduct.Version == null) {
+      if (installedProduct == null || installedProduct.Kind != InstalledProductKind.LuminalShine || installedProduct.Version == null) {
         return false;
       }
 
@@ -3370,7 +3370,7 @@ namespace VibeshineInstaller {
         return new InstallerResult {
           Operation = InstallerOperation.Uninstall,
           ExitCode = failWhenMissing ? 1605 : 0,
-          Message = "No existing Vibeshine installation was found."
+          Message = "No existing LuminalShine installation was found."
         };
       }
 
@@ -3472,7 +3472,7 @@ namespace VibeshineInstaller {
         if (stream == null) {
           throw new InvalidOperationException(
             "No MSI payload was found. The installer may be corrupted.\n\n"
-            + "Try re-downloading the installer from the Vibeshine releases page, "
+            + "Try re-downloading the installer from the LuminalShine releases page, "
             + "or use the --msi option to specify a payload manually.");
         }
 
@@ -3480,7 +3480,7 @@ namespace VibeshineInstaller {
         var extractDirectory = BuildEmbeddedMsiExtractDirectory(versionToken, forceFreshExtract);
         Directory.CreateDirectory(extractDirectory);
 
-        var msiPath = Path.Combine(extractDirectory, "Vibeshine.msi");
+        var msiPath = Path.Combine(extractDirectory, "LuminalShine.msi");
         var shouldWrite = forceFreshExtract
           || !File.Exists(msiPath)
           || new FileInfo(msiPath).Length != stream.Length
@@ -3508,7 +3508,7 @@ namespace VibeshineInstaller {
     private static string BuildEmbeddedMsiExtractDirectory(string versionToken, bool forceFreshExtract) {
       var root = Path.Combine(
         Path.GetTempPath(),
-        "VibeshineInstaller",
+        "LuminalShineInstaller",
         versionToken);
       if (!forceFreshExtract) {
         return root;
@@ -3701,7 +3701,7 @@ namespace VibeshineInstaller {
 
     private static string BuildLogPath(string phase) {
       var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-      return Path.Combine(Path.GetTempPath(), "vibeshine_" + phase + "_" + timestamp + ".log");
+      return Path.Combine(Path.GetTempPath(), "luminalshine_" + phase + "_" + timestamp + ".log");
     }
 
     private static List<string> CollectInstallComponentFailures(string installLogPath, bool installVirtualDisplayDriver) {
@@ -3784,7 +3784,7 @@ namespace VibeshineInstaller {
       Directory.CreateDirectory(logDirectory);
 
       var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-      var destinationFileName = "vibeshine_" + phase + "_" + timestamp + ".log";
+      var destinationFileName = "luminalshine_" + phase + "_" + timestamp + ".log";
       var destinationPath = Path.Combine(logDirectory, destinationFileName);
       File.Copy(sourceLogPath, destinationPath, true);
       return destinationPath;
@@ -3795,7 +3795,7 @@ namespace VibeshineInstaller {
       string installDirectory,
       bool installVirtualDisplayDriver,
       bool saveInstallLogs) {
-      var resultPath = Path.Combine(Path.GetTempPath(), "vibeshine_install_result_" + Guid.NewGuid().ToString("N") + ".txt");
+      var resultPath = Path.Combine(Path.GetTempPath(), "luminalshine_install_result_" + Guid.NewGuid().ToString("N") + ".txt");
       var elevatedArgs = new List<string> {
         "--internal-elevated-install",
         "--internal-install-path",
@@ -3814,7 +3814,7 @@ namespace VibeshineInstaller {
 
       var exitCode = RunElevatedBootstrapper(elevatedArgs);
       var snapshot = TryReadInternalInstallResult(resultPath);
-      var installLogPath = FindMostRecentLog(Path.GetTempPath(), "vibeshine_install_*.log");
+      var installLogPath = FindMostRecentLog(Path.GetTempPath(), "luminalshine_install_*.log");
       if (snapshot != null && !string.IsNullOrWhiteSpace(snapshot.LogPath)) {
         installLogPath = snapshot.LogPath;
       }
@@ -3850,8 +3850,8 @@ namespace VibeshineInstaller {
       }
 
       var exitCode = RunElevatedBootstrapper(elevatedArgs);
-      var uninstallLogPath = FindMostRecentLog(Path.GetTempPath(), "vibeshine_uninstall_*.log")
-        ?? FindMostRecentLog(Path.GetTempPath(), "vibeshine_uninstall_remove_*.log");
+      var uninstallLogPath = FindMostRecentLog(Path.GetTempPath(), "luminalshine_uninstall_*.log")
+        ?? FindMostRecentLog(Path.GetTempPath(), "luminalshine_uninstall_remove_*.log");
       return new InstallerResult {
         Operation = InstallerOperation.Uninstall,
         ExitCode = exitCode,
@@ -4085,13 +4085,13 @@ namespace VibeshineInstaller {
 
       var message = operationName + " failed (error " + exitCode + ").";
       if (exitCode == 1603) {
-        message += " A fatal error occurred during installation. Ensure no Vibeshine processes are running and try again.";
+        message += " A fatal error occurred during installation. Ensure no LuminalShine processes are running and try again.";
       } else if (exitCode == 1618) {
         message += " Another installation is already in progress. Wait for it to finish, then try again.";
       } else if (exitCode == 1602) {
         message += " The installation was cancelled by the user.";
       } else if (exitCode == 1605) {
-        message += " No existing Vibeshine installation was found.";
+        message += " No existing LuminalShine installation was found.";
       }
       if (!string.IsNullOrWhiteSpace(logPath)) {
         message += " Log: " + logPath;
@@ -4101,7 +4101,7 @@ namespace VibeshineInstaller {
   }
 
   internal static class ShellIdentity {
-    internal const string InstallerAppUserModelId = "Vibeshine.Installer";
+    internal const string InstallerAppUserModelId = "LuminalShine.Installer";
 
     private static readonly PropertyKey AppUserModelIdKey =
       new PropertyKey(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5);

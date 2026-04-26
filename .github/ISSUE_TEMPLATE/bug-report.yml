@@ -36,7 +36,7 @@ body:
       label: Logs (Optional but Recommended)
       description: |
         If possible, attach your logs to help us diagnose the issue.  
-        Go to **Troubleshooting tab → Export Logs** and upload the **Vibeshine logs zip file** here.
+        Go to **Troubleshooting tab → Export Logs** and upload the **LuminalShine logs zip file** here.
     validations:
       required: false
 

@@ -65,9 +65,9 @@ namespace statefile {
     return config::nvhttp.file_state;
   }
 
-  const std::string &vibeshine_state_path() {
-    if (!config::nvhttp.vibeshine_file_state.empty()) {
-      return config::nvhttp.vibeshine_file_state;
+  const std::string &luminalshine_state_path() {
+    if (!config::nvhttp.luminalshine_file_state.empty()) {
+      return config::nvhttp.luminalshine_file_state;
     }
     return config::nvhttp.file_state;
   }
@@ -75,7 +75,7 @@ namespace statefile {
   void migrate_recent_state_keys() {
     std::call_once(migration_once, [] {
       const fs::path old_path = sunshine_state_path();
-      const fs::path new_path = vibeshine_state_path();
+      const fs::path new_path = luminalshine_state_path();
 
       if (old_path.empty() || new_path.empty() || old_path == new_path) {
         return;
@@ -138,9 +138,9 @@ namespace statefile {
 
   void save_snapshot_exclude_devices(const std::vector<std::string> &devices) {
     migrate_recent_state_keys();
-    const auto &path_str = vibeshine_state_path();
+    const auto &path_str = luminalshine_state_path();
     if (path_str.empty()) {
-      BOOST_LOG(warning) << "statefile: cannot save snapshot exclusions - vibeshine state path is empty";
+      BOOST_LOG(warning) << "statefile: cannot save snapshot exclusions - luminalshine state path is empty";
       return;
     }
 
@@ -164,12 +164,12 @@ namespace statefile {
     root_node.put_child("snapshot_exclude_devices", exclusions_pt);
 
     write_tree(path, root);
-    BOOST_LOG(info) << "statefile: persisted " << devices.size() << " snapshot exclusion device(s) to vibeshine state";
+    BOOST_LOG(info) << "statefile: persisted " << devices.size() << " snapshot exclusion device(s) to luminalshine state";
   }
 
   std::vector<std::string> load_snapshot_exclude_devices() {
     migrate_recent_state_keys();
-    const auto &path_str = vibeshine_state_path();
+    const auto &path_str = luminalshine_state_path();
     if (path_str.empty()) {
       return {};
     }

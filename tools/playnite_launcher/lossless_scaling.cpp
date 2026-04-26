@@ -44,7 +44,7 @@ namespace playnite_launcher::lossless {
 
   namespace {
 
-    constexpr std::string_view k_lossless_profile_title = "Vibeshine";
+    constexpr std::string_view k_lossless_profile_title = "LuminalShine";
     constexpr size_t k_lossless_max_executables = 256;
     constexpr auto k_lossless_observation_duration = std::chrono::seconds(10);
     constexpr auto k_lossless_poll_interval = std::chrono::milliseconds(250);
@@ -1313,7 +1313,7 @@ namespace playnite_launcher::lossless {
       return {};
     }
 
-    bool remove_vibeshine_profiles(boost::property_tree::ptree &profiles) {
+    bool remove_luminalshine_profiles(boost::property_tree::ptree &profiles) {
       bool removed = false;
       for (auto it = profiles.begin(); it != profiles.end();) {
         if (it->first == "Profile" && it->second.get<std::string>("Title", "") == k_lossless_profile_title) {
@@ -1326,7 +1326,7 @@ namespace playnite_launcher::lossless {
       return removed;
     }
 
-    boost::property_tree::ptree make_vibeshine_profile(const ProfileTemplates &templates, const lossless_scaling_options &options, const std::string &filter_utf8) {
+    boost::property_tree::ptree make_luminalshine_profile(const ProfileTemplates &templates, const lossless_scaling_options &options, const std::string &filter_utf8) {
       auto profile = clone_template_profile(templates);
       profile.put("Title", std::string(k_lossless_profile_title));
       profile.put("Path", filter_utf8);
@@ -1408,11 +1408,11 @@ namespace playnite_launcher::lossless {
       return profile;
     }
 
-    bool insert_vibeshine_profile(const ProfileTemplates &templates, const lossless_scaling_options &options, const std::string &filter_utf8, boost::property_tree::ptree &profiles, lossless_scaling_profile_backup &backup) {
+    bool insert_luminalshine_profile(const ProfileTemplates &templates, const lossless_scaling_options &options, const std::string &filter_utf8, boost::property_tree::ptree &profiles, lossless_scaling_profile_backup &backup) {
       if (filter_utf8.empty()) {
         return false;
       }
-      profiles.push_back(std::make_pair("Profile", make_vibeshine_profile(templates, options, filter_utf8)));
+      profiles.push_back(std::make_pair("Profile", make_luminalshine_profile(templates, options, filter_utf8)));
       backup.valid = true;
       return true;
     }
@@ -2068,13 +2068,13 @@ namespace playnite_launcher::lossless {
         return false;
       }
       auto &profiles = *profiles_opt;
-      bool removed = remove_vibeshine_profiles(profiles);
+      bool removed = remove_luminalshine_profiles(profiles);
       ProfileTemplates templates = find_profile_templates(profiles);
       capture_backup_fields(templates, backup);
       auto base_dir = lossless_resolve_base_dir(install_dir_utf8, exe_path_utf8);
       auto explicit_exe = resolve_explicit_executable(exe_path_utf8);
       std::string filter_utf8 = build_executable_filter(base_dir, explicit_exe);
-      bool inserted = insert_vibeshine_profile(templates, options, filter_utf8, profiles, backup);
+      bool inserted = insert_luminalshine_profile(templates, options, filter_utf8, profiles, backup);
       if (!removed && !inserted) {
         return false;
       }
@@ -2100,7 +2100,7 @@ namespace playnite_launcher::lossless {
         return false;
       }
       auto &profiles = *profiles_opt;
-      bool changed = remove_vibeshine_profiles(profiles);
+      bool changed = remove_luminalshine_profiles(profiles);
       ProfileTemplates templates = find_profile_templates(profiles);
       if (templates.defaults && backup.valid) {
         changed |= apply_backup_to_profile(*templates.defaults, backup);
