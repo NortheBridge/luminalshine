@@ -13,6 +13,7 @@
 
 // platform includes
 #include <winsock2.h>
+#include <excpt.h>  // __try/__except, EXCEPTION_EXECUTE_HANDLER (MSVC + MinGW-w64 x64 SEH)
 #include <initguid.h>
 
 // lib includes
@@ -212,13 +213,53 @@ namespace platf::dxgi {
     return g_dxgi_adapter_luid_override;
   }
 
-  capture_e duplication_t::next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p) {
+  // SPECULATIVE (Win11 Insider 29570 dxgi.dll AV mitigation):
+  // Bracket DXGI dispatch in SEH so a freed-object access violation inside dxgi.dll
+  // (observed crash in dxgi.dll!+0x6b74f reading [rax+0x10] where rax is freed memory)
+  // is converted into a clean DXGI_ERROR_DEVICE_REMOVED instead of crashing the process.
+  // The body deliberately holds no C++ objects with destructors so __try is well-formed.
+  static HRESULT seh_acquire_next_frame_(IDXGIOutputDuplication *d, UINT timeout_ms, DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **res) noexcept {
+    __try {
+      return d->AcquireNextFrame(timeout_ms, info, res);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      return DXGI_ERROR_DEVICE_REMOVED;
+    }
+  }
+
+  static HRESULT seh_release_frame_(IDXGIOutputDuplication *d) noexcept {
+    __try {
+      return d->ReleaseFrame();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      return DXGI_ERROR_DEVICE_REMOVED;
+    }
+  }
+
+  static HRESULT seh_get_device_removed_reason_(ID3D11Device *dev) noexcept {
+    __try {
+      return dev->GetDeviceRemovedReason();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      return DXGI_ERROR_DEVICE_REMOVED;
+    }
+  }
+
+  capture_e duplication_t::next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p, ID3D11Device *device) {
     auto capture_status = release_frame();
     if (capture_status != capture_e::ok) {
       return capture_status;
     }
 
-    auto status = dup->AcquireNextFrame(timeout.count(), &frame_info, res_p);
+    // SPECULATIVE: when the backing virtual display is torn down (recovery monitor
+    // recreates it under us), the D3D11 device is removed by the driver before we
+    // notice via ACCESS_LOST on the duplication. Probe first so we exit cleanly
+    // instead of letting the next AcquireNextFrame chase a dead internal object.
+    if (device) {
+      const HRESULT removed = seh_get_device_removed_reason_(device);
+      if (removed != S_OK) {
+        return capture_e::reinit;
+      }
+    }
+
+    auto status = seh_acquire_next_frame_(dup.get(), static_cast<UINT>(timeout.count()), &frame_info, res_p);
 
     switch (status) {
       case S_OK:
@@ -237,6 +278,8 @@ namespace platf::dxgi {
       case WAIT_ABANDONED:
       case DXGI_ERROR_ACCESS_LOST:
       case DXGI_ERROR_ACCESS_DENIED:
+      case DXGI_ERROR_DEVICE_REMOVED:
+      case DXGI_ERROR_DEVICE_RESET:
         return capture_e::reinit;
       default:
         BOOST_LOG(error) << "Couldn't acquire next frame [0x"sv << util::hex(status).to_string_view();
@@ -257,7 +300,7 @@ namespace platf::dxgi {
       return capture_e::ok;
     }
 
-    auto status = dup->ReleaseFrame();
+    auto status = seh_release_frame_(dup.get());
     has_frame = false;
     switch (status) {
       case S_OK:
@@ -268,6 +311,8 @@ namespace platf::dxgi {
         return capture_e::ok;
 
       case DXGI_ERROR_ACCESS_LOST:
+      case DXGI_ERROR_DEVICE_REMOVED:
+      case DXGI_ERROR_DEVICE_RESET:
         return capture_e::reinit;
 
       default:

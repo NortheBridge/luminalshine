@@ -304,7 +304,12 @@ namespace platf::dxgi {
     std::chrono::steady_clock::time_point last_protected_content_warning_time {};
 
     int init(display_base_t *display, const ::video::config_t &config);
-    capture_e next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p);
+    // SPECULATIVE (Win11 Insider 29570 dxgi.dll AV mitigation):
+    // device is checked via GetDeviceRemovedReason() before each AcquireNextFrame,
+    // and the actual DXGI dispatch is bracketed by SEH so a freed-object access
+    // violation is converted to capture_e::reinit instead of crashing the process.
+    // Pre-existing callers that pass nullptr fall back to the previous behavior.
+    capture_e next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p, ID3D11Device *device = nullptr);
     capture_e reset(dup_t::pointer dup_p = dup_t::pointer());
     capture_e release_frame();
 

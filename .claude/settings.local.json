@@ -5,7 +5,10 @@
       "Bash(rg:*)",
       "Bash(PATH=\"D:/Software/MSYS2/ucrt64/bin;$env:PATH\" D:/Software/MSYS2/ucrt64/bin/cmake.exe:*)",
       "Bash(Select-Object -First 50)",
-      "Bash(PATH=\"D:/Software/MSYS2/ucrt64/bin:$PATH\" cmake --build:*)"
+      "Bash(PATH=\"D:/Software/MSYS2/ucrt64/bin:$PATH\" cmake --build:*)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine log --oneline -30)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine diff --stat)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine diff -- src/platform/windows/display.h src/platform/windows/display_base.cpp src/platform/windows/display_ram.cpp src/platform/windows/display_vram.cpp)"
     ],
     "deny": [],
     "ask": []

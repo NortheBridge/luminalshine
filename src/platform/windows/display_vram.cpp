@@ -1174,7 +1174,10 @@ namespace platf::dxgi {
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
     resource_t::pointer res_p {};
-    auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
+    // Pass device so duplication_t can probe GetDeviceRemovedReason()
+    // before AcquireNextFrame; mitigates Win11 Insider 29570 dxgi.dll AV
+    // when the backing virtual display is recreated mid-stream.
+    auto capture_status = dup.next_frame(frame_info, timeout, &res_p, device.get());
     resource_t res {res_p};
 
     if (capture_status != capture_e::ok) {
