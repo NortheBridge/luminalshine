@@ -6,7 +6,7 @@ set(CPACK_GENERATOR "WIX")
 
 # Product identity and visuals
 set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/sunshine.ico")
-set(CPACK_WIX_PROGRAM_MENU_FOLDER "Vibeshine")
+set(CPACK_WIX_PROGRAM_MENU_FOLDER "LuminalShine")
 
 # Stable Upgrade GUID to enable in-place upgrades
 # NOTE: Do not change once released, or upgrades will break.
@@ -40,7 +40,7 @@ set(CPACK_WIX_LIGHT_EXTRA_FLAGS
 # BinDir: directory containing built binaries (sunshine.exe) at packaging time
 set(CPACK_WIX_CANDLE_EXTRA_FLAGS
   "-dBinDir=${CMAKE_BINARY_DIR}"
-  "-dVibeshineAppId=${WINDOWS_APP_USER_MODEL_ID}"
+  "-dLuminalShineAppId=${WINDOWS_APP_USER_MODEL_ID}"
 )
 
 

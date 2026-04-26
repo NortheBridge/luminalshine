@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.20)
 # todo - set this conditionally
 
 project(Vibeshine VERSION 0.0.0
-        DESCRIPTION "Self-hosted game stream host for Moonlight"
-        HOMEPAGE_URL "https://github.com/Nonary/vibeshine")
+        DESCRIPTION "Modern Self-hosted game stream host for Moonlight"
+        HOMEPAGE_URL "https://github.com/NortheBridge/luminalshine")
 
 set(PROJECT_LICENSE "GPL-3.0-only")
 
