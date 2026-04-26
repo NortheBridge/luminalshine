@@ -216,8 +216,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DSUNSHINE_ASSETS_DIR=assets \
             -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
-            -DSUNSHINE_PUBLISHER_WEBSITE="https://app.lizardbyte.dev" \
-            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://app.lizardbyte.dev/support"
+            -DSUNSHINE_PUBLISHER_WEBSITE="https://luminalshine.northebridge.com" \
+            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://luminalshine.northebridge.com/support"
           echo "::add-matcher::.github/matchers/gcc.json"
           ninja -C build
           echo "::remove-matcher owner=gcc::"
@@ -243,9 +243,9 @@ jobs:
           portable_zip=$(ls -1 ./cpack_artifacts/*.zip | head -n 1)
 
           # move
-          mv "${msi_file}" ../artifacts/Sunshine-${{ matrix.name }}-installer.msi
-          mv "${installer_exe}" ../artifacts/Sunshine-${{ matrix.name }}-installer.exe
-          mv "${portable_zip}" ../artifacts/Sunshine-${{ matrix.name }}-portable.zip
+          mv "${msi_file}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.msi
+          mv "${installer_exe}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.exe
+          mv "${portable_zip}" ../artifacts/LuminalShine-${{ matrix.name }}-portable.zip
 
       - name: Debug nsis
         if: always()
@@ -305,7 +305,7 @@ jobs:
           7z -r `
             "-xr!CMakeFiles" `
             "-xr!cpack_artifacts" `
-            a "../artifacts/Sunshine-${{ matrix.name }}-debuginfo.7z" "*.dbg"
+            a "../artifacts/LuminalShine-${{ matrix.name }}-debuginfo.7z" "*.dbg"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0

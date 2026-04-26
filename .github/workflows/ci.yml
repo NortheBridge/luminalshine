@@ -245,9 +245,7 @@ jobs:
 
   release:
     name: Release
-    if:
-      needs.release-setup.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
+    if: needs.release-setup.outputs.publish_release == 'true'
     needs:
       - release-setup
       - build-archlinux
