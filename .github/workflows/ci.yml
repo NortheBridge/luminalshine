@@ -4,6 +4,16 @@ permissions: {}
 
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version (e.g., 26.04.0-alpha.1, no leading v)'
+        required: true
+        type: string
+      publish_release:
+        description: 'Create a GitHub Release with the built artifacts'
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
@@ -25,6 +35,7 @@ jobs:
       release_generate_release_notes: ${{ steps.release-setup.outputs.release_generate_release_notes }}
       release_tag: ${{ steps.release-setup.outputs.release_tag }}
       release_version: ${{ steps.release-setup.outputs.release_version }}
+      prerelease: ${{ steps.release-setup.outputs.prerelease }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -34,9 +45,36 @@ jobs:
 
       - name: Release Setup
         id: release-setup
-        uses: LizardByte/actions/actions/release_setup@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          REL_VERSION: ${{ inputs.release_version }}
+          REL_PUBLISH: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          version="${REL_VERSION}"
+          tag="${version}"
+          commit="$(git rev-parse HEAD)"
+
+          # Treat any version with a hyphenated suffix (-alpha, -beta, -rc, etc.) as a prerelease.
+          if [[ "${version}" == *-* ]]; then
+            prerelease="true"
+          else
+            prerelease="false"
+          fi
+
+          {
+            echo "release_version=${version}"
+            echo "release_tag=${tag}"
+            echo "release_commit=${commit}"
+            echo "publish_release=${REL_PUBLISH}"
+            echo "release_generate_release_notes=true"
+            echo "prerelease=${prerelease}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "release_body<<__BODY_EOF__"
+            echo "Automated release for ${tag}."
+            echo "__BODY_EOF__"
+          } >> "${GITHUB_OUTPUT}"
 
   build-docker:
     name: Docker
@@ -248,15 +286,9 @@ jobs:
     if: needs.release-setup.outputs.publish_release == 'true'
     needs:
       - release-setup
-      - build-archlinux
-      - build-docker
-      - build-freebsd
-      - build-homebrew
-      - build-linux
-      - build-linux-flatpak
       - build-windows
     permissions:
-      contents: read
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
@@ -269,17 +301,17 @@ jobs:
       - name: Debug artifacts
         run: ls -l artifacts
 
-      - name: Create/Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@6be4ea62064b64957aa880252fe353cd65bcdef7  # v2026.214.14019
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974  # v2.1.0
         with:
-          allowUpdates: false
           body: ${{ needs.release-setup.outputs.release_body }}
-          generateReleaseNotes: ${{ needs.release-setup.outputs.release_generate_release_notes }}
+          generate_release_notes: ${{ needs.release-setup.outputs.release_generate_release_notes }}
           name: ${{ needs.release-setup.outputs.release_tag }}
-          prerelease: true
-          tag: ${{ needs.release-setup.outputs.release_tag }}
-          token: ${{ secrets.GH_BOT_TOKEN }}
-          virustotal_api_key: ${{ secrets.VIRUSTOTAL_API_KEY }}
+          prerelease: ${{ needs.release-setup.outputs.prerelease }}
+          tag_name: ${{ needs.release-setup.outputs.release_tag }}
+          files: artifacts/*
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   release-homebrew-beta:
     name: Release Homebrew Beta
