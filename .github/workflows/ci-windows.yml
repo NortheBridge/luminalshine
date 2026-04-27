@@ -269,6 +269,7 @@ jobs:
             -G Ninja \
             -S . \
             -DBUILD_WERROR=OFF \
+            -DBUILD_DOCS=OFF \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
