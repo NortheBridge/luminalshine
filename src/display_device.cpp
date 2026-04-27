@@ -773,7 +773,16 @@ namespace display_device {
     }
 
     SingleDisplayConfiguration config;
-    config.m_device_id = config::get_active_output_name();
+    // Honor the caller-supplied video_config rather than re-reading the global
+    // config::video (via config::get_active_output_name()). Production callers
+    // such as SessionDisplayConfigurationHelper already merge the runtime
+    // output_name override into video_config.output_name at construction
+    // (see src/platform/windows/display_helper_request_helpers.cpp), so this
+    // path is the authoritative value. Re-reading the global state here ignored
+    // the function's own argument, broke the ParseDeviceId unit test, and
+    // introduced a subtle race when the runtime override flipped between
+    // effective config construction and parse.
+    config.m_device_id = video_config.output_name;
     config.m_device_prep = *device_prep;
     config.m_hdr_state = parse_hdr_option(video_config, session);
 
