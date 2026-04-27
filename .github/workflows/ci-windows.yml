@@ -142,28 +142,6 @@ jobs:
         with:
           dotnet-version: '10.x'
 
-      - name: Setup NodeJS
-        # Clang compiled NodeJS has issues when running rollup webpack
-        if: matrix.msystem != 'ucrt64'
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
-        with:
-          node-version: 'lts/*'
-
-      - name: NodeJS Path
-        if: matrix.msystem != 'ucrt64'
-        shell: pwsh
-        run: |
-          # get NodeJS PATH
-          $NODEJS_BINARY_PATH = (Get-Command node).Source
-          $NODEJS_PATH = Split-Path -Path "$NODEJS_BINARY_PATH" -Parent
-
-          # setup environment variables
-          echo "NODEJS_PATH=$NODEJS_PATH" >> $env:GITHUB_ENV
-
-          # step output
-          echo "nodejs-path=$NODEJS_PATH"
-          echo "nodejs-path=$NODEJS_PATH" >> $env:GITHUB_OUTPUT
-
       - name: Setup python
         id: setup-python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
@@ -265,12 +243,6 @@ jobs:
           BUILD_VERSION: ${{ inputs.release_version }}
           COMMIT: ${{ inputs.release_commit }}
         run: |
-          # setup NodeJS PATH
-          if [[ "${MATRIX_MSYSTEM}" != "ucrt64" ]]; then
-            NODEJS_PATH=$(cygpath "$NODEJS_PATH")
-            export PATH="$PATH:$NODEJS_PATH"
-          fi
-
           mkdir -p build
           cmake \
             -B build \

@@ -217,7 +217,9 @@ namespace platf::dxgi {
   // Bracket DXGI dispatch in SEH so a freed-object access violation inside dxgi.dll
   // (observed crash in dxgi.dll!+0x6b74f reading [rax+0x10] where rax is freed memory)
   // is converted into a clean DXGI_ERROR_DEVICE_REMOVED instead of crashing the process.
-  // The body deliberately holds no C++ objects with destructors so __try is well-formed.
+  // SEH is MSVC-only syntax; on MinGW GCC the wrappers fall through to the raw call
+  // and the AV will still terminate the process if it occurs.
+#ifdef _MSC_VER
   static HRESULT seh_acquire_next_frame_(IDXGIOutputDuplication *d, UINT timeout_ms, DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **res) noexcept {
     __try {
       return d->AcquireNextFrame(timeout_ms, info, res);
@@ -241,6 +243,19 @@ namespace platf::dxgi {
       return DXGI_ERROR_DEVICE_REMOVED;
     }
   }
+#else
+  static HRESULT seh_acquire_next_frame_(IDXGIOutputDuplication *d, UINT timeout_ms, DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **res) noexcept {
+    return d->AcquireNextFrame(timeout_ms, info, res);
+  }
+
+  static HRESULT seh_release_frame_(IDXGIOutputDuplication *d) noexcept {
+    return d->ReleaseFrame();
+  }
+
+  static HRESULT seh_get_device_removed_reason_(ID3D11Device *dev) noexcept {
+    return dev->GetDeviceRemovedReason();
+  }
+#endif
 
   capture_e duplication_t::next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p, ID3D11Device *device) {
     auto capture_status = release_frame();
