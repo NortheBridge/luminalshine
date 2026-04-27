@@ -295,9 +295,28 @@ jobs:
           # build custom installer executable that wraps the MSI payload
           powershell -NoProfile -ExecutionPolicy Bypass -File ../packaging/windows/bootstrapper/build_bootstrapper.ps1 -BuildDir "$(cygpath -w "$(pwd)")"
 
-          msi_file=$(ls -1 ./cpack_artifacts/*.msi | head -n 1)
-          installer_exe=$(ls -1 ./cpack_artifacts/LuminalShineSetup.exe ./cpack_artifacts/*-installer.exe 2>/dev/null | head -n 1)
-          portable_zip=$(ls -1 ./cpack_artifacts/*.zip | head -n 1)
+          # Locate emitted artifacts. nullglob makes unmatched globs expand to
+          # nothing instead of the literal pattern, so `ls` doesn't error out
+          # under `bash -eo pipefail` when a fallback name doesn't exist.
+          shopt -s nullglob
+          msi_files=(./cpack_artifacts/*.msi)
+          installer_files=(./cpack_artifacts/LuminalShineSetup.exe ./cpack_artifacts/*-installer.exe)
+          zip_files=(./cpack_artifacts/*.zip)
+          shopt -u nullglob
+
+          if (( ${#msi_files[@]} == 0 )); then
+            echo "::error::No MSI produced in ./cpack_artifacts/"; exit 1
+          fi
+          if (( ${#installer_files[@]} == 0 )); then
+            echo "::error::No installer EXE produced in ./cpack_artifacts/"; exit 1
+          fi
+          if (( ${#zip_files[@]} == 0 )); then
+            echo "::error::No portable ZIP produced in ./cpack_artifacts/"; exit 1
+          fi
+
+          msi_file="${msi_files[0]}"
+          installer_exe="${installer_files[0]}"
+          portable_zip="${zip_files[0]}"
 
           # move
           mv "${msi_file}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.msi
