@@ -14,14 +14,22 @@ set(INSTALL_GMOCK OFF)
 add_subdirectory("${GTEST_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/googletest")
 include_directories("${GTEST_SOURCE_DIR}/googletest/include" "${GTEST_SOURCE_DIR}")
 
-# coverage
+# coverage (opt-in)
 # https://gcovr.com/en/stable/guide/compiling.html#compiler-options
-set(CMAKE_CXX_FLAGS "-fprofile-arcs -ftest-coverage -ggdb -O0")
-set(CMAKE_C_FLAGS "-fprofile-arcs -ftest-coverage -ggdb -O0")
+# Gating: the gcov flags require libgcov (gcc) or libclang_rt.profile (clang).
+# msys2's mingw-w64-ucrt-x86_64-clang package does not ship the profile runtime,
+# so unconditional instrumentation breaks the Windows-clang build. CI no longer
+# uploads coverage artifacts, so leave this OFF by default and let local
+# coverage runs opt in via -DBUILD_TESTS_WITH_COVERAGE=ON.
+option(BUILD_TESTS_WITH_COVERAGE "Instrument tests with gcov-style coverage flags" OFF)
+if(BUILD_TESTS_WITH_COVERAGE)
+    set(CMAKE_CXX_FLAGS "-fprofile-arcs -ftest-coverage -ggdb -O0")
+    set(CMAKE_C_FLAGS "-fprofile-arcs -ftest-coverage -ggdb -O0")
+endif()
 
 # Find the correct libgcov library path matching the gcc compiler version
 # This ensures the test executable links against the same libgcov version used during compilation
-if(UNIX AND NOT APPLE)
+if(BUILD_TESTS_WITH_COVERAGE AND UNIX AND NOT APPLE)
     # Get the gcc compiler version
     execute_process(
         COMMAND ${CMAKE_C_COMPILER} -dumpversion

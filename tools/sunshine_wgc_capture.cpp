@@ -64,7 +64,12 @@ struct
   virtual HRESULT __stdcall GetInterface(REFIID id, IUnknown **object) = 0;
 };
 
-#if !WINRT_IMPL_HAS_DECLSPEC_UUID
+// On any MinGW target (both gcc-mingw and clang-mingw), the headers expand
+// __uuidof(T) to __mingw_uuidof<T>(), so we must provide the template
+// specialization regardless of WINRT_IMPL_HAS_DECLSPEC_UUID. With clang the
+// __declspec(uuid) attribute alone is not sufficient — the linker still calls
+// __mingw_uuidof<T>() and needs a definition.
+#ifdef __MINGW32__
 static constexpr GUID GUID__IDirect3DDxgiInterfaceAccess = {
   0xA9B3D012,
   0x3DF2,
