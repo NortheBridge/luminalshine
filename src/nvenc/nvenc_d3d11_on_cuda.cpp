@@ -3,6 +3,14 @@
  * @brief Definitions for CUDA NVENC encoder with Direct3D11 input surfaces.
  */
 #ifdef _WIN32
+  // winsock2.h must precede windows.h (pulled in by d3d11.h via nvenc_d3d11.h)
+  // so the later boost_process_shim.h winsock2 include doesn't emit a
+  // header-order warning.
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+
   // this include
   #include "nvenc_d3d11_on_cuda.h"
   #include "nvenc_api.h"

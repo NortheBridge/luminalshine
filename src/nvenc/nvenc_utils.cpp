@@ -2,6 +2,16 @@
  * @file src/nvenc/nvenc_utils.cpp
  * @brief Definitions for NVENC utilities.
  */
+// winsock2.h must precede windows.h (pulled in by dxgiformat.h and
+// nvEncodeAPI.h via nvenc_utils.h) so the later boost_process_shim.h winsock2
+// include doesn't emit a header-order warning.
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+#endif
+
 // standard includes
 #include <cassert>
 

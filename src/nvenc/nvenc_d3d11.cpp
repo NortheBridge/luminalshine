@@ -2,6 +2,16 @@
  * @file src/nvenc/nvenc_d3d11.cpp
  * @brief Definitions for abstract Direct3D11 NVENC encoder.
  */
+// winsock2.h must precede windows.h (pulled in by comdef.h/d3d11.h via
+// nvenc_d3d11.h) so the later boost_process_shim.h winsock2 include doesn't
+// emit a header-order warning.
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+#endif
+
 // local includes
 #include "src/logging.h"
 

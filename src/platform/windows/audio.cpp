@@ -2,6 +2,14 @@
  * @file src/platform/windows/audio.cpp
  * @brief Definitions for Windows audio capture.
  */
+// winsock2.h must precede windows.h (pulled in by Audioclient.h, mmdeviceapi.h,
+// etc.) so the boost_process_shim.h winsock2 include later in the chain doesn't
+// emit a header-order warning.
+#ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+
 #define INITGUID
 
 // standard includes

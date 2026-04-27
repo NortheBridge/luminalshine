@@ -2,6 +2,16 @@
  * @file src/nvenc/nvenc_base.cpp
  * @brief Definitions for abstract platform-agnostic base of standalone NVENC encoder.
  */
+// winsock2.h must be included before windows.h (pulled in by nvEncodeAPI.h on
+// Windows) so the boost_process_shim.h winsock2 include later in the chain
+// doesn't emit a header-order warning.
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+#endif
+
 // this include
 #include "nvenc_base.h"
 #include "nvenc_api.h"
