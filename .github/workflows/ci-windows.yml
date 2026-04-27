@@ -57,16 +57,22 @@ jobs:
           declare -A pinned_deps
 
           # dependencies
+          # NOTE: We build with clang (not gcc) so __try/__except SEH compiles
+          # natively under -fms-extensions. The toolchain meta-package stays to
+          # provide binutils/headers/runtime libs that clang relies on; the
+          # extra disk for gcc is acceptable and the two compilers coexist.
           dependencies=(
             "git"
             "mingw-w64-${TOOLCHAIN}-boost"
+            "mingw-w64-${TOOLCHAIN}-clang"
             "mingw-w64-${TOOLCHAIN}-cmake"
             "mingw-w64-${TOOLCHAIN}-cppwinrt"
             "mingw-w64-${TOOLCHAIN}-curl-winssl"
-            "mingw-w64-${TOOLCHAIN}-gcc"
             "mingw-w64-${TOOLCHAIN}-graphviz"
+            "mingw-w64-${TOOLCHAIN}-lld"
             "mingw-w64-${TOOLCHAIN}-miniupnpc"
             "mingw-w64-${TOOLCHAIN}-nlohmann-json"
+            "mingw-w64-${TOOLCHAIN}-ninja"
             "mingw-w64-${TOOLCHAIN}-onevpl"
             "mingw-w64-${TOOLCHAIN}-openssl"
             "mingw-w64-${TOOLCHAIN}-opus"
@@ -242,6 +248,15 @@ jobs:
           BRANCH: ${{ github.head_ref || github.ref_name }}
           BUILD_VERSION: ${{ inputs.release_version }}
           COMMIT: ${{ inputs.release_commit }}
+          # Build with clang from msys2 ucrt64. -fms-extensions enables MSVC
+          # SEH keywords (__try/__except/__finally) so the dxgi.dll AV
+          # mitigation in src/platform/windows/display_base.cpp compiles
+          # natively. lld is used as the linker for faster link times.
+          CC: clang
+          CXX: clang++
+          CFLAGS: "-fms-extensions"
+          CXXFLAGS: "-fms-extensions"
+          LDFLAGS: "-fuse-ld=lld"
         run: |
           mkdir -p build
           cmake \
@@ -250,13 +265,13 @@ jobs:
             -S . \
             -DBUILD_WERROR=OFF \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
             -DSUNSHINE_ASSETS_DIR=assets \
             -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://luminalshine.northebridge.com" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://luminalshine.northebridge.com/support"
-          echo "::add-matcher::.github/matchers/gcc.json"
           ninja -C build
-          echo "::remove-matcher owner=gcc::"
 
       # WiX already installed before configure so env:WIX is available
 

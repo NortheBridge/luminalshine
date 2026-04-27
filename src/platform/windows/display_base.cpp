@@ -217,9 +217,10 @@ namespace platf::dxgi {
   // Bracket DXGI dispatch in SEH so a freed-object access violation inside dxgi.dll
   // (observed crash in dxgi.dll!+0x6b74f reading [rax+0x10] where rax is freed memory)
   // is converted into a clean DXGI_ERROR_DEVICE_REMOVED instead of crashing the process.
-  // SEH is MSVC-only syntax; on MinGW GCC the wrappers fall through to the raw call
-  // and the AV will still terminate the process if it occurs.
-#ifdef _MSC_VER
+  // The body deliberately holds no C++ objects with destructors so __try is well-formed.
+  // SEH __try/__except is MSVC syntax. Clang accepts it under -fms-extensions; plain
+  // GCC does not, so the GCC fallback is a passthrough (no mitigation).
+#if defined(_MSC_VER) || defined(__clang__)
   static HRESULT seh_acquire_next_frame_(IDXGIOutputDuplication *d, UINT timeout_ms, DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **res) noexcept {
     __try {
       return d->AcquireNextFrame(timeout_ms, info, res);
