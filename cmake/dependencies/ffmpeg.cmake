@@ -46,14 +46,20 @@ if(NOT DEFINED FFMPEG_PREPARED_BINARIES)
 
     # Set GitHub release URL
     set(FFMPEG_GITHUB_REPO "LizardByte/build-deps")
+    # Hardcoded fallback tag used when the build-deps submodule isn't checked out
+    # at a tagged commit. Avoids the GitHub `/releases/latest/download/` redirect,
+    # which intermittently returns HTTP 404 for this repo. Bump when build-deps
+    # publishes a newer release that ships the assets we need (Windows-AMD64-ffmpeg.tar.gz).
+    set(FFMPEG_FALLBACK_RELEASE_TAG "v2026.425.130933"
+        CACHE STRING "Pinned LizardByte/build-deps release tag used when no submodule tag is found")
     if(FFMPEG_RELEASE_TAG)
         set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/download/${FFMPEG_RELEASE_TAG}")
         set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-${FFMPEG_RELEASE_TAG}")
         message(STATUS "Using FFmpeg from build-deps tag: ${FFMPEG_RELEASE_TAG}")
     else()
-        set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/latest/download")
-        set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-latest")
-        message(STATUS "Using FFmpeg from latest build-deps release")
+        set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/download/${FFMPEG_FALLBACK_RELEASE_TAG}")
+        set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-${FFMPEG_FALLBACK_RELEASE_TAG}")
+        message(STATUS "Using FFmpeg from pinned build-deps release: ${FFMPEG_FALLBACK_RELEASE_TAG}")
     endif()
 
     # Set extraction directory and prepared binaries path
