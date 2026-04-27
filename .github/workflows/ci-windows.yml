@@ -186,6 +186,75 @@ jobs:
         run: |
           choco install wixtoolset -y
 
+      - name: Fetch SudoVDA driver bundle
+        shell: pwsh
+        env:
+          # Apollo version that ships a working signed SudoVDA.dll bundle.
+          # All four signed/source files (.inf, .cat, .cer, uninstall.bat) are
+          # fetched from the SAME Apollo tag so the catalog matches the .dll.
+          APOLLO_VERSION: '0.4.6'
+          # Nefarius/nefcon release that provides nefconc.exe.
+          NEFCON_VERSION: 'v1.17.40'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $driversDir = Join-Path $PWD 'src_assets/windows/drivers/sudovda'
+          if (-not (Test-Path $driversDir)) {
+            throw "Drivers directory missing: $driversDir"
+          }
+
+          $apolloRaw = "https://raw.githubusercontent.com/ClassicOldSong/Apollo/v$($env:APOLLO_VERSION)/src_assets/windows/drivers/sudovda"
+          foreach ($file in 'SudoVDA.inf', 'sudovda.cat', 'sudovda.cer', 'uninstall.bat') {
+            $dest = Join-Path $driversDir $file
+            Write-Host "Downloading $file from Apollo v$($env:APOLLO_VERSION)..."
+            Invoke-WebRequest -Uri "$apolloRaw/$file" -OutFile $dest -UseBasicParsing
+          }
+
+          $nefconTmp = Join-Path $env:RUNNER_TEMP 'nefcon'
+          New-Item -ItemType Directory -Path $nefconTmp -Force | Out-Null
+          $nefconZip = Join-Path $nefconTmp 'nefcon.zip'
+          $nefconUrl = "https://github.com/nefarius/nefcon/releases/download/$($env:NEFCON_VERSION)/nefcon_$($env:NEFCON_VERSION).zip"
+          Write-Host "Downloading nefcon $($env:NEFCON_VERSION)..."
+          Invoke-WebRequest -Uri $nefconUrl -OutFile $nefconZip -UseBasicParsing
+          Expand-Archive -Path $nefconZip -DestinationPath $nefconTmp -Force
+          $nefconc = Get-ChildItem -Path $nefconTmp -Recurse -Filter 'nefconc.exe' |
+                       Where-Object { $_.FullName -match '(?i)x64|amd64' } |
+                       Select-Object -First 1
+          if (-not $nefconc) {
+            throw "nefconc.exe (x64) not found in $nefconUrl"
+          }
+          Copy-Item $nefconc.FullName (Join-Path $driversDir 'nefconc.exe') -Force
+
+          $apolloTmp = Join-Path $env:RUNNER_TEMP 'apollo'
+          New-Item -ItemType Directory -Path $apolloTmp -Force | Out-Null
+          $apolloExe = Join-Path $apolloTmp "Apollo-$($env:APOLLO_VERSION).exe"
+          $apolloUrl = "https://github.com/ClassicOldSong/Apollo/releases/download/v$($env:APOLLO_VERSION)/Apollo-$($env:APOLLO_VERSION).exe"
+          Write-Host "Downloading Apollo installer v$($env:APOLLO_VERSION) for SudoVDA.dll extraction..."
+          Invoke-WebRequest -Uri $apolloUrl -OutFile $apolloExe -UseBasicParsing
+          $apolloExtracted = Join-Path $apolloTmp 'extracted'
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (-not (Test-Path $sevenZip)) {
+            throw "7-Zip not found at $sevenZip"
+          }
+          & $sevenZip x "-o$apolloExtracted" $apolloExe -y | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip failed to extract $apolloExe (exit $LASTEXITCODE)"
+          }
+          $sudoDll = Get-ChildItem -Path $apolloExtracted -Recurse -Filter 'SudoVDA.dll' |
+                       Select-Object -First 1
+          if (-not $sudoDll) {
+            throw "SudoVDA.dll not found inside Apollo installer $apolloExe"
+          }
+          Copy-Item $sudoDll.FullName (Join-Path $driversDir 'SudoVDA.dll') -Force
+
+          $required = @('install.ps1','uninstall.bat','SudoVDA.inf','SudoVDA.dll','sudovda.cat','sudovda.cer','nefconc.exe')
+          foreach ($file in $required) {
+            $p = Join-Path $driversDir $file
+            if (-not (Test-Path $p)) { throw "Driver artifact missing after fetch: $p" }
+            if ((Get-Item $p).Length -le 0) { throw "Driver artifact is empty: $p" }
+          }
+          Write-Host "SudoVDA driver bundle ready:"
+          Get-ChildItem $driversDir | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+
       - name: Build Windows
         shell: msys2 {0}
         env:
