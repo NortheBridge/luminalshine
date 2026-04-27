@@ -2,6 +2,11 @@
 name: CI-Windows
 permissions: {}
 
+# Opt msys2/setup-msys2 (still on the Node 20 runtime in v2.30.0) into the
+# Node 24 runtime to silence the deprecation warning and stay forward-compatible.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 on:
   workflow_call:
     inputs:

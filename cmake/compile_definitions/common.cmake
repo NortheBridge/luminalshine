@@ -30,6 +30,15 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 
     # Clang doesn't actually complain about this this, so disabling for now
     # list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-uninitialized)
+
+    # Enable MSVC C/C++ extensions so __try/__except SEH compiles for the
+    # dxgi.dll AV mitigation in src/platform/windows/display_base.cpp.
+    # Applied here (rather than via CXXFLAGS env) so every target including
+    # tests/test_sunshine inherits it consistently.
+    if(WIN32)
+        list(APPEND SUNSHINE_COMPILE_OPTIONS -fms-extensions)
+        add_compile_options(-fms-extensions)
+    endif()
 endif()
 if(BUILD_WERROR)
     list(APPEND SUNSHINE_COMPILE_OPTIONS -Werror)
