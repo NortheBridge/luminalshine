@@ -75,9 +75,28 @@ namespace platf::dxgi {
 
   display_wgc_ipc_vram_t::display_wgc_ipc_vram_t() = default;
 
+  // SEH-wrap the helper-frame release. _ipc_session->release() ultimately drops a shared
+  // D3D11 texture that the WGC capture helper handed us; if the underlying display device
+  // disappeared under us, that release can AV inside d3d11/dxgi. We cannot hold the frame
+  // forever, so swallow the AV and log it. The helper process will detect our death (or
+  // get a fresh init request) and clean up its side independently.
+#if defined(_MSC_VER) || defined(__clang__)
+  static void seh_release_ipc_frame_(class ipc_session_t *s) noexcept {
+    __try {
+      s->release();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      // Logged by caller using the SEH-aware wrapper if we expose it; for now, swallow.
+    }
+  }
+#else
+  static void seh_release_ipc_frame_(class ipc_session_t *s) noexcept {
+    s->release();
+  }
+#endif
+
   display_wgc_ipc_vram_t::~display_wgc_ipc_vram_t() {
     if (_frame_locked && _ipc_session) {
-      _ipc_session->release();
+      seh_release_ipc_frame_(_ipc_session.get());
       _frame_locked = false;
     }
   }
@@ -131,7 +150,9 @@ namespace platf::dxgi {
     _frame_locked = capture_status == capture_e::ok;
     auto release_guard = util::fail_guard([&]() {
       if (_frame_locked && _ipc_session) {
-        _ipc_session->release();
+        // SEH-protected because the display device may have vanished between the
+        // acquire and our release path (e.g. virtual display recovery).
+        seh_release_ipc_frame_(_ipc_session.get());
         _frame_locked = false;
       }
     });
@@ -259,7 +280,7 @@ namespace platf::dxgi {
 
   capture_e display_wgc_ipc_vram_t::release_snapshot() {
     if (_ipc_session && _frame_locked) {
-      _ipc_session->release();
+      seh_release_ipc_frame_(_ipc_session.get());
       _frame_locked = false;
     }
     return capture_e::ok;
@@ -379,14 +400,14 @@ namespace platf::dxgi {
     // captures textures in unrotated physical pixel dimensions, same as VRAM path
     if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
       BOOST_LOG(info) << "Capture size changed [" << width_before_rotation << 'x' << height_before_rotation << " -> " << desc.Width << 'x' << desc.Height << ']';
-      _ipc_session->release();
+      seh_release_ipc_frame_(_ipc_session.get());
       return capture_e::reinit;
     }
 
     // Check for format changes
     if (capture_format != desc.Format) {
       BOOST_LOG(info) << "Capture format changed [" << dxgi_format_to_string(capture_format) << " -> " << dxgi_format_to_string(desc.Format) << ']';
-      _ipc_session->release();
+      seh_release_ipc_frame_(_ipc_session.get());
       return capture_e::reinit;
     }
 
@@ -409,7 +430,7 @@ namespace platf::dxgi {
       auto hr = device->CreateTexture2D(&t, nullptr, &texture);
       if (FAILED(hr)) {
         BOOST_LOG(error) << "[display_wgc_ipc_ram_t] Failed to create staging texture: " << hr;
-        _ipc_session->release();
+        seh_release_ipc_frame_(_ipc_session.get());
         return capture_e::error;
       }
 
@@ -426,7 +447,7 @@ namespace platf::dxgi {
 
     // CRITICAL: Release the keyed mutex BEFORE blocking on Map()
     // The helper needs the mutex to write the next frame while we're reading this one
-    _ipc_session->release();
+    seh_release_ipc_frame_(_ipc_session.get());
 
     // Get a free image from the pool
     if (!pull_free_image_cb(img_out)) {

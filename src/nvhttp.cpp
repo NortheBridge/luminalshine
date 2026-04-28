@@ -577,13 +577,39 @@ namespace nvhttp {
           recovery_params.max_attempts = 3;
 
           GUID recovery_guid = virtual_display_guid;
-          recovery_params.should_abort = [recovery_guid]() {
-            return !VDISPLAY::is_virtual_display_guid_tracked(recovery_guid);
+          // Abort recovery if (a) the virtual display is no longer tracked, or (b) every streaming
+          // session has ended. Without (b), a client disconnect that races with a virtual-display
+          // disappearance triggers recreate-during-teardown: the recovery monitor recreates the
+          // display under a new device id and dispatches an APPLY while sunshine is already winding
+          // down its capture pipeline against the OLD device id. That race wedges the videoThread
+          // join, which then trips the 10s "Hang detected" watchdog (see crash analysis).
+          auto session_shutting_down = []() {
+            return stream::session::running_sessions.load(std::memory_order_acquire) == 0
+                   && !webrtc_stream::has_active_sessions();
+          };
+          recovery_params.should_abort = [recovery_guid, session_shutting_down]() {
+            if (!VDISPLAY::is_virtual_display_guid_tracked(recovery_guid)) {
+              return true;
+            }
+            if (session_shutting_down()) {
+              BOOST_LOG(info) << "Virtual display recovery: aborting because no streaming sessions remain.";
+              return true;
+            }
+            return false;
           };
           auto recovery_session = std::make_shared<rtsp_stream::launch_session_t>(
             display_helper_integration::helpers::make_display_request_session_snapshot(*launch_session)
           );
-          recovery_params.on_recovery_success = [recovery_session](const VDISPLAY::VirtualDisplayCreationResult &result) {
+          recovery_params.on_recovery_success = [recovery_session, session_shutting_down](const VDISPLAY::VirtualDisplayCreationResult &result) {
+              // Re-check on entry: the monitor's abort poll runs at ~1s cadence so a session
+              // teardown between abort checks can still land us here. If sessions are gone, do
+              // nothing — recreating the display id and raising switch_display would just race the
+              // teardown.
+              if (session_shutting_down()) {
+                BOOST_LOG(info) << "Virtual display recovery: skipping post-recovery APPLY because no streaming sessions remain.";
+                return;
+              }
+
               if (result.device_id && !result.device_id->empty()) {
                 recovery_session->virtual_display_device_id = *result.device_id;
                 config::set_runtime_output_name_override(recovery_session->virtual_display_device_id);
@@ -594,6 +620,12 @@ namespace nvhttp {
                 bool applied = false;
 
                 for (int attempt = 1; attempt <= kMaxApplyAttempts; ++attempt) {
+                  // Bail mid-retry if the session went away while we were sleeping.
+                  if (session_shutting_down()) {
+                    BOOST_LOG(info) << "Virtual display recovery: aborting APPLY retries because no streaming sessions remain.";
+                    return;
+                  }
+
                   (void) display_helper_integration::disarm_pending_restore();
 
                   auto request = display_helper_integration::helpers::build_request_from_session(config::video, *recovery_session);
@@ -613,6 +645,14 @@ namespace nvhttp {
                   BOOST_LOG(warning) << "Virtual display recovery: display helper apply failed after recreation (attempt "
                                      << attempt << "/" << kMaxApplyAttempts << ").";
                   std::this_thread::sleep_for(std::chrono::milliseconds(250 + (attempt - 1) * 250));
+                }
+
+                // Final session-state check before raising switch_display: if teardown won the
+                // race during the retry loop, raising the event now would queue a reinit on a
+                // capture pipeline that's already destructing.
+                if (session_shutting_down()) {
+                  BOOST_LOG(info) << "Virtual display recovery: skipping switch_display raise because no streaming sessions remain.";
+                  return;
                 }
 
                 if (mail::man) {

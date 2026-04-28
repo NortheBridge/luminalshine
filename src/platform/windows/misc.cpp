@@ -1543,6 +1543,51 @@ namespace platf {
     return saddr_v6;
   }
 
+  // Resolve the outgoing interface index for a destination address.
+  //
+  // Background: every UDP video frame is sent via WSASendMsg() with an
+  // IN_PKTINFO/IN6_PKTINFO control message that pins the source address. Older
+  // Windows builds tolerated leaving ipi_ifindex=0 alongside a specific source
+  // address. Win11 Canary tightened validation here and returns WSAEINVAL on
+  // every such send, which produces a stream that establishes RTSP but can't
+  // deliver any video — symptom previously seen as repeated
+  // "WSASendMsg() failed: 10022" log spam followed by a client timeout.
+  //
+  // GetBestInterfaceEx() consults the route table for the destination and
+  // returns the interface index the stack would have chosen anyway. Pairing
+  // it with the source address satisfies the new validation. If the lookup
+  // fails (no route, etc.), we fall back to 0 so callers can decide whether
+  // to omit the cmsg entirely.
+  static ULONG resolve_send_interface_index_(const boost::asio::ip::address &dest) {
+    DWORD ifindex = 0;
+    DWORD result;
+    if (dest.is_v6()) {
+      auto sa6 = to_sockaddr(dest.to_v6(), 0);
+      result = GetBestInterfaceEx((SOCKADDR *) &sa6, &ifindex);
+    } else {
+      auto sa4 = to_sockaddr(dest.to_v4(), 0);
+      result = GetBestInterfaceEx((SOCKADDR *) &sa4, &ifindex);
+    }
+    if (result != NO_ERROR) {
+      return 0;  // Caller decides whether to fall back to omitting the cmsg.
+    }
+    return ifindex;
+  }
+
+  // Compose a single human-readable string describing a failed WSASendMsg
+  // attempt, so logs from a failed stream startup name the actual destination,
+  // source, family, and socket handle instead of just an opaque errno.
+  static std::string describe_send_failure_(unsigned int family, std::uintptr_t native_socket, const boost::asio::ip::address &source, const boost::asio::ip::address &target, std::uint16_t target_port, ULONG ifindex, int winerr) {
+    std::ostringstream oss;
+    oss << "winerr=" << winerr
+        << " family=" << (family == AF_INET6 ? "AF_INET6" : "AF_INET")
+        << " src=" << source.to_string()
+        << " dst=" << target.to_string() << ":" << target_port
+        << " ifindex=" << ifindex
+        << " sock=0x" << std::hex << native_socket;
+    return oss.str();
+  }
+
   // Use UDP segmentation offload if it is supported by the OS. If the NIC is capable, this will use
   // hardware acceleration to reduce CPU usage. Support for USO was introduced in Windows 10 20H1.
   bool send_batch(batched_send_info_t &send_info) {
@@ -1602,13 +1647,15 @@ namespace platf {
     msg.Control.buf = cmbuf;
     msg.Control.len = sizeof(cmbuf);
 
+    const ULONG batch_ifindex = resolve_send_interface_index_(send_info.target_address);
+
     auto cm = WSA_CMSG_FIRSTHDR(&msg);
     if (send_info.source_address.is_v6()) {
       IN6_PKTINFO pktInfo;
 
       SOCKADDR_IN6 saddr_v6 = to_sockaddr(send_info.source_address.to_v6(), 0);
       pktInfo.ipi6_addr = saddr_v6.sin6_addr;
-      pktInfo.ipi6_ifindex = 0;
+      pktInfo.ipi6_ifindex = batch_ifindex;
 
       cmbuflen += WSA_CMSG_SPACE(sizeof(pktInfo));
 
@@ -1621,7 +1668,7 @@ namespace platf {
 
       SOCKADDR_IN saddr_v4 = to_sockaddr(send_info.source_address.to_v4(), 0);
       pktInfo.ipi_addr = saddr_v4.sin_addr;
-      pktInfo.ipi_ifindex = 0;
+      pktInfo.ipi_ifindex = batch_ifindex;
 
       cmbuflen += WSA_CMSG_SPACE(sizeof(pktInfo));
 
@@ -1687,13 +1734,16 @@ namespace platf {
     msg.Control.buf = cmbuf;
     msg.Control.len = sizeof(cmbuf);
 
+    const ULONG send_ifindex = resolve_send_interface_index_(send_info.target_address);
+    const unsigned int send_family = send_info.source_address.is_v6() ? AF_INET6 : AF_INET;
+
     auto cm = WSA_CMSG_FIRSTHDR(&msg);
     if (send_info.source_address.is_v6()) {
       IN6_PKTINFO pktInfo;
 
       SOCKADDR_IN6 saddr_v6 = to_sockaddr(send_info.source_address.to_v6(), 0);
       pktInfo.ipi6_addr = saddr_v6.sin6_addr;
-      pktInfo.ipi6_ifindex = 0;
+      pktInfo.ipi6_ifindex = send_ifindex;
 
       cmbuflen += WSA_CMSG_SPACE(sizeof(pktInfo));
 
@@ -1706,7 +1756,7 @@ namespace platf {
 
       SOCKADDR_IN saddr_v4 = to_sockaddr(send_info.source_address.to_v4(), 0);
       pktInfo.ipi_addr = saddr_v4.sin_addr;
-      pktInfo.ipi_ifindex = 0;
+      pktInfo.ipi_ifindex = send_ifindex;
 
       cmbuflen += WSA_CMSG_SPACE(sizeof(pktInfo));
 
@@ -1721,7 +1771,11 @@ namespace platf {
     DWORD bytes_sent;
     if (WSASendMsg((SOCKET) send_info.native_socket, &msg, 0, &bytes_sent, nullptr, nullptr) == SOCKET_ERROR) {
       auto winerr = WSAGetLastError();
-      BOOST_LOG(warning) << "WSASendMsg() failed: "sv << winerr;
+      // WSAEINVAL (10022) on Win11 Canary historically meant ipi_ifindex=0; we now set it from
+      // GetBestInterfaceEx but if the lookup failed (ifindex=0) the same error is the most likely
+      // culprit. The verbose context lets a future bug report point at the right interface/socket.
+      BOOST_LOG(warning) << "WSASendMsg() failed: "sv
+                         << describe_send_failure_(send_family, send_info.native_socket, send_info.source_address, send_info.target_address, send_info.target_port, send_ifindex, winerr);
       return false;
     }
 

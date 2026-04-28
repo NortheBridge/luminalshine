@@ -258,6 +258,57 @@ namespace platf::dxgi {
   }
 #endif
 
+  // Release a raw COM interface pointer under SEH protection so an AV inside dxgi.dll's
+  // refcounting (typically when the underlying display device has been freed) cannot kill
+  // the process during display teardown. Returns 0 on success, the SEH exception code on
+  // catch. The pointer must already have been detached from any owning safe_ptr — never
+  // pass a pointer whose owner will also call Release; double-release is itself UB.
+#if defined(_MSC_VER) || defined(__clang__)
+  static unsigned long seh_safe_release_com_(IUnknown *p) noexcept {
+    if (!p) {
+      return 0;
+    }
+    __try {
+      p->Release();
+      return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      return GetExceptionCode();
+    }
+  }
+#else
+  static unsigned long seh_safe_release_com_(IUnknown *p) noexcept {
+    if (!p) {
+      return 0;
+    }
+    p->Release();
+    return 0;
+  }
+#endif
+
+  // Hand off ownership of a util::safe_ptr<T> COM wrapper to seh_safe_release_com_,
+  // ensuring the auto-destruction of the safe_ptr afterwards is a no-op (it sees null).
+  // Logs the SEH code at warning level so a swallowed AV is visible in support bundles.
+  template <typename SafePtr>
+  static void detach_and_release_under_seh_(SafePtr &p, const char *member_name) {
+    auto *raw = p.release();  // safe_ptr no longer owns; auto-destroy is now a no-op.
+    auto seh = seh_safe_release_com_(raw);
+    if (seh != 0) {
+      BOOST_LOG(warning) << "display_base teardown: SEH 0x" << std::hex << seh << std::dec
+                         << " while releasing " << member_name
+                         << " (likely freed dxgi internal state — display device removed under us).";
+    }
+  }
+
+  display_base_t::~display_base_t() {
+    // Release in reverse acquisition order so dependents go first. The default-generated
+    // destructor would do the same, but without SEH protection.
+    detach_and_release_under_seh_(device_ctx, "device_ctx");
+    detach_and_release_under_seh_(device, "device");
+    detach_and_release_under_seh_(output, "output");
+    detach_and_release_under_seh_(adapter, "adapter");
+    detach_and_release_under_seh_(factory, "factory");
+  }
+
   capture_e duplication_t::next_frame(DXGI_OUTDUPL_FRAME_INFO &frame_info, std::chrono::milliseconds timeout, resource_t::pointer *res_p, ID3D11Device *device) {
     auto capture_status = release_frame();
     if (capture_status != capture_e::ok) {

@@ -2149,8 +2149,57 @@ namespace stream {
       // Current Nvidia drivers have a bug where NVENC can deadlock the encoder thread with hardware-accelerated
       // GPU scheduling enabled. If this happens, we will terminate ourselves and the service can restart.
       // The alternative is that Sunshine can never start another session until it's manually restarted.
-      auto task = []() {
-        BOOST_LOG(fatal) << "Hang detected! Session failed to terminate in 10 seconds."sv;
+      //
+      // Before the deadlock-recovery debug_trap, dispatch a REVERT to the display helper so the
+      // user's monitor topology is restored to its pre-stream state. The helper is a separate
+      // process that survives our death; once it has the REVERT frame in its IPC queue it will
+      // execute the restore independently. Without this explicit REVERT the helper still
+      // recovers, but only after its 30s heartbeat-timeout safety net (allowing up to ~150s for
+      // a reconnect first), which leaves the user staring at a borked desktop for a long time.
+      //
+      // We also publish a "phase" atomic so the watchdog logs WHICH wait stage was wedged
+      // instead of just "Hang detected!". A future bug report then points at video/audio/control
+      // join specifically rather than landing in dxgi.dll generically.
+      enum class join_phase_e : int {
+        starting = 0,
+        waiting_video = 1,
+        waiting_audio = 2,
+        waiting_control = 3,
+        resetting_input = 4,
+        cleanup = 5,
+        done = 6,
+      };
+      auto phase = std::make_shared<std::atomic<int>>(static_cast<int>(join_phase_e::starting));
+      auto phase_name = [](int p) -> const char * {
+        switch (static_cast<join_phase_e>(p)) {
+          case join_phase_e::starting:        return "starting";
+          case join_phase_e::waiting_video:   return "videoThread.join";
+          case join_phase_e::waiting_audio:   return "audioThread.join";
+          case join_phase_e::waiting_control: return "controlEnd.view";
+          case join_phase_e::resetting_input: return "input::reset";
+          case join_phase_e::cleanup:         return "post-join cleanup";
+          case join_phase_e::done:            return "done";
+        }
+        return "unknown";
+      };
+
+      auto task = [phase, phase_name]() {
+        const int p = phase->load(std::memory_order_acquire);
+        BOOST_LOG(fatal) << "Hang detected! Session failed to terminate in 10 seconds. Wedged in phase: "
+                         << phase_name(p) << " (" << p << ")"sv;
+#ifdef _WIN32
+        // Best-effort: ask the display helper to restore monitor topology immediately. We don't
+        // wait for ack — the helper is a separate process; the IPC frame is fire-and-forget and
+        // will be picked up by the helper's read loop even if we trap microseconds later.
+        // prefer_golden_if_current_missing=true so even if our session-current snapshot is gone
+        // the helper still falls back to the golden (pre-stream) snapshot.
+        BOOST_LOG(info) << "Hang recovery: dispatching REVERT to display helper to restore monitors before debug_trap.";
+        try {
+          (void) display_helper_integration::revert(true);
+        } catch (...) {
+          // Already crashing; absolutely nothing to do here.
+        }
+#endif
         logging::log_flush();
         lifetime::debug_trap();
       };
@@ -2160,15 +2209,20 @@ namespace stream {
         task_pool.cancel(force_kill);
       });
 
+      phase->store(static_cast<int>(join_phase_e::waiting_video), std::memory_order_release);
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
       session.videoThread.join();
+      phase->store(static_cast<int>(join_phase_e::waiting_audio), std::memory_order_release);
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
       session.audioThread.join();
+      phase->store(static_cast<int>(join_phase_e::waiting_control), std::memory_order_release);
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
+      phase->store(static_cast<int>(join_phase_e::resetting_input), std::memory_order_release);
       // Reset input on session stop to avoid stuck repeated keys
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
+      phase->store(static_cast<int>(join_phase_e::cleanup), std::memory_order_release);
 
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
@@ -2234,6 +2288,7 @@ namespace stream {
         config::maybe_apply_deferred();
       }
 
+      phase->store(static_cast<int>(join_phase_e::done), std::memory_order_release);
       BOOST_LOG(info) << "Session ended"sv;
     }
 

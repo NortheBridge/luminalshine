@@ -169,6 +169,15 @@ namespace platf::dxgi {
 
   class display_base_t: public display_t {
   public:
+    // Explicit destructor releases the COM members below in reverse-creation order under SEH.
+    // When the underlying display device disappears mid-stream (e.g. a virtual display is removed
+    // by sudovda while we still hold IDXGIOutput / ID3D11Device references), invoking Release on
+    // those interfaces can access-violate inside dxgi.dll because internal lookup tables already
+    // freed the kernel handle for that adapter. The default-generated destructor offers no
+    // protection; we wrap each release in __try/__except so an AV during teardown is logged and
+    // swallowed instead of becoming a process-killing crash.
+    ~display_base_t() override;
+
     int init(const ::video::config_t &config, const std::string &display_name, bool skip_dd_test = false);
 
     capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override;
