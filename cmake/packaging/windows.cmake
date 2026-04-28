@@ -13,6 +13,55 @@ if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64" AND DEFINED _MINHOOK_DLL)
     install(FILES "${_MINHOOK_DLL}" DESTINATION "." COMPONENT application)
 endif()
 
+# Bundle msys2 ucrt64 runtime DLLs that the binaries link against dynamically.
+# Boost, OpenSSL, libcurl, miniupnpc, FFmpeg, libstdc++, libwinpthread, libssp,
+# and minhook are all linked statically (see PLATFORM_LIBRARIES and the build
+# linker line). ICU and iconv are the exceptions — msys2 only ships them as
+# import libraries (.dll.a) so the resulting EXE has runtime references to
+# libicuin78.dll, libicudt78.dll, libicuuc78.dll, and libiconv-2.dll.
+# Without bundling these, end-users get a "code execution cannot proceed
+# because libicuin78.dll was not found" dialog when launching sunshine.exe.
+#
+# DLL discovery uses MINGW_PREFIX (set by msys2 shell) with a CI-runner
+# fallback. Glob patterns avoid hardcoding the ICU major version (currently 78)
+# so the same code keeps working when msys2 bumps to ICU 79+.
+if(DEFINED ENV{MINGW_PREFIX} AND IS_DIRECTORY "$ENV{MINGW_PREFIX}/bin")
+    set(_msys2_bin_dir "$ENV{MINGW_PREFIX}/bin")
+elseif(IS_DIRECTORY "D:/a/_temp/msys64/ucrt64/bin")
+    set(_msys2_bin_dir "D:/a/_temp/msys64/ucrt64/bin")
+elseif(IS_DIRECTORY "/ucrt64/bin")
+    set(_msys2_bin_dir "/ucrt64/bin")
+else()
+    set(_msys2_bin_dir "")
+endif()
+
+if(_msys2_bin_dir)
+    file(GLOB _msys2_runtime_dlls
+        "${_msys2_bin_dir}/libicudt*.dll"
+        "${_msys2_bin_dir}/libicuin*.dll"
+        "${_msys2_bin_dir}/libicuuc*.dll"
+        "${_msys2_bin_dir}/libiconv*.dll"
+    )
+    if(_msys2_runtime_dlls)
+        message(STATUS "Bundling msys2 runtime DLLs from ${_msys2_bin_dir}:")
+        foreach(_dll IN LISTS _msys2_runtime_dlls)
+            get_filename_component(_dll_name "${_dll}" NAME)
+            message(STATUS "  - ${_dll_name}")
+        endforeach()
+        install(FILES ${_msys2_runtime_dlls} DESTINATION "." COMPONENT application)
+    else()
+        message(FATAL_ERROR
+                "Could not locate ICU/iconv runtime DLLs in ${_msys2_bin_dir}.\n"
+                "  Without these the installed sunshine.exe will fail to launch with\n"
+                "  'libicuin*.dll was not found'. Check that the msys2 ucrt64 packages\n"
+                "  mingw-w64-ucrt-x86_64-icu and -libiconv are installed.")
+    endif()
+else()
+    message(FATAL_ERROR
+            "Could not determine msys2 bin directory for runtime DLL bundling.\n"
+            "  Set MINGW_PREFIX in the environment (msys2 shells do this automatically).")
+endif()
+
 # ViGEmBus installer is no longer bundled or managed by the installer
 
 # Adding tools
