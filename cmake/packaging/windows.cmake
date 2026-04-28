@@ -14,17 +14,25 @@ if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64" AND DEFINED _MINHOOK_DLL)
 endif()
 
 # Bundle msys2 ucrt64 runtime DLLs that the binaries link against dynamically.
-# Boost, OpenSSL, libcurl, miniupnpc, FFmpeg, libstdc++, libwinpthread, libssp,
-# and minhook are all linked statically (see PLATFORM_LIBRARIES and the build
-# linker line). ICU and iconv are the exceptions — msys2 only ships them as
-# import libraries (.dll.a) so the resulting EXE has runtime references to
-# libicuin78.dll, libicudt78.dll, libicuuc78.dll, and libiconv-2.dll.
-# Without bundling these, end-users get a "code execution cannot proceed
-# because libicuin78.dll was not found" dialog when launching sunshine.exe.
 #
-# DLL discovery uses MINGW_PREFIX (set by msys2 shell) with a CI-runner
-# fallback. Glob patterns avoid hardcoding the ICU major version (currently 78)
-# so the same code keeps working when msys2 bumps to ICU 79+.
+# Two distinct sets need to ship:
+#
+#   1. ICU/iconv — msys2 only provides import libraries (.dll.a) for these, so
+#      the linker always emits dynamic references to libicuin*.dll, libicudt*.dll,
+#      libicuuc*.dll, and libiconv-*.dll regardless of -static.
+#
+#   2. The GCC/C++ runtime (libstdc++-6.dll, libgcc_s_seh-1.dll, libwinpthread-1.dll,
+#      libssp-0.dll, etc.). The link line passes -static and lists libstdc++.a /
+#      libwinpthread.a / libssp.a explicitly, but in practice transitive dependencies
+#      pulled in by Boost, libcurl, FFmpeg, et al. can still drag in the dynamic
+#      runtime — and a single dynamic reference is enough for the loader to demand
+#      the .dll at process start. Bundling them unconditionally is cheap and
+#      removes the foot-gun: end-users hit "the code execution cannot proceed
+#      because libstdc++-6.dll was not found" otherwise.
+#
+# DLL discovery uses MINGW_PREFIX (set by msys2 shells) with a CI-runner
+# fallback. Globs avoid hardcoding ABI version numbers (ICU 78 today, libstdc++-6
+# today, etc.) so the same code keeps working as msys2 bumps versions.
 if(DEFINED ENV{MINGW_PREFIX} AND IS_DIRECTORY "$ENV{MINGW_PREFIX}/bin")
     set(_msys2_bin_dir "$ENV{MINGW_PREFIX}/bin")
 elseif(IS_DIRECTORY "D:/a/_temp/msys64/ucrt64/bin")
@@ -36,26 +44,57 @@ else()
 endif()
 
 if(_msys2_bin_dir)
-    file(GLOB _msys2_runtime_dlls
+    # ICU + iconv: always required, hard-fail if missing (something is wrong with the toolchain).
+    file(GLOB _msys2_link_dlls
         "${_msys2_bin_dir}/libicudt*.dll"
         "${_msys2_bin_dir}/libicuin*.dll"
         "${_msys2_bin_dir}/libicuuc*.dll"
         "${_msys2_bin_dir}/libiconv*.dll"
     )
-    if(_msys2_runtime_dlls)
-        message(STATUS "Bundling msys2 runtime DLLs from ${_msys2_bin_dir}:")
-        foreach(_dll IN LISTS _msys2_runtime_dlls)
-            get_filename_component(_dll_name "${_dll}" NAME)
-            message(STATUS "  - ${_dll_name}")
-        endforeach()
-        install(FILES ${_msys2_runtime_dlls} DESTINATION "." COMPONENT application)
-    else()
+    if(NOT _msys2_link_dlls)
         message(FATAL_ERROR
                 "Could not locate ICU/iconv runtime DLLs in ${_msys2_bin_dir}.\n"
                 "  Without these the installed sunshine.exe will fail to launch with\n"
                 "  'libicuin*.dll was not found'. Check that the msys2 ucrt64 packages\n"
                 "  mingw-w64-ucrt-x86_64-icu and -libiconv are installed.")
     endif()
+
+    # GCC/C++ runtime: bundle every runtime DLL that may be dynamically pulled in
+    # by us or any transitive dependency. Each pattern is best-effort — missing
+    # ones are simply not shipped — but we hard-fail if libstdc++ is missing
+    # because that's the one we know is required.
+    file(GLOB _msys2_gcc_runtime_dlls
+        "${_msys2_bin_dir}/libstdc++*.dll"
+        "${_msys2_bin_dir}/libgcc_s*.dll"
+        "${_msys2_bin_dir}/libwinpthread*.dll"
+        "${_msys2_bin_dir}/libssp*.dll"
+        "${_msys2_bin_dir}/libatomic*.dll"
+        "${_msys2_bin_dir}/libgomp*.dll"
+        "${_msys2_bin_dir}/libquadmath*.dll"
+    )
+    set(_has_libstdcxx FALSE)
+    foreach(_dll IN LISTS _msys2_gcc_runtime_dlls)
+        get_filename_component(_dll_name "${_dll}" NAME)
+        if(_dll_name MATCHES "^libstdc\\+\\+")
+            set(_has_libstdcxx TRUE)
+            break()
+        endif()
+    endforeach()
+    if(NOT _has_libstdcxx)
+        message(FATAL_ERROR
+                "Could not locate libstdc++-*.dll in ${_msys2_bin_dir}.\n"
+                "  Without it the installed sunshine.exe will fail to launch with\n"
+                "  'libstdc++-6.dll was not found'. Check that the msys2 ucrt64 package\n"
+                "  mingw-w64-ucrt-x86_64-gcc-libs is installed.")
+    endif()
+
+    set(_msys2_runtime_dlls ${_msys2_link_dlls} ${_msys2_gcc_runtime_dlls})
+    message(STATUS "Bundling msys2 runtime DLLs from ${_msys2_bin_dir}:")
+    foreach(_dll IN LISTS _msys2_runtime_dlls)
+        get_filename_component(_dll_name "${_dll}" NAME)
+        message(STATUS "  - ${_dll_name}")
+    endforeach()
+    install(FILES ${_msys2_runtime_dlls} DESTINATION "." COMPONENT application)
 else()
     message(FATAL_ERROR
             "Could not determine msys2 bin directory for runtime DLL bundling.\n"
