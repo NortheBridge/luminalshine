@@ -31,7 +31,7 @@ sudo pacman -S cmake ninja gcc cuda nvidia-utils libva libvdpau \
     libevdev libcap libnotify libayatana-appindicator
 
 # Clone and build
-git clone https://github.com/Nonary/luminalshine.git
+git clone https://github.com/NortheBridge/luminalshine.git
 cd luminalshine
 git checkout vibe
 git checkout -b fix/linux-build-boost-1.89
@@ -245,7 +245,7 @@ groups $USER | grep -E "input|video|render"
 ## 10. References
 
 - [Sunshine Documentation](https://docs.lizardbyte.dev/projects/sunshine/latest/)
-- [LuminalShine GitHub](https://github.com/Nonary/luminalshine)
+- [LuminalShine GitHub](https://github.com/NortheBridge/luminalshine)
 - [Moonlight Game Streaming Ports](https://portforward.com/moonlight-game-streaming/)
 - [Sunshine Getting Started](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html)
 

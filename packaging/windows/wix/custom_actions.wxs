@@ -114,7 +114,9 @@
     <CustomAction Id="InstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Uninstall-time actions (deferred, elevated) -->
-    <CustomAction Id="RestoreNvPrefsUndo" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <!-- Best-effort cleanup: a missing/broken legacy sunshine.exe (e.g. unable to load runtime DLLs)
+         must not block uninstall or upgrade with 1603. -->
+    <CustomAction Id="RestoreNvPrefsUndo" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RemoveConflictingProducts" BinaryKey="RemoveConflictingProductsVbs" VBScriptCall="RemoveConflictingProducts" Execute="deferred" Return="check" />
     <!-- Quiet stop for repair/basic UI: proactively stop service when UI is too low for prompts -->
     <CustomAction Id="StopSvcQuietImmediate" BinaryKey="WixCA" DllEntry="CAQuietExec" Return="ignore" />
@@ -204,7 +206,7 @@
         <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\LuminalShine">
           <RegistryValue Name="DisplayName" Type="string" Value="LuminalShine" KeyPath="yes" />
           <RegistryValue Name="DisplayVersion" Type="string" Value="[ProductVersion]" />
-          <RegistryValue Name="Publisher" Type="string" Value="Nonary" />
+          <RegistryValue Name="Publisher" Type="string" Value="NortheBridge North America" />
           <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALL_ROOT]" />
           <RegistryValue Name="DisplayIcon" Type="string" Value="[INSTALL_ROOT]sunshine.exe" />
           <RegistryValue Name="UninstallString" Type="string" Value="&quot;[INSTALL_ROOT]uninstall.exe&quot;" />

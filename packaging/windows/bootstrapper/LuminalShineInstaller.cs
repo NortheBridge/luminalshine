@@ -1662,7 +1662,7 @@ namespace LuminalShineInstaller {
         return;
       }
 
-      var nextStep = "Attach this file on GitHub: https://github.com/Nonary/LuminalShine/issues\n"
+      var nextStep = "Attach this file on GitHub: https://github.com/NortheBridge/LuminalShine/issues\n"
         + "Or Discord (#luminalshine): https://discord.com/invite/CGg5JxN";
       SetStatus("Support logs saved.", outputPath, _statusSuccessBrush);
       await ShowOverlayInfoAsync(
@@ -1701,7 +1701,7 @@ namespace LuminalShineInstaller {
         return;
       }
 
-      var nextStep = "Attach this file on GitHub: https://github.com/Nonary/LuminalShine/issues\n"
+      var nextStep = "Attach this file on GitHub: https://github.com/NortheBridge/LuminalShine/issues\n"
         + "Or Discord (#luminalshine): https://discord.com/invite/CGg5JxN";
       SetStatus("Support logs saved.", outputPath, _statusSuccessBrush);
       await ShowOverlayInfoAsync(
@@ -1859,7 +1859,7 @@ namespace LuminalShineInstaller {
         detail ?? "Unknown error",
         string.Empty,
         "Next step:",
-        "Attach this file on GitHub: https://github.com/Nonary/LuminalShine/issues",
+        "Attach this file on GitHub: https://github.com/NortheBridge/LuminalShine/issues",
         "Or Discord (#luminalshine): https://discord.com/invite/CGg5JxN"
       };
       return string.Join(Environment.NewLine, lines);
@@ -1875,9 +1875,9 @@ namespace LuminalShineInstaller {
 
       block.Inlines.Add(new Run("Open an issue on "));
       var githubLink = new Hyperlink(new Run("GitHub")) {
-        NavigateUri = new Uri("https://github.com/Nonary/LuminalShine/issues")
+        NavigateUri = new Uri("https://github.com/NortheBridge/LuminalShine/issues")
       };
-      githubLink.Click += (sender, args) => OpenExternalUrl("https://github.com/Nonary/LuminalShine/issues");
+      githubLink.Click += (sender, args) => OpenExternalUrl("https://github.com/NortheBridge/LuminalShine/issues");
       block.Inlines.Add(githubLink);
       block.Inlines.Add(new Run(" or join "));
       var discordLink = new Hyperlink(new Run("Discord (#luminalshine)")) {

@@ -2,7 +2,7 @@
 
 ## What is LuminalShine?
 
-LuminalShine is an AI‑enhanced version of Sunshine, a popular remote streaming application. It intends to integrate all scripts from myself (Nonary) and more.
+LuminalShine is an AI‑enhanced version of Sunshine, a popular remote streaming application. It intends to integrate all scripts from NortheBridge North America and more.
 
 
 

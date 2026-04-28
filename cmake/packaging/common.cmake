@@ -1,7 +1,7 @@
 # common packaging
 
 # common cpack options
-# Branding: show LuminalShine by Nonary in installer UI
+# Branding: show LuminalShine by NortheBridge North America in installer UI
 set(CPACK_PACKAGE_NAME "LuminalShine")
 set(CPACK_PACKAGE_VENDOR "NortheBridge North America")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION_NUMERIC})

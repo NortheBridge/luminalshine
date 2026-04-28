@@ -6,11 +6,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Discussions
-    url: https://github.com/Nonary/luminalshine/discussions
+    url: https://github.com/NortheBridge/luminalshine/discussions
     about: Community discussions
   - name: Questions
-    url: https://github.com/Nonary/luminalshine/discussions
+    url: https://github.com/NortheBridge/luminalshine/discussions
     about: Ask questions
   - name: Feature Requests
-    url: https://github.com/Nonary/luminalshine/discussions
+    url: https://github.com/NortheBridge/luminalshine/discussions
     about: Request new features

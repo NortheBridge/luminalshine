@@ -84,14 +84,14 @@ const resources = computed(() => [
     avatarStyle: 'background-color: rgba(99, 102, 241, 0.15); color: rgb(99, 102, 241);',
   },
   {
-    href: 'https://github.com/Nonary/luminalshine/discussions',
+    href: 'https://github.com/NortheBridge/luminalshine/discussions',
     icon: 'fab fa-github',
     title: t('resource_card.github_discussions'),
     description: 'GitHub Discussions',
     avatarStyle: 'background-color: rgba(16, 185, 129, 0.15); color: rgb(16, 185, 129);',
   },
   {
-    href: 'https://github.com/Nonary/luminalshine/issues',
+    href: 'https://github.com/NortheBridge/luminalshine/issues',
     icon: 'fab fa-github',
     title: 'GitHub Issues',
     description: 'Report bugs or request features',
@@ -101,14 +101,14 @@ const resources = computed(() => [
 
 const legalLinks = computed(() => [
   {
-    href: 'https://github.com/Nonary/luminalshine/blob/master/LICENSE',
+    href: 'https://github.com/NortheBridge/luminalshine/blob/master/LICENSE',
     icon: 'fas fa-file-alt',
     title: t('resource_card.license'),
     description: 'View license',
     avatarStyle: 'background-color: rgba(34, 197, 94, 0.15); color: rgb(34, 197, 94);',
   },
   {
-    href: 'https://github.com/Nonary/luminalshine/blob/master/NOTICE',
+    href: 'https://github.com/NortheBridge/luminalshine/blob/master/NOTICE',
     icon: 'fas fa-exclamation',
     title: t('resource_card.third_party_notice'),
     description: 'Third-party notices',
