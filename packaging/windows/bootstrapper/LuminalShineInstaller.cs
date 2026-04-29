@@ -119,43 +119,50 @@ namespace LuminalShineInstaller {
   }
 
   internal enum VirtualDisplayBackendChoice {
-    Mtt = 0,      // MTT VDD — primary, recommended.
-    Sudovda = 1,  // SudoVDA — legacy / pre-25H2 / older Insider builds.
+    Mtt = 0,      // MTT VDD — backup. Use when SudoVDA hits the
+                  // WUDFHostProblem2 / HostTimeout error on a given Windows
+                  // build. The backing INF/CAT live under drivers/vdd/.
+    Sudovda = 1,  // SudoVDA — preferred default. Richer feature set (HDR
+                  // bit-depth control, per-client virtual displays, etc.).
+                  // Slated to be replaced by a LuminalShine-built driver
+                  // tailored to modern Windows 11 / Insider Preview when
+                  // that driver ships; until then SudoVDA stays primary.
     None = 2,     // No virtual display driver — for users with their own.
   }
 
   internal static class VirtualDisplayBackendChoiceHelpers {
     public static string ToToken(VirtualDisplayBackendChoice choice) {
       switch (choice) {
-        case VirtualDisplayBackendChoice.Sudovda: return "sudovda";
-        case VirtualDisplayBackendChoice.None:    return "none";
-        default:                                  return "mtt";
+        case VirtualDisplayBackendChoice.Mtt:  return "mtt";
+        case VirtualDisplayBackendChoice.None: return "none";
+        default:                               return "sudovda";
       }
     }
 
     public static VirtualDisplayBackendChoice ParseToken(string token) {
       if (string.IsNullOrWhiteSpace(token)) {
-        return VirtualDisplayBackendChoice.Mtt;
+        return VirtualDisplayBackendChoice.Sudovda;
       }
       var trimmed = token.Trim();
-      if (string.Equals(trimmed, "sudovda", StringComparison.OrdinalIgnoreCase)) {
-        return VirtualDisplayBackendChoice.Sudovda;
+      if (string.Equals(trimmed, "mtt", StringComparison.OrdinalIgnoreCase)) {
+        return VirtualDisplayBackendChoice.Mtt;
       }
       if (string.Equals(trimmed, "none", StringComparison.OrdinalIgnoreCase)
           || string.Equals(trimmed, "off", StringComparison.OrdinalIgnoreCase)
           || string.Equals(trimmed, "0", StringComparison.OrdinalIgnoreCase)) {
         return VirtualDisplayBackendChoice.None;
       }
-      // Default to MTT for any other input including "mtt", "auto", "1", or
-      // unrecognized values — matches the bootstrapper's default selection.
-      return VirtualDisplayBackendChoice.Mtt;
+      // Default to SudoVDA for any other input including "sudovda", "auto",
+      // "1", or unrecognized values — matches the bootstrapper's default
+      // selection (SudoVDA preferred, MTT VDD reserved as backup).
+      return VirtualDisplayBackendChoice.Sudovda;
     }
 
     public static string ToDisplayName(VirtualDisplayBackendChoice choice) {
       switch (choice) {
-        case VirtualDisplayBackendChoice.Sudovda: return "SudoVDA (legacy)";
-        case VirtualDisplayBackendChoice.None:    return "(none)";
-        default:                                  return "MTT VDD";
+        case VirtualDisplayBackendChoice.Mtt:  return "MTT VDD (backup)";
+        case VirtualDisplayBackendChoice.None: return "(none)";
+        default:                               return "SudoVDA";
       }
     }
 
@@ -165,11 +172,12 @@ namespace LuminalShineInstaller {
     /// user re-runs the installer to upgrade or reconfigure.
     ///
     /// Detection rules:
-    ///   - MTT VDD: presence of `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver`
-    ///     (set by `drivers\vdd\install.ps1` when it writes VDDPATH).
     ///   - SudoVDA: presence of `HKLM\SOFTWARE\SudoMaker\SudoVDA\sdrBits`
     ///     (the WiX-installed `SudoVdaRegistryDefaults` component).
-    ///   - If both are present, MTT wins (it's the supported primary).
+    ///   - MTT VDD: presence of `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver`
+    ///     (set by `drivers\vdd\install.ps1` when it writes VDDPATH).
+    ///   - If both are present, SudoVDA wins (it's the preferred backend;
+    ///     MTT VDD is the fallback when SudoVDA fails on a given build).
     ///   - If neither is present, returns None.
     ///
     /// This is a heuristic — orphaned registry keys after a manual driver
@@ -190,8 +198,8 @@ namespace LuminalShineInstaller {
         }
       } catch { }
 
-      if (mttDetected) return VirtualDisplayBackendChoice.Mtt;
       if (sudovdaDetected) return VirtualDisplayBackendChoice.Sudovda;
+      if (mttDetected) return VirtualDisplayBackendChoice.Mtt;
       return VirtualDisplayBackendChoice.None;
     }
   }
@@ -294,10 +302,18 @@ namespace LuminalShineInstaller {
       // window keeps everything visible without forcing the content card to
       // scroll on standard 1080p displays. Uninstall-only and update flows
       // (no driver chooser) keep the original compact size.
+      // The SudoVDA-recommended/MTT-backup wording introduced in 26.04 grew
+      // each radio's description block (the SudoVDA paragraph now mentions
+      // the planned LuminalShine replacement driver, the MTT paragraph
+      // calls out the WUDFHostProblem2 / HostTimeout signal). Net change
+      // is roughly three additional wrapped lines of body text on a
+      // ResizeMode=CanMinimize window. Bumped from 780→840 (target) and
+      // 740→800 (min) so the content card never clips on a 1080p display
+      // and the user always sees the Continue button without scrolling.
       Width = 760;
-      Height = showInstallOptions ? 780 : 460;
+      Height = showInstallOptions ? 840 : 460;
       MinWidth = 720;
-      MinHeight = showInstallOptions ? 740 : 430;
+      MinHeight = showInstallOptions ? 800 : 430;
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
       ResizeMode = ResizeMode.CanMinimize;
       WindowStyle = WindowStyle.None;
@@ -618,40 +634,53 @@ namespace LuminalShineInstaller {
 
       const string vddRadioGroup = "VddBackendGroup";
 
-      _vddMttRadio = new RadioButton {
-        Content = "MTT Virtual Display Driver (recommended)",
+      // SudoVDA is the preferred default — richer feature set than MTT VDD
+      // (per-client virtual displays, HDR bit-depth control, etc.). The
+      // intent is for a LuminalShine-built driver tailored to modern
+      // Windows 11 and Windows 11 Insider Preview to eventually replace
+      // SudoVDA, but until that ships SudoVDA stays the recommended
+      // backend. MTT VDD is offered as a backup for Windows builds where
+      // SudoVDA itself fails.
+      _vddSudovdaRadio = new RadioButton {
+        Content = "SudoVDA Virtual Display Driver (recommended)",
         GroupName = vddRadioGroup,
         FontSize = 13,
         FontWeight = FontWeights.SemiBold,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 4, 0, 2),
         IsChecked = true,
-        ToolTip = "Default. SignPath/GlobalSign-signed driver. Supported on current Windows 10/11 and Insider builds."
+        ToolTip = "Default. Preferred backend for LuminalShine; richer feature set than MTT VDD."
       };
-      installStack.Children.Add(_vddMttRadio);
+      installStack.Children.Add(_vddSudovdaRadio);
       installStack.Children.Add(new TextBlock {
-        Text = "Maintained IDD-based driver. Recommended for Windows 10/11 22H2, 23H2, 24H2, 25H2, and current Insider Preview builds.",
+        Text = "Preferred virtual display backend — more robust feature set than MTT VDD. "
+             + "A future LuminalShine release will introduce a virtual display driver tailored "
+             + "to modern Windows 11 and Windows 11 Insider Preview builds that will eventually "
+             + "replace SudoVDA, but for now SudoVDA remains the default choice.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         Margin = new Thickness(24, 0, 0, 6),
         TextWrapping = TextWrapping.Wrap
       });
 
-      _vddSudovdaRadio = new RadioButton {
-        Content = "SudoVDA (compatibility / legacy)",
+      _vddMttRadio = new RadioButton {
+        Content = "MTT Virtual Display Driver (backup)",
         GroupName = vddRadioGroup,
         FontSize = 13,
         FontWeight = FontWeights.SemiBold,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 4, 0, 2),
         IsChecked = false,
-        ToolTip = "Only choose this if MTT VDD does not work on your build of Windows."
+        ToolTip = "Pick this if SudoVDA fails on this build of Windows (e.g. WUDFHostProblem2 / HostTimeout)."
       };
-      installStack.Children.Add(_vddSudovdaRadio);
+      installStack.Children.Add(_vddMttRadio);
       installStack.Children.Add(new TextBlock {
-        Text = "Legacy backend. Supported only on Windows builds pre-dating 25H2 or older Insider Preview builds where MTT VDD compatibility is unverified. Known to hang (WUDFHostProblem2 / HostTimeout) on recent Insider releases.",
+        Text = "Use this only if SudoVDA fails on your build of Windows — for example if you see the "
+             + "WUDFHostProblem2 / HostTimeout error reported against the SudoVDA driver. "
+             + "MTT VDD is a SignPath/GlobalSign-signed IDD-based driver with broad compatibility "
+             + "across Windows 10/11 builds.",
         FontSize = 12,
-        Foreground = new SolidColorBrush(Color.FromRgb(232, 196, 132)),
+        Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         Margin = new Thickness(24, 0, 0, 6),
         TextWrapping = TextWrapping.Wrap
       });
@@ -692,21 +721,21 @@ namespace LuminalShineInstaller {
       // upgrade or reconfigure starts on the user's existing choice.
       _initiallyInstalledBackend = VirtualDisplayBackendChoiceHelpers.DetectInstalledBackend();
       switch (_initiallyInstalledBackend) {
-        case VirtualDisplayBackendChoice.Sudovda:
-          _vddSudovdaRadio.IsChecked = true;
+        case VirtualDisplayBackendChoice.Mtt:
+          // Existing MTT install — pre-select MTT so the user's current
+          // backend is the visible default. They can still flip to the
+          // recommended SudoVDA from this same screen.
+          _vddMttRadio.IsChecked = true;
           break;
         case VirtualDisplayBackendChoice.None:
-          // Existing install with no detected driver — keep the recommended
-          // default (MTT) selected so the user lands on the supported
-          // backend on their next confirm.
-          if (_installedProduct != null) {
-            _vddMttRadio.IsChecked = true;
-          } else {
-            _vddMttRadio.IsChecked = true;
-          }
+          // No driver detected (fresh install, or upgrade from a build
+          // that didn't ship a VDD). Default to SudoVDA — the recommended
+          // backend.
+          _vddSudovdaRadio.IsChecked = true;
           break;
         default:
-          _vddMttRadio.IsChecked = true;
+          // Sudovda — already preferred default.
+          _vddSudovdaRadio.IsChecked = true;
           break;
       }
 
@@ -1327,13 +1356,15 @@ namespace LuminalShineInstaller {
     }
 
     private VirtualDisplayBackendChoice ResolveSelectedVddBackend() {
-      if (_vddSudovdaRadio.IsChecked == true) {
-        return VirtualDisplayBackendChoice.Sudovda;
+      if (_vddMttRadio.IsChecked == true) {
+        return VirtualDisplayBackendChoice.Mtt;
       }
       if (_vddNoneRadio.IsChecked == true) {
         return VirtualDisplayBackendChoice.None;
       }
-      return VirtualDisplayBackendChoice.Mtt;
+      // SudoVDA is the recommended default; treat any indeterminate/no-pick
+      // state as "SudoVDA selected".
+      return VirtualDisplayBackendChoice.Sudovda;
     }
 
     private async Task RunUninstallFlow() {
