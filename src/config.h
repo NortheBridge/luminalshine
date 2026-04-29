@@ -106,6 +106,12 @@ namespace config {
     virtual_display_mode_e virtual_display_mode;
     virtual_display_layout_e virtual_display_layout;
 
+    /// Selects the virtual-display driver backend. Values: "auto" (prefer MTT
+    /// if installed, fall back to SudoVDA), "mtt", or "sudovda". Default
+    /// "auto". MTT VDD is the supported primary backend; SudoVDA is retained
+    /// for compatibility on Insider Windows builds and as a manual fallback.
+    std::string virtual_display_backend;
+
     struct dd_t {
       struct workarounds_t {
         bool dummy_plug_hdr10;  ///< Force 30 Hz and HDR for physical dummy plugs (requires VSYNC override).

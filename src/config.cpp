@@ -790,6 +790,7 @@ namespace config {
 
     video_t::virtual_display_mode_e::disabled,  // virtual_display_mode
     video_t::virtual_display_layout_e::exclusive,  // virtual_display_layout
+    "auto",  // virtual_display_backend
 
     {
       video_t::dd_t::config_option_e::verify_only,  // configuration_option
@@ -1517,6 +1518,7 @@ namespace config {
 
     generic_f(vars, "virtual_display_mode", video.virtual_display_mode, virtual_display_mode_from_view);
     generic_f(vars, "virtual_display_layout", video.virtual_display_layout, virtual_display_layout_from_view);
+    string_f(vars, "virtual_display_backend", video.virtual_display_backend);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -2025,6 +2027,7 @@ namespace config {
         "virtual_sink",
         "stream_audio",
         "adapter_name",
+        "virtual_display_backend",
         "dd_configuration_option",
         "dd_resolution_option",
         "dd_manual_resolution",

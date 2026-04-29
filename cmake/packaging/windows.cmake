@@ -150,6 +150,37 @@ install(FILES ${SUDOVDA_DRIVER_FILES}
         DESTINATION "drivers/sudovda"
         COMPONENT sudovda)
 
+# MTT Virtual Display Driver — primary backend on modern Windows builds.
+# Source binaries are vendored under third-party/mtt-vdd/ (see that
+# directory's README for upstream and signing details). The install script
+# lives alongside SudoVDA's under src_assets so package metadata is
+# maintained in one place.
+set(MTT_VDD_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third-party/mtt-vdd")
+set(MTT_VDD_INSTALL_SCRIPT "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vdd/install.ps1")
+set(MTT_VDD_DRIVER_FILES
+    "${MTT_VDD_INSTALL_SCRIPT}"
+    "${MTT_VDD_SOURCE_DIR}/MttVDD.inf"
+    "${MTT_VDD_SOURCE_DIR}/MttVDD.dll"
+    "${MTT_VDD_SOURCE_DIR}/mttvdd.cat"
+    "${MTT_VDD_SOURCE_DIR}/vdd_settings.xml.template"
+    "${MTT_VDD_SOURCE_DIR}/LICENSE"
+)
+
+foreach(_mttvdd_file IN LISTS MTT_VDD_DRIVER_FILES)
+    if (NOT EXISTS "${_mttvdd_file}")
+        message(FATAL_ERROR "Required MTT VDD artifact missing: ${_mttvdd_file}")
+    endif()
+    file(SIZE "${_mttvdd_file}" _mttvdd_file_size)
+    if (_mttvdd_file_size EQUAL 0)
+        message(FATAL_ERROR "Required MTT VDD artifact is empty (0 bytes): ${_mttvdd_file}")
+    endif()
+endforeach()
+unset(_mttvdd_file_size)
+
+install(FILES ${MTT_VDD_DRIVER_FILES}
+        DESTINATION "drivers/vdd"
+        COMPONENT mttvdd)
+
 # Mandatory scripts
 install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/sunshine-setup.ps1"
         DESTINATION "scripts"
@@ -232,10 +263,19 @@ set(CPACK_COMPONENT_ASSETS_GROUP "Core")
 set(CPACK_COMPONENT_ASSETS_REQUIRED true)
 
 # drivers
-set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA")
-set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Driver required for Virtual Display to function.")
+# MTT Virtual Display Driver — primary backend, installed by default.
+set(CPACK_COMPONENT_MTTVDD_DISPLAY_NAME "Virtual Display Driver (MTT)")
+set(CPACK_COMPONENT_MTTVDD_DESCRIPTION "MikeTheTech's IDD-based virtual display driver. Default backend for per-client virtual displays. Recommended for current and Insider Windows builds.")
+set(CPACK_COMPONENT_MTTVDD_GROUP "Drivers")
+set(CPACK_COMPONENT_MTTVDD_REQUIRED true)
+
+# SudoVDA — kept available as a compatibility/legacy backend. Not installed
+# by default on new installs; users on Insider builds with MTT incompatibility
+# can choose 'Modify' in Add/Remove Programs to add it.
+set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA (Compatibility)")
+set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Legacy virtual display driver. Optional fallback for older Windows builds or troubleshooting MTT VDD.")
 set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
-set(CPACK_COMPONENT_SUDOVDA_REQUIRED true)
+set(CPACK_COMPONENT_SUDOVDA_DISABLED true)
 
 # audio tool
 set(CPACK_COMPONENT_AUDIO_DISPLAY_NAME "audio-info")

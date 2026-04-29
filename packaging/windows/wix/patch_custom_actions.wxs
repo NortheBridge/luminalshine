@@ -12,7 +12,11 @@
       <RegistrySearch Id="SearchLegacySunshineUninstall32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="UninstallString" Type="raw"/>
     </Property>
     <Property Id="REMOVEVIRTUALDISPLAYDRIVER" Value="0" Secure="yes"/>
-    <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes"/>
+    <!-- MTT VDD is the primary virtual-display driver as of 26.04. SudoVDA
+         remains opt-in via Modify for users on older Windows or Insider
+         builds where MTT may have compatibility issues. -->
+    <Property Id="INSTALL_MTTVDD" Value="1" Secure="yes"/>
+    <Property Id="INSTALL_SUDOVDA" Value="0" Secure="yes"/>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
     <Condition Message="Administrator privileges are required.">Privileged</Condition>
     <Feature Id="LuminalShineExtras" Title="LuminalShine Components" Level="1" Absent="disallow">
@@ -52,7 +56,9 @@
       <!-- Post-install chores -->
       <Custom Action="SetResetAcls" After="InstallFiles">NOT REMOVE</Custom>
       <Custom Action="ResetAcls" After="SetResetAcls">NOT REMOVE</Custom>
-      <Custom Action="SetInstallSudovda" After="ResetAcls">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
+      <Custom Action="SetInstallMttVdd" After="ResetAcls">NOT REMOVE AND INSTALL_MTTVDD = "1"</Custom>
+      <Custom Action="InstallMttVdd" After="SetInstallMttVdd">NOT REMOVE AND INSTALL_MTTVDD = "1"</Custom>
+      <Custom Action="SetInstallSudovda" After="InstallMttVdd">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
       <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
       <Custom Action="SetMigrateConfig" After="InstallSudovda">NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT REMOVE</Custom>
@@ -63,8 +69,12 @@
       <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles">REMOVE="ALL"</Custom>
       <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo">REMOVE="ALL"</Custom>
 
-      <!-- Remove Virtual Display Driver only when explicitly requested by uninstall properties. -->
-      <Custom Action="SetUninstallSudovda" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
+      <!-- Remove Virtual Display Drivers only when explicitly requested by uninstall properties.
+           Both backends are uninstalled when REMOVEVIRTUALDISPLAYDRIVER=1; if only one was
+           installed the corresponding script is a no-op. -->
+      <Custom Action="SetUninstallMttVdd" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
+      <Custom Action="UninstallMttVdd" After="SetUninstallMttVdd">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
+      <Custom Action="SetUninstallSudovda" After="UninstallMttVdd">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
       <Custom Action="UninstallSudovda" After="SetUninstallSudovda">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
 
       <!-- Execute delete/prune after MSI removes its files -->

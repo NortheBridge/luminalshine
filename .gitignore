@@ -15,6 +15,10 @@
 *.so
 *.dylib
 *.dll
+# Vendored signed driver binary for MTT Virtual Display Driver. The
+# corresponding .cat catalog must travel with this DLL or driver loading
+# fails. Tracked deliberately; do not exclude.
+!third-party/mtt-vdd/*.dll
 
 # Fortran module files
 *.mod

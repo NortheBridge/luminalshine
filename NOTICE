@@ -1,3 +1,20 @@
 ©2018 Valve Corporation. Steam and the Steam logo are trademarks and/or
 registered trademarks of Valve Corporation in the U.S. and/or other countries. All
 rights reserved.
+
+================================================================================
+MTT Virtual Display Driver (third-party/mtt-vdd/)
+================================================================================
+LuminalShine bundles a copy of MikeTheTech's Virtual Display Driver as the
+default virtual-display backend. The driver is distributed under the MIT
+License (see third-party/mtt-vdd/LICENSE for the full text).
+
+Project page : https://github.com/VirtualDrivers/Virtual-Display-Driver
+Authors      : MikeTheTech, Jocke (zjoasan), and contributors
+Driver build : 11.30.4.434 (December 2024 release)
+Code signing : SignPath Foundation, via GlobalSign Code Signing CA 2020.
+               No additional certificate setup is required at install time.
+
+This driver is the recommended backend on supported Windows builds.
+LuminalShine retains optional integration with SudoVDA for users on Windows
+Insider preview builds where MTT VDD compatibility is unverified.
