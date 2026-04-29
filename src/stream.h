@@ -49,7 +49,20 @@ namespace stream {
   };
 
   namespace session {
+    /// Count of sessions whose threads (video/audio/control) have not yet been joined.
+    /// Decremented at the end of session::join, AFTER all per-session threads finish.
+    /// During a wedged teardown (e.g., NVENC/DXGI hang on driver failure) this counter
+    /// stays > 0 even though the session is logically dead. Use active_sessions for
+    /// "is any session in the RUNNING state right now?" instead.
     extern std::atomic_uint running_sessions;
+
+    /// Count of sessions in state_e::RUNNING. Decrements as soon as session::stop
+    /// transitions the state to STOPPING — independent of whether the per-session
+    /// threads have actually exited yet. This is the right counter to consult when
+    /// deciding whether downstream subsystems (e.g. the virtual-display recovery
+    /// monitor) should still treat a session as live, because it responds immediately
+    /// to a client disconnect even if the videoThread is wedged inside dxgi/NVENC.
+    extern std::atomic_uint active_sessions;
 
     enum class state_e : int {
       STOPPED,  ///< The session is stopped

@@ -2129,6 +2129,7 @@ namespace stream {
 
   namespace session {
     std::atomic_uint running_sessions;
+    std::atomic_uint active_sessions;
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
@@ -2141,6 +2142,15 @@ namespace stream {
       if (already_stopping) {
         return;
       }
+
+      // Decrement active_sessions immediately on transition to STOPPING. This is the
+      // signal the virtual-display recovery monitor watches for — without this, a
+      // wedged videoThread.join (e.g. NVENC/DXGI hang on SudoVDA driver timeout) would
+      // keep running_sessions == 1 for the full 10s watchdog window, during which the
+      // recovery monitor would happily recreate the just-removed virtual display and
+      // dispatch APPLY against the dying capture pipeline. Crash analysis of the
+      // 2026-04-28 21:21 bundle showed exactly this race.
+      active_sessions.fetch_sub(1, std::memory_order_acq_rel);
 
       session.shutdown_event->raise(true);
     }
@@ -2320,6 +2330,13 @@ namespace stream {
 
       session.audioThread = std::thread {audioThread, &session};
       session.videoThread = std::thread {videoThread, &session};
+
+      // Mirrors the running_sessions increment but tracks "logically RUNNING"
+      // sessions instead of "joinable" sessions. session::stop decrements this
+      // immediately, while running_sessions only decrements after thread join.
+      // Increment BEFORE the state transition so that any thread that observes
+      // state==RUNNING also observes the incremented counter (no underflow window).
+      active_sessions.fetch_add(1, std::memory_order_acq_rel);
 
       session.state.store(state_e::RUNNING, std::memory_order_relaxed);
 

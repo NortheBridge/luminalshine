@@ -588,9 +588,18 @@ namespace nvhttp {
           // The "was previously active" gate is critical: the recovery monitor is scheduled by
           // /launch BEFORE the Moonlight client has issued RTSP SETUP, so running_sessions is 0 at
           // schedule time. A naive check would abort the monitor before the session even starts.
+          //
+          // We must consult stream::session::active_sessions (decremented at session::stop) rather
+          // than running_sessions (decremented at session::join). Crash analysis of the 2026-04-28
+          // 21:21 wedge: SudoVDA driver timed out (WUDFHostProblem2/HostTimeout), videoThread.join
+          // hung for the full 10s watchdog window, running_sessions stayed 1 throughout, the
+          // recovery monitor fired on_recovery_success against the dying session and dispatched an
+          // APPLY that the helper couldn't satisfy ("current snapshot not available"). With
+          // active_sessions, session::stop's RUNNING→STOPPING transition flips the gate
+          // immediately and the monitor aborts cleanly even while the videoThread is wedged.
           auto session_was_active = std::make_shared<std::atomic<bool>>(false);
           auto session_shutting_down = [session_was_active]() {
-            const bool active_now = stream::session::running_sessions.load(std::memory_order_acquire) > 0
+            const bool active_now = stream::session::active_sessions.load(std::memory_order_acquire) > 0
                                     || webrtc_stream::has_active_sessions();
             if (active_now) {
               session_was_active->store(true, std::memory_order_release);
