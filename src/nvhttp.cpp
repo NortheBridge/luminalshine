@@ -577,22 +577,33 @@ namespace nvhttp {
           recovery_params.max_attempts = 3;
 
           GUID recovery_guid = virtual_display_guid;
-          // Abort recovery if (a) the virtual display is no longer tracked, or (b) every streaming
-          // session has ended. Without (b), a client disconnect that races with a virtual-display
-          // disappearance triggers recreate-during-teardown: the recovery monitor recreates the
-          // display under a new device id and dispatches an APPLY while sunshine is already winding
-          // down its capture pipeline against the OLD device id. That race wedges the videoThread
-          // join, which then trips the 10s "Hang detected" watchdog (see crash analysis).
-          auto session_shutting_down = []() {
-            return stream::session::running_sessions.load(std::memory_order_acquire) == 0
-                   && !webrtc_stream::has_active_sessions();
+          // Abort recovery if (a) the virtual display is no longer tracked, or (b) a streaming
+          // session was previously active and has since ended. Without (b), a client disconnect
+          // that races with a virtual-display disappearance triggers recreate-during-teardown: the
+          // recovery monitor recreates the display under a new device id and dispatches an APPLY
+          // while sunshine is already winding down its capture pipeline against the OLD device id.
+          // That race wedges the videoThread join, which then trips the 10s "Hang detected"
+          // watchdog (see crash analysis).
+          //
+          // The "was previously active" gate is critical: the recovery monitor is scheduled by
+          // /launch BEFORE the Moonlight client has issued RTSP SETUP, so running_sessions is 0 at
+          // schedule time. A naive check would abort the monitor before the session even starts.
+          auto session_was_active = std::make_shared<std::atomic<bool>>(false);
+          auto session_shutting_down = [session_was_active]() {
+            const bool active_now = stream::session::running_sessions.load(std::memory_order_acquire) > 0
+                                    || webrtc_stream::has_active_sessions();
+            if (active_now) {
+              session_was_active->store(true, std::memory_order_release);
+              return false;
+            }
+            return session_was_active->load(std::memory_order_acquire);
           };
           recovery_params.should_abort = [recovery_guid, session_shutting_down]() {
             if (!VDISPLAY::is_virtual_display_guid_tracked(recovery_guid)) {
               return true;
             }
             if (session_shutting_down()) {
-              BOOST_LOG(info) << "Virtual display recovery: aborting because no streaming sessions remain.";
+              BOOST_LOG(info) << "Virtual display recovery: aborting because the previously-active streaming session has ended.";
               return true;
             }
             return false;

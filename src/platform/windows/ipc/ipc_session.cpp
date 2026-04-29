@@ -29,10 +29,57 @@
 #include <d3d11.h>
 #include <d3d11_1.h>
 #include <dxgi1_6.h>
+#include <excpt.h>  // __try/__except, EXCEPTION_EXECUTE_HANDLER (MSVC + MinGW-w64 x64 SEH)
 #include <winrt/base.h>
 
 namespace platf::dxgi {
   namespace {
+    // SPECULATIVE (Win11 Insider 29570 dxgi.dll AV mitigation):
+    // The WGC capture hot path acquires a keyed mutex on a shared D3D11 texture handed off
+    // by the helper process. The dxgi.dll!+0x6b74f AV (read [rax+0x10] on freed memory)
+    // observed during streaming has been seen happening inside this AcquireSync path when
+    // the helper-side texture has been freed under us (helper crash, GPU device reset,
+    // virtual display swap mid-frame). Convert SEH access violations into a clean
+    // capture_e::reinit so the capture pipeline cycles through helper restart instead of
+    // dying. SEH __try/__except is MSVC syntax; clang accepts it under -fms-extensions.
+#if defined(_MSC_VER) || defined(__clang__)
+    static HRESULT seh_acquire_sync_(IDXGIKeyedMutex *km, UINT64 key, DWORD timeout_ms) noexcept {
+      __try {
+        return km->AcquireSync(key, timeout_ms);
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DXGI_ERROR_DEVICE_REMOVED;
+      }
+    }
+
+    static HRESULT seh_release_sync_(IDXGIKeyedMutex *km, UINT64 key) noexcept {
+      __try {
+        return km->ReleaseSync(key);
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DXGI_ERROR_DEVICE_REMOVED;
+      }
+    }
+
+    static HRESULT seh_device_removed_reason_(ID3D11Device *dev) noexcept {
+      __try {
+        return dev->GetDeviceRemovedReason();
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DXGI_ERROR_DEVICE_REMOVED;
+      }
+    }
+#else
+    static HRESULT seh_acquire_sync_(IDXGIKeyedMutex *km, UINT64 key, DWORD timeout_ms) noexcept {
+      return km->AcquireSync(key, timeout_ms);
+    }
+
+    static HRESULT seh_release_sync_(IDXGIKeyedMutex *km, UINT64 key) noexcept {
+      return km->ReleaseSync(key);
+    }
+
+    static HRESULT seh_device_removed_reason_(ID3D11Device *dev) noexcept {
+      return dev->GetDeviceRemovedReason();
+    }
+#endif
+
     constexpr auto kRecentDesktopSwitchGrace = std::chrono::seconds(3);
     std::atomic<std::int64_t> g_last_wgc_desktop_switch_us {0};
 
@@ -444,7 +491,22 @@ namespace platf::dxgi {
       return capture_e::reinit;
     }
 
-    HRESULT hr = _keyed_mutex->AcquireSync(0, 3000);
+    // SPECULATIVE: when the backing virtual display is torn down (recovery monitor
+    // recreates it under us), the D3D11 device is removed by the driver before we
+    // notice via mutex error. Probe first so we exit cleanly instead of letting the
+    // next AcquireSync chase a dead internal object inside dxgi.dll (the +0x6b74f AV).
+    if (_device) {
+      const HRESULT removed = seh_device_removed_reason_(_device.get());
+      if (removed != S_OK) {
+        BOOST_LOG(warning) << "WGC capture device removed before keyed-mutex acquire [0x"sv
+                           << util::hex(removed).to_string_view() << "]; forcing re-init";
+        _force_reinit = true;
+        _initialized = false;
+        return capture_e::reinit;
+      }
+    }
+
+    HRESULT hr = seh_acquire_sync_(_keyed_mutex.get(), 0, 3000);
 
     if (hr == WAIT_ABANDONED) {
       BOOST_LOG(error) << "Helper process abandoned the keyed mutex, implying it may have crashed or was forcefully terminated.";
@@ -453,12 +515,19 @@ namespace platf::dxgi {
       _initialized = false;
 
       // If WAIT_ABANDONED implies ownership, release immediately to avoid leaving the mutex held.
-      (void) _keyed_mutex->ReleaseSync(0);
+      (void) seh_release_sync_(_keyed_mutex.get(), 0);
       return capture_e::reinit;
     }
 
     if (hr == WAIT_TIMEOUT) {
       BOOST_LOG(error) << "Timed out waiting for keyed mutex; forcing re-init";
+      _force_reinit = true;
+      _initialized = false;
+      return capture_e::reinit;
+    }
+
+    if (hr == DXGI_ERROR_DEVICE_REMOVED) {
+      BOOST_LOG(error) << "SEH access violation while acquiring keyed mutex (likely freed dxgi internal state — helper texture vanished); forcing re-init";
       _force_reinit = true;
       _initialized = false;
       return capture_e::reinit;
@@ -475,12 +544,12 @@ namespace platf::dxgi {
     // snapshot below belongs to the shared texture we just acquired.
     frame_metadata_snapshot_t snapshot;
     if (!read_frame_metadata_snapshot(_frame_metadata, snapshot)) {
-      (void) _keyed_mutex->ReleaseSync(0);
+      (void) seh_release_sync_(_keyed_mutex.get(), 0);
       return capture_e::timeout;
     }
 
     if (snapshot.frame_id <= _last_frame_id) {
-      (void) _keyed_mutex->ReleaseSync(0);
+      (void) seh_release_sync_(_keyed_mutex.get(), 0);
       return capture_e::timeout;
     }
 
@@ -496,7 +565,7 @@ namespace platf::dxgi {
 
   void ipc_session_t::release() {
     if (_keyed_mutex) {
-      const HRESULT hr = _keyed_mutex->ReleaseSync(0);
+      const HRESULT hr = seh_release_sync_(_keyed_mutex.get(), 0);
       if (FAILED(hr)) {
         BOOST_LOG(warning) << "Failed to release keyed mutex [0x"sv << util::hex(hr).to_string_view() << ']';
       }
