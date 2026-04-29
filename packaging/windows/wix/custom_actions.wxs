@@ -27,33 +27,43 @@
     <Binary Id="WaitForLegacyUninstallVbs" SourceFile="$(sys.SOURCEFILEDIR)wait_for_legacy_uninstall.vbs"/>
     <Binary Id="RemoveConflictingProductsVbs" SourceFile="$(sys.SOURCEFILEDIR)remove_conflicting_products.vbs"/>
 
-  </Fragment>
+    <!-- PowerShell interpreter resolution.
+         Every powershell-launching custom action substitutes [POWERSHELL_PATH]
+         instead of hardcoding WindowsPowerShell\v1.0\powershell.exe, so we
+         can opportunistically pick PowerShell 7 when it's installed and
+         silently fall back to the always-present 5.1 otherwise.
 
-  <!-- PowerShell interpreter resolution.
-       Every powershell-launching custom action substitutes [PowerShellPath]
-       instead of hardcoding WindowsPowerShell\v1.0\powershell.exe, so we can
-       opportunistically pick PowerShell 7 when it's installed and silently
-       fall back to the always-present 5.1 otherwise.
+         Lives in this fragment (with the always-included FeatureRef) so the
+         Property and SetProperty are guaranteed to be linked into the final
+         MSI even though no <PropertyRef> references them — WiX 3 only
+         tracks compile-time references, not runtime [PropName] expansions
+         inside CA Value strings.
 
-       Probe layout:
-       - PWSH7_FOUND_PATH gets populated by AppSearch from a FileSearch over
-         the standard PS 7 install path. If pwsh.exe isn't there it stays
-         empty.
-       - PowerShellPath defaults to the bundled Windows PowerShell 5.1.
-       - If PWSH7_FOUND_PATH is non-empty, an immediate SetProperty CA
-         (scheduled before any of the deferred PS-launching setters) flips
-         PowerShellPath to the resolved pwsh.exe path. -->
-  <Fragment>
+         Probe layout:
+         - PWSH7_FOUND_PATH gets populated by AppSearch from chained
+           DirectorySearch+FileSearch over the standard PS 7 install path.
+           If pwsh.exe isn't there it stays empty.
+         - POWERSHELL_PATH defaults to the bundled Windows PowerShell 5.1.
+         - If PWSH7_FOUND_PATH is non-empty, an immediate SetProperty CA
+           (scheduled After=AppSearch in the execute sequence, before any
+           deferred PS-launching setters fire) flips POWERSHELL_PATH to the
+           resolved pwsh.exe path. -->
     <Property Id="PWSH7_FOUND_PATH" Secure="yes">
-      <DirectorySearch Id="Pwsh7InstallDir" Path="[ProgramFiles64Folder]PowerShell\7" Depth="0">
-        <FileSearch Id="Pwsh7Exe" Name="pwsh.exe" />
+      <DirectorySearch Id="Pwsh7ProgramFiles" Path="[ProgramFiles64Folder]" Depth="0">
+        <DirectorySearch Id="Pwsh7Folder" Path="PowerShell" Depth="0">
+          <DirectorySearch Id="Pwsh7VersionFolder" Path="7" Depth="0">
+            <FileSearch Id="Pwsh7Exe" Name="pwsh.exe" />
+          </DirectorySearch>
+        </DirectorySearch>
       </DirectorySearch>
     </Property>
-    <Property Id="PowerShellPath" Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" Secure="yes" />
-    <SetProperty Id="PowerShellPath"
+    <Property Id="POWERSHELL_PATH" Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" Secure="yes" />
+    <SetProperty Id="POWERSHELL_PATH"
+                 Action="SetPwsh7AsPowerShellPath"
                  Value="[PWSH7_FOUND_PATH]"
                  Sequence="execute"
                  After="AppSearch">PWSH7_FOUND_PATH</SetProperty>
+
   </Fragment>
 
   <!-- Define a stable tools directory under INSTALL_ROOT for WiX-authored payloads -->
@@ -196,13 +206,13 @@
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C &quot;&quot;[INSTALL_ROOT]scripts\migrate-config.bat&quot;&quot;"/>
     <CustomAction Id="SetRunInstallerMigrations"
                  Property="RunInstallerMigrations"
-                 Value="&quot;[PowerShellPath]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\installer-migrations.ps1&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\installer-migrations.ps1&quot;"/>
     <CustomAction Id="SetInstallMttVdd"
                  Property="InstallMttVdd"
-                 Value="&quot;[PowerShellPath]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\vdd\install.ps1&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\vdd\install.ps1&quot;"/>
     <CustomAction Id="SetInstallSudovda"
                  Property="InstallSudovda"
-                 Value="&quot;[PowerShellPath]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot;"/>
 
 
     <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still
@@ -219,10 +229,10 @@
 
     <CustomAction Id="SetUninstallMttVdd"
                  Property="UninstallMttVdd"
-                 Value="&quot;[PowerShellPath]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\vdd\install.ps1&quot; -Uninstall"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\vdd\install.ps1&quot; -Uninstall"/>
     <CustomAction Id="SetUninstallSudovda"
                  Property="UninstallSudovda"
-                 Value="&quot;[PowerShellPath]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot; -Uninstall"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot; -Uninstall"/>
 
     <CustomAction Id="SetDeleteInstallDir"
                  Property="DeleteInstallDir"
@@ -236,29 +246,29 @@
          overwriting QtExecCmdLine just before its consumer runs. -->
     <CustomAction Id="SetStopSvcQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[PowerShellPath]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[PowerShellPath]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <!-- Immediate setter to prune everything except the config directory -->
     <CustomAction Id="SetPruneButConfig"
                  Property="PruneButConfig"
-                 Value="&quot;[PowerShellPath]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$r='[INSTALL_ROOT]'; Get-ChildItem -LiteralPath $r -Force | Where-Object Name -ne 'config' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$r='[INSTALL_ROOT]'; Get-ChildItem -LiteralPath $r -Force | Where-Object Name -ne 'config' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue&quot;"/>
 
     <!-- Immediate setter for quiet start service -->
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
-                 Value="&quot;[PowerShellPath]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[PowerShellPath]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[PowerShellPath]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
-                 Value="&quot;[PowerShellPath]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
 
     <!-- Legacy Sunshine handling actions -->
     <CustomAction Id="AskUninstallLegacySunshine" BinaryKey="AskUninstallLegacySunshineVbs" VBScriptCall="AskUninstallLegacySunshine" Execute="immediate" Return="check" />

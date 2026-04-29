@@ -323,15 +323,50 @@ jobs:
           mv "${installer_exe}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.exe
           mv "${portable_zip}" ../artifacts/LuminalShine-${{ matrix.name }}-portable.zip
 
-      - name: Debug nsis
-        if: always()
+      # Diagnostic dumps for packaging failures. CPack's "Fatal WiX
+      # Generator Error" / "Problem running WiX" messages by themselves
+      # are useless — the actionable error lives in wix.log (or, for the
+      # NSIS path, NSISOutput.log). Hosted runners are torn down minutes
+      # after the job ends, so neither file survives the run unless we
+      # cat it into the step log. These steps fire only on failure (green
+      # builds don't need the noise) and use clearly-marked delimiters so
+      # the relevant block is easy to find in a long action log.
+      #
+      # Each step is independently `|| true` because either log can be
+      # absent: NSISOutput.log only exists when the NSIS generator was
+      # invoked, and wix.log is only written after candle.exe starts —
+      # an earlier CPack failure (template-rendering, file-staging) skips
+      # straight to "Fatal Generator Error" without writing it.
+      - name: Dump packaging logs on failure
+        if: failure()
         shell: msys2 {0}
-        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/NSIS/NSISOutput.log || true
+        run: |
+          set +e
+          for log_path in \
+            ./build/cpack_artifacts/_CPack_Packages/win64/NSIS/NSISOutput.log \
+            ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log
+          do
+            log_name=$(basename "$log_path")
+            echo "::group::${log_name}"
+            echo "===== begin ${log_path} ====="
+            if [ -f "$log_path" ]; then
+              cat "$log_path"
+            else
+              echo "(file not present — generator failed before writing it)"
+            fi
+            echo "===== end ${log_path} ====="
+            echo "::endgroup::"
+          done
 
-      - name: Debug wix
-        if: always()
-        shell: msys2 {0}
-        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log || true
+          # When wix.log is missing, the .wixobj/.wxs siblings in the same
+          # directory still tell us how far candle.exe got. List them so a
+          # future maintainer can correlate the WiX phase with the failure.
+          wix_dir=./build/cpack_artifacts/_CPack_Packages/win64/WIX
+          if [ -d "$wix_dir" ]; then
+            echo "::group::WIX directory listing"
+            ls -la "$wix_dir" 2>&1 || true
+            echo "::endgroup::"
+          fi
 
       - name: Run tests
         id: test
