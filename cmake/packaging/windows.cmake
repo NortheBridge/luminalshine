@@ -157,6 +157,11 @@ install(FILES ${SUDOVDA_DRIVER_FILES}
 # maintained in one place.
 set(MTT_VDD_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third-party/mtt-vdd")
 set(MTT_VDD_INSTALL_SCRIPT "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vdd/install.ps1")
+# nefconc.exe is reused from the SudoVDA payload because MTT VDD's install
+# flow needs it to create/remove the ROOT\MttVDD device node. Shipping it
+# under drivers/vdd/ as well lets the MTT-only install path (the default,
+# with SudoVDA deselected) find the tool without depending on the SudoVDA
+# component being present.
 set(MTT_VDD_DRIVER_FILES
     "${MTT_VDD_INSTALL_SCRIPT}"
     "${MTT_VDD_SOURCE_DIR}/MttVDD.inf"
@@ -164,6 +169,7 @@ set(MTT_VDD_DRIVER_FILES
     "${MTT_VDD_SOURCE_DIR}/mttvdd.cat"
     "${MTT_VDD_SOURCE_DIR}/vdd_settings.xml.template"
     "${MTT_VDD_SOURCE_DIR}/LICENSE"
+    "${SUDOVDA_SOURCE_DIR}/nefconc.exe"
 )
 
 foreach(_mttvdd_file IN LISTS MTT_VDD_DRIVER_FILES)

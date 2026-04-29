@@ -37,6 +37,17 @@ function Resolve-SystemToolPath {
 
 $pnputil = Resolve-SystemToolPath -ToolName 'pnputil.exe'
 
+function ConvertTo-QuotedArgument {
+    # PowerShell 5.1's Start-Process -ArgumentList does not quote array
+    # elements that contain whitespace, so an absolute path argument gets
+    # split into multiple tokens at the child boundary. Quote anything
+    # containing whitespace before handing it off.
+    param([Parameter(Mandatory = $true)][string]$Argument)
+    if ($Argument.StartsWith('"') -and $Argument.EndsWith('"')) { return $Argument }
+    if ($Argument -notmatch '\s') { return $Argument }
+    return '"' + ($Argument -replace '"', '\"') + '"'
+}
+
 function Invoke-Process {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -47,15 +58,26 @@ function Invoke-Process {
     $stdoutPath = [System.IO.Path]::GetTempFileName()
     $stderrPath = [System.IO.Path]::GetTempFileName()
 
+    $quotedArgs = @()
+    foreach ($arg in $ArgumentList) {
+        if ($null -eq $arg) { continue }
+        $quotedArgs += ,(ConvertTo-QuotedArgument -Argument ([string]$arg))
+    }
+
     try {
-        $process = Start-Process -FilePath $FilePath `
-                                 -ArgumentList $ArgumentList `
-                                 -WorkingDirectory $WorkingDirectory `
-                                 -WindowStyle Hidden `
-                                 -Wait `
-                                 -PassThru `
-                                 -RedirectStandardOutput $stdoutPath `
-                                 -RedirectStandardError $stderrPath
+        $startProcessArgs = @{
+            FilePath               = $FilePath
+            WorkingDirectory       = $WorkingDirectory
+            WindowStyle            = 'Hidden'
+            Wait                   = $true
+            PassThru               = $true
+            RedirectStandardOutput = $stdoutPath
+            RedirectStandardError  = $stderrPath
+        }
+        if ($quotedArgs.Count -gt 0) {
+            $startProcessArgs['ArgumentList'] = $quotedArgs
+        }
+        $process = Start-Process @startProcessArgs
 
         $stdout = ''
         $stderr = ''

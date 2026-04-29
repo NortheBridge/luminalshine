@@ -10,7 +10,17 @@ $classGuid = '{4D36E968-E325-11CE-BFC1-08002BE10318}'
 $infPath = Join-Path $scriptDir 'MttVDD.inf'
 $catPath = Join-Path $scriptDir 'mttvdd.cat'
 $dllPath = Join-Path $scriptDir 'MttVDD.dll'
-$nefConc = Join-Path $scriptDir '..\sudovda\nefconc.exe'
+# Prefer the nefconc.exe shipped alongside MTT VDD (drivers/vdd/) so MTT-only
+# installs don't depend on the SudoVDA component being present. Older layouts
+# only had it under drivers/sudovda/, so fall back there if the local copy is
+# missing.
+$nefConcLocal = Join-Path $scriptDir 'nefconc.exe'
+$nefConcSudovda = Join-Path $scriptDir '..\sudovda\nefconc.exe'
+if (Test-Path -LiteralPath $nefConcLocal -PathType Leaf) {
+    $nefConc = $nefConcLocal
+} else {
+    $nefConc = $nefConcSudovda
+}
 $settingsTemplate = Join-Path $scriptDir 'vdd_settings.xml.template'
 
 # Settings live in %ProgramData%\LuminalShine\vdd_settings.xml. The MTT driver
@@ -40,6 +50,21 @@ function Resolve-SystemToolPath {
 
 $pnputil = Resolve-SystemToolPath -ToolName 'pnputil.exe'
 
+function ConvertTo-QuotedArgument {
+    # PowerShell 5.1's Start-Process -ArgumentList passes its array elements
+    # to CreateProcess by joining them with spaces, *without* quoting elements
+    # that themselves contain whitespace. That means an absolute path argument
+    # like "C:\Program Files\Sunshine\drivers\vdd\MttVDD.inf" is delivered to
+    # the child as three separate tokens, and pnputil falls back to printing
+    # its usage screen and exits 1 — observed as "Stage MttVDD driver failed
+    # with exit code 1" in install logs. Quote any argument containing
+    # whitespace ourselves before handing the array to Start-Process.
+    param([Parameter(Mandatory = $true)][string]$Argument)
+    if ($Argument.StartsWith('"') -and $Argument.EndsWith('"')) { return $Argument }
+    if ($Argument -notmatch '\s') { return $Argument }
+    return '"' + ($Argument -replace '"', '\"') + '"'
+}
+
 function Invoke-Process {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -50,14 +75,26 @@ function Invoke-Process {
     $stdoutPath = [System.IO.Path]::GetTempFileName()
     $stderrPath = [System.IO.Path]::GetTempFileName()
 
+    $quotedArgs = @()
+    foreach ($arg in $ArgumentList) {
+        if ($null -eq $arg) { continue }
+        $quotedArgs += ,(ConvertTo-QuotedArgument -Argument ([string]$arg))
+    }
+
     try {
-        $process = Start-Process -FilePath $FilePath `
-                                 -ArgumentList $ArgumentList `
-                                 -WorkingDirectory $WorkingDirectory `
-                                 -WindowStyle Hidden `
-                                 -Wait -PassThru `
-                                 -RedirectStandardOutput $stdoutPath `
-                                 -RedirectStandardError $stderrPath
+        $startProcessArgs = @{
+            FilePath               = $FilePath
+            WorkingDirectory       = $WorkingDirectory
+            WindowStyle            = 'Hidden'
+            Wait                   = $true
+            PassThru               = $true
+            RedirectStandardOutput = $stdoutPath
+            RedirectStandardError  = $stderrPath
+        }
+        if ($quotedArgs.Count -gt 0) {
+            $startProcessArgs['ArgumentList'] = $quotedArgs
+        }
+        $process = Start-Process @startProcessArgs
         $stdout = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { '' }
         $stderr = if (Test-Path $stderrPath) { Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue } else { '' }
         return [pscustomobject]@{

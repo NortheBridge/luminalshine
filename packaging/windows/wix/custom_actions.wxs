@@ -166,10 +166,16 @@
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot;"/>
 
 
-    <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still exists -->
+    <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still
+         exists. Even when present, sunshine.exe can fail to load with
+         0xc0000135 (STATUS_DLL_NOT_FOUND) on rollback after a partial
+         install — its msys2 runtime DLLs may have been removed already. The
+         trailing `& exit /b 0` swallows whatever exit code sunshine.exe
+         produces so the rollback path doesn't surface a confusing 1603 in
+         the log; nv-prefs cleanup is best-effort, not load-bearing. -->
     <CustomAction Id="SetRestoreNvPrefsUndo"
                  Property="RestoreNvPrefsUndo"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; ( &quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo ) else ( exit /b 0 )"/>
+                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo)) &amp; exit /b 0"/>
 
 
     <CustomAction Id="SetUninstallMttVdd"
@@ -182,9 +188,15 @@
     <CustomAction Id="SetDeleteInstallDir"
                  Property="DeleteInstallDir"
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C rmdir /S /Q &quot;[INSTALL_ROOT].&quot;"/>
-    <!-- Immediate setter for quiet stop service -->
+    <!-- Immediate setter for quiet stop service.
+         CAQuietExec (immediate) reads the command from the QtExecCmdLine
+         property regardless of the action ID, so the setter must target
+         that name; using a different property silently produces
+         "Failed to get command line data" and skips the action. The two
+         immediate setters below run in sequence (Set→CA, Set→CA), each
+         overwriting QtExecCmdLine just before its consumer runs. -->
     <CustomAction Id="SetStopSvcQuietImmediate"
-                 Property="StopSvcQuietImmediate"
+                 Property="QtExecCmdLine"
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
@@ -200,7 +212,7 @@
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
     <CustomAction Id="SetKillProcsQuietImmediate"
-                 Property="KillProcsQuietImmediate"
+                 Property="QtExecCmdLine"
                  Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"

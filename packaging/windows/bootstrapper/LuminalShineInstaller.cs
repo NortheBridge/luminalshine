@@ -48,8 +48,25 @@ namespace LuminalShineInstaller {
       }
 
       var parsed = InstallerArguments.Parse(args);
-      if (BuildFlavor.IsUninstallOnly) {
+      if (BuildFlavor.IsUninstallOnly && !parsed.ReconfigureRequested) {
+        // Lightweight uninstaller build defaults to uninstall mode unless the
+        // caller explicitly asked for reconfigure (Start Menu "Reconfigure
+        // LuminalShine" shortcut). Reconfigure mode gets the driver chooser
+        // UI instead of the uninstall UI.
         parsed.UninstallUiRequested = true;
+      }
+      if (parsed.ReconfigureRequested
+          && parsed.ShowUi
+          && !parsed.InternalElevatedInstall
+          && !parsed.InternalElevatedUninstall
+          && !InstallerRunner.IsProcessElevated()) {
+        // Reconfigure runs PowerShell driver scripts that call
+        // pnputil/nefconc, so the bootstrapper needs admin. The Start Menu
+        // shortcut launches us as the invoking user (asInvoker manifest);
+        // re-spawn ourselves elevated with the same args, then exit with
+        // the elevated child's exit code so callers see one outcome.
+        var exitCode = InstallerRunner.RelaunchSelfElevated(args);
+        return exitCode;
       }
       if (parsed.UninstallUiRequested && !parsed.ShowUi && !parsed.InternalElevatedUninstall) {
         var uninstallResult = InstallerRunner.RunInteractiveUninstall(parsed, false, false);
@@ -212,6 +229,13 @@ namespace LuminalShineInstaller {
     private DateTime _overlayAutoCloseDeadlineUtc;
     private bool _isBusy;
     private readonly bool _uninstallUiRequested;
+    /// True when the bootstrapper was launched in reconfigure mode
+    /// (Start Menu "Reconfigure LuminalShine" shortcut, `--reconfigure`
+    /// command line). Drives the layout overrides in UNINSTALL_ONLY builds
+    /// — the install section + driver chooser are shown, the uninstall
+    /// button is hidden, and the Continue button runs a script-only
+    /// backend switch instead of the MSI install path.
+    private readonly bool _reconfigureRequested;
     private readonly Brush _statusNormalBrush = new SolidColorBrush(Color.FromRgb(245, 249, 255));
     private readonly Brush _statusBusyBrush = new SolidColorBrush(Color.FromRgb(147, 197, 253));
     private readonly Brush _statusSuccessBrush = new SolidColorBrush(Color.FromRgb(16, 185, 129));
@@ -244,14 +268,36 @@ namespace LuminalShineInstaller {
       _legacySunshineProduct = InstallerRunner.GetInstalledSunshineProduct();
       _legacySunshineRegistration = InstallerRunner.GetLegacySunshineRegistration();
       _preferredInstallDirectory = ResolvePreferredInstallDirectory();
-      _uninstallUiRequested = BuildFlavor.IsUninstallOnly || arguments.UninstallUiRequested;
-      var showInstallOptions = !BuildFlavor.IsUninstallOnly && _installedProduct == null;
+      _reconfigureRequested = arguments != null && arguments.ReconfigureRequested;
+      // In a regular installer build, "uninstall UI" stays under user control
+      // via the explicit flag. In the lightweight uninstall-only build it's
+      // forced on except when reconfigure mode was requested — that mode
+      // shares the same binary but needs the install (driver chooser) UI.
+      _uninstallUiRequested =
+        (BuildFlavor.IsUninstallOnly && !_reconfigureRequested)
+        || arguments.UninstallUiRequested;
+      // Show the install section either when this is the full installer
+      // (fresh install path) or when the user asked to reconfigure on the
+      // lightweight uninstaller. In reconfigure mode the section is reduced
+      // to the driver chooser by ReconfigureMode flags below.
+      var showInstallOptions =
+        (!BuildFlavor.IsUninstallOnly && _installedProduct == null)
+        || (_reconfigureRequested && _installedProduct != null);
       var displayVersion = GetTargetVersionText();
-      Title = (BuildFlavor.IsUninstallOnly ? "LuminalShine Uninstaller v" : "LuminalShine Installer v") + displayVersion;
-      Width = 720;
-      Height = showInstallOptions ? 560 : 460;
-      MinWidth = 690;
-      MinHeight = showInstallOptions ? 520 : 430;
+      Title = (_reconfigureRequested
+                ? "LuminalShine Reconfigure v"
+                : (BuildFlavor.IsUninstallOnly ? "LuminalShine Uninstaller v" : "LuminalShine Installer v"))
+              + displayVersion;
+      // The install-options layout grew when the virtual-display driver
+      // chooser (3 radio buttons + per-option descriptions, plus an optional
+      // "currently installed" banner on reconfigure) was added. The taller
+      // window keeps everything visible without forcing the content card to
+      // scroll on standard 1080p displays. Uninstall-only and update flows
+      // (no driver chooser) keep the original compact size.
+      Width = 760;
+      Height = showInstallOptions ? 780 : 460;
+      MinWidth = 720;
+      MinHeight = showInstallOptions ? 740 : 430;
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
       ResizeMode = ResizeMode.CanMinimize;
       WindowStyle = WindowStyle.None;
@@ -913,8 +959,15 @@ namespace LuminalShineInstaller {
       Grid.SetColumn(_closeButton, 4);
       buttonRow.Children.Add(_closeButton);
 
-      _continueButton.Content = BuildFlavor.IsUninstallOnly ? "Uninstall LuminalShine" : BuildInstallButtonLabel();
-      if (_uninstallUiRequested && _installedProduct == null) {
+      _continueButton.Content =
+        _reconfigureRequested ? "Switch virtual display driver"
+        : (BuildFlavor.IsUninstallOnly ? "Uninstall LuminalShine" : BuildInstallButtonLabel());
+      if (_reconfigureRequested && _installedProduct == null) {
+        SetStatus(
+          "LuminalShine is not installed.",
+          "Reconfigure is unavailable. Run the LuminalShine installer first.",
+          _statusErrorBrush);
+      } else if (_uninstallUiRequested && _installedProduct == null) {
         SetStatus(
           "LuminalShine is not installed.",
           BuildFlavor.IsUninstallOnly
@@ -1129,6 +1182,15 @@ namespace LuminalShineInstaller {
     }
 
     private async void ContinueClicked(object sender, RoutedEventArgs e) {
+      if (_reconfigureRequested) {
+        // Reconfigure mode runs through a direct script-only path so the
+        // lightweight uninstall.exe (which has no embedded MSI) can still
+        // swap the virtual-display backend. The full installer EXE could
+        // also reach this path; in both cases a same-version backend swap
+        // doesn't need msiexec.
+        await RunReconfigureFlow();
+        return;
+      }
       if (BuildFlavor.IsUninstallOnly) {
         await RunUninstallFlow();
         return;
@@ -1214,6 +1276,54 @@ namespace LuminalShineInstaller {
           previousBackend,
           false));
       }, "Install", "Installing or updating LuminalShine...", "LuminalShine installation completed.");
+    }
+
+    private async Task RunReconfigureFlow() {
+      if (_installedProduct == null) {
+        SetStatus(
+          "Reconfigure not started.",
+          "LuminalShine is not installed; nothing to reconfigure.",
+          _statusErrorBrush);
+        await ShowOverlayInfoAsync(
+          "Nothing to reconfigure",
+          "LuminalShine is not currently installed on this PC. Run the LuminalShine installer first.");
+        return;
+      }
+
+      var newChoice = ResolveSelectedVddBackend();
+      var previousChoice = _initiallyInstalledBackend;
+      if (newChoice == previousChoice) {
+        SetStatus(
+          "No change requested.",
+          "The selected driver matches the one already installed. Pick a different option to switch.",
+          _statusNormalBrush);
+        return;
+      }
+
+      var installDir = !string.IsNullOrWhiteSpace(_installedProduct.InstallLocation)
+        ? _installedProduct.InstallLocation
+        : InstallerRunner.DefaultInstallDirectory;
+
+      await RunOperationAsync(
+        () => Task.Run(() => InstallerRunner.RunReconfigureBackendSwitch(
+          installDir,
+          newChoice,
+          previousChoice)),
+        "Reconfigure",
+        "Switching virtual display driver to "
+          + VirtualDisplayBackendChoiceHelpers.ToDisplayName(newChoice)
+          + "...",
+        "Driver switch completed.");
+
+      // Refresh the cached backend so a follow-up click without closing
+      // the window reflects the new state instead of re-firing the same
+      // change. RunOperationAsync closes the window on success, so this
+      // is only meaningful after a failure or no-op finish; gate on the
+      // window still being interactive.
+      if (IsLoaded && IsVisible) {
+        _initiallyInstalledBackend = VirtualDisplayBackendChoiceHelpers.DetectInstalledBackend();
+        UpdateActionUiState();
+      }
     }
 
     private VirtualDisplayBackendChoice ResolveSelectedVddBackend() {
@@ -1602,7 +1712,7 @@ namespace LuminalShineInstaller {
     }
 
     private void UpdateActionUiState() {
-      if (BuildFlavor.IsUninstallOnly) {
+      if (BuildFlavor.IsUninstallOnly && !_reconfigureRequested) {
         var allowUninstall = !_isBusy && _installedProduct != null;
         _installPathTextBox.IsEnabled = false;
         _vddMttRadio.IsEnabled = false;
@@ -1613,6 +1723,28 @@ namespace LuminalShineInstaller {
         _continueButton.Visibility = Visibility.Collapsed;
         _uninstallButton.Visibility = Visibility.Visible;
         _uninstallButton.IsEnabled = allowUninstall;
+        return;
+      }
+
+      if (_reconfigureRequested) {
+        // Reconfigure mode (Start Menu "Reconfigure LuminalShine"): show
+        // only the driver chooser. Path edit and uninstall don't apply —
+        // we're just swapping virtual-display backends in place.
+        var allowInputs = !_isBusy && _installedProduct != null;
+        _installPathTextBox.IsEnabled = false;
+        _browseButton.IsEnabled = false;
+        _vddMttRadio.IsEnabled = allowInputs;
+        _vddSudovdaRadio.IsEnabled = allowInputs;
+        _vddNoneRadio.IsEnabled = allowInputs;
+        _installSection.Visibility = _installedProduct != null
+          ? Visibility.Visible
+          : Visibility.Collapsed;
+        _continueButton.Visibility = _installedProduct != null
+          ? Visibility.Visible
+          : Visibility.Collapsed;
+        _continueButton.Content = "Switch virtual display driver";
+        _continueButton.IsEnabled = allowInputs;
+        _uninstallButton.Visibility = Visibility.Collapsed;
         return;
       }
 
@@ -2209,6 +2341,13 @@ namespace LuminalShineInstaller {
 
     public bool ShowUi { get; set; }
     public bool UninstallUiRequested { get; set; }
+    /// True when `--reconfigure` was supplied on the command line. The
+    /// Start Menu "Reconfigure LuminalShine" shortcut launches uninstall.exe
+    /// with this flag. The bootstrapper uses it to show the driver chooser
+    /// even in the lightweight uninstaller build, and to run the per-backend
+    /// install scripts directly instead of going through msiexec (which
+    /// uninstall.exe couldn't do anyway because it has no embedded MSI).
+    public bool ReconfigureRequested { get; set; }
     public bool InternalElevatedInstall { get; set; }
     public bool InternalElevatedUninstall { get; set; }
     public string InternalInstallPath { get; set; }
@@ -2260,6 +2399,7 @@ namespace LuminalShineInstaller {
           // Force UI mode so the Start Menu shortcut never falls through to
           // a quiet msiexec passthrough.
           showUiFlag = true;
+          parsed.ReconfigureRequested = true;
           continue;
         }
         if (string.Equals(arg, InternalElevatedInstallToken, StringComparison.OrdinalIgnoreCase)) {
@@ -3102,6 +3242,128 @@ namespace LuminalShineInstaller {
       }
 
       return installResult;
+    }
+
+    /// Runs a driver install or uninstall script directly, bypassing
+    /// msiexec. Returns the script's exit code; throws on launch failure.
+    /// Used both by the reconfigure path (where there's no MSI to run)
+    /// and by the older TryRunDriverUninstall helper.
+    private static int RunDriverScript(string scriptPath, bool uninstall, int timeoutMillis) {
+      var argumentString =
+        "-NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden "
+        + "-File \"" + scriptPath + "\""
+        + (uninstall ? " -Uninstall" : string.Empty);
+      var psh = ResolvePowerShellPath();
+      var psi = new ProcessStartInfo {
+        FileName = psh,
+        Arguments = argumentString,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WindowStyle = ProcessWindowStyle.Hidden,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+      };
+      using (var process = Process.Start(psi)) {
+        if (process == null) {
+          return 1;
+        }
+        if (!process.WaitForExit(timeoutMillis)) {
+          try { process.Kill(); } catch { }
+          return 1460; // ERROR_TIMEOUT
+        }
+        return process.ExitCode;
+      }
+    }
+
+    /// Direct script-only virtual-display backend switch. Used by the
+    /// "Reconfigure LuminalShine" Start Menu shortcut, which targets the
+    /// lightweight uninstall.exe (no embedded MSI). Because a same-version
+    /// backend swap touches only driver state — not files installed by
+    /// MSI — running the per-backend install.ps1 scripts directly is
+    /// sufficient and avoids needing the MSI payload.
+    public static InstallerResult RunReconfigureBackendSwitch(
+      string installDirectory,
+      VirtualDisplayBackendChoice newChoice,
+      VirtualDisplayBackendChoice previousChoice) {
+      var result = new InstallerResult {
+        Operation = InstallerOperation.Install,
+        ExitCode = 0,
+        ComponentFailures = new List<string>()
+      };
+
+      if (string.IsNullOrWhiteSpace(installDirectory) || !Directory.Exists(installDirectory)) {
+        result.ExitCode = 2; // ERROR_FILE_NOT_FOUND-ish
+        result.Message = "Reconfigure failed: LuminalShine install directory was not found.";
+        return result;
+      }
+
+      if (newChoice == previousChoice) {
+        result.Message = "No backend change requested; nothing to do.";
+        return result;
+      }
+
+      // Step 1: uninstall the previously-active backend (if any). This
+      // is best-effort — if the old driver was already gone we still
+      // proceed with the new install. We do, however, bubble up an
+      // unexpected failure as a component-failure entry so the UI can
+      // mention it.
+      if (previousChoice != VirtualDisplayBackendChoice.None) {
+        var prevSubdir = previousChoice == VirtualDisplayBackendChoice.Mtt ? "vdd" : "sudovda";
+        var prevScript = Path.Combine(installDirectory, "drivers", prevSubdir, "install.ps1");
+        if (File.Exists(prevScript)) {
+          try {
+            var exit = RunDriverScript(prevScript, true, 60000);
+            if (exit != 0 && exit != 3010) {
+              result.ComponentFailures.Add(
+                "Failed to uninstall the previous "
+                + VirtualDisplayBackendChoiceHelpers.ToDisplayName(previousChoice)
+                + " driver (exit code " + exit + "). The new driver was still attempted.");
+            }
+          } catch (Exception ex) {
+            result.ComponentFailures.Add(
+              "Could not run the previous-driver uninstall script: " + ex.Message);
+          }
+        }
+      }
+
+      // Step 2: install the newly-selected backend. None means "leave
+      // virtual displays alone after the previous backend's uninstall."
+      if (newChoice == VirtualDisplayBackendChoice.None) {
+        result.Message = "Switched to no virtual display driver. Per-client virtual displays are now disabled.";
+        return result;
+      }
+
+      var newSubdir = newChoice == VirtualDisplayBackendChoice.Mtt ? "vdd" : "sudovda";
+      var newScript = Path.Combine(installDirectory, "drivers", newSubdir, "install.ps1");
+      if (!File.Exists(newScript)) {
+        result.ExitCode = 2;
+        result.Message = "Reconfigure failed: " + newSubdir + "/install.ps1 was not found in the install directory.";
+        return result;
+      }
+
+      try {
+        var exit = RunDriverScript(newScript, false, 180000);
+        if (exit == 3010) {
+          result.ExitCode = 3010;
+          result.Message = "Backend switched to "
+            + VirtualDisplayBackendChoiceHelpers.ToDisplayName(newChoice)
+            + ". A reboot is required to finish loading the new driver.";
+        } else if (exit != 0) {
+          result.ExitCode = exit;
+          result.Message = "Failed to install the "
+            + VirtualDisplayBackendChoiceHelpers.ToDisplayName(newChoice)
+            + " driver (exit code " + exit + ").";
+        } else {
+          result.Message = "Backend switched to "
+            + VirtualDisplayBackendChoiceHelpers.ToDisplayName(newChoice)
+            + ". Streaming sessions will pick up the new driver automatically.";
+        }
+      } catch (Exception ex) {
+        result.ExitCode = 1;
+        result.Message = "Failed to launch the new-driver install script: " + ex.Message;
+      }
+
+      return result;
     }
 
     /// Best-effort driver uninstall used by the reconfigure path. Invokes
@@ -4445,11 +4707,21 @@ namespace LuminalShineInstaller {
       return propertyName + "=\"" + escaped + "\"";
     }
 
-    private static bool IsProcessElevated() {
+    internal static bool IsProcessElevated() {
       using (var identity = WindowsIdentity.GetCurrent()) {
         var principal = new WindowsPrincipal(identity);
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
       }
+    }
+
+    /// Re-spawns the bootstrapper EXE with the same command-line arguments
+    /// under the "runas" UAC verb and waits for it to exit. Used by the
+    /// reconfigure entry point so the Start Menu shortcut (which launches
+    /// the asInvoker-manifested uninstall.exe) ends up elevated before
+    /// touching driver state. Returns the child's exit code, or 1223 when
+    /// the UAC prompt was declined.
+    internal static int RelaunchSelfElevated(IReadOnlyList<string> arguments) {
+      return RunElevatedBootstrapper(arguments ?? new string[0]);
     }
 
     private static string BuildResultMessage(string operationName, int exitCode, string logPath) {
