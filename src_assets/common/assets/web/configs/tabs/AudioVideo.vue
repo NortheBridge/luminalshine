@@ -15,7 +15,7 @@ import { storeToRefs } from 'pinia';
 
 const { t } = useI18n();
 const store = useConfigStore();
-const { config } = storeToRefs(store);
+const { config, metadata } = storeToRefs(store);
 const platform = computed(() => (config.value as any)?.platform || '');
 const ddConfigDisabled = computed(
   () => (config.value as any)?.dd_configuration_option === 'disabled',
@@ -24,20 +24,56 @@ const frameLimiterStepLabel = computed(() =>
   ddConfigDisabled.value ? t('config.dd_step_3') : t('config.dd_step_4'),
 );
 
-// SudoVDA status mapping (Apollo-specific)
-const sudovdaStatus = computed(() => ({
-  '1': t('config.sudovda_status_unknown'),
-  '0': t('config.sudovda_status_ready'),
-  '-1': t('config.sudovda_status_uninitialized'),
-  '-2': t('config.sudovda_status_version_incompatible'),
-  '-3': t('config.sudovda_status_watchdog_failed'),
+// Virtual-display driver status mapping. Codes match VDISPLAY::DRIVER_STATUS
+// in src/platform/windows/virtual_display.h: 1=unknown, 0=OK, -1=failed,
+// -2=version_incompatible, -3=watchdog_failed.
+const driverStatusLabels = computed(() => ({
+  '1': t('config.virtual_display_status_state_unknown'),
+  '0': t('config.virtual_display_status_state_ready'),
+  '-1': t('config.virtual_display_status_state_uninitialized'),
+  '-2': t('config.virtual_display_status_state_version_incompatible'),
+  '-3': t('config.virtual_display_status_state_watchdog_failed'),
 }));
-const vdisplay = computed(() => (config as any)?.vdisplay || 0);
-const currentDriverStatus = computed(
-  () =>
-    sudovdaStatus.value[String(vdisplay.value) as keyof typeof sudovdaStatus.value] ||
-    t('config.sudovda_status_unknown'),
-);
+
+// /api/metadata exposes both the active backend and the current health enum.
+// Fall back to legacy `vdisplay` (config payload) for backwards compatibility
+// with builds that haven't refreshed metadata yet.
+const driverStatusCode = computed(() => {
+  const meta = (metadata.value as any) || {};
+  const fromMeta = meta.virtual_display_driver_status;
+  if (typeof fromMeta === 'number' || typeof fromMeta === 'string') {
+    return String(fromMeta);
+  }
+  const legacy = (config.value as any)?.vdisplay;
+  return legacy != null ? String(legacy) : '1';
+});
+
+const activeBackend = computed(() => {
+  const meta = (metadata.value as any) || {};
+  const name = String(meta.virtual_display_backend || '').toLowerCase();
+  return name || 'none';
+});
+
+const activeBackendLabel = computed(() => {
+  switch (activeBackend.value) {
+    case 'mtt':
+      return t('config.virtual_display_backend_mtt');
+    case 'sudovda':
+      return t('config.virtual_display_backend_sudovda');
+    case 'none':
+      return t('config.virtual_display_backend_none');
+    default:
+      return activeBackend.value;
+  }
+});
+
+const driverIsHealthy = computed(() => driverStatusCode.value === '0');
+
+const currentDriverStatus = computed(() => {
+  const labels = driverStatusLabels.value;
+  const code = driverStatusCode.value as keyof typeof labels;
+  return labels[code] || t('config.virtual_display_status_state_unknown');
+});
 
 const lastAutomationOption = ref('verify_only');
 watch(
@@ -235,17 +271,43 @@ function selectVirtualDisplayLayout(v: unknown) {
             <!-- Highlight driver health before picking a mode -->
             <PlatformLayout>
               <template #windows>
-                <div class="mt-3">
+                <div class="mt-3 space-y-3">
+                  <!-- Backend selection: MTT VDD is preferred; SudoVDA remains
+                       opt-in for users on Insider builds with MTT issues. -->
+                  <div>
+                    <ConfigFieldRenderer
+                      setting-key="virtual_display_backend"
+                      v-model="config.virtual_display_backend"
+                    />
+                    <p
+                      v-if="activeBackend === 'sudovda'"
+                      class="text-[11px] opacity-70 mt-2 leading-snug"
+                    >
+                      {{ t('config.virtual_display_backend_sudovda_warning') }}
+                    </p>
+                    <p
+                      v-else-if="activeBackend === 'none'"
+                      class="text-[11px] text-warning mt-2 leading-snug"
+                    >
+                      {{ t('config.virtual_display_backend_none_warning') }}
+                    </p>
+                  </div>
+
+                  <!-- Driver status indicator: shows active backend + health -->
                   <div
                     class="px-4 py-3 rounded-md"
                     :class="[
-                      vdisplay ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success',
+                      driverIsHealthy
+                        ? 'bg-success/10 text-success'
+                        : 'bg-warning/10 text-warning',
                     ]"
                   >
                     <i class="fa-solid fa-circle-info mr-2"></i>
-                    {{ t('config.virtual_display_status_label') }} {{ currentDriverStatus }}
+                    <span class="font-medium">{{ activeBackendLabel }}</span>
+                    <span class="opacity-70"> — </span>
+                    {{ currentDriverStatus }}
                   </div>
-                  <p v-if="vdisplay" class="text-[11px] opacity-70 mt-2 leading-snug">
+                  <p v-if="!driverIsHealthy" class="text-[11px] opacity-70 leading-snug">
                     {{ t('config.virtual_display_status_hint') }}
                   </p>
                 </div>

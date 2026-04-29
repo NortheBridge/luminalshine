@@ -520,6 +520,35 @@ export function getConfigSelectOptions(
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);
     }
+    case 'virtual_display_backend': {
+      const options = [
+        {
+          label: translateOr(
+            t,
+            'config.virtual_display_backend_auto',
+            'Auto (recommended) — prefer MTT VDD, fall back to SudoVDA',
+          ),
+          value: 'auto',
+        },
+        {
+          label: translateOr(
+            t,
+            'config.virtual_display_backend_mtt',
+            'MTT VDD (primary)',
+          ),
+          value: 'mtt',
+        },
+        {
+          label: translateOr(
+            t,
+            'config.virtual_display_backend_sudovda',
+            'SudoVDA (legacy / compatibility)',
+          ),
+          value: 'sudovda',
+        },
+      ];
+      return ensureIncludesCurrentValue(options, ctx.currentValue);
+    }
     default:
       return [];
   }

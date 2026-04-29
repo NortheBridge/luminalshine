@@ -57,7 +57,10 @@
 #include "webrtc_stream.h"
 
 #ifdef _WIN32
+  #include "platform/windows/virtual_display.h"
+  #include "platform/windows/virtual_display_backend.h"
   #include "platform/windows/virtual_display_cleanup.h"
+  #include "process.h"
 #endif
 
 #include <nlohmann/json.hpp>
@@ -1875,6 +1878,18 @@ namespace confighttp {
       }
     } catch (...) {
       // Non-fatal; keep metadata response minimal if enumeration fails.
+    }
+
+    // Virtual display backend status — surfaces the active driver (MTT VDD or
+    // SudoVDA) plus its current health enum so the web UI can render an
+    // accurate indicator instead of guessing.
+    try {
+      output_tree["virtual_display_backend"] = VDISPLAY::active_backend_name();
+      output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
+      output_tree["virtual_display_driver_ready"] =
+        proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK;
+    } catch (...) {
+      // Non-fatal; the UI gracefully falls back to "unknown" status.
     }
 #endif
     send_response(response, output_tree);
