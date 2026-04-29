@@ -66,6 +66,7 @@ namespace LuminalShineInstaller {
           parsed,
           installPath,
           parsed.InternalInstallVddBackend,
+          parsed.InternalInstallPreviousVddBackend,
           parsed.InternalInstallSaveLogs,
           false);
         InstallerRunner.TryWriteInternalInstallResult(parsed.InternalInstallResultPath, internalInstall);
@@ -140,6 +141,42 @@ namespace LuminalShineInstaller {
         default:                                  return "MTT VDD";
       }
     }
+
+    /// Detects which virtual-display backend is currently installed by
+    /// probing the registry markers each driver writes during install.
+    /// Used so the bootstrapper can pre-select the matching radio when the
+    /// user re-runs the installer to upgrade or reconfigure.
+    ///
+    /// Detection rules:
+    ///   - MTT VDD: presence of `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver`
+    ///     (set by `drivers\vdd\install.ps1` when it writes VDDPATH).
+    ///   - SudoVDA: presence of `HKLM\SOFTWARE\SudoMaker\SudoVDA\sdrBits`
+    ///     (the WiX-installed `SudoVdaRegistryDefaults` component).
+    ///   - If both are present, MTT wins (it's the supported primary).
+    ///   - If neither is present, returns None.
+    ///
+    /// This is a heuristic — orphaned registry keys after a manual driver
+    /// removal would mis-attribute. The reconfigure flow re-runs the
+    /// per-backend install.ps1 scripts which are idempotent, so a wrong
+    /// guess only costs an extra no-op.
+    public static VirtualDisplayBackendChoice DetectInstalledBackend() {
+      bool mttDetected = false;
+      bool sudovdaDetected = false;
+      try {
+        using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\MikeTheTech\VirtualDisplayDriver")) {
+          mttDetected = k != null;
+        }
+      } catch { }
+      try {
+        using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\SudoMaker\SudoVDA")) {
+          sudovdaDetected = k != null && k.GetValue("sdrBits") != null;
+        }
+      } catch { }
+
+      if (mttDetected) return VirtualDisplayBackendChoice.Mtt;
+      if (sudovdaDetected) return VirtualDisplayBackendChoice.Sudovda;
+      return VirtualDisplayBackendChoice.None;
+    }
   }
 
   internal sealed class InstallerWindow : Window {
@@ -149,6 +186,7 @@ namespace LuminalShineInstaller {
     private readonly RadioButton _vddMttRadio;
     private readonly RadioButton _vddSudovdaRadio;
     private readonly RadioButton _vddNoneRadio;
+    private VirtualDisplayBackendChoice _initiallyInstalledBackend = VirtualDisplayBackendChoice.None;
     private readonly TextBlock _statusText;
     private readonly TextBlock _statusDetailText;
     private readonly ProgressBar _progressBar;
@@ -590,6 +628,68 @@ namespace LuminalShineInstaller {
         Margin = new Thickness(24, 0, 0, 0),
         TextWrapping = TextWrapping.Wrap
       });
+
+      // Refresh the install-button label whenever the user picks a different
+      // backend. Switching to a backend other than the currently-installed
+      // one flips the action label to "Switch virtual display driver" so the
+      // user understands a backend swap is about to happen.
+      RoutedEventHandler refreshLabel = (_, __) => {
+        if (_continueButton != null) {
+          _continueButton.Content = BuildInstallButtonLabel();
+        }
+      };
+      _vddMttRadio.Checked += refreshLabel;
+      _vddSudovdaRadio.Checked += refreshLabel;
+      _vddNoneRadio.Checked += refreshLabel;
+
+      // Pre-select the radio matching the currently-installed backend so an
+      // upgrade or reconfigure starts on the user's existing choice.
+      _initiallyInstalledBackend = VirtualDisplayBackendChoiceHelpers.DetectInstalledBackend();
+      switch (_initiallyInstalledBackend) {
+        case VirtualDisplayBackendChoice.Sudovda:
+          _vddSudovdaRadio.IsChecked = true;
+          break;
+        case VirtualDisplayBackendChoice.None:
+          // Existing install with no detected driver — keep the recommended
+          // default (MTT) selected so the user lands on the supported
+          // backend on their next confirm.
+          if (_installedProduct != null) {
+            _vddMttRadio.IsChecked = true;
+          } else {
+            _vddMttRadio.IsChecked = true;
+          }
+          break;
+        default:
+          _vddMttRadio.IsChecked = true;
+          break;
+      }
+
+      // Show a small banner explaining what the bootstrapper detected — only
+      // when an existing install is present, so fresh installs aren't
+      // cluttered.
+      if (_installedProduct != null) {
+        var bannerText = _initiallyInstalledBackend == VirtualDisplayBackendChoice.None
+          ? "No virtual display driver currently installed. Pick one above and click "
+            + BuildInstallButtonLabel().ToLower() + " to install it."
+          : "Currently installed: "
+            + VirtualDisplayBackendChoiceHelpers.ToDisplayName(_initiallyInstalledBackend)
+            + ". Pick a different option above to switch backends, or keep the same selection to reinstall it.";
+
+        installStack.Children.Add(new Border {
+          CornerRadius = new CornerRadius(6),
+          Padding = new Thickness(10, 6, 10, 6),
+          Margin = new Thickness(0, 8, 0, 0),
+          Background = new SolidColorBrush(Color.FromArgb(48, 56, 189, 248)),
+          BorderBrush = new SolidColorBrush(Color.FromArgb(96, 99, 157, 219)),
+          BorderThickness = new Thickness(1),
+          Child = new TextBlock {
+            Text = bannerText,
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(211, 226, 250)),
+            TextWrapping = TextWrapping.Wrap
+          }
+        });
+      }
 
       var tipsSection = new Border {
         CornerRadius = new CornerRadius(10),
@@ -1105,10 +1205,13 @@ namespace LuminalShineInstaller {
 
       await RunOperationAsync(async () => {
         var vddChoice = ResolveSelectedVddBackend();
+        var previousBackend = _initiallyInstalledBackend;
+        var installDir = selectedPath;
         return await Task.Run(() => InstallerRunner.RunInteractiveInstall(
           _arguments,
-          selectedPath,
+          installDir,
           vddChoice,
+          previousBackend,
           false));
       }, "Install", "Installing or updating LuminalShine...", "LuminalShine installation completed.");
     }
@@ -1342,7 +1445,8 @@ namespace LuminalShineInstaller {
       Install,
       Upgrade,
       Downgrade,
-      Reinstall
+      Reinstall,
+      Reconfigure
     }
 
     private InstallActionKind GetInstallActionKind() {
@@ -1361,6 +1465,17 @@ namespace LuminalShineInstaller {
 
       if (WillPayloadMsiUpgradeInstalledProduct()) {
         return InstallActionKind.Upgrade;
+      }
+
+      // Same version: distinguish a pure backend switch ("Reconfigure") from
+      // a no-op reinstall. The radios may not yet be initialized when this is
+      // called from the very first UpdateActionUiState during construction;
+      // in that case fall back to Reinstall.
+      if (_vddMttRadio != null) {
+        var pendingChoice = ResolveSelectedVddBackend();
+        if (pendingChoice != _initiallyInstalledBackend) {
+          return InstallActionKind.Reconfigure;
+        }
       }
 
       return InstallActionKind.Reinstall;
@@ -1391,6 +1506,8 @@ namespace LuminalShineInstaller {
           return "Upgrade LuminalShine";
         case InstallActionKind.Downgrade:
           return "Downgrade LuminalShine";
+        case InstallActionKind.Reconfigure:
+          return "Switch virtual display driver";
         default:
           return "Reinstall LuminalShine";
       }
@@ -1500,13 +1617,19 @@ namespace LuminalShineInstaller {
       }
 
       var allowInstallInputs = !_isBusy;
-      _installPathTextBox.IsEnabled = allowInstallInputs;
+      // The path text box stays read-only during upgrades/reconfigures — we
+      // honor the existing install location to avoid stranding the user's
+      // data in two places. Only fresh installs let the user pick a path.
+      _installPathTextBox.IsEnabled = allowInstallInputs && _installedProduct == null;
       _vddMttRadio.IsEnabled = allowInstallInputs;
       _vddSudovdaRadio.IsEnabled = allowInstallInputs;
       _vddNoneRadio.IsEnabled = allowInstallInputs;
-      _browseButton.IsEnabled = allowInstallInputs;
+      _browseButton.IsEnabled = allowInstallInputs && _installedProduct == null;
       var hasInstalledProduct = _installedProduct != null;
-      _installSection.Visibility = hasInstalledProduct ? Visibility.Collapsed : Visibility.Visible;
+      // Always show the install section, including for upgrades and reconfigures,
+      // so the user can pick or change the virtual-display backend at any point
+      // along the install/upgrade/reconfigure flow.
+      _installSection.Visibility = Visibility.Visible;
       _uninstallButton.Visibility = hasInstalledProduct ? Visibility.Visible : Visibility.Collapsed;
       _continueButton.Visibility = Visibility.Visible;
       _continueButton.Content = BuildInstallButtonLabel();
@@ -2059,6 +2182,12 @@ namespace LuminalShineInstaller {
     private static readonly string[] UiTokens = { "--ui" };
     private static readonly string[] NoUiTokens = { "--no-ui" };
     private static readonly string[] UninstallUiTokens = { "--uninstall-ui", "--uninstall", "/uninstall" };
+    /// `--reconfigure` is the entry point used by the Start Menu
+    /// "Reconfigure LuminalShine" shortcut. Behaviorally it's a hint:
+    /// the bootstrapper now always shows the driver chooser when an
+    /// existing install is present, so this token mainly exists to
+    /// document intent and avoid the arg leaking through to msiexec.
+    private static readonly string[] ReconfigureTokens = { "--reconfigure" };
     private static readonly string[] QuietTokens = { "/quiet", "/qn", "/qb", "/passive" };
     private const string InternalElevatedInstallToken = "--internal-elevated-install";
     private const string InternalElevatedUninstallToken = "--internal-elevated-uninstall";
@@ -2068,6 +2197,11 @@ namespace LuminalShineInstaller {
     private const string InternalInstallSudoVdaToken = "--internal-install-sudovda";
     /// New tri-state token: "mtt" | "sudovda" | "none".
     private const string InternalInstallVddBackendToken = "--internal-install-vdd";
+    /// Backend that was already installed before the user opened the
+    /// installer. Used by the reconfigure path so the elevated child
+    /// inherits the parent's detection result instead of re-probing the
+    /// registry mid-install.
+    private const string InternalInstallPreviousVddToken = "--internal-install-previous-vdd";
     private const string InternalInstallSaveLogsToken = "--internal-install-save-logs";
     private const string InternalInstallResultPathToken = "--internal-install-result-path";
     private const string InternalUninstallDeleteInstallDirToken = "--internal-uninstall-delete-install-dir";
@@ -2079,6 +2213,7 @@ namespace LuminalShineInstaller {
     public bool InternalElevatedUninstall { get; set; }
     public string InternalInstallPath { get; set; }
     public VirtualDisplayBackendChoice InternalInstallVddBackend { get; set; }
+    public VirtualDisplayBackendChoice InternalInstallPreviousVddBackend { get; set; }
     public bool InternalInstallSaveLogs { get; set; }
     public string InternalInstallResultPath { get; set; }
     public bool InternalUninstallDeleteInstallDir { get; set; }
@@ -2091,6 +2226,10 @@ namespace LuminalShineInstaller {
       // this to Sudovda or None if the older `--internal-install-sudovda`
       // arg is supplied.
       InternalInstallVddBackend = VirtualDisplayBackendChoice.Mtt;
+      // No previously-installed backend by default. The elevated install
+      // path reads the parent process's auto-detected value via the
+      // `--internal-install-previous-vdd` token.
+      InternalInstallPreviousVddBackend = VirtualDisplayBackendChoice.None;
       ForwardedArguments = new List<string>();
     }
 
@@ -2117,6 +2256,12 @@ namespace LuminalShineInstaller {
           parsed.UninstallUiRequested = true;
           continue;
         }
+        if (ReconfigureTokens.Contains(arg, StringComparer.OrdinalIgnoreCase)) {
+          // Force UI mode so the Start Menu shortcut never falls through to
+          // a quiet msiexec passthrough.
+          showUiFlag = true;
+          continue;
+        }
         if (string.Equals(arg, InternalElevatedInstallToken, StringComparison.OrdinalIgnoreCase)) {
           parsed.InternalElevatedInstall = true;
           continue;
@@ -2139,6 +2284,10 @@ namespace LuminalShineInstaller {
         }
         if (string.Equals(arg, InternalInstallVddBackendToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
           parsed.InternalInstallVddBackend = VirtualDisplayBackendChoiceHelpers.ParseToken(args[++index]);
+          continue;
+        }
+        if (string.Equals(arg, InternalInstallPreviousVddToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+          parsed.InternalInstallPreviousVddBackend = VirtualDisplayBackendChoiceHelpers.ParseToken(args[++index]);
           continue;
         }
         if (string.Equals(arg, InternalInstallSaveLogsToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
@@ -2210,6 +2359,8 @@ namespace LuminalShineInstaller {
       Console.WriteLine("  --no-ui         Force command-line passthrough mode");
       Console.WriteLine("  --uninstall-ui  Open graphical UI in uninstall mode");
       Console.WriteLine("  /uninstall      Open graphical UI in uninstall mode (used by ARP)");
+      Console.WriteLine("  --reconfigure   Open graphical UI to switch the virtual-display driver");
+      Console.WriteLine("                  on an existing install without re-downloading the setup.");
       Console.WriteLine("  /?, /h, --help  Show this help message");
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
@@ -2861,10 +3012,22 @@ namespace LuminalShineInstaller {
       InstallerArguments arguments,
       string installDirectory,
       VirtualDisplayBackendChoice vddChoice,
+      VirtualDisplayBackendChoice previousBackend,
       bool saveInstallLogs,
       bool allowSelfElevation = true) {
       if (allowSelfElevation && !IsProcessElevated()) {
-        return RunElevatedBootstrapperInstall(arguments, installDirectory, vddChoice, saveInstallLogs);
+        return RunElevatedBootstrapperInstall(arguments, installDirectory, vddChoice, previousBackend, saveInstallLogs);
+      }
+
+      // Reconfigure pre-step (runs in the elevated process only): when the
+      // user is switching backends, uninstall the previously-installed driver
+      // first so we don't end up with two virtual display drivers active
+      // simultaneously. WiX's UninstallMttVdd / UninstallSudovda actions only
+      // fire on REMOVE=ALL, so a same-MSI reconfigure won't trigger them — we
+      // invoke the install scripts here directly instead. Always-elevated
+      // because nefconc/pnputil require admin.
+      if (previousBackend != VirtualDisplayBackendChoice.None && previousBackend != vddChoice) {
+        TryRunDriverUninstall(installDirectory, previousBackend);
       }
 
       var uninstallCompetingProductsResult = UninstallCompetingProducts(
@@ -2939,6 +3102,72 @@ namespace LuminalShineInstaller {
       }
 
       return installResult;
+    }
+
+    /// Best-effort driver uninstall used by the reconfigure path. Invokes
+    /// the per-backend `install.ps1 -Uninstall` script so we don't rely on
+    /// WiX's REMOVEVIRTUALDISPLAYDRIVER trigger (which only fires on a full
+    /// product uninstall). Logs and swallows failures: a stale leftover
+    /// driver is preferable to aborting the user's reconfigure attempt.
+    private static void TryRunDriverUninstall(string installDirectory, VirtualDisplayBackendChoice backend) {
+      if (backend == VirtualDisplayBackendChoice.None
+          || string.IsNullOrWhiteSpace(installDirectory)) {
+        return;
+      }
+
+      var subdir = backend == VirtualDisplayBackendChoice.Mtt ? "vdd" : "sudovda";
+      var scriptPath = Path.Combine(installDirectory, "drivers", subdir, "install.ps1");
+      if (!File.Exists(scriptPath)) {
+        // Nothing to invoke — most likely the driver folder was already
+        // removed by an earlier full uninstall. Treat as success.
+        return;
+      }
+
+      try {
+        // .NET Framework 4.x targets — no `ArgumentList` API, so we build a
+        // single Arguments string and only quote the script path (the only
+        // argument that may contain spaces from %ProgramFiles%).
+        var argumentString =
+          "-NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden "
+          + "-File \"" + scriptPath + "\" -Uninstall";
+        var psh = ResolvePowerShellPath();
+        var psi = new ProcessStartInfo {
+          FileName = psh,
+          Arguments = argumentString,
+          UseShellExecute = false,
+          CreateNoWindow = true,
+          WindowStyle = ProcessWindowStyle.Hidden,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true
+        };
+        using (var process = Process.Start(psi)) {
+          if (process != null) {
+            // Bound the wait so a hung driver-uninstall script can't pin the
+            // installer indefinitely. 60s is generous for nefconc/pnputil.
+            if (!process.WaitForExit(60000)) {
+              try { process.Kill(); } catch { }
+            }
+          }
+        }
+      } catch {
+        // Reconfigure proceeds even if the old-driver uninstall throws;
+        // the new-driver install will surface its own warnings if anything
+        // material is wrong with the system state.
+      }
+    }
+
+    /// Resolves the path to powershell.exe, honoring 32-bit-on-64-bit
+    /// redirection via Sysnative when applicable.
+    private static string ResolvePowerShellPath() {
+      var systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
+      if (string.IsNullOrWhiteSpace(systemRoot)) {
+        systemRoot = @"C:\Windows";
+      }
+      var sysnative = Path.Combine(systemRoot, @"Sysnative\WindowsPowerShell\v1.0\powershell.exe");
+      if (File.Exists(sysnative)) {
+        return sysnative;
+      }
+      return Path.Combine(systemRoot, @"System32\WindowsPowerShell\v1.0\powershell.exe");
     }
 
     private static InstallerResult RunInstallAttempt(
@@ -3939,6 +4168,7 @@ namespace LuminalShineInstaller {
       InstallerArguments arguments,
       string installDirectory,
       VirtualDisplayBackendChoice vddChoice,
+      VirtualDisplayBackendChoice previousBackend,
       bool saveInstallLogs) {
       var resultPath = Path.Combine(Path.GetTempPath(), "luminalshine_install_result_" + Guid.NewGuid().ToString("N") + ".txt");
       var elevatedArgs = new List<string> {
@@ -3947,6 +4177,8 @@ namespace LuminalShineInstaller {
         installDirectory,
         "--internal-install-vdd",
         VirtualDisplayBackendChoiceHelpers.ToToken(vddChoice),
+        "--internal-install-previous-vdd",
+        VirtualDisplayBackendChoiceHelpers.ToToken(previousBackend),
         "--internal-install-save-logs",
         saveInstallLogs ? "1" : "0",
         "--internal-install-result-path",

@@ -51,6 +51,19 @@
                       WorkingDirectory="INSTALL_ROOT">
               <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
             </Shortcut>
+            <!-- Reconfigure shortcut: opens the bootstrapper installer, which
+                 detects the existing install and lets the user switch the
+                 virtual-display backend (or repair the current one) without
+                 re-downloading. -->
+            <Shortcut Id="LuminalShineReconfigureShortcut"
+                      Name="Reconfigure LuminalShine"
+                      Description="Switch the virtual display driver or reinstall LuminalShine"
+                      Target="[INSTALL_ROOT]uninstall.exe"
+                      Icon="ProductIcon.ico"
+                      Arguments="--reconfigure"
+                      WorkingDirectory="INSTALL_ROOT">
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
+            </Shortcut>
             <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
             <RemoveFolder Id="RemoveLuminalShineMenuFolder" Directory="LUMINALSHINE_PROGRAM_MENU_FOLDER" On="uninstall" />
           </Component>
