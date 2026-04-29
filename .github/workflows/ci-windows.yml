@@ -276,7 +276,7 @@ jobs:
             -DSUNSHINE_ASSETS_DIR=assets \
             -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://luminalshine.northebridge.com" \
-            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://luminalshine.northebridge.com/support"
+            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/NortheBridge/luminalshine"
           ninja -C build
 
       # WiX already installed before configure so env:WIX is available
