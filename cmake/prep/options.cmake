@@ -1,7 +1,7 @@
 # Publisher Metadata
 set(SUNSHINE_PUBLISHER_NAME "NortheBridge North America"
         CACHE STRING "The name of the publisher (not developer) of the application.")
-set(SUNSHINE_PUBLISHER_WEBSITE "https://github.com/NortheBridge/luminalshine"
+set(SUNSHINE_PUBLISHER_WEBSITE "https://northebridge.com/"
         CACHE STRING "The URL of the publisher's website.")
 set(SUNSHINE_PUBLISHER_ISSUE_URL "https://github.com/NortheBridge/luminalshine/issues"
         CACHE STRING "The URL of the publisher's support site or issue tracker.
