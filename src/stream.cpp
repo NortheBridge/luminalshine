@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>  // std::_Exit for fast non-WER process termination on hang
 #include <cstring>
 #include <fstream>
 #include <future>
@@ -44,6 +45,8 @@ extern "C" {
 #include "utility.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
+  #include <excpt.h>  // __try/__except for the videoThread DXGI-cleanup SEH wrapper.
+
   #include "platform/windows/frame_limiter.h"
   #include "platform/windows/ipc/misc_utils.h"
   #include "platform/windows/misc.h"
@@ -2083,6 +2086,57 @@ namespace stream {
     return -1;
   }
 
+#ifdef _WIN32
+  namespace {
+    // Args struct for the SEH-wrapped video::capture call below. Constructed
+    // on videoThread's stack *outside* the __try scope so the safe::mail_t
+    // and video::config_t members do not introduce C++ unwind targets inside
+    // __try — matching the convention documented in display_base.cpp's SEH
+    // wrappers ("body deliberately holds no C++ objects with destructors").
+    struct seh_video_capture_args_t {
+      safe::mail_t mail;
+      video::config_t config;
+      void *channel_data;
+    };
+
+    // Plain C++ trampoline: lives in its own stack frame so any move/copy
+    // construction needed to bind the args to video::capture's by-value
+    // parameters happens here, not inside the __try body.
+    void invoke_video_capture_(seh_video_capture_args_t *args) {
+      video::capture(args->mail, args->config, args->channel_data);
+    }
+
+  #if defined(_MSC_VER) || defined(__clang__)
+    // SEH wrapper around video::capture. dxgi.dll on Windows Insider Canary
+    // builds (10.0.29570) has been observed to throw access violations
+    // (c0000005) deep inside its IDXGIOutput / IDXGIOutputDuplication
+    // teardown when the display adapter is removed mid-stream. Without an
+    // SEH catch the AV propagates out of the videoThread, the thread either
+    // wedges in unwinding (videoThread.join blocked) or terminates the
+    // process via Windows Error Reporting. With this catch, we log the SEH
+    // code, return cleanly, and the join() in session::join completes
+    // before the 10-second watchdog fires its _Exit fallback.
+    //
+    // The __try body is just a function-pointer call with a pointer arg —
+    // no C++ object construction or destruction inside __try, so the unwind
+    // tables under clang -fms-extensions stay well-defined.
+    unsigned long seh_invoke_video_capture_(seh_video_capture_args_t *args) noexcept {
+      __try {
+        invoke_video_capture_(args);
+        return 0;
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+      }
+    }
+  #else
+    unsigned long seh_invoke_video_capture_(seh_video_capture_args_t *args) noexcept {
+      invoke_video_capture_(args);
+      return 0;
+    }
+  #endif
+  }  // namespace
+#endif  // _WIN32
+
   void videoThread(session_t *session) {
     platf::set_thread_name("session::video");
     auto fg = util::fail_guard([&]() {
@@ -2102,7 +2156,20 @@ namespace stream {
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
+#ifdef _WIN32
+    // Build the args struct here (in the videoThread stack frame, before
+    // any __try). Its destructor will run when videoThread returns, well
+    // after the SEH wrapper has unwound.
+    seh_video_capture_args_t cap_args {session->mail, session->config.monitor, session};
+    auto seh = seh_invoke_video_capture_(&cap_args);
+    if (seh != 0) {
+      BOOST_LOG(warning) << "videoThread: SEH 0x" << std::hex << seh << std::dec
+                         << " caught during video::capture (likely dxgi.dll AV during display teardown). "
+                            "Treating as device removed; the streaming session will end cleanly.";
+    }
+#else
     video::capture(session->mail, session->config.monitor, session);
+#endif
   }
 
   void audioThread(session_t *session) {
@@ -2200,18 +2267,30 @@ namespace stream {
 #ifdef _WIN32
         // Best-effort: ask the display helper to restore monitor topology immediately. We don't
         // wait for ack — the helper is a separate process; the IPC frame is fire-and-forget and
-        // will be picked up by the helper's read loop even if we trap microseconds later.
-        // prefer_golden_if_current_missing=true so even if our session-current snapshot is gone
-        // the helper still falls back to the golden (pre-stream) snapshot.
-        BOOST_LOG(info) << "Hang recovery: dispatching REVERT to display helper to restore monitors before debug_trap.";
+        // will be picked up by the helper's read loop even if we are forcibly terminated
+        // microseconds later. prefer_golden_if_current_missing=true so even if our
+        // session-current snapshot is gone the helper still falls back to the golden
+        // (pre-stream) snapshot.
+        BOOST_LOG(info) << "Hang recovery: dispatching REVERT to display helper before fast-exit.";
         try {
           (void) display_helper_integration::revert(true);
         } catch (...) {
-          // Already crashing; absolutely nothing to do here.
+          // Already exiting; absolutely nothing to do here.
         }
 #endif
         logging::log_flush();
-        lifetime::debug_trap();
+        // Previously this called lifetime::debug_trap() (DebugBreak on Windows),
+        // which surfaced as a Windows Error Reporting "Sunshine.exe stopped
+        // working" dialog after every stream that wedged in dxgi.dll cleanup —
+        // a frequent pattern on Windows Insider Canary builds where DXGI's
+        // teardown hangs after CLIENT DISCONNECT. We still need the existing
+        // "process die → service restart" recovery semantic (NVENC/DXGI
+        // deadlocks aren't recoverable in-process), but we don't want the
+        // WER crash dialog. _Exit terminates immediately without running
+        // C++ destructors or generating a crash report; the wedged threads
+        // die with the process, the display helper has the REVERT in its
+        // queue, and SCM (or the user) can relaunch sunshine.
+        std::_Exit(1);
       };
       auto force_kill = task_pool.pushDelayed(task, 10s).task_id;
       auto fg = util::fail_guard([&force_kill]() {

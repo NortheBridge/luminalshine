@@ -3418,9 +3418,79 @@ namespace LuminalShineInstaller {
       }
     }
 
-    /// Resolves the path to powershell.exe, honoring 32-bit-on-64-bit
-    /// redirection via Sysnative when applicable.
+    /// Resolves which PowerShell interpreter to launch for our driver and
+    /// helper scripts. Prefers PowerShell 7 (pwsh.exe) when present, falling
+    /// back to the always-installed Windows PowerShell 5.1. Honors
+    /// 32-bit-on-64-bit redirection via Sysnative for the 5.1 fallback.
+    ///
+    /// Resolution order:
+    ///   1. %ProgramFiles%\PowerShell\7\pwsh.exe (standard MSI install).
+    ///   2. %ProgramW6432%\PowerShell\7\pwsh.exe — the 64-bit Program Files
+    ///      view from a 32-bit process. Necessary because when the
+    ///      bootstrapper is launched from a 32-bit WixCA host it sees
+    ///      Program Files (x86) under %ProgramFiles%, but pwsh ships as 64-bit
+    ///      and lives in the real Program Files.
+    ///   3. pwsh.exe on PATH (covers Store-installed and user-relocated
+    ///      builds).
+    ///   4. Sysnative\WindowsPowerShell\v1.0\powershell.exe (5.1, real 64-bit).
+    ///   5. System32\WindowsPowerShell\v1.0\powershell.exe (5.1, baseline).
     private static string ResolvePowerShellPath() {
+      // Step 1 + 2: standard PowerShell 7 install location, accounting for
+      // the WOW64 view a 32-bit process sees.
+      var pwshCandidates = new List<string>();
+      foreach (var envVar in new[] { "ProgramW6432", "ProgramFiles" }) {
+        var pf = Environment.GetEnvironmentVariable(envVar);
+        if (!string.IsNullOrWhiteSpace(pf)) {
+          pwshCandidates.Add(Path.Combine(pf, "PowerShell", "7", "pwsh.exe"));
+        }
+      }
+      // Hardcoded backstop for callers running with a stripped environment
+      // (some MSI custom-action contexts).
+      pwshCandidates.Add(@"C:\Program Files\PowerShell\7\pwsh.exe");
+      foreach (var candidate in pwshCandidates) {
+        try {
+          if (File.Exists(candidate)) {
+            return candidate;
+          }
+        } catch {
+        }
+      }
+
+      // Step 3: PATH lookup for unconventional installs (Store, scoop, etc.).
+      try {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(pathEnv)) {
+          foreach (var dir in pathEnv.Split(Path.PathSeparator)) {
+            if (string.IsNullOrWhiteSpace(dir)) {
+              continue;
+            }
+            string trimmed;
+            try {
+              trimmed = dir.Trim().Trim('"');
+            } catch {
+              continue;
+            }
+            if (trimmed.Length == 0) {
+              continue;
+            }
+            string candidate;
+            try {
+              candidate = Path.Combine(trimmed, "pwsh.exe");
+            } catch {
+              continue;
+            }
+            try {
+              if (File.Exists(candidate)) {
+                return candidate;
+              }
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
+
+      // Steps 4 + 5: Windows PowerShell 5.1 fallback. Always present.
       var systemRoot = Environment.GetEnvironmentVariable("SystemRoot");
       if (string.IsNullOrWhiteSpace(systemRoot)) {
         systemRoot = @"C:\Windows";

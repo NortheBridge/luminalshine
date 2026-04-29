@@ -32,6 +32,15 @@ namespace VDISPLAY {
       return b;
     }
 
+    // Distinguishes "select_backend() has never run" from "select_backend()
+    // ran and chose NONE". Lets active_backend() skip taking the selection
+    // mutex on every call after the first when the host genuinely has no
+    // backend installed.
+    std::atomic<bool> &selection_initialized() {
+      static std::atomic<bool> b {false};
+      return b;
+    }
+
     bool sudovda_appears_installed() {
       // Mirror the existing detection logic in virtual_display.cpp's
       // `find_sudovda_device_instance_id()`. We don't link to that helper
@@ -50,9 +59,8 @@ namespace VDISPLAY {
 
   BackendType select_backend() {
     std::lock_guard lk(selection_mutex());
-    auto current = selected_backend().load(std::memory_order_acquire);
-    if (current != BackendType::NONE) {
-      return current;
+    if (selection_initialized().load(std::memory_order_acquire)) {
+      return selected_backend().load(std::memory_order_acquire);
     }
 
     const std::string preference = config::video.virtual_display_backend;
@@ -99,11 +107,22 @@ namespace VDISPLAY {
     }
 
     selected_backend().store(chosen, std::memory_order_release);
+    selection_initialized().store(true, std::memory_order_release);
     return chosen;
   }
 
   BackendType active_backend() {
-    return selected_backend().load(std::memory_order_acquire);
+    // Lazy-initialize on first query so callers that run before any explicit
+    // select_backend() (e.g. should_auto_enable_virtual_display() during
+    // startup probe, or the SudoVDA-specific recovery path) still see the
+    // correct backend. Without this, active_backend() returned NONE at
+    // startup, isSudaVDADriverInstalled() fell through to the SudoVDA path,
+    // and we logged misleading "Suda VDA driver not installed" warnings even
+    // when MTT VDD was actually installed and would be selected.
+    if (selection_initialized().load(std::memory_order_acquire)) {
+      return selected_backend().load(std::memory_order_acquire);
+    }
+    return select_backend();
   }
 
   std::string active_backend_name() {

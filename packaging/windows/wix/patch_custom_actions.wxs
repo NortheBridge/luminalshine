@@ -25,6 +25,7 @@
       <ComponentRef Id="Env_Path"/>
       <ComponentRef Id="Fw_Exceptions"/>
       <ComponentRef Id="StartMenuShortcut"/>
+      <ComponentRef Id="ReconfigureStartMenuShortcut"/>
       <ComponentRef Id="SudoVdaRegistryDefaults"/>
       <ComponentRef Id="ArpCustomUninstallEntry"/>
     </Feature>

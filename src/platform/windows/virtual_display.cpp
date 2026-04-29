@@ -488,6 +488,77 @@ namespace VDISPLAY {
       return buffer;
     }
 
+    /**
+     * @brief Resolve which PowerShell interpreter to launch.
+     *
+     * Prefers PowerShell 7 (pwsh.exe) when present, falling back to the
+     * always-installed Windows PowerShell 5.1. Resolution order:
+     *   1. %ProgramW6432%\PowerShell\7\pwsh.exe (real 64-bit Program Files
+     *      view, even from a 32-bit caller).
+     *   2. %ProgramFiles%\PowerShell\7\pwsh.exe (standard 64-bit caller).
+     *   3. C:\Program Files\PowerShell\7\pwsh.exe (hardcoded backstop for
+     *      stripped-environment contexts).
+     *   4. pwsh.exe somewhere on PATH.
+     *   5. %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe
+     *      (Windows PowerShell 5.1, always present).
+     *
+     * Returns the absolute path; never empty (the 5.1 fallback is always
+     * returned if no other candidate exists).
+     */
+    std::wstring resolve_powershell_path() {
+      auto get_env = [](const wchar_t *name) -> std::wstring {
+        wchar_t buf[MAX_PATH] = {};
+        DWORD len = GetEnvironmentVariableW(name, buf, _countof(buf));
+        if (len == 0 || len >= _countof(buf)) {
+          return {};
+        }
+        return std::wstring(buf, len);
+      };
+
+      auto try_candidate = [](const std::wstring &p) {
+        if (!p.empty() && fs::exists(p)) {
+          return p;
+        }
+        return std::wstring {};
+      };
+
+      for (const auto *env : {L"ProgramW6432", L"ProgramFiles"}) {
+        auto pf = get_env(env);
+        if (!pf.empty()) {
+          if (auto found = try_candidate(pf + L"\\PowerShell\\7\\pwsh.exe"); !found.empty()) {
+            return found;
+          }
+        }
+      }
+      if (auto found = try_candidate(L"C:\\Program Files\\PowerShell\\7\\pwsh.exe"); !found.empty()) {
+        return found;
+      }
+
+      auto path_env = get_env(L"PATH");
+      if (!path_env.empty()) {
+        std::wstring entry;
+        for (size_t i = 0; i <= path_env.size(); ++i) {
+          if (i == path_env.size() || path_env[i] == L';') {
+            if (!entry.empty()) {
+              auto candidate = entry + L"\\pwsh.exe";
+              if (fs::exists(candidate)) {
+                return candidate;
+              }
+            }
+            entry.clear();
+          } else {
+            entry.push_back(path_env[i]);
+          }
+        }
+      }
+
+      auto system_root = get_env(L"SystemRoot");
+      if (system_root.empty()) {
+        system_root = L"C:\\Windows";
+      }
+      return system_root + L"\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    }
+
     std::optional<std::wstring> find_sudovda_device_instance_id() {
       DevInfoHandle info(SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DIGCF_PRESENT));
       if (!info.valid()) {
@@ -561,7 +632,13 @@ namespace VDISPLAY {
 
       BOOST_LOG(info) << "SudoVDA device node missing; attempting driver reinstall via " << platf::to_utf8(install_script.wstring());
 
-      std::wstring cmd = L"powershell.exe -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
+      // resolve_powershell_path() picks pwsh 7 when installed and falls
+      // back to Windows PowerShell 5.1. The path can contain spaces (the
+      // PS 7 install path is under "C:\Program Files"), so it needs to be
+      // quoted on the command line we hand to CreateProcessW.
+      const auto pwsh_path = resolve_powershell_path();
+      std::wstring cmd = L"\"" + pwsh_path + L"\" "
+                         L"-NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
                          install_script.wstring() + L"\"";
 
       STARTUPINFOW si {};
