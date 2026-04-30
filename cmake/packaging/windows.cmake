@@ -269,19 +269,19 @@ set(CPACK_COMPONENT_ASSETS_GROUP "Core")
 set(CPACK_COMPONENT_ASSETS_REQUIRED true)
 
 # drivers
-# MTT Virtual Display Driver — primary backend, installed by default.
+# Final install state for both VDD features is driven by the INSTALL_MTTVDD
+# and INSTALL_SUDOVDA MSI properties via feature-level <Condition> elements
+# injected from packaging/windows/wix/patch_custom_actions.wxs. We therefore
+# avoid CPACK_COMPONENT_*_REQUIRED (which emits Absent="disallow" and would
+# override the conditions) and CPACK_COMPONENT_*_DISABLED (which would lock
+# in Level=2 even when the property requests install).
 set(CPACK_COMPONENT_MTTVDD_DISPLAY_NAME "Virtual Display Driver (MTT)")
 set(CPACK_COMPONENT_MTTVDD_DESCRIPTION "MikeTheTech's IDD-based virtual display driver. Default backend for per-client virtual displays. Recommended for current and Insider Windows builds.")
 set(CPACK_COMPONENT_MTTVDD_GROUP "Drivers")
-set(CPACK_COMPONENT_MTTVDD_REQUIRED true)
 
-# SudoVDA — kept available as a compatibility/legacy backend. Not installed
-# by default on new installs; users on Insider builds with MTT incompatibility
-# can choose 'Modify' in Add/Remove Programs to add it.
 set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA (Compatibility)")
 set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Legacy virtual display driver. Optional fallback for older Windows builds or troubleshooting MTT VDD.")
 set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
-set(CPACK_COMPONENT_SUDOVDA_DISABLED true)
 
 # audio tool
 set(CPACK_COMPONENT_AUDIO_DISPLAY_NAME "audio-info")

@@ -57,10 +57,14 @@
       <!-- Post-install chores -->
       <Custom Action="SetResetAcls" After="InstallFiles">NOT REMOVE</Custom>
       <Custom Action="ResetAcls" After="SetResetAcls">NOT REMOVE</Custom>
-      <Custom Action="SetInstallMttVdd" After="ResetAcls">NOT REMOVE AND INSTALL_MTTVDD = "1"</Custom>
-      <Custom Action="InstallMttVdd" After="SetInstallMttVdd">NOT REMOVE AND INSTALL_MTTVDD = "1"</Custom>
-      <Custom Action="SetInstallSudovda" After="InstallMttVdd">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
-      <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1"</Custom>
+      <!-- Belt-and-suspenders: AND feature action state (=3 → INSTALLSTATE_LOCAL)
+           with the property switch so we never invoke install.ps1 against
+           files that weren't staged, even if the feature condition above
+           ever drifts out of sync with the INSTALL_* properties. -->
+      <Custom Action="SetInstallMttVdd" After="ResetAcls">NOT REMOVE AND INSTALL_MTTVDD = "1" AND &amp;CM_C_mttvdd=3</Custom>
+      <Custom Action="InstallMttVdd" After="SetInstallMttVdd">NOT REMOVE AND INSTALL_MTTVDD = "1" AND &amp;CM_C_mttvdd=3</Custom>
+      <Custom Action="SetInstallSudovda" After="InstallMttVdd">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND &amp;CM_C_sudovda=3</Custom>
+      <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND &amp;CM_C_sudovda=3</Custom>
       <Custom Action="SetMigrateConfig" After="InstallSudovda">NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT REMOVE</Custom>
       <Custom Action="SetRunInstallerMigrations" After="MigrateConfig">NOT REMOVE</Custom>
@@ -103,5 +107,17 @@
       
       <Custom Action="RepairCompletePrompt" After="ExecuteAction">REINSTALL AND NOT REMOVE AND NOT UPGRADINGPRODUCTCODE AND UILevel &gt; 2</Custom>
     </InstallUISequence>
+  </CPackWiXFragment>
+
+  <!-- Bind virtual-display feature install state to the INSTALL_* properties.
+       Without these, the features only honor CPack's Required/Disabled defaults
+       and the bootstrapper's INSTALL_MTTVDD / INSTALL_SUDOVDA switches end up
+       gating only the post-install custom actions, not file staging — which
+       lets InstallSudovda fire against an install.ps1 that was never copied. -->
+  <CPackWiXFragment Id="CM_C_mttvdd">
+    <Condition Level="0">INSTALL_MTTVDD &lt;&gt; "1"</Condition>
+  </CPackWiXFragment>
+  <CPackWiXFragment Id="CM_C_sudovda">
+    <Condition Level="1">INSTALL_SUDOVDA = "1"</Condition>
   </CPackWiXFragment>
 </CPackWiXPatch>
