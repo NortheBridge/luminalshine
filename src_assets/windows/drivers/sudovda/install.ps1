@@ -14,7 +14,53 @@ $catPath = Join-Path $scriptDir 'sudovda.cat'
 $dllPath = Join-Path $scriptDir 'SudoVDA.dll'
 $script:rebootRequired = $false
 
-Import-Module PnpDevice -ErrorAction SilentlyContinue | Out-Null
+# Verify the PnpDevice module is actually loadable AND that Get-PnpDevice
+# returns objects with the property surface we depend on (FriendlyName,
+# HardwareID, InstanceId). Windows 11 Insider Preview Canary builds have
+# been observed to ship with Import-Module quietly succeeding while
+# stripping properties off the returned objects, which would silently
+# bypass our filters. When the module is unusable, all driver-presence
+# checks fall through to pnputil text parsing instead.
+function Initialize-PnpDeviceUsability {
+    $script:pnpDeviceUsable = $false
+    try {
+        Import-Module PnpDevice -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "[SudoVDA] Import-Module PnpDevice failed ($($_.Exception.Message)); using pnputil fallback exclusively."
+        return
+    }
+
+    $cmd = Get-Command -Name 'Get-PnpDevice' -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        Write-Host '[SudoVDA] Get-PnpDevice cmdlet not present after Import-Module; using pnputil fallback exclusively.'
+        return
+    }
+
+    try {
+        $sample = Get-PnpDevice -PresentOnly -ErrorAction Stop | Select-Object -First 1
+    } catch {
+        Write-Host "[SudoVDA] Get-PnpDevice probe call failed ($($_.Exception.Message)); using pnputil fallback exclusively."
+        return
+    }
+
+    if ($null -eq $sample) {
+        # No PnP devices on the host is unrealistic but harmless — assume usable.
+        $script:pnpDeviceUsable = $true
+        return
+    }
+
+    $required = @('FriendlyName', 'HardwareID', 'InstanceId')
+    foreach ($name in $required) {
+        if (-not ($sample.PSObject.Properties.Name -contains $name)) {
+            Write-Host "[SudoVDA] Get-PnpDevice returned objects missing required property '$name'; using pnputil fallback exclusively."
+            return
+        }
+    }
+
+    $script:pnpDeviceUsable = $true
+}
+
+Initialize-PnpDeviceUsability
 
 function Resolve-SystemToolPath {
     param([Parameter(Mandatory = $true)][string]$ToolName)
@@ -236,17 +282,19 @@ function Get-InstalledDriverInfo {
         }
 
         # Only consider devices that are currently present to avoid ghost entries.
-        $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
-            Where-Object { $_.FriendlyName -like "*SudoMaker*" -or $_.FriendlyName -like "*SudoVDA*" }
+        if ($script:pnpDeviceUsable) {
+            $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
+                Where-Object { $_.FriendlyName -like "*SudoMaker*" -or $_.FriendlyName -like "*SudoVDA*" }
 
-        if ($devices) {
-            $device = $devices | Select-Object -First 1
-            $driver = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop |
-                Where-Object { $_.DeviceID -eq $device.InstanceId } |
-                Select-Object -First 1
+            if ($devices) {
+                $device = $devices | Select-Object -First 1
+                $driver = Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction Stop |
+                    Where-Object { $_.DeviceID -eq $device.InstanceId } |
+                    Select-Object -First 1
 
-            if ($driver) {
-                return $driver
+                if ($driver) {
+                    return $driver
+                }
             }
         }
 
@@ -273,14 +321,16 @@ function Convert-Version {
 function Test-DriverPresent {
     # Only check present devices to avoid detecting ghost/phantom entries
     # from previous installations that are no longer functional.
-    try {
-        $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
-            Where-Object { $_.FriendlyName -like "*SudoMaker*" -or $_.FriendlyName -like "*SudoVDA*" }
-        if ($devices) {
-            return $true
+    if ($script:pnpDeviceUsable) {
+        try {
+            $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
+                Where-Object { $_.FriendlyName -like "*SudoMaker*" -or $_.FriendlyName -like "*SudoVDA*" }
+            if ($devices) {
+                return $true
+            }
+        } catch {
+            $null = $_
         }
-    } catch {
-        $null = $_
     }
 
     try {

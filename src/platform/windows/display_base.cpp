@@ -221,26 +221,75 @@ namespace platf::dxgi {
   // SEH __try/__except is MSVC syntax. Clang accepts it under -fms-extensions; plain
   // GCC does not, so the GCC fallback is a passthrough (no mitigation).
 #if defined(_MSC_VER) || defined(__clang__)
+  // Telemetry counters for Canary-channel triage. Atomic so we can sample
+  // them from a logging thread without taking a lock. Each counter ticks
+  // once per swallowed SEH; the actual exception code is logged at the
+  // call site so we can correlate code -> frequency.
+  static std::atomic<uint64_t> g_dxgi_acquire_seh_count {0};
+  static std::atomic<uint64_t> g_dxgi_release_seh_count {0};
+  static std::atomic<uint64_t> g_dxgi_devremoved_reason_seh_count {0};
+
+  // Translate an SEH exception code to a recognizable name when we have
+  // one. Unknown codes are returned as a hex string. Used for diagnostic
+  // logging only; never affects control flow.
+  static const char *seh_code_name_(unsigned long code) noexcept {
+    switch (code) {
+      case 0xC0000005UL: return "EXCEPTION_ACCESS_VIOLATION";
+      case 0xC0000420UL: return "STATUS_ASSERTION_FAILURE";
+      case 0xC0000409UL: return "STATUS_STACK_BUFFER_OVERRUN";
+      case 0xC000041DUL: return "STATUS_FATAL_USER_CALLBACK_EXCEPTION";
+      case 0xC0000354UL: return "STATUS_INVALID_SYSTEM_SERVICE";
+      case 0xC00000FDUL: return "STATUS_STACK_OVERFLOW";
+      case 0xC0000006UL: return "EXCEPTION_IN_PAGE_ERROR";
+      case 0xC0000008UL: return "STATUS_INVALID_HANDLE";
+      case 0x80000003UL: return "STATUS_BREAKPOINT";
+      default: return nullptr;
+    }
+  }
+
+  // Log a swallowed SEH from a DXGI dispatch wrapper. Done out-of-line so
+  // the __try body remains free of C++ objects with destructors.
+  static void log_swallowed_dxgi_seh_(const char *site, unsigned long code, uint64_t observed_count) noexcept {
+    const char *name = seh_code_name_(code);
+    if (name) {
+      BOOST_LOG(warning) << "DXGI " << site << ": swallowed SEH " << name
+                         << " (0x" << util::hex(code).to_string_view()
+                         << "); converted to DXGI_ERROR_DEVICE_REMOVED. Total at this site: " << observed_count;
+    } else {
+      BOOST_LOG(warning) << "DXGI " << site << ": swallowed unrecognized SEH 0x"
+                         << util::hex(code).to_string_view()
+                         << "; converted to DXGI_ERROR_DEVICE_REMOVED. Total at this site: "
+                         << observed_count
+                         << ". If this is a recurring code on Canary, add it to seh_code_name_().";
+    }
+  }
+
   static HRESULT seh_acquire_next_frame_(IDXGIOutputDuplication *d, UINT timeout_ms, DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **res) noexcept {
+    unsigned long caught = 0;
     __try {
       return d->AcquireNextFrame(timeout_ms, info, res);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (caught = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+      log_swallowed_dxgi_seh_("AcquireNextFrame", caught, g_dxgi_acquire_seh_count.fetch_add(1, std::memory_order_relaxed) + 1);
       return DXGI_ERROR_DEVICE_REMOVED;
     }
   }
 
   static HRESULT seh_release_frame_(IDXGIOutputDuplication *d) noexcept {
+    unsigned long caught = 0;
     __try {
       return d->ReleaseFrame();
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (caught = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+      log_swallowed_dxgi_seh_("ReleaseFrame", caught, g_dxgi_release_seh_count.fetch_add(1, std::memory_order_relaxed) + 1);
       return DXGI_ERROR_DEVICE_REMOVED;
     }
   }
 
   static HRESULT seh_get_device_removed_reason_(ID3D11Device *dev) noexcept {
+    unsigned long caught = 0;
     __try {
       return dev->GetDeviceRemovedReason();
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (caught = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+      log_swallowed_dxgi_seh_("GetDeviceRemovedReason", caught, g_dxgi_devremoved_reason_seh_count.fetch_add(1, std::memory_order_relaxed) + 1);
       return DXGI_ERROR_DEVICE_REMOVED;
     }
   }
@@ -648,20 +697,89 @@ namespace platf::dxgi {
       typedef BOOL (*User32_SetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT value);
 
       {
+        // SetProcessDpiAwarenessContext can fail if the process already
+        // has a DPI context applied (e.g. via manifest, or a parent
+        // process). Canary may also gate or rename newer context values
+        // (a hypothetical PER_MONITOR_AWARE_V3) — fall back through the
+        // older known-good values rather than silently running with the
+        // wrong scaling, which would misreport monitor sizes downstream.
         auto user32 = LoadLibraryA("user32.dll");
-        auto f = (User32_SetProcessDpiAwarenessContext) GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        auto f = user32 ? (User32_SetProcessDpiAwarenessContext) GetProcAddress(user32, "SetProcessDpiAwarenessContext") : nullptr;
         if (f) {
-          f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+          struct ctx_attempt {
+            DPI_AWARENESS_CONTEXT ctx;
+            const char *name;
+          };
+          const ctx_attempt attempts[] = {
+            {DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, "PER_MONITOR_AWARE_V2"},
+            {DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE,    "PER_MONITOR_AWARE"},
+            {DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,         "SYSTEM_AWARE"},
+          };
+          bool applied = false;
+          for (const auto &a : attempts) {
+            if (f(a.ctx)) {
+              applied = true;
+              break;
+            }
+            const auto err = GetLastError();
+            // ERROR_ACCESS_DENIED (5) is the documented "already set"
+            // result — the manifest or a prior call already chose a
+            // context. That's not a problem; record and move on.
+            if (err == ERROR_ACCESS_DENIED) {
+              applied = true;
+              break;
+            }
+            BOOST_LOG(debug) << "SetProcessDpiAwarenessContext(" << a.name
+                             << ") failed (GetLastError=" << err << "); trying next fallback.";
+          }
+          if (!applied) {
+            BOOST_LOG(warning) << "SetProcessDpiAwarenessContext: all known DPI-context values rejected. "
+                                  "Display geometry may be reported scaled. If this is reproducible on a "
+                                  "specific Windows build, add the build-specific context value here.";
+          }
+        } else {
+          BOOST_LOG(debug) << "SetProcessDpiAwarenessContext not exported by user32; skipping DPI-awareness setup.";
         }
 
-        FreeLibrary(user32);
+        if (user32) {
+          FreeLibrary(user32);
+        }
       }
 
       {
-        // We aren't calling MH_Uninitialize(), but that's okay because this hook lasts for the life of the process
-        MH_Initialize();
-        MH_CreateHookApi(L"win32u.dll", "NtGdiDdDDIGetCachedHybridQueryValue", (void *) NtGdiDdDDIGetCachedHybridQueryValueHook, nullptr);
-        MH_EnableHook(MH_ALL_HOOKS);
+        // GPU-preference hook on win32u.dll. The hook is best-effort —
+        // when DXGI does its hybrid GPU resolution it consults this
+        // function and we fake "unspecified" so output reparenting
+        // doesn't move the duplicated output to the render GPU. If the
+        // hook fails (Canary export rename, MinHook trampoline failure,
+        // win32u.dll missing on a server SKU), the worst case is that
+        // hybrid laptops capture the wrong adapter — log loudly so we
+        // can spot the regression rather than running silently.
+        // We aren't calling MH_Uninitialize(), but that's okay because
+        // this hook lasts for the life of the process.
+        const auto mh_init = MH_Initialize();
+        if (mh_init != MH_OK && mh_init != MH_ERROR_ALREADY_INITIALIZED) {
+          BOOST_LOG(warning) << "MH_Initialize() failed (status=" << mh_init
+                             << "); GPU-preference hook will not be installed. "
+                                "Hybrid-GPU laptops may capture the wrong adapter.";
+        } else {
+          const auto create_status = MH_CreateHookApi(
+            L"win32u.dll", "NtGdiDdDDIGetCachedHybridQueryValue",
+            (void *) NtGdiDdDDIGetCachedHybridQueryValueHook, nullptr);
+          if (create_status != MH_OK) {
+            BOOST_LOG(warning) << "MH_CreateHookApi(win32u.dll!NtGdiDdDDIGetCachedHybridQueryValue) failed "
+                                  "(status=" << create_status << "). Likely causes: function renamed/inlined "
+                                  "by the running Windows build, win32u.dll absent (server SKU), or "
+                                  "MinHook trampoline allocation failed. Continuing without GPU-preference "
+                                  "spoofing — hybrid-GPU laptops may capture the wrong adapter.";
+          } else {
+            const auto enable_status = MH_EnableHook(MH_ALL_HOOKS);
+            if (enable_status != MH_OK) {
+              BOOST_LOG(warning) << "MH_EnableHook(MH_ALL_HOOKS) failed (status=" << enable_status
+                                 << "); GPU-preference hook is created but inactive.";
+            }
+          }
+        }
       }
     });
 
@@ -841,30 +959,56 @@ namespace platf::dxgi {
           auto d3dkmt_query_adapter_info = (PD3DKMTQueryAdapterInfo) GetProcAddress(gdi32, "D3DKMTQueryAdapterInfo");
           auto d3dkmt_close_adapter = (PD3DKMTCloseAdapter) GetProcAddress(gdi32, "D3DKMTCloseAdapter");
           if (!d3dkmt_open_adapter || !d3dkmt_query_adapter_info || !d3dkmt_close_adapter) {
-            BOOST_LOG(error) << "Couldn't load d3dkmt functions from gdi32.dll to determine GPU HAGS status";
+            BOOST_LOG(error) << "Couldn't load d3dkmt functions from gdi32.dll to determine GPU HAGS status; "
+                                "assuming HAGS=false.";
             return false;
           }
 
           D3DKMT_OPENADAPTERFROMLUID d3dkmt_adapter = {adapter};
           if (FAILED(d3dkmt_open_adapter(&d3dkmt_adapter))) {
-            BOOST_LOG(error) << "D3DKMTOpenAdapterFromLuid() failed while trying to determine GPU HAGS status";
+            BOOST_LOG(error) << "D3DKMTOpenAdapterFromLuid() failed while trying to determine GPU HAGS status; "
+                                "assuming HAGS=false.";
             return false;
           }
 
-          bool result;
+          // Sentinel that lets us spot the case where the kernel returns
+          // success but writes nothing — observed on some early Insider
+          // builds when the KMTQAITYPE enum was reshuffled. Pre-fill
+          // the struct with 0xCC so a no-write yields garbage that does
+          // not collide with valid HwSchEnabled values (0 or 1).
+          D3DKMT_WDDM_2_7_CAPS d3dkmt_adapter_caps;
+          std::memset(&d3dkmt_adapter_caps, 0xCC, sizeof(d3dkmt_adapter_caps));
 
-          D3DKMT_WDDM_2_7_CAPS d3dkmt_adapter_caps = {};
           D3DKMT_QUERYADAPTERINFO d3dkmt_adapter_info = {};
           d3dkmt_adapter_info.hAdapter = d3dkmt_adapter.hAdapter;
           d3dkmt_adapter_info.Type = KMTQAITYPE_WDDM_2_7_CAPS;
           d3dkmt_adapter_info.pPrivateDriverData = &d3dkmt_adapter_caps;
           d3dkmt_adapter_info.PrivateDriverDataSize = sizeof(d3dkmt_adapter_caps);
 
-          if (SUCCEEDED(d3dkmt_query_adapter_info(&d3dkmt_adapter_info))) {
-            result = d3dkmt_adapter_caps.HwSchEnabled;
+          bool result = false;
+          const NTSTATUS query_status = d3dkmt_query_adapter_info(&d3dkmt_adapter_info);
+          if (SUCCEEDED(query_status)) {
+            // HwSchEnabled is documented as a UINT bitfield; only 0 and 1
+            // are valid. If the struct still holds the 0xCC sentinel we
+            // know the kernel did not actually populate it.
+            const auto raw_byte = *reinterpret_cast<const std::uint8_t *>(&d3dkmt_adapter_caps);
+            if (raw_byte == 0xCC) {
+              BOOST_LOG(warning) << "D3DKMTQueryAdapterInfo(KMTQAITYPE_WDDM_2_7_CAPS) returned success but "
+                                    "left the result struct uninitialized. Assuming HAGS=false. This usually "
+                                    "indicates the running Windows build reshuffled the KMTQAITYPE enum.";
+              result = false;
+            } else if (d3dkmt_adapter_caps.HwSchEnabled > 1) {
+              BOOST_LOG(warning) << "D3DKMTQueryAdapterInfo(KMTQAITYPE_WDDM_2_7_CAPS) reported an out-of-range "
+                                    "HwSchEnabled value (" << static_cast<unsigned>(d3dkmt_adapter_caps.HwSchEnabled)
+                                 << "). Assuming HAGS=false.";
+              result = false;
+            } else {
+              result = d3dkmt_adapter_caps.HwSchEnabled != 0;
+            }
           } else {
-            BOOST_LOG(warning) << "D3DKMTQueryAdapterInfo() failed while trying to determine GPU HAGS status";
-            result = false;
+            BOOST_LOG(warning) << "D3DKMTQueryAdapterInfo() failed (status=0x"
+                               << util::hex(static_cast<unsigned long>(query_status)).to_string_view()
+                               << ") while trying to determine GPU HAGS status; assuming HAGS=false.";
           }
 
           D3DKMT_CLOSEADAPTER d3dkmt_close_adapter_wrap = {d3dkmt_adapter.hAdapter};

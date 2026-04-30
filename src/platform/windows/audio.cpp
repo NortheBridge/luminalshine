@@ -246,6 +246,33 @@ namespace platf::audio {
     }
   };
 
+  // CoCreateInstance wrapper that retries on transient COM-server-not-yet-
+  // ready statuses. Windows 11 Insider Preview Canary builds have been
+  // observed deferring MMDevAPI registration past the point where our
+  // service starts capturing, surfacing as REGDB_E_CLASSNOTREG and
+  // RPC_E_SERVER_DIED on the first call. Retrying once after a short
+  // delay covers that window without affecting normal startups.
+  // Takes void** so call sites can pass the address of a util::safe_ptr
+  // through the same reinterpret_cast they use for plain CoCreateInstance.
+  HRESULT co_create_instance_with_retry(REFCLSID rclsid, REFIID riid, void **out) {
+    HRESULT status = CoCreateInstance(rclsid, nullptr, CLSCTX_ALL, riid, out);
+    if (status == REGDB_E_CLASSNOTREG || status == CO_E_SERVER_EXEC_FAILURE
+        || status == RPC_E_SERVER_DIED || status == RPC_E_SERVER_DIED_DNE) {
+      const auto first_status = status;
+      // 250 ms is well above the worst sustained delay we've seen on
+      // Canary cold boot and small enough to be invisible elsewhere.
+      Sleep(250);
+      status = CoCreateInstance(rclsid, nullptr, CLSCTX_ALL, riid, out);
+      if (SUCCEEDED(status)) {
+        BOOST_LOG(info) << "CoCreateInstance recovered after retry; first attempt returned 0x"sv
+                        << util::hex(first_status).to_string_view()
+                        << ". This usually indicates the COM server (e.g. MMDevAPI) was still "
+                           "registering when we first asked for it."sv;
+      }
+    }
+    return status;
+  }
+
   class prop_var_t {
   public:
     prop_var_t() {
@@ -566,13 +593,7 @@ namespace platf::audio {
 
       HRESULT status;
 
-      status = CoCreateInstance(
-        CLSID_MMDeviceEnumerator,
-        nullptr,
-        CLSCTX_ALL,
-        IID_IMMDeviceEnumerator,
-        (void **) &device_enum
-      );
+      status = co_create_instance_with_retry(CLSID_MMDeviceEnumerator, IID_IMMDeviceEnumerator, (void **) &device_enum);
 
       if (FAILED(status)) {
         BOOST_LOG(error) << "Couldn't create Device Enumerator [0x"sv << util::hex(status).to_string_view() << ']';
@@ -1610,13 +1631,7 @@ namespace platf::audio {
         return -1;
       }
 
-      status = CoCreateInstance(
-        CLSID_MMDeviceEnumerator,
-        nullptr,
-        CLSCTX_ALL,
-        IID_IMMDeviceEnumerator,
-        (void **) &device_enum
-      );
+      status = co_create_instance_with_retry(CLSID_MMDeviceEnumerator, IID_IMMDeviceEnumerator, (void **) &device_enum);
 
       if (FAILED(status)) {
         BOOST_LOG(error) << "Couldn't create Device Enumerator: [0x"sv << util::hex(status).to_string_view() << ']';

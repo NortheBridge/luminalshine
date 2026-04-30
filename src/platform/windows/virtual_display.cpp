@@ -1131,6 +1131,102 @@ namespace VDISPLAY {
 
     std::optional<std::wstring> resolve_virtual_display_name_from_devices();
 
+    // Resolve a GDI display device name (\\.\DISPLAYn) for a given EDID
+    // device-interface path (\\?\DISPLAY#XXX#...#{guid}). Walks every
+    // adapter and its monitors and returns the adapter name whose
+    // monitor's DeviceID matches the requested EDID path. Returns
+    // std::nullopt when no live display matches — common for newly
+    // created virtual displays that haven't been published yet.
+    std::optional<std::wstring> resolve_gdi_name_from_edid_path(const std::wstring &edid_device_path) {
+      DISPLAY_DEVICEW adapter {};
+      adapter.cb = sizeof(adapter);
+      for (DWORD adapter_idx = 0; EnumDisplayDevicesW(nullptr, adapter_idx, &adapter, EDD_GET_DEVICE_INTERFACE_NAME); ++adapter_idx) {
+        DISPLAY_DEVICEW monitor {};
+        monitor.cb = sizeof(monitor);
+        for (DWORD mon_idx = 0; EnumDisplayDevicesW(adapter.DeviceName, mon_idx, &monitor, EDD_GET_DEVICE_INTERFACE_NAME); ++mon_idx) {
+          if (_wcsicmp(monitor.DeviceID, edid_device_path.c_str()) == 0) {
+            return std::wstring(adapter.DeviceName);
+          }
+        }
+      }
+      return std::nullopt;
+    }
+
+    // Attempt the matching Wcs(Dis)associateColorProfileWithDevice call
+    // from mscms.dll AFTER a successful registry write/clear. This is
+    // explicitly belt-and-suspenders — see the prominent comment near
+    // the registry call site noting that WCS APIs do not apply reliably
+    // to newly-created virtual displays. Registry remains the primary
+    // mechanism. WCS is here so that on a hypothetical future Windows
+    // build (e.g. Insider Canary) where the registry tree is no longer
+    // consulted in favor of WCS-only routing, we still have a chance of
+    // the association sticking. Failures are intentionally logged at
+    // debug because we know they are common on virtual displays today.
+    enum class wcs_op_e { associate, disassociate };
+
+    void try_wcs_color_profile_op(
+      wcs_op_e op,
+      const std::wstring &edid_device_path,
+      const std::wstring &profile_filename,
+      color_profile_scope_e scope
+    ) noexcept {
+      using wcs_associate_fn = BOOL(WINAPI *)(WCS_PROFILE_MANAGEMENT_SCOPE, PCWSTR, PCWSTR);
+      using wcs_disassociate_fn = BOOL(WINAPI *)(WCS_PROFILE_MANAGEMENT_SCOPE, PCWSTR, PCWSTR);
+
+      static const wcs_associate_fn p_associate = []() -> wcs_associate_fn {
+        const HMODULE mscms = GetModuleHandleW(L"mscms.dll");
+        if (!mscms) {
+          return nullptr;
+        }
+        return reinterpret_cast<wcs_associate_fn>(GetProcAddress(mscms, "WcsAssociateColorProfileWithDevice"));
+      }();
+      static const wcs_disassociate_fn p_disassociate = []() -> wcs_disassociate_fn {
+        const HMODULE mscms = GetModuleHandleW(L"mscms.dll");
+        if (!mscms) {
+          return nullptr;
+        }
+        return reinterpret_cast<wcs_disassociate_fn>(GetProcAddress(mscms, "WcsDisassociateColorProfileFromDevice"));
+      }();
+
+      const auto fn = (op == wcs_op_e::associate) ? reinterpret_cast<void *>(p_associate)
+                                                  : reinterpret_cast<void *>(p_disassociate);
+      if (!fn) {
+        return;
+      }
+
+      const auto gdi_name = resolve_gdi_name_from_edid_path(edid_device_path);
+      if (!gdi_name) {
+        // Common for new virtual displays — registry path remains the
+        // source of truth for those. Stay silent at debug-noise level.
+        return;
+      }
+
+      const WCS_PROFILE_MANAGEMENT_SCOPE wcs_scope =
+        (scope == color_profile_scope_e::system_wide)
+          ? WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE
+          : WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER;
+
+      const BOOL ok = (op == wcs_op_e::associate)
+                        ? p_associate(wcs_scope, profile_filename.c_str(), gdi_name->c_str())
+                        : p_disassociate(wcs_scope, profile_filename.c_str(), gdi_name->c_str());
+      if (!ok) {
+        const auto err = GetLastError();
+        BOOST_LOG(debug) << "HDR profile: WCS "
+                         << (op == wcs_op_e::associate ? "associate" : "disassociate")
+                         << " (belt-and-suspenders) failed for GDI device '"
+                         << platf::to_utf8(*gdi_name) << "' / profile '"
+                         << platf::to_utf8(profile_filename)
+                         << "' (GetLastError=" << err
+                         << "). Registry write already succeeded; continuing.";
+      } else {
+        BOOST_LOG(debug) << "HDR profile: WCS "
+                         << (op == wcs_op_e::associate ? "associate" : "disassociate")
+                         << " (belt-and-suspenders) succeeded for GDI device '"
+                         << platf::to_utf8(*gdi_name) << "' / profile '"
+                         << platf::to_utf8(profile_filename) << "'.";
+      }
+    }
+
     // Helper to compute the registry path for color profile associations from a device path
     std::optional<std::wstring> get_color_profile_registry_path(const std::wstring &device_path) {
       // Parse the device path to extract the instance ID
@@ -1243,7 +1339,17 @@ namespace VDISPLAY {
                          << ", status=" << status << ", path='" << platf::to_utf8(*profile_path) << "').";
       }
 
-      return status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND;
+      const bool registry_ok = (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
+      if (registry_ok) {
+        // Belt-and-suspenders WCS attempt for forward-compat with future
+        // Windows builds that may stop honoring the registry table. We
+        // pass the empty string for profile name because disassociate
+        // semantically means "remove any association"; mscms tolerates
+        // either an empty string or the original filename, and we no
+        // longer have the original here.
+        try_wcs_color_profile_op(wcs_op_e::disassociate, device_path, std::wstring(), scope);
+      }
+      return registry_ok;
     }
 
     // Write color profile association directly to registry for a virtual display
@@ -1299,9 +1405,14 @@ namespace VDISPLAY {
       if (status != ERROR_SUCCESS) {
         BOOST_LOG(debug) << "HDR profile: failed to write registry association (scope=" << color_profile_scope_label(scope)
                          << ", status=" << status << ", path='" << platf::to_utf8(*profile_assoc_path) << "').";
+        return false;
       }
 
-      return status == ERROR_SUCCESS;
+      // Belt-and-suspenders WCS associate (no-op on virtual displays per
+      // documented limitation; only meaningful on physical displays and
+      // as forward-compat for future Windows builds).
+      try_wcs_color_profile_op(wcs_op_e::associate, device_path, profile_filename, scope);
+      return true;
     }
 
     void apply_hdr_profile_if_available(

@@ -2008,6 +2008,24 @@ namespace platf {
   windows_version_info_t query_windows_version() {
     windows_version_info_t info {};
 
+    // Prefer RtlGetVersion as the authoritative source. The kernel-side
+    // call is unaffected by Windows' AppCompat shimming (which can lie
+    // through GetVersionEx) and by the Insider/Canary builds that have
+    // been observed shipping with an empty CurrentBuildNumber registry
+    // value during early boot. The registry probe below stays as the
+    // source of marketing-only fields (DisplayVersion, ReleaseId,
+    // ProductName) that RtlGetVersion does not expose.
+    RTL_OSVERSIONINFOW version_info {};
+    version_info.dwOSVersionInfoSize = sizeof(version_info);
+    if (NT_SUCCESS(RtlGetVersion(&version_info))) {
+      info.major_version = version_info.dwMajorVersion;
+      info.minor_version = version_info.dwMinorVersion;
+      info.build_number = version_info.dwBuildNumber;
+      if (info.build_number) {
+        info.current_build = std::to_string(*info.build_number);
+      }
+    }
+
     HKEY key = nullptr;
     const auto close_key = util::fail_guard([&]() {
       if (key) {
@@ -2047,31 +2065,27 @@ namespace platf {
       info.display_version = read_string(L"DisplayVersion");
       info.release_id = read_string(L"ReleaseId");
       info.product_name = read_string(L"ProductName");
-      info.current_build = read_string(L"CurrentBuild");
-      if (info.current_build.empty()) {
-        info.current_build = read_string(L"CurrentBuildNumber");
-      }
 
-      auto build_number_str = read_string(L"CurrentBuildNumber");
-      if (!build_number_str.empty()) {
-        try {
-          info.build_number = static_cast<std::uint32_t>(std::stoul(build_number_str));
-        } catch (...) {
-          info.build_number.reset();
+      // Only fall back to registry-derived build identifiers if
+      // RtlGetVersion couldn't supply them. CurrentBuild/CurrentBuildNumber
+      // are intentionally treated as untrusted on Canary because they can
+      // disagree with the kernel during build transitions.
+      if (info.current_build.empty()) {
+        info.current_build = read_string(L"CurrentBuild");
+        if (info.current_build.empty()) {
+          info.current_build = read_string(L"CurrentBuildNumber");
         }
       }
-    }
 
-    RTL_OSVERSIONINFOW version_info {};
-    version_info.dwOSVersionInfoSize = sizeof(version_info);
-    if (NT_SUCCESS(RtlGetVersion(&version_info))) {
-      info.major_version = version_info.dwMajorVersion;
-      info.minor_version = version_info.dwMinorVersion;
       if (!info.build_number) {
-        info.build_number = version_info.dwBuildNumber;
-      }
-      if (info.current_build.empty() && info.build_number) {
-        info.current_build = std::to_string(*info.build_number);
+        const auto build_number_str = read_string(L"CurrentBuildNumber");
+        if (!build_number_str.empty()) {
+          try {
+            info.build_number = static_cast<std::uint32_t>(std::stoul(build_number_str));
+          } catch (...) {
+            info.build_number.reset();
+          }
+        }
       }
     }
 
@@ -2081,11 +2095,20 @@ namespace platf {
   class win32_high_precision_timer: public high_precision_timer {
   public:
     win32_high_precision_timer() {
-      // Use CREATE_WAITABLE_TIMER_HIGH_RESOLUTION if supported (Windows 10 1809+)
+      // Use CREATE_WAITABLE_TIMER_HIGH_RESOLUTION if supported (Windows 10 1809+).
+      // Windows 11 Insider Preview Canary builds have tightened scheduler
+      // accounting and may reject the high-res flag for non-realtime
+      // priority processes; surface the downgrade via a warning so we can
+      // correlate frame-pacing reports with timer-resolution regressions
+      // rather than silently running at the standard ~15.6 ms quantum.
       timer = CreateWaitableTimerEx(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
       if (!timer) {
+        const auto highres_err = GetLastError();
         timer = CreateWaitableTimerEx(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
-        if (!timer) {
+        if (timer) {
+          BOOST_LOG(warning) << "CreateWaitableTimerEx(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION) failed (GetLastError="
+                             << highres_err << "); fell back to standard-resolution timer. Frame pacing accuracy may degrade.";
+        } else {
           BOOST_LOG(error) << "Unable to create high_precision_timer, CreateWaitableTimerEx() failed: " << GetLastError();
         }
       }

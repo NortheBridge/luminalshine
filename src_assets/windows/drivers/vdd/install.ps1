@@ -31,7 +31,49 @@ $settingsPath = Join-Path $settingsDir 'vdd_settings.xml'
 
 $script:rebootRequired = $false
 
-Import-Module PnpDevice -ErrorAction SilentlyContinue | Out-Null
+# See sudovda/install.ps1's Initialize-PnpDeviceUsability for the rationale.
+# Canary builds have shipped Import-Module successes that yield Get-PnpDevice
+# objects with stripped properties; without verifying the property surface
+# our HardwareID/FriendlyName filters silently bypass real devices.
+function Initialize-PnpDeviceUsability {
+    $script:pnpDeviceUsable = $false
+    try {
+        Import-Module PnpDevice -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "[MTT VDD] Import-Module PnpDevice failed ($($_.Exception.Message)); using pnputil fallback exclusively."
+        return
+    }
+
+    $cmd = Get-Command -Name 'Get-PnpDevice' -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        Write-Host '[MTT VDD] Get-PnpDevice cmdlet not present after Import-Module; using pnputil fallback exclusively.'
+        return
+    }
+
+    try {
+        $sample = Get-PnpDevice -PresentOnly -ErrorAction Stop | Select-Object -First 1
+    } catch {
+        Write-Host "[MTT VDD] Get-PnpDevice probe call failed ($($_.Exception.Message)); using pnputil fallback exclusively."
+        return
+    }
+
+    if ($null -eq $sample) {
+        $script:pnpDeviceUsable = $true
+        return
+    }
+
+    $required = @('FriendlyName', 'HardwareID', 'InstanceId')
+    foreach ($name in $required) {
+        if (-not ($sample.PSObject.Properties.Name -contains $name)) {
+            Write-Host "[MTT VDD] Get-PnpDevice returned objects missing required property '$name'; using pnputil fallback exclusively."
+            return
+        }
+    }
+
+    $script:pnpDeviceUsable = $true
+}
+
+Initialize-PnpDeviceUsability
 
 function Resolve-SystemToolPath {
     param([Parameter(Mandatory = $true)][string]$ToolName)
@@ -160,15 +202,17 @@ function Initialize-SettingsDirectory {
 }
 
 function Test-DriverPresent {
-    try {
-        $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
-            Where-Object {
-                $_.HardwareID -like '*MttVDD*' -or
-                $_.FriendlyName -like '*Virtual Display Driver*' -or
-                $_.FriendlyName -like '*MikeTheTech*'
-            }
-        if ($devices) { return $true }
-    } catch { $null = $_ }
+    if ($script:pnpDeviceUsable) {
+        try {
+            $devices = Get-PnpDevice -PresentOnly -ErrorAction Stop |
+                Where-Object {
+                    $_.HardwareID -like '*MttVDD*' -or
+                    $_.FriendlyName -like '*Virtual Display Driver*' -or
+                    $_.FriendlyName -like '*MikeTheTech*'
+                }
+            if ($devices) { return $true }
+        } catch { $null = $_ }
+    }
 
     try {
         $r = Invoke-Process -FilePath $pnputil -ArgumentList @('/enum-devices', '/class', 'Display', '/connected')

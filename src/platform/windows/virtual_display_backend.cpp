@@ -20,7 +20,9 @@
 #include "src/platform/windows/virtual_display_mtt.h"
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
+#include <thread>
 
 namespace VDISPLAY {
 
@@ -50,11 +52,31 @@ namespace VDISPLAY {
       // directly to keep this file independent; a registry probe is enough
       // for "is the user-mode side present" and the existing SudoVDA code
       // will fail-open if the device isn't actually responsive.
-      HKEY key = nullptr;
-      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\SudoMaker\\SudoVDA", 0,
-                        KEY_READ, &key) == ERROR_SUCCESS) {
-        RegCloseKey(key);
-        return true;
+      //
+      // Bounded one-shot retry: on Windows 11 Insider Preview Canary
+      // builds the UMDF host that publishes the SudoVDA registry tree
+      // can lag the SunshineService start by a few hundred milliseconds
+      // on cold boot. A single hit-and-miss probe loses that race and
+      // we fall through to BackendType::NONE for the entire process
+      // lifetime. Retry up to ~750 ms total before giving up — plenty
+      // of headroom on Canary, still negligible on systems where the
+      // key is already present (we exit on the first attempt).
+      constexpr int max_attempts = 4;
+      constexpr auto retry_backoff = std::chrono::milliseconds(250);
+      for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        HKEY key = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\SudoMaker\\SudoVDA", 0,
+                          KEY_READ, &key) == ERROR_SUCCESS) {
+          RegCloseKey(key);
+          if (attempt > 0) {
+            BOOST_LOG(info) << "SudoVDA registry key appeared on attempt " << (attempt + 1)
+                            << " (~" << (attempt * retry_backoff.count()) << " ms after first probe).";
+          }
+          return true;
+        }
+        if (attempt + 1 < max_attempts) {
+          std::this_thread::sleep_for(retry_backoff);
+        }
       }
       return false;
     }
