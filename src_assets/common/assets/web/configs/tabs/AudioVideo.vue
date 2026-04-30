@@ -272,8 +272,12 @@ function selectVirtualDisplayLayout(v: unknown) {
             <PlatformLayout>
               <template #windows>
                 <div class="mt-3 space-y-3">
-                  <!-- Backend selection: MTT VDD is preferred; SudoVDA remains
-                       opt-in for users on Insider builds with MTT issues. -->
+                  <!-- Backend selection: SudoVDA is the default backend.
+                       MTT VDD is exposed as an alternative for users hitting
+                       SudoVDA's WUDFHostProblem2 hang on recent Windows 11
+                       release / Insider Preview builds. A first-party
+                       LuminalShine VDD is planned to take over the default
+                       slot in a future release. -->
                   <div>
                     <ConfigFieldRenderer
                       setting-key="virtual_display_backend"
@@ -281,7 +285,7 @@ function selectVirtualDisplayLayout(v: unknown) {
                     />
                     <p
                       v-if="activeBackend === 'sudovda'"
-                      class="text-[11px] opacity-70 mt-2 leading-snug"
+                      class="text-[11px] text-warning mt-2 leading-snug"
                     >
                       {{ t('config.virtual_display_backend_sudovda_warning') }}
                     </p>
@@ -290,6 +294,9 @@ function selectVirtualDisplayLayout(v: unknown) {
                       class="text-[11px] text-warning mt-2 leading-snug"
                     >
                       {{ t('config.virtual_display_backend_none_warning') }}
+                    </p>
+                    <p class="text-[11px] opacity-70 mt-2 leading-snug">
+                      {{ t('config.virtual_display_backend_future_note') }}
                     </p>
                   </div>
 

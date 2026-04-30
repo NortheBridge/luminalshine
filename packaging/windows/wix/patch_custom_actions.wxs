@@ -12,11 +12,13 @@
       <RegistrySearch Id="SearchLegacySunshineUninstall32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="UninstallString" Type="raw"/>
     </Property>
     <Property Id="REMOVEVIRTUALDISPLAYDRIVER" Value="0" Secure="yes"/>
-    <!-- MTT VDD is the primary virtual-display driver as of 26.04. SudoVDA
-         remains opt-in via Modify for users on older Windows or Insider
-         builds where MTT may have compatibility issues. -->
-    <Property Id="INSTALL_MTTVDD" Value="1" Secure="yes"/>
-    <Property Id="INSTALL_SUDOVDA" Value="0" Secure="yes"/>
+    <!-- SudoVDA is the current default virtual-display backend, slated to be
+         replaced by a first-party LuminalShine VDD in a future release. MTT
+         VDD is exposed as the alternative and is the documented workaround
+         when SudoVDA hits the WUDFHostProblem2 hang on the latest Windows 11
+         release builds or on Windows 11 Insider Preview channels. -->
+    <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes"/>
+    <Property Id="INSTALL_MTTVDD" Value="0" Secure="yes"/>
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes"/>
     <Condition Message="Administrator privileges are required.">Privileged</Condition>
     <Feature Id="LuminalShineExtras" Title="LuminalShine Components" Level="1" Absent="disallow">

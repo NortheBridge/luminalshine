@@ -3,9 +3,13 @@
  * @brief Selects between the available virtual-display driver backends.
  *
  * LuminalShine supports two virtual-display drivers:
- *   - MTT VDD (MikeTheTech's Virtual Display Driver) — default, IDD-based,
- *     controlled via a named pipe + settings XML.
- *   - SudoVDA — legacy fallback, controlled via custom IOCTLs.
+ *   - SudoVDA — current default backend, controlled via custom IOCTLs.
+ *     Slated to be replaced by a first-party LuminalShine VDD in a future
+ *     release; until then it ships as the recommended driver.
+ *   - MTT VDD (MikeTheTech's Virtual Display Driver) — alternative, IDD-based,
+ *     controlled via a named pipe + settings XML. Kept as a workaround for
+ *     SudoVDA's WUDFHostProblem2 hang on the latest Windows 11 release builds
+ *     and on Windows 11 Insider Preview channels.
  *
  * Public functions in `virtual_display.h` dispatch to the active backend
  * through this thin selector. The backend is chosen at startup based on the
@@ -21,17 +25,17 @@ namespace VDISPLAY {
   enum class BackendType : int {
     /// No virtual-display driver available.
     NONE = 0,
-    /// MTT VDD (preferred default).
+    /// MTT VDD (alternative / Win11-Insider workaround).
     MTT = 1,
-    /// SudoVDA (legacy / Insider-build fallback).
+    /// SudoVDA (default backend).
     SUDOVDA = 2,
   };
 
   /// Select and initialize the backend for this process.
   ///
   /// Inspects `config::video.virtual_display_backend` (auto/mtt/sudovda) and
-  /// picks accordingly. With `auto`, prefers MTT, falls back to SudoVDA, and
-  /// emits a warning when SudoVDA is the only one present.
+  /// picks accordingly. With `auto`, prefers SudoVDA, falls back to MTT VDD,
+  /// and logs the SudoVDA Win11/Insider caveat when SudoVDA is selected.
   ///
   /// Idempotent: calling more than once returns the already-chosen backend.
   BackendType select_backend();

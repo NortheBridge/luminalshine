@@ -526,25 +526,25 @@ export function getConfigSelectOptions(
           label: translateOr(
             t,
             'config.virtual_display_backend_auto',
-            'Auto (recommended) — prefer MTT VDD, fall back to SudoVDA',
+            'Auto (recommended) — prefer SudoVDA, fall back to MTT VDD',
           ),
           value: 'auto',
         },
         {
           label: translateOr(
             t,
-            'config.virtual_display_backend_mtt',
-            'MTT VDD (primary)',
+            'config.virtual_display_backend_sudovda',
+            'SudoVDA (default)',
           ),
-          value: 'mtt',
+          value: 'sudovda',
         },
         {
           label: translateOr(
             t,
-            'config.virtual_display_backend_sudovda',
-            'SudoVDA (legacy / compatibility)',
+            'config.virtual_display_backend_mtt',
+            'MTT VDD (alternative)',
           ),
-          value: 'sudovda',
+          value: 'mtt',
         },
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);

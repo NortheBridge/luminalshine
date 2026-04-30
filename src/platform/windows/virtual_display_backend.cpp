@@ -3,10 +3,13 @@
  * @brief Picks the active virtual-display backend at startup.
  *
  * Resolution order with `virtual_display_backend = auto`:
- *   1. MTT VDD if installed (preferred for current/Insider Windows builds).
- *   2. SudoVDA fallback. Emits a warning when SudoVDA is the only option,
- *      because SudoVDA is in maintenance mode and is the documented cause
- *      of the WUDFHostProblem2 hangs on recent Insider builds.
+ *   1. SudoVDA if installed (default backend until the planned LuminalShine
+ *      first-party VDD ships).
+ *   2. MTT VDD fallback. Emits a warning when SudoVDA is the active choice
+ *      because it can hang on the latest Windows 11 release builds and on
+ *      Windows 11 Insider Preview channels (WUDFHostProblem2 / HostTimeout);
+ *      the warning points users at MTT VDD as the workaround until the
+ *      first-party driver ships.
  */
 
 #include "src/platform/windows/virtual_display_backend.h"
@@ -69,39 +72,40 @@ namespace VDISPLAY {
 
     BackendType chosen = BackendType::NONE;
     if (preference == "mtt") {
+      chosen = mtt_installed ? BackendType::MTT : BackendType::NONE;
       if (!mtt_installed) {
         BOOST_LOG(warning) << "virtual_display_backend=mtt requested but MTT VDD is not installed; "
                               "falling back to SudoVDA.";
         chosen = sudovda_installed ? BackendType::SUDOVDA : BackendType::NONE;
-      } else {
-        chosen = BackendType::MTT;
       }
     } else if (preference == "sudovda") {
-      chosen = sudovda_installed ? BackendType::SUDOVDA : BackendType::NONE;
       if (!sudovda_installed) {
-        BOOST_LOG(warning) << "virtual_display_backend=sudovda requested but SudoVDA is not installed.";
+        BOOST_LOG(warning) << "virtual_display_backend=sudovda requested but SudoVDA is not installed; "
+                              "falling back to MTT VDD.";
+        chosen = mtt_installed ? BackendType::MTT : BackendType::NONE;
+      } else {
+        chosen = BackendType::SUDOVDA;
       }
     } else {
-      // "auto" (or unrecognized) — prefer MTT.
-      if (mtt_installed) {
-        chosen = BackendType::MTT;
-      } else if (sudovda_installed) {
+      // "auto" (or unrecognized) — prefer SudoVDA, fall back to MTT VDD.
+      if (sudovda_installed) {
         chosen = BackendType::SUDOVDA;
+      } else if (mtt_installed) {
+        chosen = BackendType::MTT;
       } else {
         chosen = BackendType::NONE;
       }
     }
 
-    if (chosen == BackendType::SUDOVDA && !mtt_installed) {
-      BOOST_LOG(warning) << "Using SudoVDA as the virtual-display backend. SudoVDA is in "
-                            "maintenance mode and is known to fail on Windows Insider builds "
-                            "(WUDFHostProblem2 / HostTimeout). Run the LuminalShine installer "
-                            "and choose 'Modify' to install MTT Virtual Display Driver as the "
-                            "primary backend.";
+    if (chosen == BackendType::SUDOVDA) {
+      BOOST_LOG(info) << "Virtual-display backend: SudoVDA (default). Heads up: SudoVDA can hang "
+                         "on the latest Windows 11 release builds and on Windows 11 Insider "
+                         "Preview channels (WUDFHostProblem2 / HostTimeout). If the virtual "
+                         "display fails to come up, run \"Reconfigure LuminalShine\" from the "
+                         "Start Menu and switch to MTT Virtual Display Driver as a workaround. "
+                         "A first-party LuminalShine VDD is planned for a future release.";
     } else if (chosen == BackendType::MTT) {
-      BOOST_LOG(info) << "Virtual-display backend: MTT VDD.";
-    } else if (chosen == BackendType::SUDOVDA) {
-      BOOST_LOG(info) << "Virtual-display backend: SudoVDA (user override).";
+      BOOST_LOG(info) << "Virtual-display backend: MTT VDD (alternative).";
     } else {
       BOOST_LOG(warning) << "No virtual-display backend installed; per-client virtual displays will not work.";
     }

@@ -2392,10 +2392,10 @@ namespace LuminalShineInstaller {
     public List<string> ForwardedArguments { get; private set; }
 
     public InstallerArguments() {
-      // Default to the new MTT backend; legacy flag mappings can downgrade
-      // this to Sudovda or None if the older `--internal-install-sudovda`
-      // arg is supplied.
-      InternalInstallVddBackend = VirtualDisplayBackendChoice.Mtt;
+      // Default to SudoVDA — the recommended backend until the planned
+      // first-party LuminalShine VDD ships. Legacy `--internal-install-sudovda`
+      // and the explicit `--internal-install-vdd` token can override this.
+      InternalInstallVddBackend = VirtualDisplayBackendChoice.Sudovda;
       // No previously-installed backend by default. The elevated install
       // path reads the parent process's auto-detected value via the
       // `--internal-install-previous-vdd` token.
@@ -2536,17 +2536,19 @@ namespace LuminalShineInstaller {
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
       Console.WriteLine("  INSTALL_ROOT=<path>     Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
-      Console.WriteLine("  INSTALL_MTTVDD=1|0      Install MTT Virtual Display Driver (recommended; default 1)");
-      Console.WriteLine("  INSTALL_SUDOVDA=1|0     Install SudoVDA (legacy; default 0). Use only on Windows builds");
-      Console.WriteLine("                          pre-25H2 or older Insider builds where MTT VDD does not work.");
+      Console.WriteLine("  INSTALL_SUDOVDA=1|0     Install SudoVDA (default 1). Current default backend until the");
+      Console.WriteLine("                          planned first-party LuminalShine VDD ships.");
+      Console.WriteLine("  INSTALL_MTTVDD=1|0      Install MTT Virtual Display Driver (alternative; default 0).");
+      Console.WriteLine("                          Workaround when SudoVDA hangs on the latest Windows 11 release");
+      Console.WriteLine("                          builds or on Windows 11 Insider Preview channels.");
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  LuminalShineSetup.exe /qn");
       Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_ROOT=\"D:\\LuminalShine\"");
       Console.WriteLine("  LuminalShineSetup.exe /x {PRODUCT-CODE} /qn");
-      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_MTTVDD=1 INSTALL_SUDOVDA=0");
-      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_MTTVDD=0 INSTALL_SUDOVDA=1   (legacy fallback)");
-      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_MTTVDD=0 INSTALL_SUDOVDA=0   (no driver)");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_SUDOVDA=1 INSTALL_MTTVDD=0   (default)");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_SUDOVDA=0 INSTALL_MTTVDD=1   (Win11 Insider workaround)");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_SUDOVDA=0 INSTALL_MTTVDD=0   (no driver)");
       Console.WriteLine("  LuminalShineSetup.exe /uninstall");
       Console.WriteLine("  LuminalShineSetup.exe /uninstall /quiet");
       Console.WriteLine("  LuminalShineSetup.exe --msi C:\\temp\\LuminalShine.msi /passive");
