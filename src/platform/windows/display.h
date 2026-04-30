@@ -39,6 +39,17 @@ namespace platf::dxgi {
     dxgi->Release();
   }
 
+  // SEH-wrapped Release for IDXGIOutputDuplication. The body is defined in
+  // display_base.cpp under the same #if guards as the existing SEH wrappers.
+  // Routing every dup_t teardown through this function (instead of the
+  // unguarded Release<>) catches the use-after-free that fires from
+  // dxgi.dll's CDXGIOutputDuplicationTonemapper destructor on Windows 11
+  // Insider Canary builds (29570+) when capture used a 10-bit / HDR-capable
+  // format. Without this, releasing the duplication AVs inside dxgi.dll and
+  // takes the whole process down — observed deterministically at
+  // dxgi!~CDXGIOutputDuplicationTonemapper+0x21 with a freed ID2D1Bitmap1.
+  void seh_release_idxgi_duplication(IDXGIOutputDuplication *dup) noexcept;
+
   using factory1_t = util::safe_ptr<IDXGIFactory1, Release<IDXGIFactory1>>;
   using dxgi_t = util::safe_ptr<IDXGIDevice, Release<IDXGIDevice>>;
 
@@ -55,7 +66,7 @@ namespace platf::dxgi {
   using output1_t = util::safe_ptr<IDXGIOutput1, Release<IDXGIOutput1>>;
   using output5_t = util::safe_ptr<IDXGIOutput5, Release<IDXGIOutput5>>;
   using output6_t = util::safe_ptr<IDXGIOutput6, Release<IDXGIOutput6>>;
-  using dup_t = util::safe_ptr<IDXGIOutputDuplication, Release<IDXGIOutputDuplication>>;
+  using dup_t = util::safe_ptr<IDXGIOutputDuplication, seh_release_idxgi_duplication>;
   using texture2d_t = util::safe_ptr<ID3D11Texture2D, Release<ID3D11Texture2D>>;
   using texture1d_t = util::safe_ptr<ID3D11Texture1D, Release<ID3D11Texture1D>>;
   using resource_t = util::safe_ptr<IDXGIResource, Release<IDXGIResource>>;
@@ -311,6 +322,18 @@ namespace platf::dxgi {
     dup_t dup;
     bool has_frame {};
     std::chrono::steady_clock::time_point last_protected_content_warning_time {};
+
+    // Canary-channel triage instrumentation. These exist solely so we can
+    // distinguish "capture pipeline never produced a frame" from "capture
+    // pipeline is producing frames but every frame is empty" — the two
+    // failure modes that present identically (black screen on the client)
+    // and that the WER crash dumps cannot disambiguate. None of these
+    // affect control flow; if they trigger nothing else will fire either.
+    bool first_frame_logged {};                   ///< First S_OK from AcquireNextFrame has been logged.
+    bool first_nonempty_frame_logged {};          ///< First S_OK with AccumulatedFrames > 0 has been logged.
+    uint32_t consecutive_empty_frames {};         ///< Streak of S_OK results with AccumulatedFrames == 0.
+    std::chrono::steady_clock::time_point init_time {};
+    std::chrono::steady_clock::time_point last_empty_streak_warning_time {};
 
     int init(display_base_t *display, const ::video::config_t &config);
     // SPECULATIVE (Win11 Insider 29570 dxgi.dll AV mitigation):

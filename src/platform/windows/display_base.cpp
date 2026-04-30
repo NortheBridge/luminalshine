@@ -176,6 +176,44 @@ namespace platf::dxgi {
     BOOST_LOG(info) << "Desktop resolution ["sv << dup_desc.ModeDesc.Width << 'x' << dup_desc.ModeDesc.Height << ']';
     BOOST_LOG(info) << "Desktop format ["sv << display->dxgi_format_to_string(dup_desc.ModeDesc.Format) << ']';
 
+    // Triage instrumentation: log the GPU adapter that DuplicateOutput is
+    // actually capturing through. On Windows 11 Insider Canary, our
+    // win32u.dll!NtGdiDdDDIGetCachedHybridQueryValue MinHook can be
+    // bypassed by a renamed/reshuffled export — when that happens DXGI's
+    // hybrid resolution falls back to the render adapter rather than the
+    // scanout adapter, the duplication still succeeds, and we silently
+    // capture an empty surface (the black-screen-on-H.264 symptom). We
+    // can't fix the routing reliably from here, but logging the actual
+    // adapter LUID + description lets us confirm the regression in the
+    // field instead of guessing.
+    {
+      IDXGIDevice *dxgi_device = nullptr;
+      if (display->device && SUCCEEDED(display->device->QueryInterface(IID_IDXGIDevice, reinterpret_cast<void **>(&dxgi_device))) && dxgi_device) {
+        IDXGIAdapter *active_adapter = nullptr;
+        if (SUCCEEDED(dxgi_device->GetAdapter(&active_adapter)) && active_adapter) {
+          DXGI_ADAPTER_DESC adesc {};
+          if (SUCCEEDED(active_adapter->GetDesc(&adesc))) {
+            const auto luid_high = static_cast<uint32_t>(adesc.AdapterLuid.HighPart);
+            const auto luid_low = static_cast<uint32_t>(adesc.AdapterLuid.LowPart);
+            // adesc.Description is wchar_t[128]; convert to UTF-8 via
+            // narrow-cast since we only log it. WideCharToMultiByte would
+            // be more correct but adapter names are ASCII in practice.
+            std::string adapter_name;
+            adapter_name.reserve(128);
+            for (const wchar_t *p = adesc.Description; *p; ++p) {
+              adapter_name.push_back(*p < 0x80 ? static_cast<char>(*p) : '?');
+            }
+            BOOST_LOG(info) << "Capture adapter: '" << adapter_name
+                            << "' (VendorID=0x" << util::hex(adesc.VendorId).to_string_view()
+                            << ", DeviceID=0x" << util::hex(adesc.DeviceId).to_string_view()
+                            << ", LUID=" << luid_high << ":" << luid_low << ")";
+          }
+          active_adapter->Release();
+        }
+        dxgi_device->Release();
+      }
+    }
+
     display->display_refresh_rate = dup_desc.ModeDesc.RefreshRate;
     if (display->display_refresh_rate.Denominator == 0) {
       display->display_refresh_rate.Denominator = 1;
@@ -190,6 +228,15 @@ namespace platf::dxgi {
       BOOST_LOG(info) << "Requested frame rate [" << display->client_frame_rate << "fps]";
     }
     display->display_refresh_rate_rounded = lround(display_refresh_rate_decimal);
+
+    // Reset the per-session triage state so a reconnect after capture
+    // recovery starts fresh. Without this we'd never log "first frame"
+    // again on a re-init even if the new session is broken differently.
+    first_frame_logged = false;
+    first_nonempty_frame_logged = false;
+    consecutive_empty_frames = 0;
+    init_time = std::chrono::steady_clock::now();
+    last_empty_streak_warning_time = {};
     return 0;
   }
 
@@ -228,6 +275,7 @@ namespace platf::dxgi {
   static std::atomic<uint64_t> g_dxgi_acquire_seh_count {0};
   static std::atomic<uint64_t> g_dxgi_release_seh_count {0};
   static std::atomic<uint64_t> g_dxgi_devremoved_reason_seh_count {0};
+  static std::atomic<uint64_t> g_dxgi_duplication_release_seh_count {0};
 
   // Translate an SEH exception code to a recognizable name when we have
   // one. Unknown codes are returned as a hex string. Used for diagnostic
@@ -293,6 +341,36 @@ namespace platf::dxgi {
       return DXGI_ERROR_DEVICE_REMOVED;
     }
   }
+
+  // SEH-wrapped IDXGIOutputDuplication::Release() — the deleter used by
+  // dup_t. The free function (rather than a method) is required because
+  // util::safe_ptr's deleter is a function pointer.
+  //
+  // The use-after-free this protects against was first observed at
+  // dxgi.dll!CDXGIOutputDuplicationTonemapper::~CDXGIOutputDuplicationTonemapper+0x21
+  // on Win11 Canary 29576 with NVIDIA 596.21 / CUDA 13.2.73. dxgi.dll's
+  // tonemapper is instantiated only when DuplicateOutput1 was called with
+  // a 10-bit / HDR-capable format list (HEVC and AV1 paths). The H.264
+  // path uses 8-bit SDR formats, doesn't instantiate the tonemapper, and
+  // therefore doesn't crash on release. With this wrapper the AV becomes
+  // a logged warning and the duplication is leaked (one wrapper object
+  // per stream session) instead of taking down the whole process.
+  void seh_release_idxgi_duplication(IDXGIOutputDuplication *dup) noexcept {
+    if (!dup) {
+      return;
+    }
+    unsigned long caught = 0;
+    __try {
+      dup->Release();
+      return;
+    } __except (caught = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+      log_swallowed_dxgi_seh_("IDXGIOutputDuplication::Release",
+                              caught,
+                              g_dxgi_duplication_release_seh_count.fetch_add(1, std::memory_order_relaxed) + 1);
+      // Intentionally leak the COM object. Touching it again on a build
+      // that just AV'd inside its destructor would only re-AV.
+    }
+  }
 #else
   static HRESULT seh_acquire_next_frame_(IDXGIOutputDuplication *d, UINT timeout_ms, DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **res) noexcept {
     return d->AcquireNextFrame(timeout_ms, info, res);
@@ -304,6 +382,18 @@ namespace platf::dxgi {
 
   static HRESULT seh_get_device_removed_reason_(ID3D11Device *dev) noexcept {
     return dev->GetDeviceRemovedReason();
+  }
+
+  // Non-SEH fallback for compilers without MSVC __try/__except support.
+  // GCC without -fms-extensions lands here. There's no mitigation in this
+  // path; the build toolchain memo notes clang in msys2 ucrt64 with
+  // -fms-extensions is the supported configuration, so this branch is
+  // effectively a build-error sentinel — present only to keep the symbol
+  // resolvable if someone ever flips the toolchain.
+  void seh_release_idxgi_duplication(IDXGIOutputDuplication *dup) noexcept {
+    if (dup) {
+      dup->Release();
+    }
   }
 #endif
 
@@ -385,6 +475,60 @@ namespace platf::dxgi {
         if (frame_info.ProtectedContentMaskedOut && std::chrono::steady_clock::now() > last_protected_content_warning_time + 10s) {
           BOOST_LOG(warning) << "Windows is currently blocking DRM-protected content from capture. You may see black regions where this content would be."sv;
           last_protected_content_warning_time = std::chrono::steady_clock::now();
+        }
+
+        // Triage instrumentation. The first AcquireNextFrame success is
+        // the moment we know the OS handed us a real frame envelope.
+        // AccumulatedFrames counts presents the desktop performed since
+        // the last Acquire — when this is consistently 0 for a long
+        // streak, the source isn't producing updates (or the duplication
+        // is bound to a non-scanout adapter). The black-screen-on-H.264
+        // failure mode bottoms out as AccumulatedFrames stuck at 0 even
+        // though Acquire keeps returning S_OK.
+        if (!first_frame_logged) {
+          first_frame_logged = true;
+          const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - init_time)
+                                    .count();
+          BOOST_LOG(info) << "Capture: first AcquireNextFrame succeeded "
+                          << elapsed_ms << " ms after init "
+                          << "(AccumulatedFrames=" << frame_info.AccumulatedFrames
+                          << ", LastPresentTime=" << frame_info.LastPresentTime.QuadPart
+                          << ", res_present=" << (res_p && *res_p ? "yes" : "no")
+                          << ").";
+        }
+        if (frame_info.AccumulatedFrames > 0) {
+          if (!first_nonempty_frame_logged) {
+            first_nonempty_frame_logged = true;
+            const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - init_time)
+                                      .count();
+            BOOST_LOG(info) << "Capture: first non-empty frame received "
+                            << elapsed_ms << " ms after init "
+                            << "(AccumulatedFrames=" << frame_info.AccumulatedFrames
+                            << "). Capture pipeline is producing real pixels.";
+          }
+          consecutive_empty_frames = 0;
+        } else {
+          ++consecutive_empty_frames;
+          // Warn once per ~5 seconds when the streak grows past 600
+          // consecutive empties — at 60 fps that's 10 seconds of nothing,
+          // a strong signal the duplication is bound to an adapter that
+          // isn't actually scanning the displayed framebuffer (the
+          // hybrid-GPU misroute symptom on Insider Canary).
+          if (!first_nonempty_frame_logged && consecutive_empty_frames >= 600) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_empty_streak_warning_time > std::chrono::seconds(5)) {
+              last_empty_streak_warning_time = now;
+              BOOST_LOG(warning) << "Capture: " << consecutive_empty_frames
+                                 << " consecutive Acquire successes with AccumulatedFrames=0. "
+                                    "The source display has not presented any new content since "
+                                    "init. If you're on Windows 11 Canary, this is consistent "
+                                    "with the DXGI hybrid-GPU misroute (capture is bound to the "
+                                    "wrong adapter). See the 'Capture adapter:' log line at init "
+                                    "to confirm which adapter we landed on.";
+            }
+          }
         }
 
         has_frame = true;
