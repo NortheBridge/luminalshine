@@ -6,7 +6,7 @@ Read our contribution guide at the organization level
 
 | Tool                                                                                                                                                                           | Description                                                             |
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| <a href="https://code.visualstudio.com/"><img src="https://code.visualstudio.com/assets/branding/app-icon.png" width="32" height="32"</img>></a><br>VSCode | The Open Source AI Code Editor |
+| <a href="https://code.visualstudio.com/"><img src="https://code.visualstudio.com/assets/branding/app-icon.png" width="32" height="32"></a><br>VSCode | The Open Source AI Code Editor |
 
 ## Project Patterns
 
