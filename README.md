@@ -2,113 +2,106 @@
 
 ## What is LuminalShine?
 
-LuminalShine is an AI‑enhanced version of Sunshine, a popular remote streaming application. It intends to integrate all scripts from NortheBridge North America and more.
+AI-enhanced, LuminalShine by the NortheBridge Software Foundation (sometimes seen as "NortheBridge North America") is a modern version of Vibeshine, a fork of Sunshine, a multi-platform popular remote streaming application. It's objective is to offer a Modern Sunshine Experience on Modern Windows including Windows Insider Preview through the Canary Builds.
+
+### Foundation of LuminalShine
+LuminalShine was created as a direct response to the Vibeshine developers not supporting Windows Insider Preview Builds in the slightest and simply dismissing errors that could and would eventually have to be rectified in order for them to release on Windows Next.
+
+**Among the Many Changes**: Support for multi-platform is depreciated to allow developers and contributors to solely focus on the Windows platform ___but it is possible for other platforms to return in the future___, advanced support for Windows Insider Preview releases, and the removal of large amounts of "dead code" as well as a unique new development build framework.
+
+### Our Promise
+The NortheBridge Software Foundation promises that this software will remain fully supported for as long as Sunshine is supported and remain free as well as open source under the GNU GPL-v3 License and will not be available for commercial purposes. This includes subrelated projects such as **the future LuminalShine Virtual Graphics Drives (LuminalShine VGD) that will eventually replace the SudoVDA and MTT VDD drivers included with the current release of LuminalShine.
 
 
 
 ## Key Features
 
-* **Display Setting Automation**
-  LuminalShine adds multiple safeguards to prevent dummy plugs or virtual displays from getting “stuck” when you return to your PC. It resolves common Windows 11 **24H2** display issues and restores your layout after hard crashes, shutdowns, or reboots. (The only scenario it can’t restore is during a user logout.) The workflow is simplified to a dropdown—just pick the display you want to stream.
+* **Native Windows Current Release & Insider Preview Support**
+  LuminalShine is a single platform project developed from Vibeshine and Sunshine with the express purpose of providing a "Modern Sunshine Game Host Experience for Moonligh on Modern Windows." We therefore, are able to focus on Windows development and issues. This also includes removal of 'dead code' and Windows-only enhancements.
 
-* **Windows Graphics Capture in Service Mode**
+* **HEVC and AV1 First Support**
+  A result of supporting the latest version of Windows Canary Builds and due to an error in Microsoft's _dxgi.dll_, LuminalShine supports HEVC and AV1 with HDR streaming first. Windows releases based on 24H2, or releases outside Windows Insider Preview, should still work with H.264 **but we recommend still using _HEVC_ or _AV1_ modern codecs.
+
+* **Native SudoVDA and MTT VDD Display Support**
+  LuminalShine includes SudoVDA by default, with multiple stability improvements. It can capture output from any GPU, automatically or by specification, including those in hybrid laptops, ensuring the virtual screen connects to the correct GPU when needed. It also provides simple virtual display options, allowing users to choose between a physical or virtual display. On headless setups, it enables automatically to prevent 503 errors and false encoder detections, such as incorrect HEVC support reports.
+
+  **MTT VDD is included for compatibility and you should read the notice in the LuminalShine Installer before deciding to select MTT VDD**
+
+* **Windows Graphics Capture (WGC) in Service Mode**
   Running Windows Graphics Capture (WGC) as a service improves performance and stability. It captures the full frame rate of frame‑generated titles, avoids crashes when VRAM is exceeded, and follows Microsoft’s recommended capture method going forward. LuminalShine auto‑switches capture methods on demand, so the login screen and UAC prompts are still captured even when using WGC.
 
 * **Native Virtualized Display**
   LuminalShine includes SudoVDA by default, with multiple stability improvements. It can capture output from any GPU, including those in hybrid laptops, ensuring the virtual screen connects to the correct GPU when needed. It also provides simple virtual display options, allowing users to choose between a physical or virtual display. On headless setups, it enables automatically to prevent 503 errors and false encoder detections, such as incorrect HEVC support reports.
 
+* **Display Setting Automation**
+  LuminalShine adds multiple safeguards to prevent dummy plugs or virtual displays from not being properly released when you return to your PC. It resolves common Windows 11 **24H2** and **Insider Preview** display issues with restores of your layout after hard crashes, shutdowns, or reboots. (**Currently**: the only scenario it can’t restore is during a user logout.) The flow is simplified to a dropdown—just pick the display you want to stream.
+
+* **Modern Frontend WebUI with Full Mobile Support**
+  The modern Web UI makes it easy to add games and change settings without restarting the program. It’s fully responsive, so you can manage your library and configuration from a phone or tablet.
+
 * **WebRTC Browser Streaming**
   LuminalShine can stream straight to your web browser from the `/webrtc` page, so you can play without installing a separate client. It is designed for fast response and smooth audio/video, while still letting you use the regular Moonlight-compatible streaming path if you prefer.
 
-* **Redesigned Frontend with Full Mobile Support**
-  The new Web UI makes it easy to add games and change settings without restarting the program. It’s fully responsive, so you can manage your library and configuration from a phone or tablet.
-
-* **Playnite Integration**
-  Deep integration with Playnite (a “launcher of launchers”) automatically syncs your recently played games with configurable expiration rules, per‑category sync, and exclusions. You can also add games manually from a Web UI dropdown; LuminalShine handles artwork, launching, and clean termination—emulators included. The goal is a seamless, GeForce Experience–style library experience—only better.
-
 * **RTSS & NVIDIA Control Panel Integration**
-  LuminalShine can manage RTSS to apply the correct frame limit and disable V‑Sync before streaming, significantly improving frame pacing and smoothness. The applied frame cap matches the client device’s requested FPS.
+  LuminalShine can manage RTSS to apply the correct frame limit and disable V‑Sync before streaming, significantly improving frame pacing and smoothness. The applied frame cap matches the client device’s requested FPS. _Please Note: RTSS isn't installed by LuminalShine and must be obtained through the RTSS Official Download or MSI Afterburner._
 
-* **Frame‑Generated Capture Fixes**
-  LuminalShine includes workarounds so DLSS/FSR frame‑generated games are captured at the game’s full frame rate without micro‑stutter. This requires a very high‑refresh‑rate display (physical or virtual) at **240 Hz**.
+* **Frame‑Gen Capture Fixes**
+  LuminalShine includes workarounds so DLSS/FSR frame-generation games are captured at the game’s full frame rate without micro‑stutter. This requires a very high‑refresh‑rate display (physical or virtual) at **240 Hz**.
 
 * **Lossless Scaling & NVIDIA Smooth Motion**
-  LuminalShine can automatically apply optimal Lossless Scaling settings to generate frames for any application. On RTX 40‑series and newer GPUs, you can optionally enable **NVIDIA Smooth Motion** for better performance and image quality (while Lossless Scaling remains more customizable).
+  LuminalShine can automatically apply optimal Lossless Scaling settings to generate frames for any application. On RTX 40‑series and RTX 50-series or newer GPUs, you can optionally enable **NVIDIA Smooth Motion** for better performance and image quality.
+
+* **Playnite Integration**
+  Deep integration with Playnite (a “launcher of launchers”) automatically syncs your recently played games with configurable expiration rules, per‑category sync, and exclusions. You can also add games manually from a Web UI dropdown; LuminalShine handles artwork, launching, and clean termination. The goal is a seamless, GeForce Experience–style library experience—only better. **We, however, recommend using Steam Big Picture Mode for the best experience.**
 
 * **API Token Management**
-  Access tokens can be tightly scoped—down to specific methods—so external scripts don’t need full administrative rights. This improves security while keeping automation flexible.
+  Access tokens can be tightly scoped—down to specific methods—so external scripts don’t need full administrative rights. This is a  security improvement while keeping automations flexible.
 
 * **Session‑Based Authentication**
   The sign‑in flow supports password managers and includes a “remember me” option to minimize prompts. The experience is security‑hardened without sacrificing convenience.
 
 * **Update Notifications**
-  Built‑in notifications let you know when new features or bug fixes are available, making it easy to stay current.
-
-Due to the sheer pace and volume of changes I was producing, it became impractical to manage them within the original Sunshine repository. The review process simply couldn’t keep up with the rate of development, and large feature sets were piling up without a clear path to integration. To ensure the work remained organized, maintainable, and actively progressing, I established LuminalShine as a standalone fork.
-
-At this point, LuminalShine differs from upstream Sunshine by roughly **99,800 changed lines** (about **91,800 added** and **8,000 removed**). At that scale, asking upstream maintainers to accept large backports in one sweep is generally not sustainable, which is why LuminalShine continues as a standalone fork.
+  Built‑in notifications let you know when new features or bug fixes are available, making it easy to stay current. We offer **Pre-Release Notifications side-by-side with Release Notifications**. _It is recommended that you turn Pre-Release Notifications on in case a feature in development or a bug fix you need has already been implemented. LuminalShine will always prompt to download the latest version whether it's Pre-Release or General Availability._
 
 ---
 
-## Does LuminalShine aim to replace Sunshine or Apollo?
+## Does LuminalShine aim to replace Sunshine or Vibeshine?
 
-No. LuminalShine is intended as a **complementary fork**, not a replacement.
-
-In addition, for users who prefer Apollo’s ecosystem, there is a [Vibepollo](https://github.com/Nonary/Vibepollo) that brings LuminalShine’s feature set to Apollo. This exists primarily to serve Apollo users who asked for LuminalShine‑style capabilities while staying on Apollo.
+LuminalShine is a **complimentary fork** of Sunshine and Vibeshine intended to provide the best Sunshine experience on Modern Windows 11 Systems.
 
 
-## Will LuminalShine’s features merge back into Sunshine or Apollo?
+## Will LuminalShine’s features merge back into Sunshine or Vibeshine?
 
-**Short answer: Unlikely to be backported upstream as large, sweeping merges.**
+**Answer: No, LuminalShine will not be backported to Sunshine or Vibeshine. Significant changes, including driver updates, and the pace of development would make it nearly impossible to maintain multiple backports.**
 
-LuminalShine is largely AI‑generated. While it works well, it carries a kind of surface‑level technical debt that many upstream projects want resolved before taking big changes (styling consistency, thin/missing docs, and some over‑engineering). I see that debt as relatively unimportant today because modern AI tools can answer “why does this function exist?”, “what does this parameter do?”, or “how do these classes interact?” and will soon auto‑fix these issues—re‑style trees, write docstrings, and prune unused layers—without human effort.
+LuminalShine is based on the **Vibeshine Codebase** which was largely AI‑generated. While it works well, it carries a kind of surface‑level technical debt that many upstream projects want resolved before taking big changes (styling consistency, thin/missing docs, and some over‑engineering). This debt is relatively unimportant today because modern AI tools can answer “why does this function exist?”, “what does this parameter do?”, or “how do these classes interact?” and will soon auto‑fix these issues—re‑style trees, write docstrings, and prune unused layers—without human effort.
 
-So this “mess” is mostly cosmetic. It doesn’t break the code, create security risks, or block future maintenance. The only debt that truly matters is architectural: API design, threading models, modularity, and performance. Those are hard to fix even with AI tools, which is why I focus on them up front and guide the AI accordingly.
+LuminalShine however looks to rectify this debt as development continues on the software to bring it up to par with something not simply "Vibe-coded" like Vibeshine by creating an interactive, single pane of glass, unified experience.
 
-Because I define the architecture, I know how everything works. Whether the code looks polished or not doesn’t matter to me.
-
-Bringing LuminalShine fully in line with upstream style and documentation would take a lot of engineering time for limited practical gain. For now, full backports into Sunshine or Apollo are unlikely. Over time, targeted refactors or added documentation may make **selective upstreaming** possible.
-
-**Note on Apollo:** The Apollo port is a downstream **backport**, not an upstream merge. It adapts LuminalShine features to Apollo’s architecture where it makes sense, with the understanding that Apollo maintains its own priorities and conventions.
+Because the Vibeshine codebase was studied before the NortheBridge Software Foundation defined the new architecture, we know how everything works. We aim to polish the code and documentation but sometimes, due to legacy components, this is not always possible.
 
 ---
 
 ## Origin of the Name "LuminalShine"
 
-The name arose as a playful suggestion from another developer who joked about the potential unmanageability of extensive AI‑generated code. Given that approximately **99% of LuminalShine’s code is AI‑generated**, the name seemed fitting.
+The name "LuminalShine" emerged from the adjective form of the noun "Lumen" which in physics is the SI Unit for luminous flux - or light emitted. It's a play on the first part of the name of "Sunshine."
 
 ---
 
-## Why Use AI‑generated Code? Concerns About Technical Debt?
+## Why Use AI‑assisted generated Code?
 
-AI significantly accelerates development by offloading much of the routine implementation work. Instead of spending hours writing boilerplate, wiring dependencies, or handling repetitive edge cases, I can focus on high‑level architecture, long‑term design decisions, and system direction. This shift doesn’t just speed things up—it fundamentally changes the role of the engineer, pushing us toward oversight, orchestration, and design rather than rote code production.
+Broadly speaking, AI-assisted generated code development is becoming more and more common whether it is in the implementation of Operating Systems or simple applications. By using AI-assisted generated code development, we are able to speed up the process of developing and releasing software updates that include new features, bug fixes, and more.
 
-What stands out most is that AI code works on the first try around 90% of the time. That reliability, combined with instant generation, makes it dramatically more efficient to accept its form of debt than to painstakingly write everything from scratch. In other words, I’m trading minor, manageable debt for massive development velocity—and that trade is almost always worth it.
-
-I’m not overly concerned about technical debt in this workflow, because the debt that truly matters stems from bad architecture and poor design choices, not from the code itself. As long as I guide the AI with clear structure and intent, the generated code ends up being maintainable. Problems like inconsistent naming, redundant code, or unused helpers are minor forms of debt—easily identified, cleaned up, or ignored. By contrast, deep architectural flaws, poor layering, or mismatched abstractions create lasting problems.
-
-In fact, compared to many traditional enterprise codebases I’ve maintained, AI‑assisted code often comes out cleaner and easier to manage. Legacy systems are usually burdened with years of ad‑hoc patches, inconsistent styles, and various bad practices due to knowledge level of contributor. AI‑generated code doesn’t necessarily carry fewer design flaws than human code, but it does avoid accumulating those scars—especially when paired with an intentional architectural vision, and it is less likely to do seriously bad practices that you typically find in enterprise codebases.
-
-Broadly speaking, AI‑assisted development represents the future of software engineering. Just as compilers and IDEs once transformed programming, AI is now transforming how we design, implement, and maintain systems. Instead of fearing it, I view it as a force multiplier that complements professional judgment. LuminalShine is an example of what happens when you embrace that shift: rapid iteration, a massive expansion of features, and code that remains maintainable because the architecture is intentionally guided.
-
----
-
-## The Original “AI-Only” Goal (And Why It Changed)
-
-One of the original goals of LuminalShine was to prove a specific point: that an experienced developer could maintain a complex project using almost entirely AI‑generated code, as long as they provided the architecture and kept the system coherent.
-
-That idea hasn’t aged particularly well, not because it was wrong, but because the models scaled far faster than most projections. Most of LuminalShine was developed on GPT‑5, which (per METR’s public benchmark on metr.org at the time) only hit about a 50% success rate on 1‑hour tasks. A few months later, GPT‑5.2 landed and the same 50% point moved out to roughly 6.5‑hour tasks, which is a huge jump in practical autonomy.
-
-The result is that the “skill gap” in prompting and guiding the AI matters less than it did even a few months prior. You still need engineering judgment and architecture, but it’s now dramatically easier to get high‑quality, end‑to‑end results without the same level of careful orchestration. So the original “prove it’s possible” goal is basically moot: it’s not a niche workflow anymore, it’s simply where the tools have gone.
+As we understand the architecture of the software, we guide our AI to generate AI-assisted code to ensure that the architecture not only remains in tact but that we don't introduce new bugs while maintaining a cadence equal to the Windows Insider Preview program when required.
 
 ---
 
 ## AI Models Used by LuminalShine
 
-LuminalShine has always been built with **Codex** as the primary workflow, and in practice that has meant mostly the **GPT‑5 family** (today: **GPT‑5.3‑Codex**). I use it with the same principles as before: start from architecture, sanity‑check assumptions, and do the hard reasoning up front so the implementation lands cleanly.
+LuminalShine is built using the latest **Claude** Models as the primary workflow and that has meant significant changes to the code since it was forked from Vibeshine which depended on **GPT-5.3-Codex** including the rectification of serious errors, 'dead code,' and ensuring compatibility of threads with the latest versions of Windows.
 
-With **GPT‑5.3‑Codex**, there’s no real need to juggle a “fast but less capable” model anymore. In the past I’d reach for speed‑first models (like Sonnet, or smaller GPT “mini” variants) for quick turnaround, but **GPT‑5.3‑Codex** covers both: it’s about as fast as those options while also being strong enough to handle the hard engineering work in one pass.
+Previously, Vibeshine, the project which LuminalShine was forked from, has always been built with **Codex** as the primary workflow, and in practice that has meant mostly the **GPT‑5 family** (at the time: **GPT‑5.3‑Codex**). 
 
-Claude was used more heavily earlier on. Older Claude models had a tendency to go off on their own path, even when the architectural plan was clear. That behavior has mostly been fixed in newer Claude releases, but GPT still ended up being the more useful engineering tool for me because it will challenge you and not simply agree with whatever you ask for.
+An older version of Claude was used by Vibeshine more heavily earlier on. Older Claude models had a tendency to go off on their own path, even when the architectural plan was clear. That behavior has mostly been fixed in newer Claude releases, but GPT, was at the time Vibeshine was being developed, ended up being the more useful engineering tool.
 
-In general, GPT has felt more intelligent for the way I build and maintain this codebase. I may occasionally ask **Claude Opus 4.5** for a second opinion if GPT can’t resolve something cleanly end‑to‑end, but this is increasingly rare.
+In general, with LuminalShine, the latest **Claude** Models are exclusively used for architecutual, codebase development, and design development choices.
