@@ -922,7 +922,7 @@ namespace config {
     "ipv4",  // Address family
     {},  // Bind address
     platf::appdata().string() + "/sunshine.log",  // log file
-    false,  // notify_pre_releases
+    true,  // notify_pre_releases (default-on so Windows Insider Preview hosts get prerelease fixes; falls back to GA when no newer prerelease exists)
     true,  // system_tray
     {},  // prep commands
     std::chrono::hours {2},  // session_token_ttl default 2h

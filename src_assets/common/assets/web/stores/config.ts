@@ -64,7 +64,7 @@ const defaultGroups = [
       sunshine_name: '',
       min_log_level: 2,
       global_prep_cmd: [] as Array<{ do: string; undo: string; elevated?: boolean }>,
-      notify_pre_releases: 'disabled',
+      notify_pre_releases: 'enabled',
       update_check_interval: 86400,
       session_token_ttl_seconds: 86400,
       remember_me_refresh_token_ttl_seconds: 604800,
@@ -819,6 +819,31 @@ export const useConfigStore = defineStore('config', () => {
     return out;
   }
 
+  // Fetch /api/metadata as a standalone action so callers can refresh the
+  // metadata snapshot without re-pulling the whole config payload. Used by
+  // the Audio/Video tab so changing the virtual-display backend (or clicking
+  // "Re-check driver") updates the displayed driver status without a full
+  // page reload. Non-fatal — silently leaves metadata unchanged on failure.
+  async function fetchMetadata(): Promise<MetaInfo | null> {
+    try {
+      const mr = await http.get('/api/metadata');
+      if (mr.status === 200 && mr.data) {
+        const m = { ...mr.data } as MetaInfo;
+        const raw = String((m as any).platform || '').toLowerCase();
+        let norm = raw;
+        if (raw.startsWith('win')) norm = 'windows';
+        else if (raw === 'darwin' || raw.startsWith('mac')) norm = 'macos';
+        else if (raw.startsWith('lin')) norm = 'linux';
+        (m as any).platform = norm;
+        metadata.value = m;
+        return m;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }
+
   async function fetchConfig(force = false) {
     if (_data.value && !force) return config.value;
     loading.value = true;
@@ -826,23 +851,7 @@ export const useConfigStore = defineStore('config', () => {
     try {
       const r = await http.get('/api/config');
       if (r.status !== 200) throw new Error('bad status ' + r.status);
-      // Fetch metadata (non-fatal if it fails)
-      try {
-        const mr = await http.get('/api/metadata');
-        if (mr.status === 200 && mr.data) {
-          const m = { ...mr.data } as MetaInfo;
-          // Normalize platform identifiers across build/runtime variations
-          const raw = String((m as any).platform || '').toLowerCase();
-          let norm = raw;
-          if (raw.startsWith('win')) norm = 'windows';
-          else if (raw === 'darwin' || raw.startsWith('mac')) norm = 'macos';
-          else if (raw.startsWith('lin')) norm = 'linux';
-          (m as any).platform = norm;
-          metadata.value = m;
-        }
-      } catch (_) {
-        /* ignore */
-      }
+      await fetchMetadata();
       // keep settings and metadata separate
       setConfig(r.data);
       return config.value;
@@ -950,6 +959,7 @@ export const useConfigStore = defineStore('config', () => {
     error,
     validationError,
     fetchConfig,
+    fetchMetadata,
     setConfig,
     updateOption,
     markManualDirty,

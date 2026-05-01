@@ -288,7 +288,7 @@
         <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\LuminalShine">
           <RegistryValue Name="DisplayName" Type="string" Value="LuminalShine" KeyPath="yes" />
           <RegistryValue Name="DisplayVersion" Type="string" Value="[ProductVersion]" />
-          <RegistryValue Name="Publisher" Type="string" Value="NortheBridge North America" />
+          <RegistryValue Name="Publisher" Type="string" Value="NortheBridge Software Foundation" />
           <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALL_ROOT]" />
           <RegistryValue Name="DisplayIcon" Type="string" Value="[INSTALL_ROOT]sunshine.exe" />
           <RegistryValue Name="UninstallString" Type="string" Value="&quot;[INSTALL_ROOT]uninstall.exe&quot;" />

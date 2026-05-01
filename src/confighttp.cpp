@@ -1883,7 +1883,30 @@ namespace confighttp {
     // Virtual display backend status — surfaces the active driver (MTT VDD or
     // SudoVDA) plus its current health enum so the web UI can render an
     // accurate indicator instead of guessing.
+    //
+    // Lazy probe: proc::vDisplayDriverStatus is only flipped from UNKNOWN to a
+    // real state by proc::initVDisplayDriver(), which on a typical desktop host
+    // (physical monitors present, no active stream yet) is never called until
+    // streaming starts. That left the web UI permanently showing "unknown."
+    // We kick off a single one-shot probe the first time the metadata endpoint
+    // is hit while still in UNKNOWN, so the dashboard and Audio/Video tab can
+    // surface a real status without waiting for a stream session. Subsequent
+    // failures (FAILED / VERSION_INCOMPATIBLE / WATCHDOG_FAILED) stay sticky so
+    // we don't repeatedly slam a broken driver — the user can still act on the
+    // result via the installer's reconfigure flow.
     try {
+      static std::once_flag s_vdisplay_probe_once;
+      if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::UNKNOWN) {
+        std::call_once(s_vdisplay_probe_once, []() {
+          try {
+            proc::initVDisplayDriver();
+          } catch (...) {
+            // initVDisplayDriver swallows most errors itself; this is belt-
+            // and-braces so a probe failure can't take down the metadata
+            // endpoint.
+          }
+        });
+      }
       output_tree["virtual_display_backend"] = VDISPLAY::active_backend_name();
       output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
       output_tree["virtual_display_driver_ready"] =

@@ -1,5 +1,5 @@
 # Publisher Metadata
-set(SUNSHINE_PUBLISHER_NAME "NortheBridge North America"
+set(SUNSHINE_PUBLISHER_NAME "NortheBridge Software Foundation"
         CACHE STRING "The name of the publisher (not developer) of the application.")
 set(SUNSHINE_PUBLISHER_WEBSITE "https://northebridge.com/"
         CACHE STRING "The URL of the publisher's website.")

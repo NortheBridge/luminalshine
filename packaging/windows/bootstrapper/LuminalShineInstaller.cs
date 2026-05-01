@@ -300,20 +300,19 @@ namespace LuminalShineInstaller {
       // chooser (3 radio buttons + per-option descriptions, plus an optional
       // "currently installed" banner on reconfigure) was added. The taller
       // window keeps everything visible without forcing the content card to
-      // scroll on standard 1080p displays. Uninstall-only and update flows
-      // (no driver chooser) keep the original compact size.
-      // The SudoVDA-recommended/MTT-backup wording introduced in 26.04 grew
-      // each radio's description block (the SudoVDA paragraph now mentions
-      // the planned LuminalShine replacement driver, the MTT paragraph
-      // calls out the WUDFHostProblem2 / HostTimeout signal). Net change
-      // is roughly three additional wrapped lines of body text on a
-      // ResizeMode=CanMinimize window. Bumped from 780→840 (target) and
-      // 740→800 (min) so the content card never clips on a 1080p display
-      // and the user always sees the Continue button without scrolling.
-      Width = 760;
-      Height = showInstallOptions ? 840 : 460;
-      MinWidth = 720;
-      MinHeight = showInstallOptions ? 800 : 430;
+      // scroll on standard 1080p displays.
+      // The 26.04+ revision added a Windows Insider Preview note to both the
+      // SudoVDA and MTT description blocks (HEVC/AV1-only on SudoVDA on
+      // Insider builds; pick MTT for H.264). Net change is several more
+      // wrapped lines of body text on a ResizeMode=CanMinimize window.
+      // Sizes bumped to 800×920 (install) and 800×560 (update / uninstall)
+      // so neither the install card nor the update/uninstall flows clip on
+      // a 1080p display and the user always sees the action button without
+      // scrolling. Min dimensions trail target by 40px each axis.
+      Width = 800;
+      Height = showInstallOptions ? 920 : 560;
+      MinWidth = 760;
+      MinHeight = showInstallOptions ? 880 : 520;
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
       ResizeMode = ResizeMode.CanMinimize;
       WindowStyle = WindowStyle.None;
@@ -654,9 +653,12 @@ namespace LuminalShineInstaller {
       installStack.Children.Add(_vddSudovdaRadio);
       installStack.Children.Add(new TextBlock {
         Text = "Preferred virtual display backend — more robust feature set than MTT VDD. "
-             + "A future LuminalShine release will introduce a virtual display driver tailored "
-             + "to modern Windows 11 and Windows 11 Insider Preview builds that will eventually "
-             + "replace SudoVDA, but for now SudoVDA remains the default choice.",
+             + "Note: on Windows Insider Preview builds, SudoVDA only supports HEVC and AV1 "
+             + "encoding (with or without HDR). If you plan to stream using H.264, choose the "
+             + "MTT Virtual Display Driver below instead. A future LuminalShine release will "
+             + "introduce a virtual display driver tailored to modern Windows 11 and Windows 11 "
+             + "Insider Preview builds that will eventually replace SudoVDA, but for now SudoVDA "
+             + "remains the default choice.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         Margin = new Thickness(24, 0, 0, 6),
@@ -671,12 +673,14 @@ namespace LuminalShineInstaller {
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 4, 0, 2),
         IsChecked = false,
-        ToolTip = "Pick this if SudoVDA fails on this build of Windows (e.g. WUDFHostProblem2 / HostTimeout)."
+        ToolTip = "Pick this if SudoVDA fails on this build of Windows (e.g. WUDFHostProblem2 / HostTimeout), or if you plan to stream H.264 on a Windows Insider Preview build."
       };
       installStack.Children.Add(_vddMttRadio);
       installStack.Children.Add(new TextBlock {
-        Text = "Use this only if SudoVDA fails on your build of Windows — for example if you see the "
-             + "WUDFHostProblem2 / HostTimeout error reported against the SudoVDA driver. "
+        Text = "Use this if SudoVDA fails on your build of Windows — for example if you see the "
+             + "WUDFHostProblem2 / HostTimeout error reported against the SudoVDA driver — or if "
+             + "you plan to stream using H.264 on a Windows Insider Preview build (where SudoVDA "
+             + "only supports HEVC and AV1 with or without HDR). "
              + "MTT VDD is a SignPath/GlobalSign-signed IDD-based driver with broad compatibility "
              + "across Windows 10/11 builds.",
         FontSize = 12,

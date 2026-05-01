@@ -2,7 +2,7 @@
 
 ## What is LuminalShine?
 
-AI-enhanced, LuminalShine by the NortheBridge Software Foundation (sometimes seen as "NortheBridge North America") is a modern version of Vibeshine, a fork of Sunshine, a multi-platform popular remote streaming application. It's objective is to offer a Modern Sunshine Experience on Modern Windows including Windows Insider Preview through the Canary Builds.
+AI-enhanced, LuminalShine by the NortheBridge Software Foundation (historically published as "NortheBridge North America") is a modern version of Vibeshine, a fork of Sunshine, a multi-platform popular remote streaming application. It's objective is to offer a Modern Sunshine Experience on Modern Windows including Windows Insider Preview through the Canary Builds.
 
 ### Foundation of LuminalShine
 LuminalShine was created as a direct response to the Vibeshine developers not supporting Windows Insider Preview Builds in the slightest and simply dismissing errors that could and would eventually have to be rectified in order for them to release on Windows Next.

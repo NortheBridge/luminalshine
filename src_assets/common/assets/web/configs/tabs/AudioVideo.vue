@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { $tp } from '@/platform-i18n';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
@@ -74,6 +74,43 @@ const currentDriverStatus = computed(() => {
   const code = driverStatusCode.value as keyof typeof labels;
   return labels[code] || t('config.virtual_display_status_state_unknown');
 });
+
+// Driver-status refresh:
+// /api/metadata is the source of truth for the active backend and its health,
+// but the parent store only fetches it once on initial config load. That left
+// the status frozen at "unknown" on hosts where the driver is initialized
+// lazily (no physical-monitor auto-enable + no active stream yet) — even after
+// the backend's lazy probe lands a real value. We re-fetch metadata on mount,
+// after the backend selection changes (debounced so it lands after autosave),
+// and on demand via a "Re-check driver" button next to the status indicator.
+const refreshingDriverStatus = ref(false);
+async function refreshDriverStatus() {
+  if (refreshingDriverStatus.value) return;
+  refreshingDriverStatus.value = true;
+  try {
+    await store.fetchMetadata();
+  } finally {
+    refreshingDriverStatus.value = false;
+  }
+}
+
+onMounted(() => {
+  void refreshDriverStatus();
+});
+
+let backendChangeTimer: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => (config.value as any)?.virtual_display_backend,
+  (next, prev) => {
+    if (next === prev) return;
+    if (backendChangeTimer) clearTimeout(backendChangeTimer);
+    // Wait past the 3s autosave debounce in stores/config.ts so the server
+    // has time to apply the new backend selection before we re-probe.
+    backendChangeTimer = setTimeout(() => {
+      void refreshDriverStatus();
+    }, 3500);
+  },
+);
 
 const lastAutomationOption = ref('verify_only');
 watch(
@@ -302,17 +339,31 @@ function selectVirtualDisplayLayout(v: unknown) {
 
                   <!-- Driver status indicator: shows active backend + health -->
                   <div
-                    class="px-4 py-3 rounded-md"
+                    class="px-4 py-3 rounded-md flex items-center gap-3"
                     :class="[
                       driverIsHealthy
                         ? 'bg-success/10 text-success'
                         : 'bg-warning/10 text-warning',
                     ]"
                   >
-                    <i class="fa-solid fa-circle-info mr-2"></i>
-                    <span class="font-medium">{{ activeBackendLabel }}</span>
-                    <span class="opacity-70"> — </span>
-                    {{ currentDriverStatus }}
+                    <i class="fa-solid fa-circle-info"></i>
+                    <div class="flex-1 min-w-0">
+                      <span class="font-medium">{{ activeBackendLabel }}</span>
+                      <span class="opacity-70"> — </span>
+                      {{ currentDriverStatus }}
+                    </div>
+                    <button
+                      type="button"
+                      class="px-2 py-1 text-xs rounded border border-current/30 hover:bg-current/10 disabled:opacity-50 disabled:cursor-wait"
+                      :disabled="refreshingDriverStatus"
+                      @click="refreshDriverStatus"
+                    >
+                      <i
+                        class="fa-solid fa-arrows-rotate mr-1"
+                        :class="{ 'fa-spin': refreshingDriverStatus }"
+                      ></i>
+                      {{ t('config.virtual_display_status_recheck') }}
+                    </button>
                   </div>
                   <p v-if="!driverIsHealthy" class="text-[11px] opacity-70 leading-snug">
                     {{ t('config.virtual_display_status_hint') }}
