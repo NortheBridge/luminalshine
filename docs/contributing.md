@@ -1,12 +1,12 @@
 # Contributing
-Read our contribution guide in our organization level
-[docs](https://docs.lizardbyte.dev/latest/developers/contributing.html).
+Read our contribution guide at the organization level
+
 
 ## Recommended Tools
 
 | Tool                                                                                                                                                                           | Description                                                             |
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| <a href="https://www.jetbrains.com/clion/"><img src="https://resources.jetbrains.com/storage/products/company/brand/logos/CLion_icon.svg" width="30" height="30"></a><br>CLion | Recommended IDE for C and C++ development. Free for non-commercial use. |
+| <a href="https://code.visualstudio.com/"><svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M15.434 1.72887L12.14 0.144875C12.002 0.078875 11.855 0.046875 11.709 0.046875C11.353 0.046875 11.18 0.211875 11.155 0.228875C11.073 0.270875 11.005 0.337875 11.004 0.338875L4.698 6.08888L1.951 4.00488C1.832 3.91388 1.69 3.86987 1.548 3.86987C1.387 3.86987 1.226 3.92788 1.1 4.04288L0.219 4.84387C0.074 4.97587 0.001 5.15688 0.001 5.33687C0.001 5.51687 0.073 5.69688 0.218 5.82888L2.6 8.00088L0.217 10.1719C0.072 10.3039 0 10.4839 0 10.6639C0 10.8439 0.073 11.0249 0.218 11.1569L1.099 11.9579C1.226 12.0729 1.386 12.1309 1.547 12.1309C1.688 12.1309 1.83 12.0859 1.95 11.9959L4.697 9.91187L11.003 15.6619C11.003 15.6619 11.072 15.7299 11.155 15.7719C11.179 15.7889 11.353 15.9529 11.709 15.9529C11.855 15.9529 12.003 15.9209 12.141 15.8549L15.435 14.2709C15.781 14.1049 16.001 13.7539 16.001 13.3699V2.62888C16.001 2.24487 15.781 1.89488 15.435 1.72787L15.434 1.72887ZM7.217 7.99988L12.002 4.36987V11.6299L7.217 7.99988Z"</svg>" width="30" height="30"></a><br>VSCode | The Open Source AI Code Editor |
 
 ## Project Patterns
 
@@ -43,43 +43,11 @@ If you place Vue/HTML/TS files outside that tree, extend the glob so their class
 
 #### Building
 
-@tabs{
-  @tab{CMake | ```bash
-    cmake -B build -G Ninja -S . --target web-ui
-    ninja -C build web-ui
-    ```}
-  @tab{Manual | ```bash
-    npm run dev
-    ```}
-}
+As of the release of LuminalShine, the standard build workflow has changed greatly from Sunshine and Vibeshine, with it now using ``clang`` with ``--fms-extensions`` to build the project. This allows MSVC-specific features to be implemented into LuminalShine without fully depending on MSVC for the build process.
 
 ### Localization
-Sunshine and related LizardByte projects are being localized into various languages.
-The default language is `en` (English).
-
-![](https://app.lizardbyte.dev/dashboard/crowdin/LizardByte_graph.svg)
-
-@admonition{Community | We are looking for language coordinators to help approve translations.
-The goal is to have the bars above filled with green!
-If you are interesting, please reach out to us on our Discord server.}
-
-#### CrowdIn
-The translations occur on [CrowdIn][crowdin-url].
-Anyone is free to contribute to the localization there.
-
-##### Translation Basics
-* The brand names *LizardByte* and *Sunshine* should never be translated.
-* Other brand names should never be translated. Examples include *AMD*, *Intel*, and *NVIDIA*.
-
-##### CrowdIn Integration
-How does it work?
-
-When a change is made to Sunshine source code, a workflow generates new translation templates
-that get pushed to CrowdIn automatically.
-
-When translations are updated on CrowdIn, a push gets made to the *l10n_master* branch and a PR is made against the
-*master* branch. Once the PR is merged, all updated translations are part of the project and will be included in the
-next release.
+LuminalShine and related NortheBridge Software Foundation projects are localized into into `en` (English, US).
+This is the default language, and currently, there are no plans to localize it for other languages.
 
 #### Extraction
 
@@ -91,7 +59,7 @@ The following is a simple example of how to use it.
   ```json
   {
    "index": {
-     "welcome": "Hello, Sunshine!"
+     "welcome": "Hello, LuminalShine!"
    }
   }
   ```
@@ -99,42 +67,6 @@ The following is a simple example of how to use it.
   > [!NOTE]
   > The JSON keys should be sorted alphabetically. You can use [jsonabc](https://novicelab.org/jsonabc)
   > to sort the keys.
-
-  > [!IMPORTANT]
-  > Due to the integration with Crowdin, it is important to only add strings to the *en.json* file,
-  > and to not modify any other language files. After the PR is merged, the translations can take place
-  > on [CrowdIn][crowdin-url]. Once the translations are complete, a PR will be made
-  > to merge the translations into Sunshine.
-
-* Use the string in the Vue component.
-  ```html
-  <template>
-    <div>
-      <p>{{ $t('index.welcome') }}</p>
-    </div>
-  </template>
-  ```
-
-  > [!TIP]
-  > More formatting examples can be found in the
-  > [Vue I18n guide](https://kazupon.github.io/vue-i18n/guide/formatting.html).
-
-##### C++
-
-There should be minimal cases where strings need to be extracted from C++ source code; however it may be necessary in
-some situations. For example the system tray icon could be localized as it is user interfacing.
-
-* Wrap the string to be extracted in a function as shown.
-  ```cpp
-  #include <boost/locale.hpp>
-  #include <string>
-
-  std::string msg = boost::locale::translate("Hello world!");
-  ```
-
-> [!TIP]
-> More examples can be found in the documentation for
-> [boost locale](https://www.boost.org/doc/libs/1_70_0/libs/locale/doc/html/messages_formatting.html).
 
 > [!WARNING]
 > The below is for information only. Contributors should never include manually updated template files, or
@@ -168,58 +100,6 @@ required for this, along with the python dependencies in the `./scripts/requirem
 > Pull Requests. The files are automatically generated and updated by the workflow. Once the PR is merged, the
 > translations can take place on [CrowdIn][crowdin-url]. Once the translations are
 > complete, a PR will be made to merge the translations into Sunshine.
-
-### Testing
-
-#### Clang Format
-Source code is tested against the `.clang-format` file for linting errors. The workflow file responsible for clang
-format testing is `.github/workflows/cpp-clang-format-lint.yml`.
-
-Option 1:
-```bash
-find ./ -iname *.cpp -o -iname *.h -iname *.m -iname *.mm | xargs clang-format -i
-```
-
-Option 2 (will modify files):
-```bash
-python ./scripts/update_clang_format.py
-```
-
-#### Unit Testing
-Sunshine uses [Google Test](https://github.com/google/googletest) for unit testing. Google Test is included in the
-repo as a submodule. The test sources are located in the `./tests` directory.
-
-The tests need to be compiled into an executable, and then run. The tests are built using the normal build process, but
-can be disabled by setting the `BUILD_TESTS` CMake option to `OFF`.
-
-To run the tests, execute the following command.
-
-```bash
-./build/tests/test_sunshine
-```
-
-To see all available options, run the tests with the `--help` flag.
-
-```bash
-./build/tests/test_sunshine --help
-```
-
-> [!TIP]
-> See the googletest [FAQ](https://google.github.io/googletest/faq.html) for more information on how to use Google Test.
-
-We use [gcovr](https://www.gcovr.com) to generate code coverage reports,
-and [Codecov](https://about.codecov.io) to analyze the reports for all PRs and commits.
-
-Codecov will fail a PR if the total coverage is reduced too much, or if not enough of the diff is covered by tests.
-In some cases, the code cannot be covered when running the tests inside of GitHub runners. For example, any test that
-needs access to the GPU will not be able to run. In these cases, the coverage can be omitted by adding comments to the
-code. See the [gcovr documentation](https://gcovr.com/en/stable/guide/exclusion-markers.html#exclusion-markers) for
-more information.
-
-Even if your changes cannot be covered in the CI, we still encourage you to write the tests for them. This will allow
-maintainers to run the tests locally.
-
-[crowdin-url]: https://translate.lizardbyte.dev
 
 <div class="section_buttons">
 
