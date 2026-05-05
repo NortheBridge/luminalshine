@@ -46,7 +46,7 @@ If you place Vue/HTML/TS files outside that tree, extend the glob so their class
 As of the release of LuminalShine, the standard build workflow has changed greatly from Sunshine and Vibeshine, with it now using ``clang`` with ``--fms-extensions`` to build the project. This allows MSVC-specific features to be implemented into LuminalShine without fully depending on MSVC for the build process.
 
 ### Localization
-LuminalShine and related NortheBridge Software Foundation projects are localized into into `en` (English, US).
+LuminalShine and related NortheBridge Foundation projects are localized into into `en` (English, US).
 This is the default language, and currently, there are no plans to localize it for other languages.
 
 #### Extraction

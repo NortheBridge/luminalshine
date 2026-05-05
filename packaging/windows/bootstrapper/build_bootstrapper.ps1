@@ -212,7 +212,7 @@ $assemblyInfoContent = @(
     "[assembly: AssemblyTitle(""$assemblyTitle"")]",
     "[assembly: AssemblyDescription(""$assemblyTitle"")]",
     "[assembly: AssemblyProduct(""$assemblyTitle"")]",
-    "[assembly: AssemblyCompany(""NortheBridge Software Foundation"")]",
+    "[assembly: AssemblyCompany(""NortheBridge Foundation"")]",
     "[assembly: AssemblyVersion(""$assemblyVersion"")]",
     "[assembly: AssemblyFileVersion(""$assemblyVersion"")]",
     "[assembly: AssemblyInformationalVersion(""$informationalVersion"")]"

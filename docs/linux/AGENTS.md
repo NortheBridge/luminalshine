@@ -8,7 +8,7 @@ For full details on every topic, see **`LEARNINGS.md`**. This file is the quick-
 
 ## Repository Context
 
-- **What**: LuminalShine — a Sunshine fork by NortheBridge Software Foundation with CUDA/NVENC, virtual display, WebRTC, and Playnite integration
+- **What**: LuminalShine — a Sunshine fork by NortheBridge Foundation with CUDA/NVENC, virtual display, WebRTC, and Playnite integration
 - **Branch**: `vibe` (main development), `fix/linux-build-boost-1.89` (Linux build fixes)
 - **Binary**: Installed at `~/.local/bin/sunshine` (symlink → versioned binary)
 - **Build dir**: `~/luminalshine-build/build/`
