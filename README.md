@@ -2,11 +2,7 @@
 
 ## What is LuminalShine?
 
-<<<<<<< HEAD
-AI-enhanced, LuminalShine by the NortheBridge Foundation (historically published as "NortheBridge North America") is a modern version of Vibeshine, a fork of Sunshine, a multi-platform popular remote streaming application. It's objective is to offer a Modern Sunshine Experience on Modern Windows including Windows Insider Preview through the Canary Builds.
-=======
 AI-enhanced, LuminalShine by the NortheBridge Foundation (historically published as "NortheBridge North America") is a modern version of Vibeshine, a fork of Sunshine, a multi-platform popular remote streaming application. Its objective is to offer a Modern Sunshine Experience on Modern Windows including Windows Insider Preview through the Canary Builds.
->>>>>>> c57ff3520ec4e620d9942a43492f0535b0ff1107
 
 ### Foundation of LuminalShine
 LuminalShine was created as a direct response to the Vibeshine developers not supporting Windows Insider Preview Builds in the slightest and simply dismissing errors that could and would eventually have to be rectified in order for them to release on Windows Next.
@@ -14,13 +10,8 @@ LuminalShine was created as a direct response to the Vibeshine developers not su
 **Among the Many Changes**: Support for multi-platform is deprecated to allow developers and contributors to solely focus on the Windows platform ___but it is possible for other platforms to return in the future___, advanced support for Windows Insider Preview releases, and the removal of large amounts of "dead code" as well as a unique new development build framework.
 
 ### Our Promise
-<<<<<<< HEAD
-The NortheBridge Foundation promises that this software will remain fully supported for as long as Sunshine is supported and remain free as well as open source under the GNU GPL-v3 License and will not be available for commercial purposes. This includes subrelated projects such as **the future LuminalShine Virtual Graphics Drives (LuminalShine VGD) that will eventually replace the SudoVDA and MTT VDD drivers included with the current release of LuminalShine.
-=======
+
 The NortheBridge Software Foundation promises that this software will remain fully supported for as long as Sunshine is supported and remain free as well as open source under the GNU GPL-v3 License, and will not be available for commercial purposes. This includes subrelated projects such as **the future LuminalShine Virtual Graphics Drives (LuminalShine VGD) that will eventually replace the SudoVDA and MTT VDD drivers included with the current release of LuminalShine.
->>>>>>> c57ff3520ec4e620d9942a43492f0535b0ff1107
-
-
 
 ## Key Features
 
@@ -86,11 +77,7 @@ LuminalShine is based on the **Vibeshine Codebase**, which was largely AI‑gene
 
 LuminalShine, however, looks to rectify this debt as development continues on the software to bring it up to par with something not simply "Vibe-coded" like Vibeshine by creating an interactive, single pane of glass, unified experience.
 
-<<<<<<< HEAD
-Because the Vibeshine codebase was studied before the NortheBridge Foundation defined the new architecture, we know how everything works. We aim to polish the code and documentation but sometimes, due to legacy components, this is not always possible.
-=======
 Because the Vibeshine codebase was studied before the NortheBridge Software Foundation defined the new architecture, we know how everything works. We aim to polish the code and documentation, but sometimes, due to legacy components, this is not always possible.
->>>>>>> c57ff3520ec4e620d9942a43492f0535b0ff1107
 
 ---
 
