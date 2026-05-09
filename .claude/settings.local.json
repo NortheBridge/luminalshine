@@ -23,7 +23,19 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(gh api *)",
+      "Bash(which gh *)",
+      "Read(//opt/homebrew/bin/**)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Skill(schedule)",
+      "Skill(schedule:*)",
+      "Bash(python3 -c \"import uuid; print\\(str\\(uuid.uuid4\\(\\)\\)\\)\")",
+      "Bash(echo \"---rc $? \\(1 = zero matches, expected\\)---\")",
+      "Bash(grep -E \"\\\\.\\(vue|ts|js\\)$\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/public/assets/locale/en.json'\\)\\); json.load\\(open\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/public/assets/locale/en_US.json'\\)\\); print\\('Both valid'\\)\")"
     ],
     "deny": [],
     "ask": []
