@@ -296,22 +296,32 @@ namespace LuminalShineInstaller {
                 ? "LuminalShine Reconfigure v"
                 : (BuildFlavor.IsUninstallOnly ? "LuminalShine Uninstaller v" : "LuminalShine Installer v"))
               + displayVersion;
-      // The install-options layout grew when the virtual-display driver
-      // chooser (3 radio buttons + per-option descriptions, plus an optional
-      // "currently installed" banner on reconfigure) was added. The taller
-      // window keeps everything visible without forcing the content card to
-      // scroll on standard 1080p displays.
-      // The 26.04+ revision added a Windows Insider Preview note to both the
-      // SudoVDA and MTT description blocks (HEVC/AV1-only on SudoVDA on
-      // Insider builds; pick MTT for H.264). Net change is several more
-      // wrapped lines of body text on a ResizeMode=CanMinimize window.
-      // Sizes bumped to 800×920 (install) and 800×560 (update / uninstall)
-      // so neither the install card nor the update/uninstall flows clip on
-      // a 1080p display and the user always sees the action button without
-      // scrolling. Min dimensions trail target by 40px each axis.
-      Width = 800;
+      // Window sizing notes:
+      //
+      // Vertical: the install-options flow shows a driver chooser (3 radio
+      // buttons + per-option descriptions, including an Insider-Preview note
+      // about HEVC/AV1 on SudoVDA), an optional "currently installed" banner
+      // on reconfigure, a tips section, and a status section. Earlier revisions
+      // of this layout used Auto-sized rows on a Top-aligned card, which let
+      // tall content push the footer (action buttons) below the visible
+      // window — users reported "the Install/Update/Remove/Quit buttons are
+      // not shown." The card now uses VerticalAlignment.Stretch with a
+      // sticky-footer Grid (* content row + Auto footer row) wrapping the
+      // content in a ScrollViewer; the footer with action buttons is always
+      // visible at the bottom regardless of how tall the content grows.
+      //
+      // Horizontal: the worst-case button row is the reconfigure flow, where
+      // _continueButton.Content = "Switch virtual display driver" (~265 px) +
+      // _uninstallButton (~215 px) + _licenseButton (102 px) + _closeButton
+      // (102 px) plus inter-button margins ≈ 714 px of buttons alone. With a
+      // 40 px window margin and 40 px card padding the previous MinWidth=760
+      // left only 680 px usable inside the card and clipped the rightmost
+      // buttons. MinWidth bumped to 880 (= 800 px usable inside the card)
+      // gives ~85 px of breathing room on the worst case. Target Width must
+      // be ≥ MinWidth, so target Width is also bumped to 920.
+      Width = 920;
       Height = showInstallOptions ? 920 : 560;
-      MinWidth = 760;
+      MinWidth = 880;
       MinHeight = showInstallOptions ? 880 : 520;
       WindowStartupLocation = WindowStartupLocation.CenterScreen;
       ResizeMode = ResizeMode.CanMinimize;
@@ -397,7 +407,10 @@ namespace LuminalShineInstaller {
         Background = new SolidColorBrush(Color.FromArgb(238, 14, 20, 36)),
         BorderBrush = new SolidColorBrush(Color.FromArgb(145, 99, 102, 241)),
         BorderThickness = new Thickness(1.2),
-        VerticalAlignment = VerticalAlignment.Top
+        // Stretch (rather than Top) so the card fills the window vertically
+        // and the sticky-footer Grid below can park the action buttons at
+        // the bottom edge regardless of content height.
+        VerticalAlignment = VerticalAlignment.Stretch
       };
       Grid.SetRow(card, 1);
       root.Children.Add(card);
@@ -538,15 +551,33 @@ namespace LuminalShineInstaller {
       overlayButtons.Children.Add(_overlayPrimaryButton);
 
       var cardGrid = new Grid();
-      cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+      // Row 0 is the flexible content area (Star). Row 1 is the always-
+      // visible footer (Auto). Together with the ScrollViewer below this
+      // is the standard WPF "scrollable content + sticky footer" pattern —
+      // tall content scrolls inside Row 0 instead of pushing the footer
+      // (and its action buttons) below the visible window bottom.
+      cardGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
       cardGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
       card.Child = cardGrid;
+
+      // ScrollViewer wraps the content stack so it can scroll vertically
+      // when the install-section + tips + status don't fit. Horizontal
+      // scrolling is disabled (content is always meant to fit horizontally;
+      // any horizontal overflow is a layout bug, not a scenario to support).
+      // Right-padding leaves a small gutter so the scrollbar, when visible,
+      // doesn't overlap the rightmost edge of the content's text.
+      var contentScroll = new ScrollViewer {
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        Padding = new Thickness(0, 0, 6, 0)
+      };
+      Grid.SetRow(contentScroll, 0);
+      cardGrid.Children.Add(contentScroll);
 
       var contentStack = new StackPanel {
         Orientation = Orientation.Vertical
       };
-      Grid.SetRow(contentStack, 0);
-      cardGrid.Children.Add(contentStack);
+      contentScroll.Content = contentStack;
 
       _installSection = new Border {
         CornerRadius = new CornerRadius(10),
@@ -897,24 +928,20 @@ namespace LuminalShineInstaller {
       Grid.SetRow(_progressBar, 0);
       footerGrid.Children.Add(_progressBar);
 
-      var buttonRow = new Grid();
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition());
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-      buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+      // Right-aligned horizontal StackPanel. The previous 5-column Grid
+      // (with an empty-by-default `buttonHint` TextBlock occupying a Star
+      // column to push the buttons right) was vestigial — buttonHint never
+      // got assigned a non-empty Text — and the Star + multiple Auto
+      // columns combination clipped the rightmost buttons when the
+      // continue label was wide (e.g. "Switch virtual display driver"
+      // during reconfigure). StackPanel sizes naturally to content and
+      // right-aligns the whole row.
+      var buttonRow = new StackPanel {
+        Orientation = Orientation.Horizontal,
+        HorizontalAlignment = HorizontalAlignment.Right
+      };
       Grid.SetRow(buttonRow, 1);
       footerGrid.Children.Add(buttonRow);
-
-      var buttonHint = new TextBlock {
-        Text = "",
-        Foreground = new SolidColorBrush(Color.FromRgb(195, 209, 232)),
-        FontSize = 12,
-        TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(0, 0, 8, 0),
-        VerticalAlignment = VerticalAlignment.Center
-      };
-      buttonRow.Children.Add(buttonHint);
 
       _continueButton = new Button {
         Content = "Next",
@@ -934,7 +961,6 @@ namespace LuminalShineInstaller {
       _continueButton.MouseLeave += ContinueButtonMouseLeave;
       _continueButton.Click += ContinueClicked;
       ApplyFlatButtonTemplate(_continueButton, 8);
-      Grid.SetColumn(_continueButton, 1);
       buttonRow.Children.Add(_continueButton);
 
       _uninstallButton = new Button {
@@ -954,7 +980,6 @@ namespace LuminalShineInstaller {
       _uninstallButton.MouseLeave += UninstallButtonMouseLeave;
       _uninstallButton.Click += UninstallNowClicked;
       ApplyFlatButtonTemplate(_uninstallButton, 8);
-      Grid.SetColumn(_uninstallButton, 2);
       buttonRow.Children.Add(_uninstallButton);
 
       _licenseButton = new Button {
@@ -971,7 +996,6 @@ namespace LuminalShineInstaller {
       };
       _licenseButton.Click += LicenseClicked;
       ApplyFlatButtonTemplate(_licenseButton, 8);
-      Grid.SetColumn(_licenseButton, 3);
       buttonRow.Children.Add(_licenseButton);
 
       _closeButton = new Button {
@@ -989,7 +1013,6 @@ namespace LuminalShineInstaller {
       };
       _closeButton.Click += (sender, eventArgs) => Close();
       ApplyFlatButtonTemplate(_closeButton, 8);
-      Grid.SetColumn(_closeButton, 4);
       buttonRow.Children.Add(_closeButton);
 
       _continueButton.Content =
