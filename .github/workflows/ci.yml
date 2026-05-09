@@ -101,7 +101,7 @@ jobs:
         run: ls -l artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974  # v2.1.0
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
           body: ${{ needs.release-setup.outputs.release_body }}
           generate_release_notes: ${{ needs.release-setup.outputs.release_generate_release_notes }}
