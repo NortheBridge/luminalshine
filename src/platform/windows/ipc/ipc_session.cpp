@@ -339,7 +339,24 @@ namespace platf::dxgi {
       return;
     }
 
-    constexpr auto handle_wait_timeout = std::chrono::seconds(3);
+    // Progressive timeout: the cold-start case usually completes well under
+    // 3 s, but on a busy host (background work, antivirus scanning the helper
+    // exe, slow user-token resolution in the helper) the handshake can run
+    // long. The previous fixed-3 s budget meant a slow start triggered a
+    // terminate-and-relaunch loop — observed on Insider Preview as 4
+    // consecutive 3 s timeouts before the 5th launch succeeded, costing
+    // ~14 s of session-startup latency. Bumping the per-attempt budget to
+    // 6 s once we've already seen one timeout in this process catches the
+    // slow-start case in one retry instead of four.
+    //
+    // Counter is per-parent-process (this is the main sunshine.exe; helper
+    // is spawned and killed each attempt). Reset on a successful handshake
+    // so a host that occasionally hits a cold-start blip doesn't pay the
+    // longer timeout for every subsequent stream session.
+    static std::atomic<int> consecutive_timeouts {0};
+    const int prior_timeouts = consecutive_timeouts.load(std::memory_order_acquire);
+    const auto handle_wait_timeout =
+      (prior_timeouts == 0) ? std::chrono::seconds(3) : std::chrono::seconds(6);
     auto deadline = std::chrono::steady_clock::now() + handle_wait_timeout;
     std::array<uint8_t, sizeof(shared_handle_data_t)> control_buffer {};
     bool handle_received = false;
@@ -385,12 +402,17 @@ namespace platf::dxgi {
 
     if (!handle_received) {
       if (timed_out_waiting) {
-        BOOST_LOG(error) << "Timed out waiting for handle data from helper process (3s)";
+        consecutive_timeouts.fetch_add(1, std::memory_order_acq_rel);
+        BOOST_LOG(error) << "Timed out waiting for handle data from helper process ("
+                         << handle_wait_timeout.count() << "s)";
       }
       BOOST_LOG(error) << "Failed to receive handle data from helper process! Helper is likely deadlocked!";
       _process_helper->terminate();
       return;
     }
+    // Successful handshake — clear the timeout counter so the next cold
+    // start can use the tight 3 s budget again.
+    consecutive_timeouts.store(0, std::memory_order_release);
 
     auto cleanup_on_failure = util::fail_guard([this]() {
       if (_pipe) {
