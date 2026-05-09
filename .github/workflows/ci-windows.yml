@@ -102,7 +102,7 @@ jobs:
           # do not modify below this line
 
           ignore_packages=()
-          tarballs=""
+          tarballs=()
           for pkg in "${!pinned_deps[@]}"; do
             ignore_packages+=("${pkg}")
             version="${pinned_deps[$pkg]}"
@@ -111,15 +111,15 @@ jobs:
             # download working version
             wget "https://repo.msys2.org/mingw/${MATRIX_MSYSTEM}/${tarball}"
 
-            tarballs="${tarballs} ${tarball}"
+            tarballs+=("${tarball}")
           done
 
           # Create the ignore string for pacman
           ignore_list=$(IFS=,; echo "${ignore_packages[*]}")
 
           # install pinned dependencies
-          if [ -n "${tarballs}" ]; then
-            pacman -U --noconfirm "${tarballs}"
+          if [ ${#tarballs[@]} -gt 0 ]; then
+            pacman -U --noconfirm "${tarballs[@]}"
           fi
 
           # Only add --ignore if we have packages to ignore
