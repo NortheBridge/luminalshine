@@ -889,6 +889,34 @@ namespace nvenc {
     lock_bitstream.doNotWait = async_event_handle ? 1 : 0;
 
     if (async_event_handle && !wait_for_async_event(100)) {
+      // Capture diagnostic context on the timeout. The previous one-line
+      // log gave no signal about whether this was a transient bubble or
+      // the start of a TDR — and the line printed two lines before the
+      // recovery cascade in user crash logs, so support readers had no
+      // way to distinguish a recoverable hiccup from a process-killing
+      // hang. Numbers below are cheap to compute and orient the reader
+      // immediately: how long has this session been alive, how long
+      // since the last successful encode, what was the configured frame
+      // shape. Keep this single info line; the existing error stays for
+      // log-level filters that already key on it.
+      const auto now = std::chrono::steady_clock::now();
+      const auto session_age =
+        encoder_state.session_start_time != std::chrono::steady_clock::time_point::min()
+          ? std::chrono::duration_cast<std::chrono::milliseconds>(now - encoder_state.session_start_time).count()
+          : 0;
+      const auto since_last_encode =
+        encoder_state.last_successful_encode_time != std::chrono::steady_clock::time_point::min()
+          ? std::chrono::duration_cast<std::chrono::milliseconds>(now - encoder_state.last_successful_encode_time).count()
+          : 0;
+      BOOST_LOG(info) << "NvEnc: encode-wait timeout context — frame=" << frame_index
+                      << " last_successful_frame=" << encoder_state.last_encoded_frame_index
+                      << " session_age=" << session_age << "ms"
+                      << " since_last_encode=" << since_last_encode << "ms"
+                      << " resolution=" << encoder_params.width << "x" << encoder_params.height
+                      << " buffer_format=" << static_cast<int>(encoder_params.buffer_format)
+                      << " force_idr=" << (force_idr ? "true" : "false")
+                      << ". A long since_last_encode (>200ms) typically indicates GPU TDR is in progress; "
+                         "the encoder will tear down and the D3D11 retry path (D3D11CreateDeviceWithRecovery) will pick up.";
       BOOST_LOG(error) << "NvEnc: frame " << frame_index << " encode wait timeout";
       return {};
     }
@@ -922,6 +950,16 @@ namespace nvenc {
     }
 
     encoder_state.frame_size_logger.collect_and_log(encoded_frame.data.size() / 1000.);
+
+    // Telemetry hooks: record the first successful encode as the session
+    // start, and update the per-encode timestamp so a later timeout can
+    // report "since last successful encode". Both fields are read-only
+    // outside this function.
+    const auto now = std::chrono::steady_clock::now();
+    if (encoder_state.session_start_time == std::chrono::steady_clock::time_point::min()) {
+      encoder_state.session_start_time = now;
+    }
+    encoder_state.last_successful_encode_time = now;
 
     return encoded_frame;
   }

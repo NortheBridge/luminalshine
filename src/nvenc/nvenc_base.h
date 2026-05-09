@@ -5,6 +5,7 @@
 #pragma once
 
 // lib includes
+#include <chrono>
 #include <ffnvcodec/nvEncodeAPI.h>
 
 // local includes
@@ -140,6 +141,13 @@ namespace nvenc {
       bool rfi_needs_confirmation = false;
       std::pair<uint64_t, uint64_t> last_rfi_range;
       logging::min_max_avg_periodic_logger<double> frame_size_logger = {debug, "NvEnc: encoded frame sizes in kB", ""};
+      // Telemetry for the encode-wait-timeout diagnostic. Populated on each
+      // successful encode_frame so the timeout site can report "how far did
+      // we get and when did we last succeed" without grepping through the
+      // surrounding debug log. Stored as steady_clock to remain monotonic
+      // across system clock changes.
+      std::chrono::steady_clock::time_point session_start_time = std::chrono::steady_clock::time_point::min();
+      std::chrono::steady_clock::time_point last_successful_encode_time = std::chrono::steady_clock::time_point::min();
     } encoder_state;
   };
 
