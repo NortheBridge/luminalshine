@@ -45,6 +45,22 @@ jobs:
           install: >-
             wget
 
+      - name: Setup Node.js
+        # Use the official MSVC-built Node.js Windows binary instead of the
+        # MSYS2 mingw-w64 build. The mingw-w64 nodejs package
+        # (mingw-w64-ucrt-x86_64-nodejs) suffers from a std::bad_weak_ptr
+        # race in libuv worker-thread teardown that crashes both `npm ci`
+        # and `vite build` with STATUS_STACK_BUFFER_OVERRUN
+        # (exit 0xC0000409). The bug is in how MSYS2 builds Node from
+        # source with clang/mingw-w64 — the official MSVC-compiled Windows
+        # binaries from nodejs.org don't have it. CMake's web-ui target
+        # uses find_program(NPM npm REQUIRED) so it picks up whichever
+        # `npm` is first on PATH; actions/setup-node prepends its install
+        # so the official binary wins.
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
+        with:
+          node-version: '22'
+
       - name: Update Windows dependencies
         env:
           # MSYSTEM is a built-in environment variable of MSYS2.
@@ -55,18 +71,6 @@ jobs:
         run: |
           # variables
           declare -A pinned_deps
-          # The MSYS2 ucrt64 nodejs package was rebuilt as
-          # mingw-w64-ucrt-x86_64-nodejs-24.14.1-2 on 2026-05-05. That
-          # rebuild crashes during `npm ci` with std::bad_weak_ptr (libuv
-          # /v8 lifetime race surfaced by whatever toolchain change came
-          # with the rebump), which terminates the process via __fastfail
-          # (exit 0xC0000409 / 3221226505) before the Web UI build can
-          # start. Pinning to 24.14.1-1 (2026-04-14) — the immediate
-          # predecessor that ran cleanly — is the minimal-risk fix while
-          # we wait for upstream to either issue another rebuild or for
-          # the next Node release to land. Re-check this pin after every
-          # setup-msys2 bump and try removing it.
-          pinned_deps["mingw-w64-ucrt-x86_64-nodejs"]="24.14.1-1"
 
           # dependencies
           # NOTE: We build with clang (not gcc) so __try/__except SEH compiles
@@ -95,9 +99,12 @@ jobs:
             dependencies+=(
               "mingw-w64-${TOOLCHAIN}-MinHook"
               "mingw-w64-${TOOLCHAIN}-nsis"
-              "mingw-w64-${TOOLCHAIN}-nodejs"
             )
           fi
+          # NOTE: mingw-w64-${TOOLCHAIN}-nodejs is intentionally not in
+          # this list. We use actions/setup-node to install the official
+          # MSVC-built Node.js binary instead — see the "Setup Node.js"
+          # step above for the rationale.
 
           # do not modify below this line
 
