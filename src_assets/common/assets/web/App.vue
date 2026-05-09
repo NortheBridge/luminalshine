@@ -37,6 +37,9 @@
                   <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
                     <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
                   </RouterLink>
+                  <RouterLink to="/about" :class="linkClass('/about')">
+                    <i class="fas fa-circle-info" /><span>{{ $t('navbar.about') }}</span>
+                  </RouterLink>
                   <a href="#" :class="linkClass('/logout')" @click.prevent="logout">
                     <i class="fas fa-sign-out-alt" /><span>{{ $t('navbar.logout') }}</span>
                   </a>
@@ -243,6 +246,7 @@ const mobileMenuOptions = computed(() => {
     { label: t('webrtc.nav'), key: '/webrtc', icon: icon('fas fa-satellite-dish') },
     { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
     { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },
+    { label: t('navbar.about'), key: '/about', icon: icon('fas fa-circle-info') },
     { type: 'divider' as const },
     { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
   ];

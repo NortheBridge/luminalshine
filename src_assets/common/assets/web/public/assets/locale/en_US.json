@@ -492,7 +492,8 @@
     "theme_slate": "Slate",
     "theme_sunshine": "Sunshine",
     "toggle_theme": "Theme",
-    "troubleshoot": "Troubleshooting"
+    "troubleshoot": "Troubleshooting",
+    "about": "About"
   },
   "password": {
     "confirm_password": "Confirm Password",

@@ -9,6 +9,7 @@ const SettingsView = () => import('@/views/SettingsView.vue');
 const TroubleshootingView = () => import('@/views/TroubleshootingView.vue');
 const ClientManagementView = () => import('@/views/ClientManagementView.vue');
 const WebRtcClientView = () => import('@/views/WebRtcClientView.vue');
+const AboutView = () => import('@/views/AboutView.vue');
 
 const routes = [
   { path: '/', component: DashboardView },
@@ -17,6 +18,7 @@ const routes = [
   { path: '/logs', component: DashboardView },
   { path: '/troubleshooting', component: TroubleshootingView },
   { path: '/clients', component: ClientManagementView },
+  { path: '/about', component: AboutView, meta: { container: 'lg' } },
   {
     path: '/api-tokens',
     alias: '/api-tokens/',

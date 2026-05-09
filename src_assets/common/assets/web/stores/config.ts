@@ -2,12 +2,13 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { http } from '@/http';
 
-// Metadata describing build/runtime info returned by /api/meta
+// Metadata describing build/runtime info returned by /api/metadata
 export interface MetaInfo {
   platform?: string;
   status?: boolean;
   version?: string;
   commit?: string;
+  prerelease?: string;
   branch?: string;
   release_date?: string; // ISO 8601 when available
   gpus?: Array<{
@@ -26,6 +27,41 @@ export interface MetaInfo {
   windows_build_number?: number;
   windows_major_version?: number;
   windows_minor_version?: number;
+  // About-page diagnostic fields (Windows only).
+  gpu_drivers?: Array<{
+    vendor_id?: number;
+    device_id?: number;
+    description?: string;
+    driver_version?: string;
+    driver_date?: string;
+  }>;
+  windows_insider?: {
+    is_insider?: boolean;
+    branch_name?: string;
+    ring?: string;
+    content_type?: string;
+  };
+  displays?: Array<{
+    display_name?: string;
+    friendly_name?: string;
+    advanced_color_supported?: boolean;
+    advanced_color_enabled?: boolean;
+  }>;
+  encoder_probe?: {
+    probed?: boolean;
+    h264_available?: boolean;
+    hevc_available?: boolean;
+    av1_available?: boolean;
+    h264_yuv444?: boolean;
+    hevc_yuv444?: boolean;
+    av1_yuv444?: boolean;
+    ref_frames_invalidation?: boolean;
+  };
+  virtual_display_backend?: string;
+  virtual_display_backend_version?: string;
+  virtual_display_driver_status?: number | string;
+  virtual_display_driver_ready?: boolean;
+  active_session_count?: number;
 }
 
 // --- Defaults (flat) -------------------------------------------------------
