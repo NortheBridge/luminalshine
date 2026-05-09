@@ -35,7 +35,10 @@
       "Bash(python3 -c \"import uuid; print\\(str\\(uuid.uuid4\\(\\)\\)\\)\")",
       "Bash(echo \"---rc $? \\(1 = zero matches, expected\\)---\")",
       "Bash(grep -E \"\\\\.\\(vue|ts|js\\)$\")",
-      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/public/assets/locale/en.json'\\)\\); json.load\\(open\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/public/assets/locale/en_US.json'\\)\\); print\\('Both valid'\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/public/assets/locale/en.json'\\)\\); json.load\\(open\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/public/assets/locale/en_US.json'\\)\\); print\\('Both valid'\\)\")",
+      "WebFetch(domain:repo.msys2.org)",
+      "Bash(curl -fsS \"https://repo.msys2.org/mingw/ucrt64/\")",
+      "Bash(curl -sI \"https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-nodejs-24.14.1-1-any.pkg.tar.zst\")"
     ],
     "deny": [],
     "ask": []
