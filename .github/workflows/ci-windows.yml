@@ -2,11 +2,6 @@
 name: CI-Windows
 permissions: {}
 
-# Opt msys2/setup-msys2 (still on the Node 20 runtime in v2.30.0) into the
-# Node 24 runtime to silence the deprecation warning and stay forward-compatible.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 on:
   workflow_call:
     inputs:
@@ -43,7 +38,7 @@ jobs:
 
       - name: Setup Dependencies Windows
         # if a dependency needs to be pinned, see https://github.com/LizardByte/build-deps/pull/186
-        uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda  # v2.30.0
+        uses: msys2/setup-msys2@e9898307ac31d1a803454791be09ab9973336e1c  # v2.31.1
         with:
           msystem: ${{ matrix.msystem }}
           update: true
