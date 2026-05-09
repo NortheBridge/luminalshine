@@ -55,6 +55,18 @@ jobs:
         run: |
           # variables
           declare -A pinned_deps
+          # The MSYS2 ucrt64 nodejs package was rebuilt as
+          # mingw-w64-ucrt-x86_64-nodejs-24.14.1-2 on 2026-05-05. That
+          # rebuild crashes during `npm ci` with std::bad_weak_ptr (libuv
+          # /v8 lifetime race surfaced by whatever toolchain change came
+          # with the rebump), which terminates the process via __fastfail
+          # (exit 0xC0000409 / 3221226505) before the Web UI build can
+          # start. Pinning to 24.14.1-1 (2026-04-14) — the immediate
+          # predecessor that ran cleanly — is the minimal-risk fix while
+          # we wait for upstream to either issue another rebuild or for
+          # the next Node release to land. Re-check this pin after every
+          # setup-msys2 bump and try removing it.
+          pinned_deps["mingw-w64-ucrt-x86_64-nodejs"]="24.14.1-1"
 
           # dependencies
           # NOTE: We build with clang (not gcc) so __try/__except SEH compiles
