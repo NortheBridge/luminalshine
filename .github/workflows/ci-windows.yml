@@ -44,6 +44,14 @@ jobs:
           update: true
           install: >-
             wget
+          # Inherit the Windows PATH (prepend MSYS2 bins to it instead of
+          # replacing it) so subsequent `shell: msys2 {0}` steps can see
+          # tools installed by other Actions — specifically the official
+          # Node.js placed on PATH by actions/setup-node below. Without
+          # this, CMake's find_program(NPM npm REQUIRED) fails because
+          # MSYS2's default minimal PATH doesn't include the runner-side
+          # tool directories.
+          path-type: inherit
 
       - name: Setup Node.js
         # Use the official MSVC-built Node.js Windows binary instead of the
