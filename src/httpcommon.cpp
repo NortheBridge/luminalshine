@@ -6,11 +6,13 @@
 
 // standard includes
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 // lib includes
@@ -57,6 +59,87 @@ namespace {
   std::string windows_ca_bundle;
   bool windows_ca_loaded = false;
   std::size_t windows_ca_count = 0;
+  std::size_t windows_ca_skipped_non_ca = 0;
+  std::size_t windows_ca_skipped_dup = 0;
+
+  // curl's schannel backend hard-rejects CAINFO files larger than 1 MiB
+  // (CURL_MAX_INPUT_LENGTH for the schannel cert importer). Cap our bundle
+  // before passing it to libcurl so update checks don't fail with
+  // "schannel: CA file exceeds max size of 1048576 bytes".
+  constexpr std::size_t kSchannelCaInfoMaxBytes = 1048576;
+
+  // Treat a certificate as a usable CA only when both BasicConstraints
+  // marks it as a CA AND key usage permits keyCertSign. The Windows ROOT
+  // store on a typical desktop is full of intermediates, end-entity certs
+  // pulled from CurrentUser\My, and other non-CA material that schannel
+  // refuses to use as a trust anchor anyway. Filtering early shrinks the
+  // bundle from ~1260 entries to the actual ~200 trust anchors.
+  bool is_usable_ca_cert(PCCERT_CONTEXT ctx) {
+    if (!ctx || !ctx->pCertInfo) {
+      return false;
+    }
+    bool has_basic_ca = false;
+    if (auto *bc_ext = CertFindExtension(
+          szOID_BASIC_CONSTRAINTS2,
+          ctx->pCertInfo->cExtension,
+          ctx->pCertInfo->rgExtension)) {
+      CERT_BASIC_CONSTRAINTS2_INFO info {};
+      DWORD info_size = sizeof(info);
+      if (CryptDecodeObjectEx(
+            X509_ASN_ENCODING,
+            X509_BASIC_CONSTRAINTS2,
+            bc_ext->Value.pbData,
+            bc_ext->Value.cbData,
+            CRYPT_DECODE_NOCOPY_FLAG,
+            nullptr,
+            &info,
+            &info_size)) {
+        has_basic_ca = info.fCA != FALSE;
+      }
+    } else {
+      // No BasicConstraints extension — root certs predating RFC 3280 are
+      // legitimately CAs. Allow self-signed certs (issuer == subject) through
+      // even without the extension; schannel will accept them as trust anchors.
+      const auto &issuer = ctx->pCertInfo->Issuer;
+      const auto &subject = ctx->pCertInfo->Subject;
+      if (issuer.cbData == subject.cbData
+          && issuer.cbData > 0
+          && std::memcmp(issuer.pbData, subject.pbData, issuer.cbData) == 0) {
+        has_basic_ca = true;
+      }
+    }
+    if (!has_basic_ca) {
+      return false;
+    }
+
+    // Key usage check: the cert must permit keyCertSign. If the extension is
+    // absent, default-allow (RFC 5280 §4.2.1.3 makes KU advisory).
+    if (auto *ku_ext = CertFindExtension(
+          szOID_KEY_USAGE,
+          ctx->pCertInfo->cExtension,
+          ctx->pCertInfo->rgExtension)) {
+      CRYPT_BIT_BLOB ku_blob {};
+      DWORD blob_size = sizeof(ku_blob);
+      BYTE ku_bytes[2] = {0, 0};
+      ku_blob.pbData = ku_bytes;
+      ku_blob.cbData = sizeof(ku_bytes);
+      if (CryptDecodeObjectEx(
+            X509_ASN_ENCODING,
+            X509_KEY_USAGE,
+            ku_ext->Value.pbData,
+            ku_ext->Value.cbData,
+            0,
+            nullptr,
+            &ku_blob,
+            &blob_size)
+          && ku_blob.cbData >= 1) {
+        if ((ku_blob.pbData[0] & CERT_KEY_CERT_SIGN_KEY_USAGE) == 0) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
 
   void append_pem_chunk(const char *data, DWORD length) {
     if (!data || length == 0) {
@@ -75,7 +158,7 @@ namespace {
     }
   }
 
-  bool populate_from_store(DWORD flags) {
+  bool populate_from_store(DWORD flags, std::unordered_set<std::string> &seen_fingerprints) {
     HCERTSTORE store = CertOpenStore(
       CERT_STORE_PROV_SYSTEM_W,
       0,
@@ -89,8 +172,32 @@ namespace {
     }
 
     std::size_t added = 0;
+    std::size_t skipped_non_ca = 0;
+    std::size_t skipped_dup = 0;
     PCCERT_CONTEXT ctx = nullptr;
     while ((ctx = CertEnumCertificatesInStore(store, ctx)) != nullptr) {
+      // Filter to actual trust anchors before doing any work.
+      if (!is_usable_ca_cert(ctx)) {
+        ++skipped_non_ca;
+        continue;
+      }
+
+      // Deduplicate by SHA-256 fingerprint — both stores commonly contain the
+      // same Microsoft / public-CA roots, and the LM/CU duplication alone was
+      // the primary cause of the >1 MiB bundle.
+      BYTE fp[32] = {};
+      DWORD fp_len = sizeof(fp);
+      if (!CertGetCertificateContextProperty(ctx, CERT_HASH_PROP_ID, fp, &fp_len) || fp_len == 0) {
+        // Fall back to using the encoded body as the dedup key; this is rare.
+        fp_len = (ctx->cbCertEncoded < sizeof(fp)) ? ctx->cbCertEncoded : sizeof(fp);
+        std::memcpy(fp, ctx->pbCertEncoded, fp_len);
+      }
+      std::string fp_key(reinterpret_cast<const char *>(fp), fp_len);
+      if (!seen_fingerprints.insert(std::move(fp_key)).second) {
+        ++skipped_dup;
+        continue;
+      }
+
       DWORD out_len = 0;
       if (!CryptBinaryToStringA(ctx->pbCertEncoded, ctx->cbCertEncoded, CRYPT_STRING_BASE64HEADER, nullptr, &out_len)) {
         continue;
@@ -103,9 +210,12 @@ namespace {
       ++added;
     }
     CertCloseStore(store, 0);
-    if (added > 0) {
-      windows_ca_count += added;
-      BOOST_LOG(debug) << "Loaded " << added << " certificates from Windows store flags " << flags;
+    windows_ca_count += added;
+    windows_ca_skipped_non_ca += skipped_non_ca;
+    windows_ca_skipped_dup += skipped_dup;
+    if (added > 0 || skipped_non_ca > 0 || skipped_dup > 0) {
+      BOOST_LOG(debug) << "Loaded " << added << " trust anchors from Windows store flags " << flags
+                       << " (skipped " << skipped_non_ca << " non-CA, " << skipped_dup << " duplicate)";
     }
     return added > 0;
   }
@@ -113,14 +223,33 @@ namespace {
   void load_windows_root_store() {
     windows_ca_bundle.clear();
     windows_ca_count = 0;
-    bool loaded_machine = populate_from_store(CERT_SYSTEM_STORE_LOCAL_MACHINE);
-    bool loaded_user = populate_from_store(CERT_SYSTEM_STORE_CURRENT_USER);
+    windows_ca_skipped_non_ca = 0;
+    windows_ca_skipped_dup = 0;
+    std::unordered_set<std::string> seen_fingerprints;
+    seen_fingerprints.reserve(512);
+    bool loaded_machine = populate_from_store(CERT_SYSTEM_STORE_LOCAL_MACHINE, seen_fingerprints);
+    bool loaded_user = populate_from_store(CERT_SYSTEM_STORE_CURRENT_USER, seen_fingerprints);
     windows_ca_loaded = loaded_machine || loaded_user;
 
+    // Final size guard: if even after dedup + CA-only filter the bundle
+    // still exceeds schannel's hard limit, drop the bundle entirely so the
+    // caller can fall back to CURLSSLOPT_NATIVE_CA. Better to ask schannel
+    // to walk the OS store directly than to ship a file curl will reject.
+    if (windows_ca_loaded && windows_ca_bundle.size() > kSchannelCaInfoMaxBytes) {
+      BOOST_LOG(warning) << "Windows CA bundle still exceeds schannel limit after filtering ("
+                         << windows_ca_bundle.size() << " bytes, " << windows_ca_count
+                         << " trust anchors); discarding bundle and relying on schannel native trust store.";
+      windows_ca_bundle.clear();
+      windows_ca_loaded = false;
+    }
+
     if (windows_ca_loaded) {
-      BOOST_LOG(info) << "Loaded " << windows_ca_count << " Windows root certificates (machine="
-                      << (loaded_machine ? "yes" : "no") << ", user=" << (loaded_user ? "yes" : "no") << ')';
-    } else {
+      BOOST_LOG(info) << "Loaded " << windows_ca_count << " Windows trust anchors (machine="
+                      << (loaded_machine ? "yes" : "no") << ", user=" << (loaded_user ? "yes" : "no")
+                      << ", bundle=" << windows_ca_bundle.size() << "B, skipped="
+                      << windows_ca_skipped_non_ca << " non-CA / "
+                      << windows_ca_skipped_dup << " dup)";
+    } else if (!loaded_machine && !loaded_user) {
       BOOST_LOG(error) << "Unable to load certificates from any Windows ROOT store. Last error " << GetLastError();
     }
   }
@@ -129,7 +258,14 @@ namespace {
     static std::once_flag write_once;
     static std::optional<std::string> path;
     std::call_once(write_once, []() {
-      if (!windows_ca_loaded) {
+      if (!windows_ca_loaded || windows_ca_bundle.empty()) {
+        return;
+      }
+      if (windows_ca_bundle.size() > kSchannelCaInfoMaxBytes) {
+        // Should already have been guarded in load_windows_root_store, but
+        // keep this defensive check to avoid ever emitting a too-large file.
+        BOOST_LOG(warning) << "Skipping CA bundle file write: size "
+                           << windows_ca_bundle.size() << "B exceeds schannel limit";
         return;
       }
       try {
@@ -138,7 +274,8 @@ namespace {
         out.write(windows_ca_bundle.data(), static_cast<std::streamsize>(windows_ca_bundle.size()));
         if (out && out.good()) {
           path = temp.string();
-          BOOST_LOG(debug) << "Persisted Windows CA bundle to " << *path;
+          BOOST_LOG(debug) << "Persisted Windows CA bundle to " << *path
+                           << " (" << windows_ca_bundle.size() << " bytes)";
         }
       } catch (const std::exception &ex) {
         BOOST_LOG(error) << "Failed to persist Windows CA bundle: " << ex.what();
@@ -153,17 +290,27 @@ namespace {
       return false;
     }
 #if defined(_WIN32)
-    std::call_once(windows_ca_once, load_windows_root_store);
-
+    // Preferred path: tell curl to walk the schannel/native trust store
+    // directly. This avoids materializing a PEM bundle entirely and is the
+    // schannel-recommended approach on Windows. Try it before doing any of
+    // the expensive cert enumeration / dedup work below.
   #if defined(CURLOPT_SSL_OPTIONS) && defined(CURLSSLOPT_NATIVE_CA)
     CURLcode native_res = curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
     if (native_res == CURLE_OK) {
       return true;
     }
+    BOOST_LOG(debug) << "CURLSSLOPT_NATIVE_CA setopt rejected (code " << native_res
+                     << "); falling back to manually-built CA bundle.";
   #endif
 
+    // Fallback path: materialize a deduplicated, CA-filtered, size-capped
+    // PEM bundle from the Windows ROOT stores. Loaded lazily so a build
+    // where NATIVE_CA always succeeds never pays this cost.
+    std::call_once(windows_ca_once, load_windows_root_store);
+
     if (!windows_ca_loaded) {
-      BOOST_LOG(warning) << "Windows root certificate bundle not available for HTTPS requests";
+      BOOST_LOG(warning) << "Windows root certificate bundle not available for HTTPS requests; "
+                            "schannel will use its built-in defaults if any.";
       return false;
     }
 
