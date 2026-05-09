@@ -4000,6 +4000,55 @@ namespace VDISPLAY {
     return std::nullopt;
   }
 
+  // Track consecutive enumerate_devices failures so we can detect a stuck
+  // post-TDR display stack and break the cycle. The libdisplaydevice
+  // submodule already retries QueryDisplayConfig 9× internally; once it
+  // gives up and returns nullopt to us, the OS display API is genuinely
+  // wedged. Hammering it more from this layer just produces more noise.
+  // Instead, after a small consecutive-failure threshold we close and
+  // reopen the SudoVDA / MTT VDD handle (which on Windows triggers a
+  // device-stack rebuild) and retry exactly once — gated by a 30s rate
+  // limit so a permanently-stuck driver can't get reset in a tight loop.
+  namespace {
+    std::mutex g_qdc_recovery_mutex;
+    int g_qdc_consecutive_failures = 0;
+    std::chrono::steady_clock::time_point g_qdc_last_reset_at {};
+    constexpr int kQdcFailureResetThreshold = 3;
+    constexpr std::chrono::seconds kQdcResetCooldown {30};
+
+    bool maybe_reset_virtual_display_driver_for_qdc() {
+      std::lock_guard<std::mutex> lk(g_qdc_recovery_mutex);
+      ++g_qdc_consecutive_failures;
+      if (g_qdc_consecutive_failures < kQdcFailureResetThreshold) {
+        return false;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (g_qdc_last_reset_at != std::chrono::steady_clock::time_point {}
+          && (now - g_qdc_last_reset_at) < kQdcResetCooldown) {
+        // Within cooldown — don't try to reset again. Caller falls back
+        // to the existing recreate-on-demand path.
+        return false;
+      }
+      g_qdc_last_reset_at = now;
+      g_qdc_consecutive_failures = 0;
+      BOOST_LOG(info) << "Display config API unavailable for "
+                      << kQdcFailureResetThreshold
+                      << " consecutive enumerate calls; resetting virtual display driver handle "
+                         "to break a likely post-TDR stuck state.";
+      // Done under the lock so two concurrent resolvers don't both try
+      // to recycle the driver. The reset itself is idempotent but the
+      // close+open pair shouldn't race.
+      closeVDisplayDevice();
+      proc::initVDisplayDriver();
+      return true;
+    }
+
+    void note_enumerate_success() {
+      std::lock_guard<std::mutex> lk(g_qdc_recovery_mutex);
+      g_qdc_consecutive_failures = 0;
+    }
+  }  // namespace
+
   std::optional<std::string> resolveActiveVirtualDisplayDeviceId(
     const std::string &preferred_output_identifier,
     const std::string &client_name
@@ -4008,9 +4057,24 @@ namespace VDISPLAY {
                      << preferred_output_identifier << "' client_name='" << client_name << "'.";
     auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
     if (!devices) {
-      BOOST_LOG(debug) << "Resolving active virtual display device_id failed: device enumeration unavailable.";
-      return std::nullopt;
+      // Display config query failed (libdisplaydevice exhausted its 9
+      // internal retries against QueryDisplayConfig). On Windows 11
+      // Insider Preview this happens during a post-TDR window where
+      // QDC returns ERROR_NOT_SUPPORTED for several seconds. Try a
+      // bounded driver-handle recycle once before giving up — if it
+      // succeeds, the next call site usually finds the virtual display.
+      if (maybe_reset_virtual_display_driver_for_qdc()) {
+        devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+        if (devices) {
+          BOOST_LOG(info) << "Display config API recovered after virtual display driver reset.";
+        }
+      }
+      if (!devices) {
+        BOOST_LOG(debug) << "Resolving active virtual display device_id failed: device enumeration unavailable.";
+        return std::nullopt;
+      }
     }
+    note_enumerate_success();
 
     std::optional<std::string> normalized_output;
     if (!preferred_output_identifier.empty() &&
