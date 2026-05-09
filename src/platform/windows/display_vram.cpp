@@ -754,7 +754,7 @@ namespace platf::dxgi {
         D3D_FEATURE_LEVEL_9_1
       };
 
-      HRESULT status = D3D11CreateDevice(
+      HRESULT status = D3D11CreateDeviceWithRecovery(
         adapter_p,
         D3D_DRIVER_TYPE_UNKNOWN,
         nullptr,
@@ -764,7 +764,8 @@ namespace platf::dxgi {
         D3D11_SDK_VERSION,
         &device,
         nullptr,
-        &device_ctx
+        &device_ctx,
+        "encoder"
       );
 
       if (FAILED(status)) {

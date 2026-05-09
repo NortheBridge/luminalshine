@@ -50,6 +50,31 @@ namespace platf::dxgi {
   // dxgi!~CDXGIOutputDuplicationTonemapper+0x21 with a freed ID2D1Bitmap1.
   void seh_release_idxgi_duplication(IDXGIOutputDuplication *dup) noexcept;
 
+  // Wrapper around D3D11CreateDevice with exponential-backoff retry for
+  // post-TDR transient failures. Call sites that try to create a D3D11
+  // device immediately after a NVENC encode-wait timeout (or any other
+  // GPU-side hang) routinely see DXGI_ERROR_UNSUPPORTED (0x887A0004) or
+  // DXGI_ERROR_DEVICE_REMOVED (0x887A0005) on the first attempt because
+  // the driver is still mid-TDR-recovery. Without this wrapper the
+  // encoder restart fails outright and the streaming session enters a
+  // recovery loop the user has to kill. The backoff (1s → 2s → 4s → 8s,
+  // capped at 4 attempts, ~15s total) gives the GPU time to come back
+  // online before bailing. `call_site` is included in the failure log
+  // so encoder-vs-DD-test failures stay distinguishable. Non-transient
+  // failures (E_FAIL, E_INVALIDARG, etc.) return on the first attempt.
+  HRESULT D3D11CreateDeviceWithRecovery(
+    IDXGIAdapter *adapter,
+    D3D_DRIVER_TYPE driver_type,
+    HMODULE software,
+    UINT flags,
+    const D3D_FEATURE_LEVEL *feature_levels,
+    UINT feature_level_count,
+    UINT sdk_version,
+    ID3D11Device **device,
+    D3D_FEATURE_LEVEL *feature_level,
+    ID3D11DeviceContext **context,
+    const char *call_site) noexcept;
+
   using factory1_t = util::safe_ptr<IDXGIFactory1, Release<IDXGIFactory1>>;
   using dxgi_t = util::safe_ptr<IDXGIDevice, Release<IDXGIDevice>>;
 

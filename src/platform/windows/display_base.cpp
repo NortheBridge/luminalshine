@@ -424,6 +424,108 @@ namespace platf::dxgi {
   }
 #endif
 
+  // Wrapper around D3D11CreateDevice with bounded exponential-backoff
+  // retry for the post-TDR transient failure window. Retries only on
+  // DXGI_ERROR_UNSUPPORTED (0x887A0004) and DXGI_ERROR_DEVICE_REMOVED
+  // (0x887A0005) — the two HRESULTs the kernel returns while a NVENC /
+  // GPU TDR recovery is in flight. Other failures (E_FAIL, E_INVALIDARG,
+  // E_OUTOFMEMORY) are surfaced immediately because they mean the call
+  // itself is wrong, not that the GPU is in a transient bad state.
+  //
+  // Backoff schedule: 1s, 2s, 4s, 8s — capped at 4 retries (~15s total).
+  // Empirically this matches NVIDIA Game Ready driver TDR recovery on
+  // Blackwell (RTX 50-series) under sustained AV1/HEVC HDR encode load
+  // and is short enough that an interactive user only ever sees a brief
+  // "reconnecting" window from Moonlight before encode resumes. Any
+  // failure beyond this window is reported as a hard error so the
+  // recovery loop can give up and tear down the session cleanly instead
+  // of spinning indefinitely.
+  //
+  // The same adapter pointer is reused across retries. Reacquiring the
+  // adapter via a fresh IDXGIFactory would also be valid, but TDR
+  // recovery typically restores the existing handle on Blackwell + R570+
+  // drivers; if the handle never recovers, all 4 attempts will fail and
+  // the caller can then drop the adapter and rebuild. Keeping this
+  // wrapper transparent at the API level (same signature as
+  // D3D11CreateDevice) means existing call sites need only one-line
+  // changes.
+  HRESULT D3D11CreateDeviceWithRecovery(
+    IDXGIAdapter *adapter,
+    D3D_DRIVER_TYPE driver_type,
+    HMODULE software,
+    UINT flags,
+    const D3D_FEATURE_LEVEL *feature_levels,
+    UINT feature_level_count,
+    UINT sdk_version,
+    ID3D11Device **device,
+    D3D_FEATURE_LEVEL *feature_level,
+    ID3D11DeviceContext **context,
+    const char *call_site) noexcept {
+    using namespace std::chrono_literals;
+    constexpr std::chrono::milliseconds backoff_schedule[] = {1000ms, 2000ms, 4000ms, 8000ms};
+    constexpr int max_attempts = sizeof(backoff_schedule) / sizeof(backoff_schedule[0]) + 1;
+
+    HRESULT status = E_FAIL;
+    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+      // Defensive: clear any partially-initialized out parameters from the
+      // previous attempt so we never accidentally release a half-built
+      // device. D3D11CreateDevice itself zero-fills on entry, but only on
+      // the happy path.
+      if (device) {
+        *device = nullptr;
+      }
+      if (context) {
+        *context = nullptr;
+      }
+      if (feature_level) {
+        *feature_level = static_cast<D3D_FEATURE_LEVEL>(0);
+      }
+
+      status = D3D11CreateDevice(
+        adapter,
+        driver_type,
+        software,
+        flags,
+        feature_levels,
+        feature_level_count,
+        sdk_version,
+        device,
+        feature_level,
+        context);
+      if (SUCCEEDED(status)) {
+        if (attempt > 1) {
+          BOOST_LOG(info) << "D3D11CreateDevice (" << (call_site ? call_site : "unknown")
+                          << "): recovered after " << attempt << " attempts (status 0x"
+                          << util::hex(status).to_string_view() << ").";
+        }
+        return status;
+      }
+
+      const bool is_transient =
+        status == DXGI_ERROR_UNSUPPORTED
+        || status == DXGI_ERROR_DEVICE_REMOVED;
+      if (!is_transient || attempt == max_attempts) {
+        // Either the failure mode isn't recoverable by waiting (E_FAIL,
+        // E_INVALIDARG, etc.) or we've exhausted the backoff schedule.
+        // Caller logs the final HRESULT.
+        return status;
+      }
+
+      const auto delay = backoff_schedule[attempt - 1];
+      BOOST_LOG(warning) << "D3D11CreateDevice (" << (call_site ? call_site : "unknown")
+                         << "): transient failure 0x"
+                         << util::hex(status).to_string_view()
+                         << " (attempt " << attempt << "/" << max_attempts
+                         << "); GPU TDR recovery suspected, retrying in "
+                         << delay.count() << "ms.";
+      std::this_thread::sleep_for(delay);
+    }
+
+    // Unreachable: the loop above always either returns or sleeps and
+    // continues. Keep the explicit return so the compiler is happy.
+    return status;
+  }
+
   // Hand off ownership of a util::safe_ptr<T> COM wrapper to seh_safe_release_com_,
   // ensuring the auto-destruction of the safe_ptr afterwards is a no-op (it sees null).
   // Logs the SEH code at warning level so a swallowed AV is visible in support bundles.
@@ -760,7 +862,7 @@ namespace platf::dxgi {
     };
 
     device_t device;
-    auto status = D3D11CreateDevice(
+    auto status = D3D11CreateDeviceWithRecovery(
       adapter.get(),
       D3D_DRIVER_TYPE_UNKNOWN,
       nullptr,
@@ -770,7 +872,8 @@ namespace platf::dxgi {
       D3D11_SDK_VERSION,
       &device,
       nullptr,
-      nullptr
+      nullptr,
+      "DD test"
     );
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
