@@ -57,11 +57,14 @@
 #include "webrtc_stream.h"
 
 #ifdef _WIN32
+  #include "platform/windows/diag_info.h"
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_backend.h"
   #include "platform/windows/virtual_display_cleanup.h"
   #include "process.h"
 #endif
+
+#include "video.h"
 
 #include <nlohmann/json.hpp>
 #if defined(_WIN32)
@@ -1911,9 +1914,103 @@ namespace confighttp {
       output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
       output_tree["virtual_display_driver_ready"] =
         proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK;
+      if (auto vdd_version = platf::diag::query_virtual_display_driver_version()) {
+        output_tree["virtual_display_backend_version"] = *vdd_version;
+      }
     } catch (...) {
       // Non-fatal; the UI gracefully falls back to "unknown" status.
     }
+
+    // About-page diagnostics block: GPU drivers, Windows Insider channel,
+    // per-display HDR state, encoder probe results. Each query is wrapped
+    // in its own try/catch so a single failure doesn't take down the whole
+    // metadata response — the About page renders empty rows for missing
+    // fields instead of breaking.
+    try {
+      auto drivers = platf::diag::query_gpu_drivers();
+      if (!drivers.empty()) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto &d : drivers) {
+          nlohmann::json entry;
+          entry["vendor_id"] = d.vendor_id;
+          entry["device_id"] = d.device_id;
+          if (!d.description.empty()) {
+            entry["description"] = d.description;
+          }
+          if (!d.driver_version.empty()) {
+            entry["driver_version"] = d.driver_version;
+          }
+          if (!d.driver_date.empty()) {
+            entry["driver_date"] = d.driver_date;
+          }
+          arr.push_back(std::move(entry));
+        }
+        output_tree["gpu_drivers"] = std::move(arr);
+      }
+    } catch (...) {}
+
+    try {
+      auto insider = platf::diag::query_insider_channel();
+      nlohmann::json node;
+      node["is_insider"] = insider.is_insider;
+      if (!insider.branch_name.empty()) {
+        node["branch_name"] = insider.branch_name;
+      }
+      if (!insider.ring.empty()) {
+        node["ring"] = insider.ring;
+      }
+      if (!insider.content_type.empty()) {
+        node["content_type"] = insider.content_type;
+      }
+      output_tree["windows_insider"] = std::move(node);
+    } catch (...) {}
+
+    try {
+      auto displays = platf::diag::query_hdr_states();
+      if (!displays.empty()) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto &d : displays) {
+          nlohmann::json entry;
+          if (!d.display_name.empty()) {
+            entry["display_name"] = d.display_name;
+          }
+          if (!d.friendly_name.empty()) {
+            entry["friendly_name"] = d.friendly_name;
+          }
+          entry["advanced_color_supported"] = d.advanced_color_supported;
+          entry["advanced_color_enabled"] = d.advanced_color_enabled;
+          arr.push_back(std::move(entry));
+        }
+        output_tree["displays"] = std::move(arr);
+      }
+    } catch (...) {}
+
+    try {
+      // Encoder probe results from src/video.cpp's last_encoder_probe_*
+      // module-level state. Populated at process startup (or on the first
+      // session start) and stable thereafter unless the user changes
+      // encoder config and a re-probe fires. If has_attempted_encoder_probe
+      // returns false, none of the entries below are meaningful — surface
+      // that state explicitly so the About page can show "Probing…"
+      // instead of "Unavailable" for everything.
+      nlohmann::json node;
+      node["probed"] = video::has_attempted_encoder_probe();
+      node["h264_available"] = video::last_encoder_probe_supported_codec[0];
+      node["hevc_available"] = video::last_encoder_probe_supported_codec[1];
+      node["av1_available"] = video::last_encoder_probe_supported_codec[2];
+      node["h264_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[0];
+      node["hevc_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[1];
+      node["av1_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[2];
+      node["ref_frames_invalidation"] = video::last_encoder_probe_supported_ref_frames_invalidation;
+      output_tree["encoder_probe"] = std::move(node);
+    } catch (...) {}
+
+    // Active session count: useful nice-to-have for the About page so a
+    // support reader can immediately tell whether the host is currently
+    // streaming or idle.
+    try {
+      output_tree["active_session_count"] = static_cast<int>(rtsp_stream::session_count());
+    } catch (...) {}
 #endif
     send_response(response, output_tree);
   }

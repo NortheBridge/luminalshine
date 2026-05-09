@@ -340,6 +340,11 @@ namespace video {
   extern int active_av1_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
+  // Mirrors of the encoder.h264/hevc/av1[encoder_t::PASSED] flags taken at
+  // probe completion. Used by /api/metadata to populate the About page's
+  // "Encoders Available" row without forcing the dashboard to start an
+  // encoder probe of its own.
+  extern std::array<bool, 3> last_encoder_probe_supported_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
   bool has_attempted_encoder_probe();
 

@@ -65,6 +65,8 @@ list(APPEND SUNSHINE_DEFINITIONS VIGEMBUS_PACKAGED_VERSION="${VIGEMBUS_PACKAGED_
 
 set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/publish.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/diag_info.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/diag_info.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.h"

@@ -1388,6 +1388,7 @@ namespace video {
   int active_av1_mode;
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};
+  std::array<bool, 3> last_encoder_probe_supported_codec = {};
   std::atomic<bool> encoder_probe_attempted {false};
   std::mutex encoder_probe_mutex;
 
@@ -3284,6 +3285,7 @@ namespace video {
     const auto previous_active_av1_mode = active_av1_mode;
     const auto previous_last_ref_frames_invalidation = last_encoder_probe_supported_ref_frames_invalidation;
     const auto previous_last_yuv444_for_codec = last_encoder_probe_supported_yuv444_for_codec;
+    const auto previous_last_supported_codec = last_encoder_probe_supported_codec;
     auto previous_encoder = chosen_encoder;
 
     auto restore_previous_probe_state = util::fail_guard([&]() {
@@ -3291,6 +3293,7 @@ namespace video {
       active_av1_mode = previous_active_av1_mode;
       last_encoder_probe_supported_ref_frames_invalidation = previous_last_ref_frames_invalidation;
       last_encoder_probe_supported_yuv444_for_codec = previous_last_yuv444_for_codec;
+      last_encoder_probe_supported_codec = previous_last_supported_codec;
     });
 
     auto encoder_list = encoders;
@@ -3302,6 +3305,7 @@ namespace video {
     active_av1_mode = config::video.av1_mode;
     last_encoder_probe_supported_ref_frames_invalidation = false;
     last_encoder_probe_supported_yuv444_for_codec = {};
+    last_encoder_probe_supported_codec = {};
 
     // Clear any cached display from previous probes to ensure fresh start
     cached_probe_display.reset();
@@ -3435,6 +3439,9 @@ namespace video {
                                                        encoder.hevc[encoder_t::YUV444];
     last_encoder_probe_supported_yuv444_for_codec[2] = encoder.av1[encoder_t::PASSED] &&
                                                        encoder.av1[encoder_t::YUV444];
+    last_encoder_probe_supported_codec[0] = encoder.h264[encoder_t::PASSED];
+    last_encoder_probe_supported_codec[1] = encoder.hevc[encoder_t::PASSED];
+    last_encoder_probe_supported_codec[2] = encoder.av1[encoder_t::PASSED];
 
     BOOST_LOG(debug) << "------  h264 ------"sv;
     for (int x = 0; x < encoder_t::MAX_FLAGS; ++x) {
