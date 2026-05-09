@@ -319,7 +319,18 @@ namespace nvenc {
           return false;
         }
         if (!*supports_yuv444) {
-          BOOST_LOG(error) << "NvEnc: gpu doesn't support YUV444 encode";
+          // Demoted from error → warning: most consumer NVENC GPUs (GeForce
+          // RTX 30/40/50-series) report no AV1/HEVC YUV444 support, which is
+          // correct hardware behavior, not a software bug. The encoder probe
+          // calls this code path expecting it to fail and retries with
+          // YUV420 — the probe's "Ignore any errors mentioned above" log
+          // disclaimer was the only thing telling support readers to filter
+          // it out. Keep it visible at warning so a session-level surprise
+          // (the user really did configure YUV444 streaming) is still
+          // distinguishable from probe noise.
+          BOOST_LOG(warning) << "NvEnc: gpu doesn't support YUV444 encode "
+                                "(expected on consumer GeForce hardware; the encoder probe "
+                                "will retry with YUV420)";
           return false;
         }
       }
@@ -798,7 +809,19 @@ namespace nvenc {
       NV_ENC_EVENT_PARAMS event_params = {api::event_params_version(selected_api_version)};
       event_params.completionEvent = async_event_handle;
       if (nvenc_failed(nvenc->nvEncUnregisterAsyncEvent(encoder, &event_params))) {
-        BOOST_LOG(error) << "NvEnc: NvEncUnregisterAsyncEvent() failed: " << last_nvenc_error_string;
+        // NV_ENC_ERR_DEVICE_NOT_EXIST here is the signature of cleaning up
+        // after a partially-initialized encoder (e.g. probe attempt where
+        // YUV444 was unsupported and we abort init before fully creating
+        // the device). The handle was set, the device was not — unregister
+        // is benign in that state. Other status codes still surface as
+        // errors because they indicate real cleanup failures on a
+        // legitimately-active encoder.
+        if (last_nvenc_status == NV_ENC_ERR_DEVICE_NOT_EXIST) {
+          BOOST_LOG(debug) << "NvEnc: NvEncUnregisterAsyncEvent() skipped — encoder device "
+                              "not present (cleanup after aborted init): " << last_nvenc_error_string;
+        } else {
+          BOOST_LOG(error) << "NvEnc: NvEncUnregisterAsyncEvent() failed: " << last_nvenc_error_string;
+        }
       }
     }
     if (registered_input_buffer) {
