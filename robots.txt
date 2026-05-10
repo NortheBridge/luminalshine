@@ -1,1 +1,1 @@
-Sitemap: http://gitdocs.northebridge.com/sitemap.xml
+Sitemap: https://gitdocs.northebridge.com/sitemap.xml

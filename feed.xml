@@ -7,8 +7,8 @@
     
     <description>LizardByte</description>
     
-    <link>http://gitdocs.northebridge.com/</link>
-    <atom:link href="http://gitdocs.northebridge.com/feed.xml" rel="self" type="application/rss+xml" />
+    <link>https://gitdocs.northebridge.com/</link>
+    <atom:link href="https://gitdocs.northebridge.com/feed.xml" rel="self" type="application/rss+xml" />
     
     
   </channel>
