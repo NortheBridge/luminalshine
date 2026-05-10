@@ -405,7 +405,7 @@ namespace LuminalShineInstaller {
         Margin = new Thickness(20, 10, 20, 12),
         Padding = new Thickness(20),
         Background = new SolidColorBrush(Color.FromArgb(238, 14, 20, 36)),
-        BorderBrush = new SolidColorBrush(Color.FromArgb(145, 99, 102, 241)),
+        BorderBrush = new SolidColorBrush(Color.FromArgb(145, 0, 180, 216)),
         BorderThickness = new Thickness(1.2),
         // Stretch (rather than Top) so the card fills the window vertically
         // and the sticky-footer Grid below can park the action buttons at
@@ -446,7 +446,7 @@ namespace LuminalShineInstaller {
         Height = 4,
         CornerRadius = new CornerRadius(3),
         Margin = new Thickness(0, 0, 0, 14),
-        Background = new SolidColorBrush(Color.FromRgb(99, 102, 241))
+        Background = new SolidColorBrush(Color.FromRgb(0, 180, 216))
       };
       Grid.SetRow(_overlayAccentBar, 0);
       overlayLayout.Children.Add(_overlayAccentBar);
@@ -484,7 +484,7 @@ namespace LuminalShineInstaller {
 
       _overlayHintText = new TextBlock {
         FontSize = 12,
-        Foreground = new SolidColorBrush(Color.FromRgb(165, 180, 252)),
+        Foreground = new SolidColorBrush(Color.FromRgb(144, 224, 239)),
         Margin = new Thickness(0, 0, 0, 8),
         Visibility = Visibility.Collapsed,
         TextWrapping = TextWrapping.Wrap
@@ -498,7 +498,7 @@ namespace LuminalShineInstaller {
         Value = 0,
         Visibility = Visibility.Collapsed,
         Margin = new Thickness(2, 0, 2, 12),
-        Foreground = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
+        Foreground = new SolidColorBrush(Color.FromRgb(0, 180, 216)),
         Background = new SolidColorBrush(Color.FromRgb(24, 34, 58)),
         BorderThickness = new Thickness(0)
       };
@@ -541,9 +541,9 @@ namespace LuminalShineInstaller {
         MinWidth = 108,
         Padding = new Thickness(16, 0, 16, 0),
         FontWeight = FontWeights.SemiBold,
-        Background = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
+        Background = new SolidColorBrush(Color.FromRgb(0, 180, 216)),
         Foreground = new SolidColorBrush(Color.FromRgb(245, 249, 255)),
-        BorderBrush = new SolidColorBrush(Color.FromRgb(165, 180, 252))
+        BorderBrush = new SolidColorBrush(Color.FromRgb(144, 224, 239))
       };
       _overlayPrimaryButton.Click += (sender, eventArgs) => ResolveOverlay("primary");
       ApplyFlatButtonTemplate(_overlayPrimaryButton, 8);
@@ -583,7 +583,7 @@ namespace LuminalShineInstaller {
         CornerRadius = new CornerRadius(10),
         Padding = new Thickness(16),
         Margin = new Thickness(0, 0, 0, 10),
-        Background = new SolidColorBrush(Color.FromArgb(44, 99, 102, 241)),
+        Background = new SolidColorBrush(Color.FromArgb(44, 0, 180, 216)),
         BorderBrush = new SolidColorBrush(Color.FromArgb(112, 128, 133, 255)),
         BorderThickness = new Thickness(1)
       };
@@ -922,7 +922,7 @@ namespace LuminalShineInstaller {
         Height = 4,
         IsIndeterminate = true,
         Visibility = Visibility.Collapsed,
-        Foreground = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
+        Foreground = new SolidColorBrush(Color.FromRgb(0, 180, 216)),
         Margin = new Thickness(8, 4, 8, 8)
       };
       Grid.SetRow(_progressBar, 0);
@@ -950,9 +950,9 @@ namespace LuminalShineInstaller {
         Margin = new Thickness(10, 0, 0, 0),
         Padding = new Thickness(16, 0, 16, 0),
         FontWeight = FontWeights.SemiBold,
-        Background = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
+        Background = new SolidColorBrush(Color.FromRgb(0, 180, 216)),
         Foreground = new SolidColorBrush(Color.FromRgb(245, 249, 255)),
-        BorderBrush = new SolidColorBrush(Color.FromRgb(165, 180, 252)),
+        BorderBrush = new SolidColorBrush(Color.FromRgb(144, 224, 239)),
         BorderThickness = new Thickness(1.5),
         IsDefault = true,
         ToolTip = "Run the selected action"
@@ -1206,13 +1206,13 @@ namespace LuminalShineInstaller {
     }
 
     private void ContinueButtonMouseEnter(object sender, MouseEventArgs e) {
-      _continueButton.Background = new SolidColorBrush(Color.FromRgb(129, 140, 248));
-      _continueButton.BorderBrush = new SolidColorBrush(Color.FromRgb(199, 210, 254));
+      _continueButton.Background = new SolidColorBrush(Color.FromRgb(48, 200, 230));
+      _continueButton.BorderBrush = new SolidColorBrush(Color.FromRgb(72, 202, 228));
     }
 
     private void ContinueButtonMouseLeave(object sender, MouseEventArgs e) {
-      _continueButton.Background = new SolidColorBrush(Color.FromRgb(99, 102, 241));
-      _continueButton.BorderBrush = new SolidColorBrush(Color.FromRgb(165, 180, 252));
+      _continueButton.Background = new SolidColorBrush(Color.FromRgb(0, 180, 216));
+      _continueButton.BorderBrush = new SolidColorBrush(Color.FromRgb(144, 224, 239));
     }
 
     private void UninstallButtonMouseEnter(object sender, MouseEventArgs e) {
@@ -1711,8 +1711,8 @@ namespace LuminalShineInstaller {
         "LuminalShine software license terms:",
         "Close",
         string.Empty,
-        new SolidColorBrush(Color.FromRgb(99, 102, 241)),
-        new SolidColorBrush(Color.FromRgb(165, 180, 252)),
+        new SolidColorBrush(Color.FromRgb(0, 180, 216)),
+        new SolidColorBrush(Color.FromRgb(144, 224, 239)),
         false,
         content => {
           var licenseTextBox = new TextBox {
@@ -1853,15 +1853,15 @@ namespace LuminalShineInstaller {
 
       _overlayTitleText.Text = title ?? string.Empty;
       _overlayMessageText.Text = message ?? string.Empty;
-      _overlayAccentBar.Background = primaryBackground ?? new SolidColorBrush(Color.FromRgb(99, 102, 241));
+      _overlayAccentBar.Background = primaryBackground ?? new SolidColorBrush(Color.FromRgb(0, 180, 216));
       _overlayContentHost.Children.Clear();
       if (buildContent != null) {
         buildContent(_overlayContentHost);
       }
 
       _overlayPrimaryButton.Content = primaryText ?? "OK";
-      _overlayPrimaryButton.Background = primaryBackground ?? new SolidColorBrush(Color.FromRgb(99, 102, 241));
-      _overlayPrimaryButton.BorderBrush = primaryBorder ?? new SolidColorBrush(Color.FromRgb(165, 180, 252));
+      _overlayPrimaryButton.Background = primaryBackground ?? new SolidColorBrush(Color.FromRgb(0, 180, 216));
+      _overlayPrimaryButton.BorderBrush = primaryBorder ?? new SolidColorBrush(Color.FromRgb(144, 224, 239));
 
       _overlaySecondaryButton.Content = secondaryText ?? "Cancel";
       _overlaySecondaryButton.Visibility = showSecondary ? Visibility.Visible : Visibility.Collapsed;
@@ -1947,10 +1947,10 @@ namespace LuminalShineInstaller {
     private async Task<bool> ShowOverlayConfirmAsync(string title, string message, string confirmText, string cancelText, bool destructive) {
       var primaryBg = destructive
         ? (Brush)new SolidColorBrush(Color.FromRgb(225, 29, 72))
-        : new SolidColorBrush(Color.FromRgb(99, 102, 241));
+        : new SolidColorBrush(Color.FromRgb(0, 180, 216));
       var primaryBorder = destructive
         ? (Brush)new SolidColorBrush(Color.FromRgb(251, 113, 133))
-        : new SolidColorBrush(Color.FromRgb(165, 180, 252));
+        : new SolidColorBrush(Color.FromRgb(144, 224, 239));
       var result = await ShowOverlayAsync(title, message, confirmText, cancelText, primaryBg, primaryBorder, true, null, 0);
       return string.Equals(result, "primary", StringComparison.OrdinalIgnoreCase);
     }
@@ -1961,8 +1961,8 @@ namespace LuminalShineInstaller {
         message,
         "OK",
         string.Empty,
-        new SolidColorBrush(Color.FromRgb(99, 102, 241)),
-        new SolidColorBrush(Color.FromRgb(165, 180, 252)),
+        new SolidColorBrush(Color.FromRgb(0, 180, 216)),
+        new SolidColorBrush(Color.FromRgb(144, 224, 239)),
         false,
         null,
         5);
@@ -2022,8 +2022,8 @@ namespace LuminalShineInstaller {
         failureDetail + "\n\nSave logs now, then report this issue on GitHub or Discord.",
         "Save logs",
         "Not now",
-        new SolidColorBrush(Color.FromRgb(99, 102, 241)),
-        new SolidColorBrush(Color.FromRgb(165, 180, 252)),
+        new SolidColorBrush(Color.FromRgb(0, 180, 216)),
+        new SolidColorBrush(Color.FromRgb(144, 224, 239)),
         true,
         content => {
           content.Children.Add(BuildSupportLinksTextBlock());
@@ -2044,8 +2044,8 @@ namespace LuminalShineInstaller {
         warningDetail + "\n\nSave logs now, then report this issue on GitHub or Discord.",
         "Save logs",
         "Not now",
-        new SolidColorBrush(Color.FromRgb(99, 102, 241)),
-        new SolidColorBrush(Color.FromRgb(165, 180, 252)),
+        new SolidColorBrush(Color.FromRgb(0, 180, 216)),
+        new SolidColorBrush(Color.FromRgb(144, 224, 239)),
         true,
         content => {
           content.Children.Add(BuildSupportLinksTextBlock());
