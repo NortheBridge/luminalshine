@@ -41,7 +41,15 @@
       "Bash(curl -sI \"https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-nodejs-24.14.1-1-any.pkg.tar.zst\")",
       "Bash(bash /tmp/extract_colors.sh)",
       "Bash(python3 -c \"import json; d=json.load\\(open\\('public/assets/locale/en.json'\\)\\); print\\('high_perf keys:', sorted\\(d['high_perf'].keys\\(\\)\\)\\)\")",
-      "Bash(git log *)"
+      "Bash(git log *)",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('/Users/Avalon/Git/luminalshine/.github/workflows/_jekyll-build.yml'\\)\\); print\\('_jekyll-build.yml OK'\\)\")",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('/Users/Avalon/Git/luminalshine/.github/workflows/update-pages.yml'\\)\\); print\\('update-pages.yml OK'\\)\")",
+      "Bash(pip3 install *)",
+      "Bash(brew list *)",
+      "Bash(python3 -m pip install --user pyyaml --quiet)",
+      "Bash(python3 -c \"import yaml; print\\('yaml available'\\)\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/_jekyll-build.yml'\\); puts '_jekyll-build.yml OK'\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/update-pages.yml'\\); puts 'update-pages.yml OK'\")"
     ],
     "deny": [],
     "ask": []
