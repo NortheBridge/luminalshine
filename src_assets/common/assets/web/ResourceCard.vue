@@ -81,7 +81,7 @@ const resources = computed(() => [
     icon: 'fab fa-discord',
     title: 'Discord',
     description: withFallback('resource_card.discord_desc', 'Join the community'),
-    avatarStyle: 'background-color: rgba(99, 102, 241, 0.15); color: rgb(99, 102, 241);',
+    avatarStyle: 'background-color: rgba(0, 180, 216, 0.15); color: rgb(0, 180, 216);',
   },
   {
     href: 'https://github.com/NortheBridge/luminalshine/discussions',

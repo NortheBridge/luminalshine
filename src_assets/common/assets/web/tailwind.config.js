@@ -37,15 +37,17 @@ module.exports = {
           brand: '217 119 6', // #D97706 brand orange
         },
         dark: {
-          // 🌙 Lunar (cosmic blues + purples), tuned for contrast on deep navy
+          // 🌊 Alexa+ blue palette — cyan + deep ocean on near-black, tuned
+          // for contrast on deep navy and matching the Echo Show + Alexa+
+          // hero aesthetic.
           dark: '6 10 24', // #0A0F18  starfield background
           surface: '14 20 36', // #0E1424  panels/cards
           light: '224 236 255', // #E0ECFF  pale moon haze (for light surfaces)
 
-          // Core actions/brand (cool spectrum)
-          primary: '99 102 241', // #6366F1  indigo (main CTA/links)
-          secondary: '168 85 247', // #A855F7  vibrant purple (alt CTA/accents)
-          accent: '56 189 248', // #38BDF8  cyan comet (chips/highlights)
+          // Core actions/brand (Alexa cyan + deep ocean)
+          primary: '0 180 216', // #00B4D8  Alexa cyan (main CTA/links)
+          secondary: '0 119 182', // #0077B6  deep ocean (alt CTA/accents)
+          accent: '56 189 248', // #38BDF8  bright cyan (chips/highlights)
           info: '147 197 253', // #93C5FD  periwinkle info
 
           // Status with lunar tilt (cool-leaning where possible)
@@ -57,13 +59,13 @@ module.exports = {
           onDark: '245 249 255', // near-white on dark/surface
           onSurface: '245 249 255', // (if you expose separately)
           onLight: '6 10 24', // dark text on light surfaces
-          onPrimary: '245 249 255', // white on indigo (AA+)
-          onSecondary: '245 249 255', // white on purple (AA+)
+          onPrimary: '6 10 24', // dark text on cyan primary (AA+)
+          onSecondary: '245 249 255', // white on deep ocean (AA+)
           onAccent: '6 10 24', // dark text on cyan (AA+)
           onInfo: '6 10 24', // dark text on light info blue (AA+)
 
-          // Brand tint (cool lavender for logos/illustrations)
-          brand: '165 180 252', // #A5B4FC  steel-lavender
+          // Brand tint (pale cyan for logos/illustrations)
+          brand: '144 224 239', // #90E0EF  pale cyan
         },
       },
       colors: {
