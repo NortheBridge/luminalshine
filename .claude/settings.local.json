@@ -40,7 +40,8 @@
       "Bash(curl -fsS \"https://repo.msys2.org/mingw/ucrt64/\")",
       "Bash(curl -sI \"https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-nodejs-24.14.1-1-any.pkg.tar.zst\")",
       "Bash(bash /tmp/extract_colors.sh)",
-      "Bash(python3 -c \"import json; d=json.load\\(open\\('public/assets/locale/en.json'\\)\\); print\\('high_perf keys:', sorted\\(d['high_perf'].keys\\(\\)\\)\\)\")"
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('public/assets/locale/en.json'\\)\\); print\\('high_perf keys:', sorted\\(d['high_perf'].keys\\(\\)\\)\\)\")",
+      "Bash(git log *)"
     ],
     "deny": [],
     "ask": []
