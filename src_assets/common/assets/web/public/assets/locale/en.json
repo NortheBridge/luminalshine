@@ -615,6 +615,29 @@
     "vigembus_outdated_desc": "You are running an outdated version of ViGEmBus (v{version}). Version 1.17 or higher is required for proper gamepad support. Click the button below to update.",
     "vigembus_outdated_title": "ViGEmBus Driver Outdated"
   },
+  "high_perf": {
+    "title": "High Performance Streaming",
+    "description": "One-click profile that re-tunes Sunshine for the lowest-latency, highest-quality stream. It changes virtual display, display automation, encoder, and CPU thread settings. Your prior settings are snapshotted on enable so you can roll back.",
+    "requirements_title": "Recommended hardware & network",
+    "req_gpu": "High-end discrete graphics card on the host.",
+    "req_host_net": "Wired 5 Gbps Ethernet or faster on the host.",
+    "req_client_net": "Wi-Fi 5 minimum for Moonlight clients; Wi-Fi 6E preferred.",
+    "req_cpu": "High-core-count CPU on the host (12 cores / 24 threads or more).",
+    "req_resource_use": "Will divert host CPU/GPU/network resources away from gaming and saturate the local network.",
+    "tested_title": "Tested configuration",
+    "tested_body": "These settings were validated only on an NVIDIA Blackwell 5080-class GPU with an Intel Core i9-12900KS, 64 GB of RAM, Wi-Fi 6E to Wi-Fi 5 Moonlight clients, and 10 Gbps host networking. Behavior on other hardware is unverified.",
+    "toggle_label": "Enable High Performance Mode",
+    "vendor_nvidia": "NVIDIA GPU detected — applying NVENC profile.",
+    "vendor_amd": "AMD GPU detected — applying AMF analog of the NVIDIA profile.",
+    "vendor_intel": "Intel GPU detected — applying QuickSync analog of the NVIDIA profile.",
+    "vendor_unknown": "GPU vendor not detected — only vendor-neutral settings will change.",
+    "restore_previous": "Restore Previous User Settings",
+    "restore_default": "Restore to Default",
+    "applied": "High Performance Mode applied.",
+    "restored_previous": "Restored your previous settings.",
+    "restored_default": "Restored default settings.",
+    "snapshot_save_failed": "Could not save snapshot of previous settings (browser storage unavailable). Restore Previous may not be available."
+  },
   "resources": {
     "title": "Resources"
   },

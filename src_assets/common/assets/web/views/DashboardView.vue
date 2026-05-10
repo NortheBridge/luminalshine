@@ -451,6 +451,9 @@
         </n-card>
       </div>
 
+      <!-- High Performance Streaming -->
+      <HighPerformanceCard />
+
       <!-- Resources -->
       <div class="min-w-0">
         <n-card>
@@ -473,6 +476,7 @@ import { ref, onMounted, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { NCard, NAlert, useMessage, useDialog } from 'naive-ui';
 import ResourceCard from '@/ResourceCard.vue';
+import HighPerformanceCard from '@/components/HighPerformanceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
 import LuminalShineVersion, { GitHubRelease } from '@/sunshine_version';
 import { useConfigStore } from '@/stores/config';
