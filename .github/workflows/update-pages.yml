@@ -5,9 +5,11 @@ permissions: {}
 on:
   workflow_dispatch:
 
+# Pages-recommended single-flight concurrency. Allow the in-flight deploy to
+# complete so we don't interrupt a published deployment mid-rollout.
 concurrency:
-  group: "${{ github.workflow }}-${{ github.ref }}"
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   prep:
@@ -30,12 +32,10 @@ jobs:
   call-jekyll-build:
     needs: prep
     permissions:
-      contents: write  # required so the deploy job in the called workflow can push to gh-pages via GITHUB_TOKEN
+      contents: read
+      pages: write
+      id-token: write
     uses: ./.github/workflows/_jekyll-build.yml
-    secrets:
-      GH_BOT_EMAIL: ${{ secrets.GH_BOT_EMAIL }}
     with:
-      clean_gh_pages: true
-      gh_bot_name: ${{ vars.GH_BOT_NAME }}
       site_artifact: 'prep'
-      target_branch: 'gh-pages'
+      base_url: '_auto'

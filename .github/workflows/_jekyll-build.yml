@@ -1,8 +1,8 @@
 ---
 # Forked from LizardByte/LizardByte.github.io/.github/workflows/jekyll-build.yml@master.
-# Local copy maintained so we can drop the Node-20 actions-js/push step (deprecated by
-# GitHub Actions runners) and authenticate the gh-pages push with GITHUB_TOKEN instead
-# of a personal access token.
+# Reworked to deploy via actions/upload-pages-artifact + actions/deploy-pages so it
+# works with the Pages "GitHub Actions" source mode. The previous gh-pages-branch
+# deploy path (and its Node-20 actions-js/push step) is gone.
 name: Build Jekyll
 permissions: {}
 
@@ -26,16 +26,6 @@ on:
         required: false
         default: '_config.yml'
         type: string
-      target_branch:
-        description: 'Branch to deploy to. Branch must already exist.'
-        required: false
-        default: 'gh-pages'
-        type: string
-      clean_gh_pages:
-        description: 'Clean gh-pages before deploying'
-        required: false
-        default: true
-        type: boolean
       theme_ref:
         description: 'Branch, tag, or commit SHA of the theme repository to use'
         required: false
@@ -58,21 +48,11 @@ on:
         required: false
         default: ''
         type: string
-      gh_bot_name:
-        description: 'Name of the bot account used as commit author'
-        required: true
-        type: string
-    secrets:
-      GH_BOT_EMAIL:
-        description: 'Email address of the bot account used as commit author'
-        required: true
 
 env:
   INPUT_SITE_ARTIFACT: ${{ inputs.site_artifact }}
   INPUT_EXTRACT_ARCHIVE: ${{ inputs.extract_archive }}
   INPUT_CONFIG_FILE: ${{ inputs.config_file }}
-  INPUT_TARGET_BRANCH: ${{ inputs.target_branch }}
-  INPUT_CLEAN_GH_PAGES: ${{ inputs.clean_gh_pages }}
   INPUT_THEME_REF: ${{ inputs.theme_ref }}
   INPUT_THEME_REPOSITORY: ${{ inputs.theme_repository }}
   INPUT_BASE_URL: ${{ inputs.base_url }}
@@ -220,18 +200,10 @@ jobs:
 
           bundle exec jekyll build --future --config "${config_files}"
 
-      - name: Prepare Artifacts  # uploading artifacts may fail if not zipped due to very large quantity of files
-        shell: bash
-        run: 7z a _site.zip ./_site/.
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
         with:
-          name: site
-          path: _site.zip
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 1
+          path: _site
 
   deploy:
     name: Deploy to Pages
@@ -241,48 +213,13 @@ jobs:
       github.event_name == 'workflow_dispatch'
     needs: build
     permissions:
-      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout gh-pages
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          ref: ${{ env.INPUT_TARGET_BRANCH }}
-          path: gh-pages
-          fetch-depth: 0
-
-      # empty contents of gh-pages
-      - name: Clean
-        if: env.INPUT_CLEAN_GH_PAGES == 'true'
-        run: find ./gh-pages -mindepth 1 -not -path './gh-pages/.git*' -delete
-
-      - name: Download artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: site
-          path: gh-pages
-
-      - name: Setup gh-pages
-        working-directory: gh-pages
-        run: |
-          7z x _site.zip -o.
-          rm _site.zip
-          touch .nojekyll
-
-      - name: Deploy to gh-pages
-        working-directory: gh-pages
-        env:
-          BOT_NAME: ${{ inputs.gh_bot_name }}
-          BOT_EMAIL: ${{ secrets.GH_BOT_EMAIL }}
-          TARGET_BRANCH: ${{ inputs.target_branch }}
-          COMMIT_SHA: ${{ github.sha }}
-        run: |
-          git config user.name "${BOT_NAME}"
-          git config user.email "${BOT_EMAIL}"
-          git add -A
-          if git diff --staged --quiet; then
-            echo "No changes to deploy."
-            exit 0
-          fi
-          git commit -m "Deploy site from ${COMMIT_SHA}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128  # v5.0.0
