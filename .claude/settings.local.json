@@ -49,7 +49,17 @@
       "Bash(python3 -m pip install --user pyyaml --quiet)",
       "Bash(python3 -c \"import yaml; print\\('yaml available'\\)\")",
       "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/_jekyll-build.yml'\\); puts '_jekyll-build.yml OK'\")",
-      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/update-pages.yml'\\); puts 'update-pages.yml OK'\")"
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/update-pages.yml'\\); puts 'update-pages.yml OK'\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/upload-pages-artifact/releases/latest\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/deploy-pages/releases/latest\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/upload-pages-artifact/git/ref/tags/v5.0.0\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/deploy-pages/git/ref/tags/v5.0.0\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/configure-pages/releases/latest\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/upload-pages-artifact/git/tags/fc324d3547104276b827a68afc52ff2a11cc49c9\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/actions/deploy-pages/git/tags/cd2ce8fcbc39b97be8ca5fce6e763baed58fa128\")",
+      "Bash(curl -fsSL -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/actions/upload-pages-artifact/git/ref/tags/v5.0.0\")",
+      "Bash(curl -fsSL -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/actions/deploy-pages/git/ref/tags/v5.0.0\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/gh-pages-template/_config.yml'\\); puts '_config.yml OK'\")"
     ],
     "deny": [],
     "ask": []
