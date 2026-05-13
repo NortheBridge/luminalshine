@@ -73,7 +73,10 @@
       "Read(//usr/local/bin/**)",
       "Bash(grep -E \"/\\(n|node|npm\\)$\")",
       "Bash(/Users/Avalon/tool/webOS_TV_SDK/CLI/bin/node --version)",
-      "Read(//Users/Avalon/tool/webOS_TV_SDK/CLI/bin/**)"
+      "Read(//Users/Avalon/tool/webOS_TV_SDK/CLI/bin/**)",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=gcovr&page_size=10\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=python-gcovr&page_size=10\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('.github/workflows/coverage-windows.yml'\\); puts 'coverage-windows.yml OK'\")"
     ],
     "deny": [],
     "ask": []
