@@ -10,6 +10,12 @@ export default defineConfig({
     alias: {
       '@web': __dirname,
       '@': __dirname,
+      // Tests live at <repoRoot>/tests/frontend/, outside the web package.
+      // Node's module-resolution walk-up from there never reaches this
+      // package's node_modules, so npm imports from test files (such as
+      // @vue/test-utils) fail to resolve. Explicitly alias each npm package
+      // the tests pull in to its absolute install location here.
+      '@vue/test-utils': resolve(__dirname, 'node_modules/@vue/test-utils'),
     },
   },
   // Vite's default fs.allow is the directory containing this config
