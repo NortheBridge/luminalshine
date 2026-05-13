@@ -382,7 +382,10 @@
                   class="rounded-lg border border-dark/10 dark:border-light/10 bg-surface/60 dark:bg-dark/40 p-3 overflow-auto max-h-72 text-xs"
                 >
                   <p class="font-semibold mb-2">{{ preReleaseRelease?.name }}</p>
-                  <pre class="font-mono whitespace-pre-wrap">{{ preReleaseRelease?.body }}</pre>
+                  <div
+                    class="release-notes-prose prose prose-sm dark:prose-invert max-w-none"
+                    v-html="preReleaseHtml"
+                  />
                 </div>
               </div>
             </n-alert>
@@ -443,7 +446,10 @@
                   class="rounded-lg border border-dark/10 dark:border-light/10 bg-surface/60 dark:bg-dark/40 p-3 overflow-auto max-h-72 text-xs"
                 >
                   <p class="font-semibold mb-2">{{ githubRelease?.name }}</p>
-                  <pre class="font-mono whitespace-pre-wrap">{{ githubRelease?.body }}</pre>
+                  <div
+                    class="release-notes-prose prose prose-sm dark:prose-invert max-w-none"
+                    v-html="stableReleaseHtml"
+                  />
                 </div>
               </div>
             </n-alert>
@@ -479,6 +485,7 @@ import ResourceCard from '@/ResourceCard.vue';
 import HighPerformanceCard from '@/components/HighPerformanceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
 import LuminalShineVersion, { GitHubRelease } from '@/sunshine_version';
+import { renderReleaseMarkdown } from '@/utils/markdown';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { useAppsStore } from '@/stores/apps';
@@ -500,6 +507,12 @@ const preReleaseVersion = computed(() =>
     ? LuminalShineVersion.fromRelease(preReleaseRelease.value)
     : new LuminalShineVersion('0.0.0'),
 );
+// Markdown-rendered release notes for the two banners. renderReleaseMarkdown
+// runs marked (GFM) -> highlight.js -> DOMPurify and returns sanitized HTML
+// that's safe to feed into v-html. Empty input yields an empty string so the
+// surrounding container collapses naturally.
+const stableReleaseHtml = computed(() => renderReleaseMarkdown(githubRelease.value?.body));
+const preReleaseHtml = computed(() => renderReleaseMarkdown(preReleaseRelease.value?.body));
 const notifyPreReleases = ref(false);
 const showPreNotes = ref(false);
 const showStableNotes = ref(false);
@@ -1189,5 +1202,42 @@ async function onPlayniteReinstallDone(res: { ok: boolean; error?: string }) {
     justify-content: flex-end;
     transform: translateY(-8px);
   }
+}
+
+/* Rendered-markdown styling tuned for the compact release-notes container
+ * (~18rem tall, text-xs body). Tailwind Typography's defaults are sized for
+ * full-bleed articles; we tighten margins, shrink headings to fit, and let
+ * code blocks scroll horizontally instead of breaking the layout. */
+.release-notes-prose :deep(h1),
+.release-notes-prose :deep(h2),
+.release-notes-prose :deep(h3) {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  font-size: 1.1em;
+}
+.release-notes-prose :deep(h1) {
+  font-size: 1.25em;
+}
+.release-notes-prose :deep(h2) {
+  font-size: 1.15em;
+}
+.release-notes-prose :deep(p),
+.release-notes-prose :deep(ul),
+.release-notes-prose :deep(ol) {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+.release-notes-prose :deep(pre) {
+  font-size: 0.85em;
+  padding: 0.6em 0.8em;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+}
+.release-notes-prose :deep(code) {
+  font-size: 0.9em;
+}
+.release-notes-prose :deep(a) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 </style>

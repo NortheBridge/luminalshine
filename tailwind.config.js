@@ -38,5 +38,5 @@ module.exports = {
     preflight: true,
     visibility: false,
   },
-  plugins: [],
+  plugins: [require('@tailwindcss/typography')],
 };
