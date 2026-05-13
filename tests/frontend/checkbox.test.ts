@@ -1,5 +1,4 @@
-import { mount } from '@vue/test-utils';
-import { NCheckbox } from 'naive-ui';
+import { mount, flushPromises } from '@vue/test-utils';
 import Checkbox from '@web/Checkbox.vue';
 
 describe('Checkbox.vue', () => {
@@ -9,48 +8,45 @@ describe('Checkbox.vue', () => {
       global: { mocks: { $t: (k: string) => k } },
     });
 
-  // Checkbox.vue wraps naive-ui's NCheckbox, which RENDERS a
-  // <div role="checkbox" aria-checked="..."> in the DOM, but the VueWrapper
-  // returned by findComponent(NCheckbox) has its .element pointed at an
-  // outer wrapper that doesn't carry that attribute — so attribute reads
-  // via the component wrapper return undefined. The pattern below splits
-  // concerns:
-  //   - w.find('[role="checkbox"]') returns a DOMWrapper for state reads
-  //   - w.findComponent(NCheckbox) returns a VueWrapper for $emit
-  // Together they exercise both the rendered initial state and the
-  // v-model:checked event path through the parent's value mapping.
+  // Checkbox.vue wraps naive-ui's NCheckbox, which renders a
+  // <div role="checkbox" aria-checked="..."> in the DOM. To drive the
+  // checkbox we click that DOM element — naive-ui's internal click
+  // handler then calls its own emit('update:checked', ...), which Vue
+  // routes through the v-model:checked binding on Checkbox.vue,
+  // running the value-mapping setter and emitting update:modelValue
+  // with the mapped result. Going through .trigger('click') exercises
+  // the same path a real user takes; emitting on findComponent(NCheckbox).vm
+  // bypasses naive-ui's own emit wrapper and the event doesn't propagate
+  // to the parent listener via vue-test-utils 2.x in jsdom.
 
   test('maps boolean model to true/false values', async () => {
     const w = mountWith(true);
-    const cbEl = w.find('[role="checkbox"]');
-    const cbComp = w.findComponent(NCheckbox);
-    expect(cbEl.exists()).toBe(true);
-    expect(cbEl.attributes('aria-checked')).toBe('true');
-    await cbComp.vm.$emit('update:checked', false);
-    await w.vm.$nextTick();
+    const cb = w.find('[role="checkbox"]');
+    expect(cb.exists()).toBe(true);
+    expect(cb.attributes('aria-checked')).toBe('true');
+    await cb.trigger('click');
+    await flushPromises();
     expect(w.emitted()['update:modelValue']?.[0]?.[0]).toBe(false);
   });
 
   test('maps string "enabled/disabled" and respects inverseValues', async () => {
     const w = mountWith('enabled', { inverseValues: true });
-    const cbEl = w.find('[role="checkbox"]');
-    const cbComp = w.findComponent(NCheckbox);
+    const cb = w.find('[role="checkbox"]');
     // inverseValues flips truthy/falsy mapping; 'enabled' becomes falsy.
-    expect(cbEl.attributes('aria-checked')).toBe('false');
-    await cbComp.vm.$emit('update:checked', true);
-    await w.vm.$nextTick();
-    // When checked under inverseValues, the model updates to the *other*
-    // member of the pair — 'disabled'.
+    expect(cb.attributes('aria-checked')).toBe('false');
+    await cb.trigger('click');
+    await flushPromises();
+    // When toggled on under inverseValues, the model updates to the
+    // *other* member of the pair — 'disabled'.
     expect(w.emitted()['update:modelValue']?.[0]?.[0]).toBe('disabled');
   });
 
   test('numeric 1/0 mapping works', async () => {
     const w = mountWith(1);
-    const cbEl = w.find('[role="checkbox"]');
-    const cbComp = w.findComponent(NCheckbox);
-    expect(cbEl.attributes('aria-checked')).toBe('true');
-    await cbComp.vm.$emit('update:checked', false);
-    await w.vm.$nextTick();
+    const cb = w.find('[role="checkbox"]');
+    expect(cb.attributes('aria-checked')).toBe('true');
+    await cb.trigger('click');
+    await flushPromises();
     expect(w.emitted()['update:modelValue']?.[0]?.[0]).toBe(0);
   });
 
