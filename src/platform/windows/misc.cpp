@@ -2089,6 +2089,20 @@ namespace platf {
       }
     }
 
+    // Windows 11 reports build_number >= 22000 via RtlGetVersion, but Microsoft
+    // deliberately leaves the registry's ProductName as "Windows 10 X" for
+    // app-compat reasons. Rewrite the prefix so consumers (About page, support
+    // bundles, crash dumps) display the correct marketing name. Idempotent:
+    // only fires when build is Windows-11-era AND the string still has the
+    // legacy "Windows 10 " prefix, so a future build that ships with the name
+    // already corrected won't be touched.
+    constexpr std::uint32_t WINDOWS_11_MIN_BUILD = 22000;
+    constexpr std::string_view WIN10_PREFIX = "Windows 10 ";
+    if (info.build_number && *info.build_number >= WINDOWS_11_MIN_BUILD &&
+        info.product_name.starts_with(WIN10_PREFIX)) {
+      info.product_name.replace(0, WIN10_PREFIX.size(), "Windows 11 ");
+    }
+
     return info;
   }
 
