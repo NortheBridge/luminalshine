@@ -67,7 +67,8 @@
       "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/coverage-windows.yml'\\); puts 'coverage-windows.yml OK'\")",
       "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/coverage-web.yml'\\); puts 'coverage-web.yml OK'\")",
       "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/codecov.yml'\\); puts 'codecov.yml OK'\")",
-      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/package.json', 'utf8'\\)\\); console.log\\('package.json OK'\\)\")"
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/package.json', 'utf8'\\)\\); console.log\\('package.json OK'\\)\")",
+      "Bash(git rm *)"
     ],
     "deny": [],
     "ask": []
