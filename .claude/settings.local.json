@@ -68,7 +68,12 @@
       "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/coverage-web.yml'\\); puts 'coverage-web.yml OK'\")",
       "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/codecov.yml'\\); puts 'codecov.yml OK'\")",
       "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/package.json', 'utf8'\\)\\); console.log\\('package.json OK'\\)\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(npm ci *)",
+      "Read(//usr/local/bin/**)",
+      "Bash(grep -E \"/\\(n|node|npm\\)$\")",
+      "Bash(/Users/Avalon/tool/webOS_TV_SDK/CLI/bin/node --version)",
+      "Read(//Users/Avalon/tool/webOS_TV_SDK/CLI/bin/**)"
     ],
     "deny": [],
     "ask": []
