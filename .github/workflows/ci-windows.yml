@@ -336,12 +336,19 @@ jobs:
             echo "::error::No portable ZIP produced in ./cpack_artifacts/"; exit 1
           fi
 
-          msi_file="${msi_files[0]}"
+          # NOTE: The standalone MSI is intentionally NOT promoted to the
+          # release artifacts directory. The MSI is still built (cpack -G WIX
+          # above) and is still required — build_bootstrapper.ps1 embeds it
+          # inside the .exe via `/resource:...,Payload.msi`. We just don't
+          # publish it as a separate downloadable; users get the bootstrapper
+          # .exe (which contains the MSI) and the portable .zip. Uncomment
+          # the two msi_file lines below to restore standalone MSI publishing.
+          # msi_file="${msi_files[0]}"
           installer_exe="${installer_files[0]}"
           portable_zip="${zip_files[0]}"
 
           # move
-          mv "${msi_file}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.msi
+          # mv "${msi_file}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.msi
           mv "${installer_exe}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.exe
           mv "${portable_zip}" ../artifacts/LuminalShine-${{ matrix.name }}-portable.zip
 
