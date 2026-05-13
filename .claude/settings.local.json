@@ -76,7 +76,18 @@
       "Read(//Users/Avalon/tool/webOS_TV_SDK/CLI/bin/**)",
       "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=gcovr&page_size=10\")",
       "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=python-gcovr&page_size=10\")",
-      "Bash(ruby -ryaml -e \"YAML.load_file\\('.github/workflows/coverage-windows.yml'\\); puts 'coverage-windows.yml OK'\")"
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('.github/workflows/coverage-windows.yml'\\); puts 'coverage-windows.yml OK'\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=compiler-rt&page_size=10\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=clang&page_size=20\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); pkgs=d['results'].get\\('exact',{}\\); print\\('EXACT:', json.dumps\\(pkgs.get\\('name','-'\\), indent=2\\) if pkgs else 'none'\\); print\\('---'\\); [print\\(p['name'],'|',p.get\\('descriptions',''\\)[:80]\\) for p in d['results'].get\\('other',[]\\)]\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=libclang&page_size=10\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(p['name'],'|',p.get\\('descriptions',''\\)[:80]\\) for p in d['results'].get\\('other',[]\\)+\\([d['results']['exact']] if d['results'].get\\('exact'\\) else []\\)]\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?repo=ucrt64&query=profile&page_size=10\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/search?query=clang_rt&page_size=10\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(p['name'],'|',p['repos'],'|',p.get\\('descriptions',''\\)[:80]\\) for p in d['results'].get\\('other',[]\\)+\\([d['results']['exact']] if d['results'].get\\('exact'\\) else []\\)]\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/api/list?package=mingw-w64-ucrt-x86_64-clang\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)[:2000]\\)\")",
+      "Bash(curl -fsSL \"https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-clang\" -o /tmp/clang_pkg.html)"
     ],
     "deny": [],
     "ask": []
