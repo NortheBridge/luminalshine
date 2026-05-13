@@ -1,5 +1,7 @@
 # LuminalShine
 
+[![codecov](https://codecov.io/gh/NortheBridge/luminalshine/graph/badge.svg?token=BCG83VQ1LZ)](https://codecov.io/gh/NortheBridge/luminalshine)
+
 ## What is LuminalShine?
 
 AI-enhanced, LuminalShine by the NortheBridge Foundation (historically published as "NortheBridge North America") is a modern version of Vibeshine, a fork of Sunshine, a multi-platform popular remote streaming application. Its objective is to offer a Modern Sunshine Experience on Modern Windows including Windows Insider Preview through the Canary Builds.
