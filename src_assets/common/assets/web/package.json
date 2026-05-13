@@ -9,7 +9,9 @@
     "lint": "eslint --ext .js,.ts,.vue . --max-warnings 0",
     "lint:fix": "eslint --ext .js,.ts,.vue . --fix",
     "format": "prettier --write .",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "6.5.2",
@@ -27,6 +29,8 @@
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "@vitejs/plugin-vue": "4.6.2",
+    "@vitest/coverage-v8": "^2.1.9",
+    "@vue/test-utils": "^2.4.6",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.2",
@@ -38,8 +42,10 @@
     "tailwindcss": "^3.4.10",
     "typescript": "^5.9.2",
     "unplugin-vue-components": "0.26.0",
+    "jsdom": "^25.0.1",
     "vite": "4.5.14",
     "vite-plugin-ejs": "1.6.4",
+    "vitest": "^2.1.9",
     "vue-eslint-parser": "^10.2.0",
     "vue-tsc": "^3.0.6"
   }

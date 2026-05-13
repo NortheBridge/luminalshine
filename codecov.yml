@@ -1,6 +1,6 @@
 ---
 codecov:
-  branch: master
+  branch: main
 
 coverage:
   status:
@@ -8,6 +8,25 @@ coverage:
       default:
         target: auto
         threshold: 10%
+      windows:
+        target: auto
+        threshold: 10%
+        flags: [windows]
+      web:
+        target: auto
+        threshold: 10%
+        flags: [web]
+
+flag_management:
+  individual_flags:
+    - name: windows
+      paths:
+        - "src/"
+      carryforward: true
+    - name: web
+      paths:
+        - "src_assets/common/assets/web/"
+      carryforward: true
 
 comment:
   layout: "diff, flags, files"

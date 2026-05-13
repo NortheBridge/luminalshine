@@ -1,0 +1,77 @@
+---
+# Vue/TypeScript web UI coverage. Runs Vitest with the v8 coverage provider
+# against tests/frontend/, emits lcov.info, and uploads to Codecov under the
+# `web` flag. Designed as a BLOCKING PR check: any test failure (or the upload
+# itself failing) red-X's the PR.
+
+name: Coverage (Web)
+permissions: {}
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: coverage-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage_web:
+    name: Vitest Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # All npm scripts and vitest invocations live in the web package dir.
+        working-directory: src_assets/common/assets/web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Codecov PR-context detection benefits from full history.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src_assets/common/assets/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        # No continue-on-error: a Vitest failure or coverage emit failure must
+        # fail the job and block the PR. This is the user-requested behavior
+        # for Option D.
+        run: npm run test:coverage
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: coverage-web
+          # vitest.config.ts writes lcov.info into <repoRoot>/coverage/web/.
+          # working-directory above scopes shell steps, but actions/upload-
+          # artifact's `path` is resolved from the workspace root regardless,
+          # so this is the correct path.
+          path: coverage/web/
+          if-no-files-found: error
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Repo-root-relative path. Vitest emits lcov.info into coverage/web/.
+          files: ../../../../coverage/web/lcov.info
+          flags: web
+          name: web-vitest
+          # Blocking check: if the upload itself fails, fail the job too. This
+          # is the only knob that decides whether codecov-action's exit code
+          # propagates.
+          fail_ci_if_error: true
+          verbose: true

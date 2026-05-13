@@ -18,5 +18,18 @@ export default defineConfig({
     setupFiles: [resolve(repoRoot, 'tests/frontend/setup.ts')],
     include: [resolve(repoRoot, 'tests/frontend/**/*.test.ts')],
     css: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov', 'json'],
+      reportsDirectory: resolve(repoRoot, 'coverage/web'),
+      include: ['src_assets/common/assets/web/**/*.{ts,vue}'],
+      exclude: [
+        'src_assets/common/assets/web/**/*.d.ts',
+        'src_assets/common/assets/web/**/__tests__/**',
+        'src_assets/common/assets/web/main.ts',
+        'src_assets/common/assets/web/env.d.ts',
+      ],
+      all: true,
+    },
   },
 });
