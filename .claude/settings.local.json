@@ -59,7 +59,15 @@
       "Bash(curl -fsSL \"https://api.github.com/repos/actions/deploy-pages/git/tags/cd2ce8fcbc39b97be8ca5fce6e763baed58fa128\")",
       "Bash(curl -fsSL -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/actions/upload-pages-artifact/git/ref/tags/v5.0.0\")",
       "Bash(curl -fsSL -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/actions/deploy-pages/git/ref/tags/v5.0.0\")",
-      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/gh-pages-template/_config.yml'\\); puts '_config.yml OK'\")"
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/gh-pages-template/_config.yml'\\); puts '_config.yml OK'\")",
+      "Bash(curl -fsSL \"https://api.github.com/repos/codecov/codecov-action/releases/latest\")",
+      "Bash(curl -fsSL 'https://api.github.com/repos/codecov/codecov-action/releases/latest')",
+      "Bash(curl -fsSL -H \"Accept: application/vnd.github+json\" \"https://api.github.com/repos/codecov/codecov-action/git/ref/tags/$\\(curl -fsSL 'https://api.github.com/repos/codecov/codecov-action/releases/latest')",
+      "Bash(curl -fsSL \"https://api.github.com/repos/codecov/codecov-action/git/tags/3f20e214133d0983f9a10f3d63b0faf9241a3daa\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/coverage-windows.yml'\\); puts 'coverage-windows.yml OK'\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/.github/workflows/coverage-web.yml'\\); puts 'coverage-web.yml OK'\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('/Users/Avalon/Git/luminalshine/codecov.yml'\\); puts 'codecov.yml OK'\")",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/package.json', 'utf8'\\)\\); console.log\\('package.json OK'\\)\")"
     ],
     "deny": [],
     "ask": []
