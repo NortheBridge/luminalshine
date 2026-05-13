@@ -74,14 +74,15 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-opus"
             "mingw-w64-${TOOLCHAIN}-toolchain"
             "mingw-w64-${TOOLCHAIN}-MinHook"
-            "mingw-w64-${TOOLCHAIN}-python"
-            "mingw-w64-${TOOLCHAIN}-python-pip"
+            "mingw-w64-${TOOLCHAIN}-python-gcovr"
           )
+          # python-gcovr pulls in python, python-lxml, and the rest of gcovr's
+          # runtime as MSYS2-prebuilt packages — sidesteps the pip-install
+          # lxml-source-compile failure on MSYS2's PEP 668 externally-managed
+          # environment (lxml has no pre-built wheel for Python 3.14 on
+          # mingw_x86_64_ucrt_gnu so pip would fall back to source build,
+          # which then errors out on missing libxml2 headers).
           pacman -Syu --noconfirm "${dependencies[@]}"
-
-      - name: Install gcovr
-        run: |
-          python -m pip install --user gcovr
 
       - name: Fetch SudoVDA driver bundle
         # Same fetch as ci-windows.yml so the CMake configure step doesn't fail
