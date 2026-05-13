@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils';
+import { NCheckbox } from 'naive-ui';
 import Checkbox from '@web/Checkbox.vue';
 
 describe('Checkbox.vue', () => {
@@ -16,7 +17,7 @@ describe('Checkbox.vue', () => {
 
   test('maps boolean model to true/false values', async () => {
     const w = mountWith(true);
-    const cb = w.findComponent({ name: 'NCheckbox' });
+    const cb = w.findComponent(NCheckbox);
     expect(cb.exists()).toBe(true);
     expect(cb.props('checked')).toBe(true);
     await cb.vm.$emit('update:checked', false);
@@ -26,7 +27,7 @@ describe('Checkbox.vue', () => {
 
   test('maps string "enabled/disabled" and respects inverseValues', async () => {
     const w = mountWith('enabled', { inverseValues: true });
-    const cb = w.findComponent({ name: 'NCheckbox' });
+    const cb = w.findComponent(NCheckbox);
     // inverseValues flips truthy/falsy mapping; 'enabled' is the falsy side.
     expect(cb.props('checked')).toBe(false);
     await cb.vm.$emit('update:checked', true);
@@ -38,7 +39,7 @@ describe('Checkbox.vue', () => {
 
   test('numeric 1/0 mapping works', async () => {
     const w = mountWith(1);
-    const cb = w.findComponent({ name: 'NCheckbox' });
+    const cb = w.findComponent(NCheckbox);
     expect(cb.props('checked')).toBe(true);
     await cb.vm.$emit('update:checked', false);
     await w.vm.$nextTick();

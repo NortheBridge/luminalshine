@@ -16,6 +16,10 @@ export default defineConfig({
       // @vue/test-utils) fail to resolve. Explicitly alias each npm package
       // the tests pull in to its absolute install location here.
       '@vue/test-utils': resolve(__dirname, 'node_modules/@vue/test-utils'),
+      // Same reason as @vue/test-utils: tests at <repoRoot>/tests/frontend/
+      // need this package to be reachable but Node's walk-up resolution
+      // from there can't find the web package's node_modules.
+      'naive-ui': resolve(__dirname, 'node_modules/naive-ui'),
     },
   },
   // Vite's default fs.allow is the directory containing this config
