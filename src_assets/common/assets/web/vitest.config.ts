@@ -12,6 +12,16 @@ export default defineConfig({
       '@': __dirname,
     },
   },
+  // Vite's default fs.allow is the directory containing this config
+  // (src_assets/common/assets/web/). Tests live at <repoRoot>/tests/frontend/,
+  // which is outside that root, so Vite refuses to load setup.ts and the
+  // failure surfaces as a confusing "Does the file exist?" error. Whitelist
+  // the repo root so setupFiles and test source files load cleanly.
+  server: {
+    fs: {
+      allow: [repoRoot],
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,
