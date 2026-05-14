@@ -1,11 +1,16 @@
 <template>
-  <div
-    class="min-h-screen bg-gradient-to-br from-light/40 via-surface/40 to-light/60 dark:from-dark/50 dark:via-dark/60 dark:to-dark/80 flex items-center justify-center px-4 py-12"
-  >
+  <div class="relative min-h-screen flex items-center justify-center px-4 py-12">
+    <div class="aurora-bg" aria-hidden="true"></div>
+    <div class="aurora-grain" aria-hidden="true"></div>
     <n-card class="w-full max-w-md" :bordered="false">
       <n-space vertical size="large" class="w-full">
         <n-space vertical align="center" size="small">
-          <n-image src="/images/logo-sunshine-45.png" width="45" preview-disabled alt="LuminalShine" />
+          <n-image
+            src="/images/logo-sunshine-45.png"
+            width="45"
+            preview-disabled
+            alt="LuminalShine"
+          />
           <n-h2>{{ $t('auth.login_title') }}</n-h2>
         </n-space>
 

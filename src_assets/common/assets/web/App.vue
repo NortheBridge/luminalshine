@@ -1,22 +1,35 @@
 <template>
-  <n-config-provider :theme="isDark ? darkTheme : null" :theme-overrides="naiveOverrides">
+  <n-config-provider :theme="darkTheme" :theme-overrides="naiveOverrides">
     <n-loading-bar-provider>
       <n-dialog-provider>
         <n-notification-provider>
           <n-message-provider>
-            <div class="min-h-screen flex flex-col bg-light dark:bg-dark text-dark dark:text-light">
+            <!-- Aurora gradient + dot-grain layers sit behind every view so the
+                 entire UI feels like one continuous pane of glass. -->
+            <div class="aurora-bg" aria-hidden="true"></div>
+            <div class="aurora-grain" aria-hidden="true"></div>
+            <div class="min-h-screen flex flex-col text-onDark">
               <header
-                class="sticky top-0 z-30 h-14 flex items-center gap-4 px-4 border-b border-dark/10 dark:border-light/10 bg-light/70 dark:bg-dark/60 backdrop-blur supports-[backdrop-filter]:bg-light/40 supports-[backdrop-filter]:dark:bg-dark/40"
+                class="sticky top-0 z-30 h-16 flex items-center gap-4 px-4 sm:px-6 border-b border-white/10 bg-[rgba(7,11,31,0.55)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(7,11,31,0.4)]"
               >
                 <div class="flex items-center gap-3 min-w-0">
-                  <img src="/images/logo-sunshine-45.png" alt="LuminalShine" class="h-8 w-8" />
-                  <h1 class="text-base md:text-lg font-semibold tracking-tight truncate">
+                  <RouterLink to="/" class="brand-mark shrink-0" aria-label="LuminalShine home">
+                    <span class="brand-mark-dot" aria-hidden="true"></span>
+                    <span>NortheBridge&nbsp;Foundation</span>
+                  </RouterLink>
+                  <span
+                    class="hidden md:inline-block h-6 w-px bg-white/10"
+                    aria-hidden="true"
+                  ></span>
+                  <h1
+                    class="hidden md:block text-sm md:text-base font-medium tracking-tight truncate text-[var(--aurora-text-secondary)]"
+                  >
                     {{
                       displayTitle && displayTitle.includes('.') ? $t(displayTitle) : displayTitle
                     }}
                   </h1>
                 </div>
-                <nav class="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
+                <nav class="hidden md:flex items-center gap-0.5 text-sm font-medium ml-2">
                   <RouterLink to="/" :class="linkClass('/')">
                     <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
                   </RouterLink>
@@ -58,12 +71,10 @@
                   </n-dropdown>
                   <!-- Show save/status control on mobile app bar when on Settings -->
                   <SavingStatus />
-                  <ThemeToggle />
                 </div>
                 <!-- Desktop actions -->
                 <div class="hidden md:flex ml-auto items-center gap-3 text-xs">
                   <SavingStatus />
-                  <ThemeToggle />
                 </div>
               </header>
 
@@ -80,7 +91,7 @@
               <!-- Immediate background for login modal (no transition delay) -->
               <div v-if="loginOverlay" class="fixed inset-0 z-[110]">
                 <div
-                  class="absolute inset-0 bg-gradient-to-br from-white/70 via-white/60 to-white/70 dark:from-black/70 dark:via-black/60 dark:to-black/70 backdrop-blur-md"
+                  class="absolute inset-0 bg-gradient-to-br from-[rgba(4,6,15,0.78)] via-[rgba(7,11,31,0.7)] to-[rgba(4,6,15,0.78)] backdrop-blur-md"
                 ></div>
               </div>
               <LoginModal />
@@ -88,7 +99,7 @@
               <transition name="fade-fast">
                 <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
                   <div
-                    class="absolute inset-0 bg-gradient-to-br from-white/70 via-white/60 to-white/70 dark:from-black/70 dark:via-black/60 dark:to-black/70 backdrop-blur-md"
+                    class="absolute inset-0 bg-gradient-to-br from-[rgba(4,6,15,0.82)] via-[rgba(7,11,31,0.72)] to-[rgba(4,6,15,0.82)] backdrop-blur-md"
                   ></div>
                   <div
                     class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto"
@@ -139,10 +150,9 @@ import {
   NDropdown,
   darkTheme,
 } from 'naive-ui';
-import { useNaiveThemeOverrides, useDarkModeClassRef } from '@/naive-theme';
+import { useNaiveThemeOverrides } from '@/naive-theme';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
-import ThemeToggle from '@/ThemeToggle.vue';
 import SavingStatus from '@/components/SavingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import OfflineOverlay from '@/components/OfflineOverlay.vue';
@@ -152,8 +162,6 @@ import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
 import { useConnectivityStore } from '@/stores/connectivity';
 
-// Sync Naive theme to existing dark mode class and pick colors from CSS vars
-const isDark = useDarkModeClassRef();
 const naiveOverrides = useNaiveThemeOverrides();
 
 const route = useRoute();
@@ -164,10 +172,15 @@ const cfgStore = useConfigStore();
 const { metadata } = storeToRefs(cfgStore);
 
 const linkClass = (path: string) => {
-  const base = 'inline-flex items-center gap-2 px-3 py-1 rounded-md text-brand';
+  const base =
+    'inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] transition-colors';
   const active = route.path === path;
-  if (active) return base + ' font-semibold bg-primary/20 text-brand';
-  return base + ' hover:bg-primary/10';
+  if (active)
+    return (
+      base +
+      ' font-semibold text-onPrimary bg-gradient-to-br from-primary/90 to-secondary/80 shadow-[0_8px_24px_-12px_rgba(30,200,255,0.55)]'
+    );
+  return base + ' text-[var(--aurora-text-secondary)] hover:text-onDark hover:bg-white/5';
 };
 const pageTitle = ref('Dashboard');
 const displayTitle = computed(() => {

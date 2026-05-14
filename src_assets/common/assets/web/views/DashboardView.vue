@@ -1,12 +1,14 @@
 <template>
   <div class="dashboard-page space-y-6 px-2 sm:space-y-8 md:px-4">
     <!-- Hero / Intro -->
-    <section
-      class="rounded-xl border border-dark/10 bg-light/70 p-4 shadow-sm backdrop-blur dark:border-light/10 dark:bg-surface/70 sm:p-5 md:p-6"
-    >
+    <section class="dashboard-hero">
+      <span class="brand-mark dashboard-hero__mark">
+        <span class="brand-mark-dot" aria-hidden="true"></span>
+        <span>LuminalShine</span>
+      </span>
       <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div class="min-w-0">
-          <h2 class="text-xl md:text-2xl font-semibold tracking-tight">
+          <h2 class="gradient-text text-2xl md:text-3xl font-semibold tracking-tight leading-tight">
             {{ $t('index.welcome') }}
           </h2>
           <p class="text-sm opacity-80 mt-1 leading-relaxed">
@@ -42,7 +44,9 @@
       <div class="min-w-0">
         <n-card v-if="installedVersion" :segmented="{ content: true, footer: true }">
           <template #header>
-            <h2 class="text-xl sm:text-2xl font-semibold tracking-tight mx-auto text-center break-words">
+            <h2
+              class="text-xl sm:text-2xl font-semibold tracking-tight mx-auto text-center break-words"
+            >
               {{ 'Version ' + displayVersion }}
             </h2>
           </template>
@@ -177,7 +181,12 @@
                       }}
                     </span>
                   </n-button>
-                  <n-button tertiary size="small" class="w-full justify-center sm:w-auto" @click="dismissCrashBundle">
+                  <n-button
+                    tertiary
+                    size="small"
+                    class="w-full justify-center sm:w-auto"
+                    @click="dismissCrashBundle"
+                  >
                     <i class="fas fa-xmark" />
                     <span>{{ $t('config.crash_dump_dismiss') || 'Dismiss' }}</span>
                   </n-button>
@@ -348,7 +357,9 @@
                       </p>
                     </div>
                   </div>
-                  <div class="dashboard-release-alert__actions grid gap-2 sm:flex sm:flex-wrap sm:items-center shrink-0">
+                  <div
+                    class="dashboard-release-alert__actions grid gap-2 sm:flex sm:flex-wrap sm:items-center shrink-0"
+                  >
                     <n-button
                       type="default"
                       strong
@@ -412,7 +423,9 @@
                       </p>
                     </div>
                   </div>
-                  <div class="dashboard-release-alert__actions grid gap-2 sm:flex sm:flex-wrap sm:items-center shrink-0">
+                  <div
+                    class="dashboard-release-alert__actions grid gap-2 sm:flex sm:flex-wrap sm:items-center shrink-0"
+                  >
                     <n-button
                       type="default"
                       strong
@@ -659,9 +672,9 @@ async function runVersionChecks() {
     }
     // Fetch list of releases to locate prereleases and determine installed stability
     try {
-      const releases = await fetch('https://api.github.com/repos/NortheBridge/luminalshine/releases').then(
-        (r) => r.json(),
-      );
+      const releases = await fetch(
+        'https://api.github.com/repos/NortheBridge/luminalshine/releases',
+      ).then((r) => r.json());
       if (Array.isArray(releases)) {
         // Pick the latest prerelease by semver (not just the first one)
         const prereleases = releases.filter((r: any) => r && r.prerelease && !r.draft);
@@ -1154,24 +1167,38 @@ async function onPlayniteReinstallDone(res: { ok: boolean; error?: string }) {
 </script>
 
 <style scoped>
-.dashboard-page :deep(.n-card) {
-  border-radius: 1rem;
+.dashboard-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1.75rem 1.5rem 1.65rem;
+  border-radius: 22px;
+  background: rgba(20, 30, 60, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
   overflow: hidden;
-  border: 1px solid rgb(var(--color-dark) / 0.1);
-  background: rgb(var(--color-light) / 0.8);
-  backdrop-filter: blur(6px);
+  isolation: isolate;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 30px 60px -30px rgba(0, 0, 0, 0.6);
 }
 
-.dark .dashboard-page :deep(.n-card) {
-  border-color: rgb(var(--color-light) / 0.14);
-  background: rgb(var(--color-surface) / 0.74);
+.dashboard-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(30, 200, 255, 0.18), transparent 55%),
+    radial-gradient(120% 80% at 100% 100%, rgba(138, 92, 255, 0.14), transparent 55%);
+  opacity: 0.85;
+  z-index: -1;
 }
 
-.dashboard-page :deep(.n-card .n-card__header),
-.dashboard-page :deep(.n-card .n-card-header),
-.dashboard-page :deep(.n-card .n-card__footer),
-.dashboard-page :deep(.n-card .n-card-footer) {
-  border-radius: 0.95rem;
+.dashboard-hero__mark {
+  align-self: flex-start;
+  margin-bottom: 0.35rem;
 }
 
 .dashboard-page :deep(.n-alert),
@@ -1181,7 +1208,7 @@ async function onPlayniteReinstallDone(res: { ok: boolean; error?: string }) {
 .dashboard-page :deep(.n-base-selection .n-base-selection-label),
 .dashboard-page :deep(.n-data-table-wrapper),
 .dashboard-page :deep(.n-table-wrapper) {
-  border-radius: 0.8rem !important;
+  border-radius: 14px !important;
 }
 
 .dashboard-page :deep(.dashboard-release-alert .n-alert-body__content) {

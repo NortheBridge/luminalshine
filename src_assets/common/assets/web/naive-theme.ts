@@ -21,21 +21,6 @@ function cssVarRgb(name: string, fallback: string): string {
   return `rgb(${nr}, ${ng}, ${nb})`;
 }
 
-// Resolve `--color-xxx` to a comma-separated "r, g, b" string for rgba()
-function cssVarRgbComma(name: string, fallback: string): string {
-  if (typeof window === 'undefined') return fallback;
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  if (!raw) return fallback;
-  const parts = raw.replace(/\s+/g, ' ').replace(/,/g, ' ').trim().split(' ');
-  if (parts.length < 3) return fallback;
-  const [r, g, b] = parts;
-  const nr = Number(r),
-    ng = Number(g),
-    nb = Number(b);
-  if ([nr, ng, nb].some((n) => !isFinite(n))) return fallback;
-  return `${nr}, ${ng}, ${nb}`;
-}
-
 export function useNaiveThemeOverrides() {
   const overrides = ref<GlobalThemeOverrides>({});
   const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
@@ -56,45 +41,82 @@ export function useNaiveThemeOverrides() {
     return toCss(r * (1 - amt), g * (1 - amt), b * (1 - amt));
   };
   const compute = () => {
-    const primary = cssVarRgb('--color-primary', '77, 163, 255');
-    const info = cssVarRgb('--color-info', '2, 136, 209');
-    const success = cssVarRgb('--color-success', '76, 175, 80');
-    const warning = cssVarRgb('--color-warning', '245, 124, 0');
-    const danger = cssVarRgb('--color-danger', '220, 38, 38');
+    const primary = cssVarRgb('--color-primary', 'rgb(30, 200, 255)');
+    const info = cssVarRgb('--color-info', 'rgb(0, 224, 198)');
+    const success = cssVarRgb('--color-success', 'rgb(16, 185, 129)');
+    const warning = cssVarRgb('--color-warning', 'rgb(245, 158, 11)');
+    const danger = cssVarRgb('--color-danger', 'rgb(225, 29, 72)');
+    // Frosted-glass surfaces — semi-transparent so the aurora background
+    // bleeds through cards, modals, and popovers.
+    const glassSurface = 'rgba(20, 30, 60, 0.55)';
+    const glassPopover = 'rgba(20, 30, 60, 0.72)';
+    const glassTable = 'rgba(14, 20, 36, 0.45)';
+    const glassBorder = 'rgba(255, 255, 255, 0.12)';
     overrides.value = {
       common: {
         primaryColor: primary,
-        primaryColorHover: darken(primary, 0.08),
-        primaryColorPressed: darken(primary, 0.16),
-        primaryColorSuppl: lighten(primary, 0.12),
+        primaryColorHover: lighten(primary, 0.1),
+        primaryColorPressed: darken(primary, 0.12),
+        primaryColorSuppl: lighten(primary, 0.18),
         infoColor: info,
-        infoColorHover: darken(info, 0.08),
-        infoColorPressed: darken(info, 0.16),
-        infoColorSuppl: lighten(info, 0.12),
+        infoColorHover: lighten(info, 0.1),
+        infoColorPressed: darken(info, 0.12),
+        infoColorSuppl: lighten(info, 0.18),
         successColor: success,
-        successColorHover: darken(success, 0.08),
-        successColorPressed: darken(success, 0.16),
-        successColorSuppl: lighten(success, 0.12),
+        successColorHover: lighten(success, 0.08),
+        successColorPressed: darken(success, 0.12),
+        successColorSuppl: lighten(success, 0.16),
         warningColor: warning,
-        warningColorHover: darken(warning, 0.08),
-        warningColorPressed: darken(warning, 0.16),
-        warningColorSuppl: lighten(warning, 0.12),
+        warningColorHover: lighten(warning, 0.08),
+        warningColorPressed: darken(warning, 0.12),
+        warningColorSuppl: lighten(warning, 0.16),
         errorColor: danger,
-        errorColorHover: darken(danger, 0.08),
-        errorColorPressed: darken(danger, 0.16),
-        errorColorSuppl: lighten(danger, 0.12),
+        errorColorHover: lighten(danger, 0.08),
+        errorColorPressed: darken(danger, 0.14),
+        errorColorSuppl: lighten(danger, 0.16),
 
-        baseColor: cssVarRgb('--color-light', '#ffffff'),
-        bodyColor: cssVarRgb('--color-light', '#ffffff'),
-        textColorBase: cssVarRgb('--color-dark', '#000000'),
-        cardColor: cssVarRgb('--color-surface', '#ffffff'),
-        modalColor: cssVarRgb('--color-surface', '#ffffff'),
-        popoverColor: cssVarRgb('--color-surface', '#ffffff'),
-        tableColor: cssVarRgb('--color-light', '#ffffff'),
+        baseColor: cssVarRgb('--color-dark', 'rgb(6, 10, 24)'),
+        bodyColor: 'rgba(0, 0, 0, 0)', // transparent so the aurora layer shows through
+        textColorBase: cssVarRgb('--color-onDark', 'rgb(245, 249, 255)'),
+        cardColor: glassSurface,
+        modalColor: glassSurface,
+        popoverColor: glassPopover,
+        tableColor: glassTable,
 
-        // Subtle borders/dividers using resolved theme tokens (avoid var() usage here)
-        borderColor: `rgba(${cssVarRgbComma('--color-dark', '0, 0, 0')}, 0.10)`,
-        dividerColor: `rgba(${cssVarRgbComma('--color-dark', '0, 0, 0')}, 0.10)`,
+        borderColor: glassBorder,
+        dividerColor: glassBorder,
+        hoverColor: 'rgba(120, 200, 255, 0.10)',
+      },
+      Card: {
+        borderRadius: '22px',
+        paddingMedium: '20px 22px',
+        paddingLarge: '24px 26px',
+      },
+      Button: {
+        borderRadiusMedium: '12px',
+        borderRadiusLarge: '14px',
+        borderRadiusSmall: '10px',
+      },
+      Input: {
+        borderRadius: '12px',
+        color: 'rgba(20, 30, 60, 0.55)',
+        colorFocus: 'rgba(20, 30, 60, 0.65)',
+      },
+      Tag: {
+        borderRadius: '999px',
+      },
+      Alert: {
+        borderRadius: '18px',
+      },
+      Modal: {
+        peers: {
+          Card: {
+            borderRadius: '22px',
+          },
+        },
+      },
+      Dropdown: {
+        borderRadius: '14px',
       },
     } as GlobalThemeOverrides;
   };

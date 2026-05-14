@@ -2,52 +2,402 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Theme CSS variables (semantic tokens) */
+/*
+ * Aurora-glass theme (gitdocs.northebridge.com).
+ * Dark-only: surfaces sit on a fixed deep-navy gradient with cyan/violet
+ * halos. Cards, modals, and inputs are frosted glass that lets the
+ * aurora bleed through. Inter is the brand typeface.
+ */
 @layer base {
+  :root {
+    --aurora-bg-base: #04060f;
+    --aurora-bg-deep: #070b1f;
+    --aurora-cyan: #1ec8ff;
+    --aurora-periwinkle: #4a7dff;
+    --aurora-violet: #8a5cff;
+    --aurora-teal: #00e0c6;
+    --aurora-text: #f3f6ff;
+    --aurora-text-secondary: rgba(225, 232, 255, 0.72);
+    --aurora-text-muted: rgba(180, 195, 230, 0.55);
+    --aurora-glass-bg: rgba(20, 30, 60, 0.35);
+    --aurora-glass-bg-strong: rgba(20, 30, 60, 0.55);
+    --aurora-glass-border: rgba(255, 255, 255, 0.12);
+    --aurora-glass-border-hover: rgba(120, 200, 255, 0.45);
+    --aurora-glass-highlight: rgba(255, 255, 255, 0.08);
+  }
+
+  html,
   body {
-    @apply text-dark dark:text-light bg-light dark:bg-dark antialiased;
+    background-color: var(--aurora-bg-base);
+    color: var(--aurora-text);
+  }
+
+  body {
+    font-family:
+      'Inter',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI Variable',
+      'Segoe UI',
+      system-ui,
+      sans-serif;
+    font-feature-settings: 'ss01', 'cv11';
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    @apply text-onDark antialiased;
+    position: relative;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    letter-spacing: -0.015em;
   }
 }
 
-/* Naive UI button overrides to ensure solid variants across the app */
+/* ---------------------------------------------------------------- */
+/* Aurora background — fixed gradient halos + faint dot grid overlay */
+/* ---------------------------------------------------------------- */
 @layer components {
-  :root .n-button {
-    @apply shadow-sm;
-  }
-  :root .n-button .n-button__content {
-    @apply inline-flex items-center gap-2;
-  }
-  :root .n-button--default-type {
-    /* Neutral button surfaces align with our Tailwind tokens */
-    @apply bg-dark/10 dark:bg-light/10 text-dark dark:text-light hover:bg-dark/15 dark:hover:bg-light/15;
-  }
-  /* Link-like button variant to match navbar links */
-  :root .n-button.n-button--linkish {
-    @apply bg-transparent text-brand hover:bg-primary/10 shadow-none border-0 px-3 py-1 rounded-md;
+  .aurora-bg {
+    position: fixed;
+    inset: -20%;
+    z-index: -2;
+    background:
+      radial-gradient(ellipse 60% 50% at 15% 20%, rgba(30, 200, 255, 0.35), transparent 60%),
+      radial-gradient(ellipse 50% 45% at 85% 15%, rgba(138, 92, 255, 0.32), transparent 60%),
+      radial-gradient(ellipse 70% 55% at 50% 95%, rgba(0, 224, 198, 0.22), transparent 65%),
+      radial-gradient(ellipse 45% 40% at 90% 80%, rgba(74, 125, 255, 0.28), transparent 60%),
+      linear-gradient(180deg, var(--aurora-bg-deep) 0%, var(--aurora-bg-base) 100%);
+    filter: blur(40px) saturate(125%);
+    animation: aurora-drift 28s ease-in-out infinite alternate;
+    pointer-events: none;
   }
 
-  /* Preserve scrollbar gutter to avoid content overlap in scrollable dropdowns */
+  .aurora-grain {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 3px 3px;
+    opacity: 0.6;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  @keyframes aurora-drift {
+    0% {
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      transform: translate3d(-2%, 1.5%, 0) scale(1.05);
+    }
+    100% {
+      transform: translate3d(2%, -1%, 0) scale(1.02);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .aurora-bg {
+      animation: none;
+    }
+  }
+
+  /* Pulse for the brand-mark dot */
+  @keyframes aurora-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.6;
+      transform: scale(0.85);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Section heading helpers (gitdocs-style)                          */
+/* ---------------------------------------------------------------- */
+@layer components {
+  .brand-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0.95rem 0.4rem 0.55rem;
+    background: var(--aurora-glass-bg);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--aurora-glass-border);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: var(--aurora-text-secondary);
+  }
+
+  .brand-mark .brand-mark-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--aurora-cyan), var(--aurora-teal));
+    box-shadow: 0 0 12px rgba(30, 200, 255, 0.7);
+    animation: aurora-pulse 2.4s ease-in-out infinite;
+  }
+
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--aurora-text-muted);
+    margin: 0 0 1.5rem;
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--aurora-glass-border), transparent);
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, #ffffff 0%, #cfe4ff 45%, #8ecbff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Naive UI surface overrides — frosted-glass cards, dialogs, etc.  */
+/* ---------------------------------------------------------------- */
+@layer components {
+  :root .n-card {
+    background-color: var(--aurora-glass-bg-strong) !important;
+    border: 1px solid var(--aurora-glass-border) !important;
+    border-radius: 22px !important;
+    backdrop-filter: blur(22px) saturate(180%);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    box-shadow:
+      0 1px 0 var(--aurora-glass-highlight) inset,
+      0 30px 60px -30px rgba(0, 0, 0, 0.6);
+    transition:
+      transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
+      border-color 0.4s ease,
+      box-shadow 0.5s ease;
+  }
+
+  :root .n-card.n-card--hoverable:hover {
+    transform: translateY(-4px);
+    border-color: var(--aurora-glass-border-hover) !important;
+    box-shadow:
+      0 1px 0 var(--aurora-glass-highlight) inset,
+      0 0 0 1px rgba(120, 200, 255, 0.18),
+      0 25px 55px -20px rgba(30, 120, 220, 0.45),
+      0 40px 80px -30px rgba(138, 92, 255, 0.35);
+  }
+
+  :root .n-card > .n-card-header,
+  :root .n-card .n-card__content,
+  :root .n-card .n-card__footer {
+    background-color: transparent !important;
+  }
+
+  :root .n-modal-mask,
+  :root .n-modal-mask + .n-modal {
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+  }
+
+  :root .n-modal-mask {
+    background: rgba(4, 6, 15, 0.55) !important;
+  }
+
+  :root .n-base-selection,
+  :root .n-input,
+  :root .n-input-wrapper {
+    background-color: var(--aurora-glass-bg-strong) !important;
+    border-radius: 12px !important;
+  }
+
+  :root .n-input .n-input__border,
+  :root .n-input .n-input__state-border {
+    border-color: var(--aurora-glass-border) !important;
+    border-radius: 12px !important;
+  }
+
+  :root .n-input:focus-within .n-input__state-border,
+  :root .n-base-selection--focus .n-base-selection__state-border {
+    border-color: rgb(var(--color-primary)) !important;
+    box-shadow: 0 0 0 3px rgba(30, 200, 255, 0.25) !important;
+  }
+
+  :root .n-tag {
+    border-radius: 999px !important;
+    background-color: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    color: var(--aurora-text-secondary) !important;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  :root .n-alert {
+    border-radius: 18px !important;
+    border: 1px solid var(--aurora-glass-border);
+    backdrop-filter: blur(18px) saturate(170%);
+    -webkit-backdrop-filter: blur(18px) saturate(170%);
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Naive UI button overrides                                        */
+/* ---------------------------------------------------------------- */
+@layer components {
+  :root .n-button {
+    border-radius: 12px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    transition:
+      background 0.25s ease,
+      border-color 0.25s ease,
+      color 0.25s ease,
+      transform 0.2s ease,
+      box-shadow 0.25s ease;
+  }
+
+  :root .n-button .n-button__content {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Default / neutral: glass surface */
+  :root .n-button--default-type {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid var(--aurora-glass-border) !important;
+    color: var(--aurora-text) !important;
+    backdrop-filter: blur(12px) saturate(160%);
+    -webkit-backdrop-filter: blur(12px) saturate(160%);
+  }
+  :root .n-button--default-type:hover {
+    background-color: rgba(120, 200, 255, 0.12) !important;
+    border-color: var(--aurora-glass-border-hover) !important;
+    color: var(--aurora-text) !important;
+  }
+
+  /* Primary: cyan with dark text */
+  :root .n-button--primary-type {
+    background: linear-gradient(
+      135deg,
+      rgb(var(--color-primary)) 0%,
+      rgb(var(--color-secondary)) 100%
+    ) !important;
+    color: rgb(var(--color-onPrimary)) !important;
+    border: none !important;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.18) inset,
+      0 10px 30px -12px rgba(30, 200, 255, 0.55);
+  }
+  :root .n-button--primary-type:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+  }
+
+  /* Secondary / tertiary: violet-tinted glass */
+  :root .n-button--secondary,
+  :root .n-button--tertiary {
+    background-color: rgba(138, 92, 255, 0.18) !important;
+    border: 1px solid rgba(138, 92, 255, 0.3) !important;
+    color: var(--aurora-text) !important;
+  }
+  :root .n-button--secondary:hover,
+  :root .n-button--tertiary:hover {
+    background-color: rgba(138, 92, 255, 0.28) !important;
+    border-color: rgba(138, 92, 255, 0.5) !important;
+  }
+
+  /* Success / Info / Warning / Error: tinted glass with colored border */
+  :root .n-button--success-type {
+    background-color: rgba(16, 185, 129, 0.18) !important;
+    border: 1px solid rgba(16, 185, 129, 0.45) !important;
+    color: rgb(var(--color-success)) !important;
+  }
+  :root .n-button--info-type {
+    background-color: rgba(0, 224, 198, 0.18) !important;
+    border: 1px solid rgba(0, 224, 198, 0.45) !important;
+    color: rgb(var(--color-info)) !important;
+  }
+  :root .n-button--warning-type {
+    background-color: rgba(245, 158, 11, 0.18) !important;
+    border: 1px solid rgba(245, 158, 11, 0.45) !important;
+    color: rgb(var(--color-warning)) !important;
+  }
+  :root .n-button--error-type {
+    background-color: rgba(225, 29, 72, 0.18) !important;
+    border: 1px solid rgba(225, 29, 72, 0.45) !important;
+    color: rgb(var(--color-danger)) !important;
+  }
+
+  /* Link-like variant — used for navbar items */
+  :root .n-button.n-button--linkish {
+    @apply bg-transparent text-primary hover:bg-primary/10 shadow-none border-0 px-3 py-1 rounded-md;
+  }
+
+  :root .n-button--disabled,
+  :root .n-button[disabled='true'],
+  :root .n-button[aria-disabled='true'] {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
+    transform: none;
+  }
+
+  /* Reset icon margins inside Naive buttons (gap handles spacing) */
+  :root .n-button .n-button__content .icon,
+  :root .n-button .n-button__content .fa,
+  :root .n-button .n-button__content .fas,
+  :root .n-button .n-button__content .far,
+  :root .n-button .n-button__content .fal,
+  :root .n-button .n-button__content .fab {
+    margin: 0 !important;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Scrollbar (preserves the previous "thumb gradient" treatment but  */
+/* re-tinted to cyan/periwinkle).                                    */
+/* ---------------------------------------------------------------- */
+@layer components {
   .scroll-stable {
     scrollbar-gutter: stable;
   }
 
-  /*
-   * Reusable app scrollbar styling for native scroll containers.
-   * Apply to any overflow container that should feel integrated with our glassy surfaces.
-   */
   .app-scrollbar {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
-    scrollbar-color: rgb(var(--color-primary) / 0.5) rgb(var(--color-dark) / 0.06);
+    scrollbar-color: rgba(30, 200, 255, 0.55) rgba(255, 255, 255, 0.06);
   }
 
   .app-scrollbar-prominent {
     scrollbar-gutter: stable both-edges;
     scrollbar-width: auto;
-    scrollbar-color: rgb(var(--color-primary) / 0.58) rgb(var(--color-dark) / 0.1);
+    scrollbar-color: rgba(30, 200, 255, 0.68) rgba(255, 255, 255, 0.1);
   }
 
-  .app-scrollbar::-webkit-scrollbar {
+  .app-scrollbar::-webkit-scrollbar,
+  .app-scrollbar-prominent::-webkit-scrollbar {
     width: 12px;
     height: 12px;
   }
@@ -57,222 +407,55 @@
     height: 14px;
   }
 
-  .app-scrollbar::-webkit-scrollbar-track {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-dark) / 0.03),
-      rgb(var(--color-dark) / 0.07)
-    );
+  .app-scrollbar::-webkit-scrollbar-track,
+  .app-scrollbar-prominent::-webkit-scrollbar-track {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.1));
     border-radius: 999px;
     margin: 0.35rem;
-    box-shadow: inset 0 0 0 1px rgb(var(--color-dark) / 0.05);
-  }
-
-  .app-scrollbar-prominent::-webkit-scrollbar-track {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-dark) / 0.045),
-      rgb(var(--color-dark) / 0.11)
-    );
-    box-shadow: inset 0 0 0 1px rgb(var(--color-dark) / 0.07);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   }
 
   .app-scrollbar-edge::-webkit-scrollbar-track {
     margin: 0.35rem 0 0.35rem 0.25rem;
   }
 
-  .app-scrollbar::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.44),
-      rgb(var(--color-secondary) / 0.34)
-    );
+  .app-scrollbar::-webkit-scrollbar-thumb,
+  .app-scrollbar-prominent::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(30, 200, 255, 0.62), rgba(74, 125, 255, 0.45));
     border: 3px solid transparent;
     border-radius: 999px;
     background-clip: padding-box;
     box-shadow:
-      inset 0 0 0 1px rgb(255 255 255 / 0.18),
-      0 8px 18px rgb(var(--color-dark) / 0.08);
+      inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+      0 10px 24px rgba(0, 0, 0, 0.28);
     min-height: 2.75rem;
   }
 
-  .app-scrollbar-prominent::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.52),
-      rgb(var(--color-secondary) / 0.4)
-    );
-    border-width: 3px;
-    box-shadow:
-      inset 0 0 0 1px rgb(255 255 255 / 0.24),
-      0 10px 22px rgb(var(--color-dark) / 0.12);
-    min-height: 3.25rem;
-  }
-
-  .app-scrollbar:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.58),
-      rgb(var(--color-secondary) / 0.46)
-    );
-    border-width: 2px;
-  }
-
+  .app-scrollbar:hover::-webkit-scrollbar-thumb,
   .app-scrollbar-prominent:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.68),
-      rgb(var(--color-secondary) / 0.5)
-    );
+    background: linear-gradient(180deg, rgba(30, 200, 255, 0.78), rgba(74, 125, 255, 0.6));
   }
 
-  .app-scrollbar::-webkit-scrollbar-corner {
+  .app-scrollbar::-webkit-scrollbar-corner,
+  .app-scrollbar-prominent::-webkit-scrollbar-corner {
     background: transparent;
   }
+}
 
-  .dark .app-scrollbar {
-    scrollbar-color: rgb(var(--color-primary) / 0.62) rgb(var(--color-light) / 0.08);
-  }
-
-  .dark .app-scrollbar-prominent {
-    scrollbar-color: rgb(var(--color-primary) / 0.72) rgb(var(--color-light) / 0.12);
-  }
-
-  .dark .app-scrollbar::-webkit-scrollbar-track {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-light) / 0.05),
-      rgb(var(--color-light) / 0.1)
-    );
-    box-shadow: inset 0 0 0 1px rgb(var(--color-light) / 0.06);
-  }
-
-  .dark .app-scrollbar-prominent::-webkit-scrollbar-track {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-light) / 0.07),
-      rgb(var(--color-light) / 0.14)
-    );
-    box-shadow: inset 0 0 0 1px rgb(var(--color-light) / 0.08);
-  }
-
-  .dark .app-scrollbar::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.56),
-      rgb(var(--color-light) / 0.22)
-    );
-    box-shadow:
-      inset 0 0 0 1px rgb(255 255 255 / 0.12),
-      0 10px 22px rgb(0 0 0 / 0.24);
-  }
-
-  .dark .app-scrollbar-prominent::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.66),
-      rgb(var(--color-light) / 0.28)
-    );
-    box-shadow:
-      inset 0 0 0 1px rgb(255 255 255 / 0.16),
-      0 12px 24px rgb(0 0 0 / 0.28);
-  }
-
-  .dark .app-scrollbar:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.72),
-      rgb(var(--color-light) / 0.3)
-    );
-  }
-
-  .dark .app-scrollbar-prominent:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgb(var(--color-primary) / 0.78),
-      rgb(var(--color-light) / 0.36)
-    );
-  }
-  :root .n-button--primary-type {
-    @apply bg-primary text-onPrimary hover:bg-primary/90;
-  }
-  :root .n-button--secondary {
-    @apply bg-secondary text-onSecondary hover:bg-secondary/90;
-  }
-  :root .n-button--success-type {
-    @apply bg-success text-onLight hover:bg-success/90;
-  }
-  :root .n-button--error-type {
-    @apply bg-danger text-onDark hover:bg-danger/90;
-  }
-  :root .n-button--warning-type {
-    @apply bg-warning text-onLight hover:bg-warning/90;
-  }
-  :root .n-button--info-type {
-    @apply bg-info text-onLight hover:bg-info/90;
-  }
-  :root .n-button--tertiary {
-    @apply bg-secondary text-onSecondary hover:bg-secondary/90;
-  }
-  :root .n-button--disabled,
-  :root .n-button[disabled='true'],
-  :root .n-button[aria-disabled='true'] {
-    @apply opacity-50 cursor-not-allowed;
-  }
-
-  /*
-   * Naive UI button content alignment and icon spacing
-   * - Ensure icons and text inside buttons are consistently centered with spacing.
-   * - Avoid per-button flex wrappers by normalizing the inner content element.
-   */
-  :root .n-button .n-button__content {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem; /* 8px gap between icon and text */
-  }
-
-  /* Reset icon margins inside Naive buttons (gap handles spacing there) */
-  :root .n-button .n-button__content .icon,
-  :root .n-button .n-button__content .fa,
-  :root .n-button .n-button__content .fas,
-  :root .n-button .n-button__content .far,
-  :root .n-button .n-button__content .fal,
-  :root .n-button .n-button__content .fab {
-    margin: 0 !important;
-  }
-
-  /* Global icon alignment and spacing when used inline (outside buttons) */
-  .icon,
-  .fa,
-  .fas,
-  .far,
-  .fal,
-  .fab {
-    line-height: 1;
-    vertical-align: -0.125em; /* optical alignment with text baseline */
-  }
-
-  /* Provide spacing when icon is leading or trailing text (non-button contexts) */
-  :not(.n-button__content) > .icon:first-child,
-  :not(.n-button__content) > .fa:first-child,
-  :not(.n-button__content) > .fas:first-child,
-  :not(.n-button__content) > .far:first-child,
-  :not(.n-button__content) > .fal:first-child,
-  :not(.n-button__content) > .fab:first-child {
-    margin-right: 0.5rem;
-  }
-
-  :not(.n-button__content) > .icon:last-child,
-  :not(.n-button__content) > .fa:last-child,
-  :not(.n-button__content) > .fas:last-child,
-  :not(.n-button__content) > .far:last-child,
-  :not(.n-button__content) > .fal:last-child,
-  :not(.n-button__content) > .fab:last-child {
-    margin-left: 0.5rem;
-  }
-  /* Card + forms: stronger borders in light mode for ≥3:1 contrast */
+/* ---------------------------------------------------------------- */
+/* Cards, forms, alerts (Tailwind-utility class helpers)            */
+/* ---------------------------------------------------------------- */
+@layer components {
   .card {
-    @apply p-5 rounded-md border border-dark/55 dark:border-light/10 bg-white dark:bg-surface shadow-sm;
+    @apply p-5;
+    border-radius: 22px;
+    background: var(--aurora-glass-bg-strong);
+    border: 1px solid var(--aurora-glass-border);
+    backdrop-filter: blur(22px) saturate(180%);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    box-shadow:
+      0 1px 0 var(--aurora-glass-highlight) inset,
+      0 30px 60px -30px rgba(0, 0, 0, 0.6);
   }
 
   .card-header {
@@ -280,18 +463,28 @@
   }
 
   .form-control {
-    @apply w-full px-3 py-2 text-sm rounded-md 
-           border border-dark/55 dark:border-light/15
-           bg-light dark:bg-surface/70
-           text-dark dark:text-light
-           placeholder-dark/70 dark:placeholder-light/40
-           focus:outline-none focus:ring-2 focus:ring-primary/40;
-    /* normalize native select appearance and ensure padding for custom arrow */
+    @apply w-full px-3 py-2 text-sm;
+    border-radius: 12px;
+    background: var(--aurora-glass-bg-strong);
+    border: 1px solid var(--aurora-glass-border);
+    color: var(--aurora-text);
     -webkit-appearance: none;
     appearance: none;
     background-repeat: no-repeat;
     background-position: right 0.75rem center;
     background-size: 1.25rem 1.25rem;
+    transition:
+      border-color 0.2s ease,
+      box-shadow 0.2s ease,
+      background-color 0.2s ease;
+  }
+  .form-control::placeholder {
+    color: var(--aurora-text-muted);
+  }
+  .form-control:focus {
+    outline: none;
+    border-color: rgb(var(--color-primary));
+    box-shadow: 0 0 0 3px rgba(30, 200, 255, 0.25);
   }
 
   .form-control.monospace {
@@ -299,15 +492,12 @@
   }
 
   .form-label {
-    @apply block text-sm font-medium mb-1 text-dark dark:text-light;
+    @apply block text-sm font-medium mb-1 text-onDark;
   }
 
   .form-text {
     @apply text-[11px] mt-1;
-    color: rgb(var(--color-dark) / 0.7);
-  }
-  .dark .form-text {
-    color: rgb(var(--color-light) / 0.65);
+    color: var(--aurora-text-muted);
   }
 
   .form-select {
@@ -315,13 +505,8 @@
   }
 
   select.form-control option {
-    background-color: rgb(var(--color-light));
-    color: rgb(var(--color-on-light));
-  }
-
-  .dark select.form-control option {
     background-color: rgb(var(--color-surface));
-    color: rgb(var(--color-on-dark));
+    color: rgb(var(--color-onDark));
   }
 
   select.form-control {
@@ -343,6 +528,7 @@
 
   .table th {
     @apply text-left font-semibold pr-3 pb-2;
+    color: var(--aurora-text-secondary);
   }
 
   .table td {
@@ -353,149 +539,130 @@
     vertical-align: middle;
   }
 
-  /* Alerts (bootstrap-like) */
+  /* Alerts — glass-tinted, colored left edge cue. */
   .alert {
-    @apply rounded-md px-3 py-2 my-2;
+    border-radius: 18px;
+    padding: 0.65rem 0.9rem;
+    margin: 0.5rem 0;
+    border: 1px solid var(--aurora-glass-border);
+    background: var(--aurora-glass-bg-strong);
+    backdrop-filter: blur(16px) saturate(170%);
+    -webkit-backdrop-filter: blur(16px) saturate(170%);
+    color: var(--aurora-text);
   }
 
   .alert-danger {
-    background-color: rgba(var(--color-danger), 0.1);
-    color: rgb(var(--color-on-dark));
-    border: 1px solid rgba(var(--color-danger), 0.25);
+    background-color: rgba(225, 29, 72, 0.12);
+    border-color: rgba(225, 29, 72, 0.35);
   }
 
   .alert-success {
-    background-color: rgba(var(--color-success), 0.1);
-    color: rgb(var(--color-on-light));
-    border: 1px solid rgba(var(--color-success), 0.2);
+    background-color: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.35);
   }
 
   .alert-warning {
-    background-color: rgba(var(--color-warning), 0.12);
-    color: rgb(var(--color-on-primary));
-    border: 1px solid rgba(var(--color-warning), 0.25);
+    background-color: rgba(245, 158, 11, 0.14);
+    border-color: rgba(245, 158, 11, 0.35);
   }
 
   .alert-info {
-    background-color: rgba(var(--color-info), 0.1);
-    color: rgb(var(--color-on-light));
-    border: 1px solid rgba(var(--color-info), 0.2);
+    background-color: rgba(0, 224, 198, 0.12);
+    border-color: rgba(0, 224, 198, 0.35);
   }
-
-  /* Improve contrast for alerts in dark mode */
-  .dark .alert-success {
-    color: rgb(var(--color-on-dark));
-  }
-  .dark .alert-info {
-    color: rgb(var(--color-on-dark));
-  }
-
-  /* spacing utilities like mb-3/mb-2 should use Tailwind classes directly in templates; do not @apply them here */
-
-  /* Removed .w-100 and .ms-auto alias shims; use w-full and ml-auto directly in templates */
 }
 
-/*
- * Improve dark-mode visibility for unchecked Naive UI checkboxes.
- * Adds a subtle inset outline when unchecked; removed when checked.
- */
+/* ---------------------------------------------------------------- */
+/* Inline icon polish (legacy Bootstrap-style icons)                */
+/* ---------------------------------------------------------------- */
 @layer components {
-  .dark .n-checkbox:not(.n-checkbox--checked) .n-checkbox-box,
-  .dark .n-checkbox:not(.n-checkbox--checked) .n-checkbox__input {
-    /* Stronger visible outline + subtle fill in dark mode */
-    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.45);
-    border-color: rgb(var(--color-light) / 0.45) !important;
-    background-color: rgb(var(--color-light) / 0.06);
+  .icon,
+  .fa,
+  .fas,
+  .far,
+  .fal,
+  .fab {
+    line-height: 1;
+    vertical-align: -0.125em;
   }
 
-  /* Hover state: slightly increase contrast so it reads as interactive */
-  .dark .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox-box,
-  .dark .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox__input {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.65);
-    border-color: rgb(var(--color-light) / 0.65) !important;
-    background-color: rgb(var(--color-light) / 0.1);
+  :not(.n-button__content) > .icon:first-child,
+  :not(.n-button__content) > .fa:first-child,
+  :not(.n-button__content) > .fas:first-child,
+  :not(.n-button__content) > .far:first-child,
+  :not(.n-button__content) > .fal:first-child,
+  :not(.n-button__content) > .fab:first-child {
+    margin-right: 0.5rem;
   }
 
-  /* Keyboard focus ring for accessibility */
-  .dark .n-checkbox .n-checkbox__input:focus-visible .n-checkbox-box {
+  :not(.n-button__content) > .icon:last-child,
+  :not(.n-button__content) > .fa:last-child,
+  :not(.n-button__content) > .fas:last-child,
+  :not(.n-button__content) > .far:last-child,
+  :not(.n-button__content) > .fal:last-child,
+  :not(.n-button__content) > .fab:last-child {
+    margin-left: 0.5rem;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Naive UI checkbox / radio — visible outline on dark surfaces     */
+/* ---------------------------------------------------------------- */
+@layer components {
+  :root .n-checkbox:not(.n-checkbox--checked) .n-checkbox-box,
+  :root .n-checkbox:not(.n-checkbox--checked) .n-checkbox__input {
+    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.45);
+    border-color: rgba(224, 236, 255, 0.45) !important;
+    background-color: rgba(224, 236, 255, 0.06);
+  }
+  :root .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox-box,
+  :root .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox__input {
+    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.65);
+    border-color: rgba(224, 236, 255, 0.65) !important;
+    background-color: rgba(224, 236, 255, 0.1);
+  }
+  :root .n-checkbox .n-checkbox__input:focus-visible .n-checkbox-box {
     box-shadow:
-      0 0 0 3px rgb(var(--color-primary) / 0.35),
-      inset 0 0 0 2px rgb(var(--color-light) / 0.55);
+      0 0 0 3px rgba(30, 200, 255, 0.35),
+      inset 0 0 0 2px rgba(224, 236, 255, 0.55);
   }
-
-  .dark .n-checkbox.n-checkbox--checked .n-checkbox-box,
-  .dark .n-checkbox.n-checkbox--checked .n-checkbox__input {
+  :root .n-checkbox.n-checkbox--checked .n-checkbox-box,
+  :root .n-checkbox.n-checkbox--checked .n-checkbox__input {
     box-shadow: none;
   }
-}
 
-/* Radios — better visible outline when unchecked and clear active dot */
-@layer components {
   :root .n-radio:not(.n-radio--checked) .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-secondary) / 0.6);
-    border-color: rgb(var(--color-secondary) / 0.6) !important;
-    background-color: transparent;
+    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.55);
+    border-color: rgba(224, 236, 255, 0.55) !important;
+    background-color: rgba(224, 236, 255, 0.06);
+  }
+  :root .n-radio:not(.n-radio--checked):hover .n-radio__input {
+    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.75);
+    background-color: rgba(224, 236, 255, 0.1);
+  }
+  :root .n-radio .n-radio__input:focus-visible {
+    box-shadow:
+      0 0 0 3px rgba(30, 200, 255, 0.35),
+      inset 0 0 0 2px rgba(224, 236, 255, 0.55);
   }
   :root .n-radio.n-radio--checked .n-radio__dot {
     background-color: rgb(var(--color-primary));
   }
-
-  /* Dark mode: add visible outline + readable label */
-  .dark .n-radio:not(.n-radio--checked) .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.55);
-    border-color: rgb(var(--color-light) / 0.55) !important;
-    background-color: rgb(var(--color-light) / 0.06);
-  }
-  .dark .n-radio:not(.n-radio--checked):hover .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.75);
-    background-color: rgb(var(--color-light) / 0.1);
-  }
-  .dark .n-radio .n-radio__input:focus-visible {
-    box-shadow:
-      0 0 0 3px rgb(var(--color-primary) / 0.35),
-      inset 0 0 0 2px rgb(var(--color-light) / 0.55);
-  }
-  .dark .n-radio.n-radio--checked .n-radio__dot {
-    background-color: rgb(var(--color-primary));
-  }
-  /* Naive uses either __label or -label across versions; cover both */
-  .dark .n-radio .n-radio__label,
-  .dark .n-radio .n-radio-label {
-    color: rgb(var(--color-on-dark));
-  }
-
-  /* Ensure the actual visible circle shows a clear outline (unselected) */
   :root .n-radio:not(.n-radio--checked) .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-secondary) / 0.6) !important;
+    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.55) !important;
     background-color: transparent !important;
   }
   :root .n-radio:not(.n-radio--checked):hover .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-secondary) / 0.8) !important;
-    background-color: rgb(var(--color-secondary) / 0.06) !important;
+    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.75) !important;
+    background-color: rgba(224, 236, 255, 0.1) !important;
   }
   :root .n-radio:focus-visible .n-radio__dot {
     box-shadow:
-      0 0 0 3px rgb(var(--color-primary) / 0.35),
-      inset 0 0 0 2px rgb(var(--color-secondary) / 0.6) !important;
+      0 0 0 3px rgba(30, 200, 255, 0.35),
+      inset 0 0 0 2px rgba(224, 236, 255, 0.55) !important;
   }
-  .dark .n-radio:not(.n-radio--checked) .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.55) !important;
-    background-color: rgb(var(--color-light) / 0.06) !important;
-  }
-  .dark .n-radio:not(.n-radio--checked):hover .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgb(var(--color-light) / 0.75) !important;
-    background-color: rgb(var(--color-light) / 0.1) !important;
-  }
-  .dark .n-radio:focus-visible .n-radio__dot {
-    box-shadow:
-      0 0 0 3px rgb(var(--color-primary) / 0.35),
-      inset 0 0 0 2px rgb(var(--color-light) / 0.55) !important;
-  }
-
-  /* Keyboard focus ring in light mode */
-  :root .n-radio .n-radio__input:focus-visible {
-    box-shadow:
-      0 0 0 3px rgb(var(--color-primary) / 0.35),
-      inset 0 0 0 2px rgb(var(--color-secondary) / 0.6) !important;
+  :root .n-radio .n-radio__label,
+  :root .n-radio .n-radio-label {
+    color: var(--aurora-text);
   }
 }

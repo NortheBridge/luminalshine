@@ -14,58 +14,59 @@ module.exports = {
   ],
   theme: {
     extend: {
-      // Single source of truth for semantic colors (light/dark).
-      // These values drive CSS variables that both Tailwind utilities and Naive UI consume.
+      // Single source of truth for semantic colors.
+      // The app is dark-only; both `light` and `dark` resolve to the same
+      // aurora palette so anything that lands before `.dark` is applied
+      // still gets a coherent surface. Values mirror gitdocs.northebridge.com.
       semanticColors: {
         light: {
-          // Sun-like palette (warmer, less brown)
-          primary: '253 184 19', // #FDB813 sun gold
-          secondary: '234 88 12', // #EA580C vibrant orange
-          success: '76 175 80',
-          warning: '245 158 11', // #F59E0B amber
-          danger: '220 38 38',
-          info: '2 136 209',
-          light: '255 250 244', // warm paper
-          dark: '33 33 33',
-          surface: '255 248 225', // #FFF8E1 soft cream
-          accent: '245 130 0', // #F58200 rich amber accent
-          onPrimary: '33 33 33', // dark text on bright gold for contrast
-          onSecondary: '255 255 255',
-          onAccent: '255 255 255',
-          onLight: '33 33 33',
-          onDark: '255 255 255',
-          brand: '217 119 6', // #D97706 brand orange
+          // Mirror of dark — see below. Kept identical so `:root` defaults
+          // stay coherent if `.dark` is ever absent.
+          dark: '6 10 24',
+          surface: '14 20 36',
+          light: '224 236 255',
+          primary: '30 200 255',
+          secondary: '74 125 255',
+          accent: '138 92 255',
+          info: '0 224 198',
+          success: '16 185 129',
+          warning: '245 158 11',
+          danger: '225 29 72',
+          onPrimary: '6 10 24',
+          onSecondary: '245 249 255',
+          onAccent: '6 10 24',
+          onLight: '6 10 24',
+          onDark: '245 249 255',
+          brand: '144 224 239',
         },
         dark: {
-          // 🌊 Alexa+ blue palette — cyan + deep ocean on near-black, tuned
-          // for contrast on deep navy and matching the Echo Show + Alexa+
-          // hero aesthetic.
-          dark: '6 10 24', // #0A0F18  starfield background
-          surface: '14 20 36', // #0E1424  panels/cards
-          light: '224 236 255', // #E0ECFF  pale moon haze (for light surfaces)
+          // Aurora-glass palette (gitdocs.northebridge.com).
+          // Backgrounds: deep navy near-black starfield.
+          dark: '6 10 24', // #06 0A 18 base
+          surface: '14 20 36', // #0E 14 24 panels
+          light: '224 236 255', // #E0 EC FF pale moon (text helpers)
 
-          // Core actions/brand (Alexa cyan + deep ocean)
-          primary: '0 180 216', // #00B4D8  Alexa cyan (main CTA/links)
-          secondary: '0 119 182', // #0077B6  deep ocean (alt CTA/accents)
-          accent: '56 189 248', // #38BDF8  bright cyan (chips/highlights)
-          info: '147 197 253', // #93C5FD  periwinkle info
+          // Aurora accents — Alexa+ cyan leads, with periwinkle/violet/teal
+          // as supporting hues used for halos, gradients, and info states.
+          primary: '30 200 255', // #1EC8FF  Alexa+ cyan
+          secondary: '74 125 255', // #4A7DFF  periwinkle
+          accent: '138 92 255', // #8A5CFF  violet
+          info: '0 224 198', // #00E0C6  teal
 
-          // Status with lunar tilt (cool-leaning where possible)
+          // Status colors retain salience by sitting outside the cyan/violet axis.
           success: '16 185 129', // #10B981  emerald-teal
-          warning: '245 158 11', // #F59E0B  amber flare (kept warm for salience)
-          danger: '225 29 72', // #E11D48  rose/magenta-leaning red
+          warning: '245 158 11', // #F59E0B  amber
+          danger: '225 29 72', // #E11D48  rose
 
-          // Text-on-color (picked to pass AA on typical sizes)
-          onDark: '245 249 255', // near-white on dark/surface
-          onSurface: '245 249 255', // (if you expose separately)
-          onLight: '6 10 24', // dark text on light surfaces
-          onPrimary: '6 10 24', // dark text on cyan primary (AA+)
-          onSecondary: '245 249 255', // white on deep ocean (AA+)
-          onAccent: '6 10 24', // dark text on cyan (AA+)
-          onInfo: '6 10 24', // dark text on light info blue (AA+)
+          // Text-on-color (AA+).
+          onDark: '245 249 255',
+          onLight: '6 10 24',
+          onPrimary: '6 10 24',
+          onSecondary: '245 249 255',
+          onAccent: '6 10 24',
 
-          // Brand tint (pale cyan for logos/illustrations)
-          brand: '144 224 239', // #90E0EF  pale cyan
+          // Pale-cyan brand tint for logos and illustrations.
+          brand: '144 224 239', // #90E0EF
         },
       },
       colors: {
