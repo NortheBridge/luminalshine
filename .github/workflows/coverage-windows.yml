@@ -151,7 +151,7 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DSUNSHINE_ASSETS_DIR=assets \
-            -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
+            -DSUNSHINE_PUBLISHER_NAME="NortheBridge Foundation" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://northebridge.com/" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/NortheBridge/luminalshine"
 
