@@ -36,6 +36,7 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
+#include "state_storage.h"
 #include "utility.h"
 #include "uuid.h"
 
@@ -357,6 +358,74 @@ namespace http {
   std::string shared_virtual_display_guid;
 #endif
 
+  namespace {
+    /**
+     * One-shot migration of legacy admin credentials from sunshine_state.json
+     * (where they used to live at top-level alongside the pairing list) into
+     * a dedicated sunshine_credentials.json. Solves a long-standing class of
+     * bugs where save_state() and save_user_creds() raced on the same file
+     * and could clobber each other.
+     *
+     * Idempotent: skipped once the credentials file exists, OR if creds_file
+     * and state_file point at the same path (user explicitly opted into the
+     * legacy shared layout via config).
+     *
+     * Caller must hold statefile::state_mutex().
+     */
+    void migrate_credentials_into_dedicated_file() {
+      const auto &creds_file = config::sunshine.credentials_file;
+      const auto &state_file = config::nvhttp.file_state;
+      if (creds_file.empty() || state_file.empty() || creds_file == state_file) {
+        return;
+      }
+      if (fs::exists(creds_file)) {
+        return;
+      }
+      if (!fs::exists(state_file)) {
+        return;
+      }
+
+      pt::ptree state_tree;
+      try {
+        pt::read_json(state_file, state_tree);
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Credential migration: failed to read "sv << state_file << ": "sv << e.what();
+        return;
+      }
+
+      auto username = state_tree.get_optional<std::string>("username");
+      auto salt = state_tree.get_optional<std::string>("salt");
+      auto password = state_tree.get_optional<std::string>("password");
+      if (!username || !salt || !password) {
+        return;
+      }
+
+      pt::ptree creds_tree;
+      creds_tree.put("username", *username);
+      creds_tree.put("salt", *salt);
+      creds_tree.put("password", *password);
+
+      if (!statefile::atomic_write_json(creds_file, creds_tree)) {
+        BOOST_LOG(error) << "Credential migration: failed to write "sv << creds_file
+                         << "; admin credentials remain in shared state file"sv;
+        return;
+      }
+
+      // Strip legacy keys from the state file. If this write fails, the
+      // duplicate copy in sunshine_state.json is harmless — the dedicated
+      // credentials file is consulted first from now on.
+      state_tree.erase("username");
+      state_tree.erase("salt");
+      state_tree.erase("password");
+      if (!statefile::atomic_write_json(state_file, state_tree)) {
+        BOOST_LOG(warning) << "Credential migration: created "sv << creds_file
+                           << " but couldn't strip legacy keys from "sv << state_file
+                           << " (duplicate is harmless)"sv;
+      }
+      BOOST_LOG(info) << "Migrated admin credentials to dedicated file "sv << creds_file;
+    }
+  }  // namespace
+
   int init() {
     ensure_curl_global_init();
     bool clean_slate = config::sunshine.flags[config::flag::FRESH_STATE];
@@ -373,10 +442,18 @@ namespace http {
         create_creds(config::nvhttp.pkey, config::nvhttp.cert)) {
       return -1;
     }
-    if (!user_creds_exist(config::sunshine.credentials_file)) {
-      BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
-    } else if (reload_user_creds(config::sunshine.credentials_file)) {
-      return -1;
+    // Take the state lock around credential migration + reload so a
+    // concurrent save_state on another thread can't see a half-migrated
+    // file. http::init is currently called from main before nvhttp::start
+    // spawns, but locking here is cheap and keeps the invariant explicit.
+    {
+      std::lock_guard<std::mutex> guard(statefile::state_mutex());
+      migrate_credentials_into_dedicated_file();
+      if (!user_creds_exist(config::sunshine.credentials_file)) {
+        BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
+      } else if (reload_user_creds(config::sunshine.credentials_file)) {
+        return -1;
+      }
     }
     return 0;
   }
@@ -385,6 +462,10 @@ namespace http {
     origin_web_ui_allowed = net::from_enum_string(config::nvhttp.origin_web_ui_allowed);
   }
 
+  // Caller must hold statefile::state_mutex() to keep this safe against
+  // concurrent save_state() / migrate_recent_state_keys() invocations that
+  // touch the same file (when credentials_file and file_state are the same
+  // path under legacy config).
   int save_user_creds(const std::string &file, const std::string &username, const std::string &password, bool run_our_mouth) {
     pt::ptree outputTree;
 
@@ -401,10 +482,9 @@ namespace http {
     outputTree.put("username", username);
     outputTree.put("salt", salt);
     outputTree.put("password", util::hex(crypto::hash(password + salt)).to_string());
-    try {
-      pt::write_json(file, outputTree);
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "error writing to the credentials file, perhaps try this again as an administrator? Details: "sv << e.what();
+    if (!statefile::atomic_write_json(file, outputTree)) {
+      BOOST_LOG(error) << "error writing to the credentials file at "sv << file
+                       << " - try running as an administrator if this persists"sv;
       return -1;
     }
 
@@ -430,6 +510,8 @@ namespace http {
     return false;
   }
 
+  // Caller must hold statefile::state_mutex() so the file we read isn't
+  // being concurrently rewritten by save_user_creds or save_state.
   int reload_user_creds(const std::string &file) {
     pt::ptree inputTree;
     try {

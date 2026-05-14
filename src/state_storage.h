@@ -1,5 +1,7 @@
 #pragma once
 
+#include <boost/property_tree/ptree_fwd.hpp>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -13,6 +15,22 @@ namespace statefile {
   std::mutex &state_mutex();
 
   void migrate_recent_state_keys();
+
+  /**
+   * @brief Atomically write a JSON ptree to disk.
+   *
+   * Writes to "<path>.tmp" and then renames it onto <path>. On NTFS and
+   * POSIX filesystems the rename is atomic, so a concurrent reader (or a
+   * crash mid-write) will see either the full prior file contents or the
+   * full new contents — never a partial / truncated file. Creates parent
+   * directories if needed.
+   *
+   * The caller is responsible for holding `state_mutex()` if the target
+   * file is shared with other writers that take the same lock.
+   *
+   * @return true on success, false on any I/O failure. Failure is logged.
+   */
+  bool atomic_write_json(const std::filesystem::path &path, const boost::property_tree::ptree &tree);
 
   /**
    * @brief Persist the snapshot exclusion device list to luminalshine_state.json.

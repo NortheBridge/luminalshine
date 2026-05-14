@@ -832,10 +832,8 @@ namespace nvhttp {
     root_node.put_child("named_devices", named_cert_nodes);
     root.put_child("root", root_node);
 
-    try {
-      pt::write_json(sunshine_path, root);
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "Couldn't write "sv << sunshine_path << ": "sv << e.what();
+    if (!statefile::atomic_write_json(sunshine_path, root)) {
+      BOOST_LOG(error) << "Couldn't write "sv << sunshine_path;
       return;
     }
 
@@ -878,10 +876,8 @@ namespace nvhttp {
         vibe_root.put_child("client_last_seen", last_seen_nodes);
       }
 
-      try {
-        pt::write_json(luminalshine_path, luminalshine_tree);
-      } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't write "sv << luminalshine_path << ": "sv << e.what();
+      if (!statefile::atomic_write_json(luminalshine_path, luminalshine_tree)) {
+        BOOST_LOG(error) << "Couldn't write "sv << luminalshine_path;
       }
     }
   }

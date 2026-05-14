@@ -6,6 +6,7 @@
 #include <csignal>
 #include <format>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 // local includes
@@ -17,6 +18,7 @@
 #include "logging.h"
 #include "network.h"
 #include "platform/common.h"
+#include "state_storage.h"
 
 extern "C" {
 #ifdef _WIN32
@@ -40,7 +42,13 @@ namespace args {
       help(name);
     }
 
-    http::save_user_creds(config::sunshine.credentials_file, argv[0], argv[1]);
+    // save_user_creds requires the state lock; this offline `creds` mode
+    // runs before any other thread so contention is theoretical, but holding
+    // the lock keeps the contract uniform across all call sites.
+    {
+      std::lock_guard<std::mutex> guard(statefile::state_mutex());
+      http::save_user_creds(config::sunshine.credentials_file, argv[0], argv[1]);
+    }
 
     return 0;
   }

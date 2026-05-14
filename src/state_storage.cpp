@@ -41,20 +41,56 @@ namespace statefile {
     }
 
     void write_tree(const fs::path &path, const pt::ptree &tree) {
-      try {
-        if (!path.empty()) {
-          auto dir = path;
-          dir.remove_filename();
-          if (!dir.empty() && !fs::exists(dir)) {
-            fs::create_directories(dir);
-          }
-        }
-        pt::write_json(path.string(), tree);
-      } catch (const std::exception &e) {
-        BOOST_LOG(error) << "statefile: failed to write "sv << path.string() << ": "sv << e.what();
-      }
+      // Route through the atomic helper so callers in this file get the same
+      // crash-safety guarantee as external callers.
+      atomic_write_json(path, tree);
     }
   }  // namespace
+
+  bool atomic_write_json(const fs::path &path, const pt::ptree &tree) {
+    if (path.empty()) {
+      BOOST_LOG(error) << "statefile: atomic_write_json called with empty path"sv;
+      return false;
+    }
+
+    // Create parent directory if missing.
+    auto dir = path;
+    dir.remove_filename();
+    if (!dir.empty() && !fs::exists(dir)) {
+      std::error_code mk_ec;
+      fs::create_directories(dir, mk_ec);
+      if (mk_ec) {
+        BOOST_LOG(error) << "statefile: failed to create dir "sv << dir.string() << ": "sv << mk_ec.message();
+        return false;
+      }
+    }
+
+    // Sibling temp file in the same directory keeps the eventual rename on a
+    // single filesystem volume — required for the OS-level rename to be
+    // atomic. On Windows this maps to MoveFileExW(MOVEFILE_REPLACE_EXISTING).
+    fs::path temp_path = path;
+    temp_path += ".tmp";
+
+    try {
+      pt::write_json(temp_path.string(), tree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "statefile: failed to write temp file "sv << temp_path.string() << ": "sv << e.what();
+      std::error_code rm_ec;
+      fs::remove(temp_path, rm_ec);
+      return false;
+    }
+
+    std::error_code mv_ec;
+    fs::rename(temp_path, path, mv_ec);
+    if (mv_ec) {
+      BOOST_LOG(error) << "statefile: atomic rename "sv << temp_path.string() << " -> "sv << path.string()
+                       << " failed: "sv << mv_ec.message();
+      std::error_code rm_ec;
+      fs::remove(temp_path, rm_ec);
+      return false;
+    }
+    return true;
+  }
 
   std::mutex &state_mutex() {
     static std::mutex mutex;

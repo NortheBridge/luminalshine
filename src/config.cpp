@@ -1599,8 +1599,23 @@ namespace config {
     path_f(vars, "file_state", nvhttp.file_state);
     path_f(vars, "luminalshine_file_state", nvhttp.luminalshine_file_state);
 
-    // Must be run after "file_state"
-    config::sunshine.credentials_file = config::nvhttp.file_state;
+    // Default credentials_file to a SEPARATE file next to sunshine_state.json
+    // so concurrent save_state() writes can never clobber admin credentials
+    // and vice versa. Historical default was config::nvhttp.file_state (the
+    // same file as pairings/uniqueid), which created a write race between
+    // save_user_creds and save_state. A one-shot migration in http::init()
+    // moves any pre-existing legacy credentials from sunshine_state.json
+    // into the new file. Users who explicitly set `credentials_file` in
+    // their config (including pointing it back at file_state) keep that
+    // behavior — path_f below honors the override.
+    //
+    // Must be run after "file_state" so we can derive the new default from
+    // its already-resolved parent directory.
+    {
+      fs::path state_path(config::nvhttp.file_state);
+      fs::path creds_default = state_path.parent_path() / "sunshine_credentials.json";
+      config::sunshine.credentials_file = creds_default.string();
+    }
     path_f(vars, "credentials_file", config::sunshine.credentials_file);
 
     string_f(vars, "external_ip", nvhttp.external_ip);

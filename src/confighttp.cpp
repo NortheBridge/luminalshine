@@ -54,6 +54,7 @@
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
+#include "state_storage.h"
 #include "webrtc_stream.h"
 
 #ifdef _WIN32
@@ -3108,9 +3109,35 @@ namespace confighttp {
           if (newPassword.empty() || newPassword != confirmPassword) {
             errors.emplace_back("Password Mismatch");
           } else {
-            http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword);
-            http::reload_user_creds(config::sunshine.credentials_file);
-            output_tree["status"] = true;
+            // save + reload must run under the same state lock so a concurrent
+            // save_state() on another thread can't observe a half-written
+            // credentials file or clobber the new ones if the legacy shared-
+            // file layout is still in effect.
+            bool save_ok = false;
+            {
+              std::lock_guard<std::mutex> guard(statefile::state_mutex());
+              if (http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword) == 0 &&
+                  http::reload_user_creds(config::sunshine.credentials_file) == 0) {
+                save_ok = true;
+              }
+            }
+            // Defensive read-back: confirm in-memory state matches what was
+            // just saved. Catches the symptom-#3 class of bugs (new creds
+            // don't work at login) immediately at save time rather than at
+            // the next login attempt. Logs the file path but no secrets.
+            if (save_ok) {
+              const auto verify_hash = util::hex(crypto::hash(newPassword + config::sunshine.salt)).to_string();
+              if (!boost::iequals(config::sunshine.username, newUsername) || verify_hash != config::sunshine.password) {
+                BOOST_LOG(error) << "Credential save verification FAILED: in-memory state does not match newly-saved file ("
+                                 << config::sunshine.credentials_file << "). Check filesystem permissions on the credentials file directory.";
+                save_ok = false;
+              }
+            }
+            if (save_ok) {
+              output_tree["status"] = true;
+            } else {
+              errors.emplace_back("Failed to persist new credentials. Check service logs.");
+            }
           }
         } else {
           errors.emplace_back("Invalid Current Credentials");
