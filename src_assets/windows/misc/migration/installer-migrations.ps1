@@ -159,20 +159,101 @@ function Update-SplitFrameEncodingInJson {
     return $true
 }
 
+function Move-ConfigToProgramData {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LegacyConfigDir
+    )
+
+    # Target lives under %ProgramData% so it survives Windows Insider Preview
+    # flight upgrades and cumulative updates that may "repair" Program Files
+    # subdirectories. The C++ runtime also resolves to this location.
+    $programData = $env:ProgramData
+    if ([string]::IsNullOrWhiteSpace($programData)) {
+        $programData = [Environment]::GetFolderPath('CommonApplicationData')
+    }
+    if ([string]::IsNullOrWhiteSpace($programData)) {
+        Write-Output 'ProgramData path not resolvable; skipping config migration to ProgramData.'
+        return $null
+    }
+
+    $targetDir = Join-Path $programData 'LuminalShine\config'
+
+    try {
+        if (-not (Test-Path -LiteralPath $targetDir)) {
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        }
+    } catch {
+        Write-Output ("Failed to create target directory '{0}': {1}" -f $targetDir, $_.Exception.Message)
+        return $null
+    }
+
+    if (-not (Test-Path -LiteralPath $LegacyConfigDir)) {
+        return $targetDir
+    }
+
+    # Best-effort copy of every file/subdirectory from the legacy location.
+    # We never overwrite an existing destination — that keeps the migration
+    # idempotent and avoids clobbering data the user has already touched on
+    # the new build. Pairings (sunshine_state.json), credentials, apps.json,
+    # snapshot history, .bak siblings, etc. all come along.
+    try {
+        Get-ChildItem -LiteralPath $LegacyConfigDir -Force -ErrorAction Stop | ForEach-Object {
+            $dst = Join-Path $targetDir $_.Name
+            if (-not (Test-Path -LiteralPath $dst)) {
+                try {
+                    if ($_.PSIsContainer) {
+                        Copy-Item -LiteralPath $_.FullName -Destination $dst -Recurse -Force -ErrorAction Stop
+                    } else {
+                        Copy-Item -LiteralPath $_.FullName -Destination $dst -Force -ErrorAction Stop
+                    }
+                    Write-Output ("Migrated {0} -> {1}" -f $_.FullName, $dst)
+                } catch {
+                    Write-Output ("Failed to migrate '{0}': {1}" -f $_.FullName, $_.Exception.Message)
+                }
+            }
+        }
+    } catch {
+        Write-Output ("Failed to enumerate '{0}': {1}" -f $LegacyConfigDir, $_.Exception.Message)
+    }
+
+    return $targetDir
+}
+
 $rootDir = Split-Path -Parent $PSScriptRoot
-$candidateConfigs = @(
+$legacyConfigDir = Join-Path $rootDir 'config'
+
+# Run the ProgramData migration before any in-file fix-ups so subsequent
+# steps operate on the canonical (new) location.
+$newConfigDir = Move-ConfigToProgramData -LegacyConfigDir $legacyConfigDir
+
+$candidateConfigs = @()
+if ($newConfigDir) {
+    $candidateConfigs += (Join-Path $newConfigDir 'sunshine.conf')
+}
+$candidateConfigs += @(
     (Join-Path $rootDir 'config\sunshine.conf'),
     (Join-Path $rootDir 'sunshine.conf')
-) | Select-Object -Unique
+)
+$candidateConfigs = $candidateConfigs | Select-Object -Unique
 
-$candidateJsonFiles = @(
+$candidateJsonFiles = @()
+if ($newConfigDir) {
+    $candidateJsonFiles += @(
+        (Join-Path $newConfigDir 'apps.json'),
+        (Join-Path $newConfigDir 'sunshine_state.json'),
+        (Join-Path $newConfigDir 'luminalshine_state.json')
+    )
+}
+$candidateJsonFiles += @(
     (Join-Path $rootDir 'config\apps.json'),
     (Join-Path $rootDir 'apps.json'),
     (Join-Path $rootDir 'config\sunshine_state.json'),
     (Join-Path $rootDir 'sunshine_state.json'),
     (Join-Path $rootDir 'config\luminalshine_state.json'),
     (Join-Path $rootDir 'luminalshine_state.json')
-) | Select-Object -Unique
+)
+$candidateJsonFiles = $candidateJsonFiles | Select-Object -Unique
 
 $changedAny = $false
 foreach ($configPath in $candidateConfigs) {

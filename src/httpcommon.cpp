@@ -386,10 +386,12 @@ namespace http {
       }
 
       pt::ptree state_tree;
-      try {
-        pt::read_json(state_file, state_tree);
-      } catch (const std::exception &e) {
-        BOOST_LOG(warning) << "Credential migration: failed to read "sv << state_file << ": "sv << e.what();
+      // Use the recovery-aware loader: if sunshine_state.json was corrupted by
+      // a Windows servicing reboot, the .bak (if present) is promoted and we
+      // still see the legacy admin credentials we need to migrate.
+      if (!statefile::load_or_recover(state_file, state_tree)) {
+        BOOST_LOG(warning) << "Credential migration: failed to read "sv << state_file
+                           << " (and no usable backup); skipping migration"sv;
         return;
       }
 
@@ -469,14 +471,12 @@ namespace http {
   int save_user_creds(const std::string &file, const std::string &username, const std::string &password, bool run_our_mouth) {
     pt::ptree outputTree;
 
-    if (fs::exists(file)) {
-      try {
-        pt::read_json(file, outputTree);
-      } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't read user credentials: "sv << e.what();
-        return -1;
-      }
-    }
+    // load_or_recover returns false if neither the primary file nor the .bak
+    // is readable — equivalent to "no existing creds", which is the
+    // first-run path. We intentionally do NOT bail in that case; we want
+    // to write fresh credentials over a corrupted-without-backup file
+    // because the alternative is leaving the user permanently locked out.
+    (void) statefile::load_or_recover(file, outputTree);
 
     auto salt = crypto::rand_alphabet(16);
     outputTree.put("username", username);
@@ -493,29 +493,24 @@ namespace http {
   }
 
   bool user_creds_exist(const std::string &file) {
-    if (!fs::exists(file)) {
+    pt::ptree inputTree;
+    if (!statefile::load_or_recover(file, inputTree)) {
       return false;
     }
-
-    pt::ptree inputTree;
-    try {
-      pt::read_json(file, inputTree);
-      return inputTree.find("username") != inputTree.not_found() &&
-             inputTree.find("password") != inputTree.not_found() &&
-             inputTree.find("salt") != inputTree.not_found();
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "validating user credentials: "sv << e.what();
-    }
-
-    return false;
+    return inputTree.find("username") != inputTree.not_found() &&
+           inputTree.find("password") != inputTree.not_found() &&
+           inputTree.find("salt") != inputTree.not_found();
   }
 
   // Caller must hold statefile::state_mutex() so the file we read isn't
   // being concurrently rewritten by save_user_creds or save_state.
   int reload_user_creds(const std::string &file) {
     pt::ptree inputTree;
+    if (!statefile::load_or_recover(file, inputTree)) {
+      BOOST_LOG(error) << "loading user credentials: unreadable file (no usable backup): "sv << file;
+      return -1;
+    }
     try {
-      pt::read_json(file, inputTree);
       config::sunshine.username = inputTree.get<std::string>("username");
       config::sunshine.password = inputTree.get<std::string>("password");
       config::sunshine.salt = inputTree.get<std::string>("salt");

@@ -889,19 +889,19 @@ namespace nvhttp {
 
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
 
-    if (!fs::exists(sunshine_path)) {
-      BOOST_LOG(info) << "File "sv << sunshine_path << " doesn't exist"sv;
+    pt::ptree tree;
+    // load_or_recover transparently falls back to "<sunshine_path>.bak" when
+    // the primary file is unreadable (the classic Windows-servicing zero-byte
+    // outcome) and re-promotes the backup to the primary location on success.
+    if (!statefile::load_or_recover(sunshine_path, tree)) {
+      if (!fs::exists(sunshine_path)) {
+        BOOST_LOG(info) << "File "sv << sunshine_path << " doesn't exist"sv;
+      } else {
+        BOOST_LOG(error) << "Couldn't read "sv << sunshine_path
+                         << " and no usable backup; starting with empty state"sv;
+      }
       http::unique_id = uuid_util::uuid_t::generate().string();
       update::state.last_notified_version.clear();
-      return;
-    }
-
-    pt::ptree tree;
-    try {
-      pt::read_json(sunshine_path, tree);
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "Couldn't read "sv << sunshine_path << ": "sv << e.what();
-
       return;
     }
 
@@ -913,16 +913,14 @@ namespace nvhttp {
     }
     http::unique_id = std::move(*unique_id_p);
 
-    if (!luminalshine_path.empty() && fs::exists(luminalshine_path)) {
-      try {
-        pt::ptree luminalshine_tree;
-        pt::read_json(luminalshine_path, luminalshine_tree);
+    if (!luminalshine_path.empty()) {
+      pt::ptree luminalshine_tree;
+      if (statefile::load_or_recover(luminalshine_path, luminalshine_tree)) {
         update::state.last_notified_version = luminalshine_tree.get("root.last_notified_version", "");
 #ifdef _WIN32
         http::shared_virtual_display_guid = luminalshine_tree.get("root.shared_virtual_display_guid", "");
 #endif
-      } catch (const std::exception &e) {
-        BOOST_LOG(warning) << "Couldn't read "sv << luminalshine_path << " for notification state: "sv << e.what();
+      } else {
         update::state.last_notified_version.clear();
 #ifdef _WIN32
         http::shared_virtual_display_guid.clear();

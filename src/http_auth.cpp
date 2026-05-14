@@ -422,13 +422,28 @@ namespace confighttp {
   ApiTokenManagerDependencies ApiTokenManager::make_default_dependencies() {
     ApiTokenManagerDependencies dependencies;
     dependencies.file_exists = [](const std::string &path) {
-      return fs::exists(path);
+      // The recovery loader can resurrect content from "<path>.bak" when the
+      // primary file is gone or zero-bytes (Windows servicing fallout), so
+      // treat the backup's presence as "file exists" for read scheduling.
+      if (fs::exists(path)) {
+        return true;
+      }
+      fs::path bak = path;
+      bak += ".bak";
+      return fs::exists(bak);
     };
     dependencies.read_json = [](const std::string &path, pt::ptree &tree) {
-      boost::property_tree::json_parser::read_json(path, tree);
+      if (!statefile::load_or_recover(path, tree)) {
+        throw std::runtime_error("state file unreadable and no usable backup: " + path);
+      }
     };
     dependencies.write_json = [](const std::string &path, const pt::ptree &tree) {
-      boost::property_tree::json_parser::write_json(path, tree);
+      // Route through the atomic helper: temp+fsync+rename, plus a refreshed
+      // .bak sibling so a torn write or Windows servicing reboot can never
+      // wedge the file beyond recovery.
+      if (!statefile::atomic_write_json(path, tree)) {
+        throw std::runtime_error("atomic write failed for " + path);
+      }
     };
     dependencies.now = []() {
       return std::chrono::system_clock::now();
@@ -462,13 +477,22 @@ namespace confighttp {
       return util::hex(hash_result).to_string();
     };
     deps.file_exists = [](const std::string &path) {
-      return fs::exists(path);
+      if (fs::exists(path)) {
+        return true;
+      }
+      fs::path bak = path;
+      bak += ".bak";
+      return fs::exists(bak);
     };
     deps.read_json = [](const std::string &path, pt::ptree &tree) {
-      boost::property_tree::json_parser::read_json(path, tree);
+      if (!statefile::load_or_recover(path, tree)) {
+        throw std::runtime_error("state file unreadable and no usable backup: " + path);
+      }
     };
     deps.write_json = [](const std::string &path, const pt::ptree &tree) {
-      boost::property_tree::json_parser::write_json(path, tree);
+      if (!statefile::atomic_write_json(path, tree)) {
+        throw std::runtime_error("atomic write failed for " + path);
+      }
     };
     return deps;
   }

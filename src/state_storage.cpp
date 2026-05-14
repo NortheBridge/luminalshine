@@ -9,6 +9,14 @@
 #include <mutex>
 #include <string>
 
+#ifdef _WIN32
+  #include <windows.h>
+#else
+  #include <fcntl.h>
+  #include <sys/types.h>
+  #include <unistd.h>
+#endif
+
 using namespace std::literals;
 
 namespace statefile {
@@ -28,22 +36,95 @@ namespace statefile {
     }
 
     bool load_tree_if_exists(const fs::path &path, pt::ptree &out) {
-      if (!fs::exists(path)) {
-        return false;
-      }
-      try {
-        pt::read_json(path.string(), out);
-        return true;
-      } catch (const std::exception &e) {
-        BOOST_LOG(warning) << "statefile: failed to read "sv << path.string() << ": "sv << e.what();
-        return false;
-      }
+      // Delegate to the public recovery-aware loader so the migration and the
+      // snapshot-exclusion readers also benefit from the .bak fallback. The
+      // public helper handles existence checks, parse failures, and
+      // restoration in one shot.
+      out.clear();
+      return load_or_recover(path, out);
     }
 
     void write_tree(const fs::path &path, const pt::ptree &tree) {
       // Route through the atomic helper so callers in this file get the same
       // crash-safety guarantee as external callers.
       atomic_write_json(path, tree);
+    }
+
+    // Force the file's bytes (and Windows metadata) to physical storage. Closes
+    // the window where a power loss or Windows servicing reboot between the
+    // write and the next read could surface a zero-byte file. Returns true on
+    // success; logs and returns false on failure. The caller decides whether
+    // to abort or proceed — in our case we abort and clean up the temp file.
+    bool fsync_path(const fs::path &path) {
+#ifdef _WIN32
+      HANDLE h = ::CreateFileW(
+        path.wstring().c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+      );
+      if (h == INVALID_HANDLE_VALUE) {
+        BOOST_LOG(warning) << "statefile: fsync open failed for "sv << path.string()
+                           << " (err="sv << ::GetLastError() << ")"sv;
+        return false;
+      }
+      const BOOL ok = ::FlushFileBuffers(h);
+      const DWORD err = ok ? 0 : ::GetLastError();
+      ::CloseHandle(h);
+      if (!ok) {
+        BOOST_LOG(warning) << "statefile: FlushFileBuffers failed for "sv << path.string()
+                           << " (err="sv << err << ")"sv;
+        return false;
+      }
+      return true;
+#else
+      int fd = ::open(path.string().c_str(), O_RDONLY);
+      if (fd < 0) {
+        BOOST_LOG(warning) << "statefile: fsync open failed for "sv << path.string();
+        return false;
+      }
+      const int rc = ::fsync(fd);
+      ::close(fd);
+      if (rc != 0) {
+        BOOST_LOG(warning) << "statefile: fsync failed for "sv << path.string();
+        return false;
+      }
+      return true;
+#endif
+    }
+
+    // Mirror the freshly-committed primary file to "<path>.bak". Uses the same
+    // temp+rename pattern so the backup itself is never observed in a torn
+    // state, even if interrupted. Failures here are non-fatal — the primary
+    // file is already durable on disk; the backup is a recovery aid.
+    void update_backup(const fs::path &path) {
+      fs::path bak_path = path;
+      bak_path += ".bak";
+      fs::path bak_temp = path;
+      bak_temp += ".bak.tmp";
+
+      std::error_code copy_ec;
+      fs::copy_file(path, bak_temp, fs::copy_options::overwrite_existing, copy_ec);
+      if (copy_ec) {
+        BOOST_LOG(warning) << "statefile: backup copy "sv << path.string() << " -> "sv
+                           << bak_temp.string() << " failed: "sv << copy_ec.message();
+        return;
+      }
+
+      // Best-effort durability for the backup, then atomic swap.
+      (void) fsync_path(bak_temp);
+
+      std::error_code mv_ec;
+      fs::rename(bak_temp, bak_path, mv_ec);
+      if (mv_ec) {
+        BOOST_LOG(warning) << "statefile: backup rename "sv << bak_temp.string() << " -> "sv
+                           << bak_path.string() << " failed: "sv << mv_ec.message();
+        std::error_code rm_ec;
+        fs::remove(bak_temp, rm_ec);
+      }
     }
   }  // namespace
 
@@ -80,6 +161,11 @@ namespace statefile {
       return false;
     }
 
+    // Flush the temp file's bytes to physical storage before the rename so a
+    // sudden power loss or Windows servicing reboot can never expose a
+    // post-rename file that is zero-length on disk.
+    (void) fsync_path(temp_path);
+
     std::error_code mv_ec;
     fs::rename(temp_path, path, mv_ec);
     if (mv_ec) {
@@ -89,6 +175,55 @@ namespace statefile {
       fs::remove(temp_path, rm_ec);
       return false;
     }
+
+    // Refresh the on-disk backup. Done after the primary commits so the .bak
+    // always reflects a known-good past version.
+    update_backup(path);
+    return true;
+  }
+
+  bool load_or_recover(const fs::path &path, pt::ptree &out) {
+    if (path.empty()) {
+      return false;
+    }
+
+    std::error_code ec;
+    const bool primary_exists = fs::exists(path, ec);
+    if (primary_exists) {
+      try {
+        pt::read_json(path.string(), out);
+        return true;
+      } catch (const std::exception &e) {
+        // Distinguish "file is empty / zero bytes" — the canonical failure
+        // mode after an interrupted Windows servicing reboot — from a parse
+        // error mid-document, but treat both the same: try the backup.
+        BOOST_LOG(warning) << "statefile: failed to read "sv << path.string()
+                           << " ("sv << e.what() << "); attempting recovery from .bak"sv;
+        out.clear();
+      }
+    }
+
+    fs::path bak_path = path;
+    bak_path += ".bak";
+    if (!fs::exists(bak_path, ec)) {
+      return false;
+    }
+
+    try {
+      pt::read_json(bak_path.string(), out);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "statefile: backup "sv << bak_path.string()
+                       << " also unreadable ("sv << e.what() << "); cannot recover"sv;
+      out.clear();
+      return false;
+    }
+
+    BOOST_LOG(warning) << "statefile: recovered "sv << path.string() << " from backup "sv
+                       << bak_path.string() << "; restoring primary"sv;
+    // Promote the backup back to the primary location so subsequent reads
+    // succeed without further recovery. Uses atomic_write_json so the
+    // restoration itself is crash-safe and refreshes the .bak in turn.
+    (void) atomic_write_json(path, out);
     return true;
   }
 

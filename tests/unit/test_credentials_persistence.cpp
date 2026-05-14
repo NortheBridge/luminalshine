@@ -169,6 +169,103 @@ TEST_F(CredentialsPersistenceTest, MigrationMovesLegacyCredsAndPreservesPairings
   ASSERT_EQ(first_dev.get<std::string>("uuid"), "uuid-client-1");
 }
 
+TEST_F(CredentialsPersistenceTest, AtomicWriteUpdatesBackupSibling) {
+  // Every successful atomic_write_json must refresh a .bak sibling so the
+  // recovery loader has a known-good copy to fall back to when Windows
+  // servicing or a torn-write incident leaves the primary unreadable.
+  const auto file = scratch / "state.json";
+  fs::path bak = file;
+  bak += ".bak";
+
+  pt::ptree first;
+  first.put("root.uniqueid", "uuid-first");
+  ASSERT_TRUE(statefile::atomic_write_json(file, first));
+  ASSERT_TRUE(fs::exists(bak));
+  ASSERT_EQ(read_json(bak).get<std::string>("root.uniqueid"), "uuid-first");
+
+  pt::ptree second;
+  second.put("root.uniqueid", "uuid-second");
+  ASSERT_TRUE(statefile::atomic_write_json(file, second));
+  ASSERT_EQ(read_json(file).get<std::string>("root.uniqueid"), "uuid-second");
+  ASSERT_EQ(read_json(bak).get<std::string>("root.uniqueid"), "uuid-second");
+}
+
+TEST_F(CredentialsPersistenceTest, LoadOrRecoverReturnsFalseForMissingFile) {
+  pt::ptree out;
+  ASSERT_FALSE(statefile::load_or_recover(scratch / "absent.json", out));
+}
+
+TEST_F(CredentialsPersistenceTest, LoadOrRecoverReadsPrimaryWhenValid) {
+  const auto file = scratch / "state.json";
+  pt::ptree expected;
+  expected.put("root.uniqueid", "uuid-primary");
+  ASSERT_TRUE(statefile::atomic_write_json(file, expected));
+
+  pt::ptree out;
+  ASSERT_TRUE(statefile::load_or_recover(file, out));
+  ASSERT_EQ(out.get<std::string>("root.uniqueid"), "uuid-primary");
+}
+
+TEST_F(CredentialsPersistenceTest, LoadOrRecoverRestoresFromBackupWhenPrimaryCorrupt) {
+  // Simulate the canonical "Windows servicing zero-byte file" failure mode:
+  // the primary exists but parses to nothing, while the .bak written by the
+  // previous successful save still holds the prior good state.
+  const auto file = scratch / "state.json";
+  pt::ptree good;
+  good.put("root.uniqueid", "uuid-survivor");
+  pt::ptree dev;
+  dev.put("name", "Macintosh");
+  dev.put("cert", "---cert---");
+  dev.put("uuid", "uuid-paired-client");
+  pt::ptree devices;
+  devices.push_back(std::make_pair("", dev));
+  good.put_child("root.named_devices", devices);
+  ASSERT_TRUE(statefile::atomic_write_json(file, good));
+
+  fs::path bak = file;
+  bak += ".bak";
+  ASSERT_TRUE(fs::exists(bak));
+
+  // Truncate the primary to 0 bytes — exactly what a torn write or a
+  // partial Windows servicing reboot can produce.
+  {
+    std::ofstream truncator(file.string(), std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(truncator.good());
+  }
+  ASSERT_EQ(fs::file_size(file), 0u);
+
+  pt::ptree recovered;
+  ASSERT_TRUE(statefile::load_or_recover(file, recovered));
+  ASSERT_EQ(recovered.get<std::string>("root.uniqueid"), "uuid-survivor");
+  auto named = recovered.get_child("root.named_devices");
+  ASSERT_EQ(named.size(), 1u);
+  ASSERT_EQ(named.begin()->second.get<std::string>("uuid"), "uuid-paired-client");
+
+  // Side effect: the backup is promoted back to the primary so subsequent
+  // reads succeed without another recovery hop.
+  ASSERT_GT(fs::file_size(file), 0u);
+  ASSERT_EQ(read_json(file).get<std::string>("root.uniqueid"), "uuid-survivor");
+}
+
+TEST_F(CredentialsPersistenceTest, LoadOrRecoverFailsWhenBothFilesCorrupt) {
+  const auto file = scratch / "state.json";
+  fs::path bak = file;
+  bak += ".bak";
+
+  // Both files exist but contain junk — no recovery is possible.
+  {
+    std::ofstream f(file.string(), std::ios::binary | std::ios::trunc);
+    f << "not-json";
+  }
+  {
+    std::ofstream f(bak.string(), std::ios::binary | std::ios::trunc);
+    f << "also-not-json";
+  }
+
+  pt::ptree out;
+  ASSERT_FALSE(statefile::load_or_recover(file, out));
+}
+
 TEST_F(CredentialsPersistenceTest, MigrationSkipsWhenCredentialsFileAlreadyExists) {
   const auto state_file = scratch / "sunshine_state.json";
   const auto creds_file = scratch / "sunshine_credentials.json";

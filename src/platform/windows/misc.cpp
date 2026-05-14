@@ -39,6 +39,8 @@
 // Boost overrides NTDDI_VERSION, so we re-override it here
 #undef NTDDI_VERSION
 #define NTDDI_VERSION NTDDI_WIN10
+#include <KnownFolders.h>
+#include <ShlObj.h>
 #include <Shlwapi.h>
 
 // local includes
@@ -125,9 +127,66 @@ namespace platf {
   decltype(WlanSetInterface) *fn_WlanSetInterface = nullptr;
 
   std::filesystem::path appdata() {
-    WCHAR sunshine_path[MAX_PATH];
-    GetModuleFileNameW(nullptr, sunshine_path, _countof(sunshine_path));
-    return std::filesystem::path {sunshine_path}.remove_filename() / L"config"sv;
+    // Resolved exactly once per process. We deliberately avoid BOOST_LOG here
+    // — this can be called before the logger has been initialised.
+    static const std::filesystem::path resolved = [] {
+      // Legacy location: <exe_dir>\config\ — used by all builds prior to the
+      // ProgramData move. Kept as a fallback target and as the source for the
+      // one-time runtime migration so user pairings/credentials/apps survive
+      // the upgrade transparently.
+      WCHAR exe_path[MAX_PATH] = {};
+      GetModuleFileNameW(nullptr, exe_path, _countof(exe_path));
+      std::filesystem::path legacy = std::filesystem::path {exe_path}.remove_filename() / L"config"sv;
+
+      // Preferred location: %ProgramData%\LuminalShine\config\
+      //
+      // This survives Windows Insider Preview flight upgrades and cumulative
+      // updates that may "repair" Program Files subdirectories. It also
+      // sidesteps UAC VirtualStore redirection that can split SYSTEM-service
+      // writes from user-tool writes when the install dir is under
+      // Program Files.
+      std::filesystem::path target;
+      PWSTR program_data_w = nullptr;
+      if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_CREATE, nullptr, &program_data_w)) && program_data_w) {
+        target = std::filesystem::path {program_data_w} / L"LuminalShine" / L"config";
+        CoTaskMemFree(program_data_w);
+      }
+
+      // If the ProgramData lookup failed for any reason, fall back to the
+      // legacy path so we never return an empty path.
+      if (target.empty()) {
+        return legacy;
+      }
+
+      // Best-effort one-time migration from the legacy directory. Run on every
+      // process start; std::filesystem::copy with skip_existing makes this
+      // idempotent — files already present at the destination are left
+      // untouched, so a re-run never clobbers fresher data.
+      std::error_code ec;
+      std::filesystem::create_directories(target, ec);
+      if (!ec && std::filesystem::exists(legacy, ec) && legacy != target) {
+        for (auto it = std::filesystem::directory_iterator(legacy, ec);
+             !ec && it != std::filesystem::directory_iterator();
+             it.increment(ec)) {
+          const auto &src_path = it->path();
+          std::error_code copy_ec;
+          std::filesystem::copy(
+            src_path,
+            target / src_path.filename(),
+            std::filesystem::copy_options::recursive |
+              std::filesystem::copy_options::skip_existing,
+            copy_ec
+          );
+          // Intentionally ignore copy_ec — best effort. A failure here just
+          // means a single file didn't migrate; nvhttp::load_state still
+          // works with whatever made it across, and the legacy file remains
+          // in place as a recovery anchor.
+        }
+      }
+
+      return target;
+    }();
+    return resolved;
   }
 
   std::string from_sockaddr(const sockaddr *const socket_address) {
