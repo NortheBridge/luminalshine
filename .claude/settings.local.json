@@ -89,7 +89,17 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)[:2000]\\)\")",
       "Bash(curl -fsSL \"https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-clang\" -o /tmp/clang_pkg.html)",
       "Bash(ruby -ryaml -e \"YAML.load_file\\('.github/workflows/ci-windows.yml'\\); puts 'OK'\")",
-      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/package.json','utf8'\\)\\); console.log\\('package.json OK'\\)\")"
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/package.json','utf8'\\)\\); console.log\\('package.json OK'\\)\")",
+      "WebFetch(domain:gitdocs.northebridge.com)",
+      "Bash(curl -sL https://gitdocs.northebridge.com/ -o /tmp/gitdocs.html -w \"HTTP: %{http_code}\\\\nSize: %{size_download}\\\\n\")",
+      "Bash(sed -n '200,500p' /tmp/gitdocs.html)",
+      "Read(//private/tmp/**)",
+      "Bash(npm run *)",
+      "Bash(git stash *)",
+      "Bash(awk '/^\\\\/Users.*\\\\/web\\\\/App\\\\.vue$/{p=1;next} /^\\\\/Users.*\\\\.vue$|^\\\\/Users.*\\\\.ts$|^\\\\/Users.*\\\\.js$/{p=0} p')",
+      "Bash(awk '/^\\\\/Users.*\\\\/Login\\\\.vue$/{p=1;next} /^\\\\/Users.*\\\\.vue$|^\\\\/Users.*\\\\.ts$|^\\\\/Users.*\\\\.js$/{p=0} p')",
+      "Bash(awk '/^\\\\/Users.*\\\\/naive-theme\\\\.ts$/{p=1;next} /^\\\\/Users.*\\\\.vue$|^\\\\/Users.*\\\\.ts$|^\\\\/Users.*\\\\.js$/{p=0} p')",
+      "Bash(npx prettier *)"
     ],
     "deny": [],
     "ask": []
