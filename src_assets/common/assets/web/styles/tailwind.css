@@ -152,6 +152,80 @@
     animation: aurora-pulse 2.4s ease-in-out infinite;
   }
 
+  /*
+   * Stacked variant — used by the nav-bar brand-mark in App.vue:
+   * a Sunshine logo sits on the left, with "LuminalShine" stacked over
+   * "NortheBridge Foundation" on the right. Pill is taller than the
+   * single-line variant to fit two lines of text without crowding.
+   * Existing single-line callers (e.g. the dashboard hero accent) are
+   * unaffected because they don't apply `.brand-mark--stacked`.
+   */
+  a.brand-mark,
+  a.brand-mark:hover,
+  a.brand-mark:focus,
+  a.brand-mark:visited {
+    text-decoration: none;
+    color: inherit;
+  }
+
+  .brand-mark--stacked {
+    gap: 0.7rem;
+    padding: 0.35rem 0.95rem 0.35rem 0.45rem;
+    transition:
+      border-color 0.25s ease,
+      box-shadow 0.25s ease;
+  }
+
+  .brand-mark--stacked:hover,
+  .brand-mark--stacked:focus-visible {
+    border-color: var(--aurora-glass-border-hover);
+    box-shadow: 0 0 0 1px rgba(120, 200, 255, 0.18);
+    outline: none;
+  }
+
+  .brand-mark-logo {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    object-fit: contain;
+    /* Soft cyan halo so the logo reads as part of the aurora-glass family
+       even when the asset itself doesn't have any glow baked in. */
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+      0 0 12px rgba(30, 200, 255, 0.35),
+      0 0 22px rgba(30, 200, 255, 0.2);
+  }
+
+  .brand-mark-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1.15;
+    /* Allow truncation of the org line on tight viewports without
+       clipping the product name. */
+    min-width: 0;
+  }
+
+  .brand-mark-product {
+    font-size: 0.875rem; /* 14px */
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--aurora-text);
+  }
+
+  .brand-mark-org {
+    font-size: 0.625rem; /* 10px */
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--aurora-text-muted);
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .section-label {
     display: flex;
     align-items: center;

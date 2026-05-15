@@ -13,9 +13,21 @@
                 class="sticky top-0 z-30 h-16 flex items-center gap-4 px-4 sm:px-6 border-b border-white/10 bg-[rgba(7,11,31,0.55)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(7,11,31,0.4)]"
               >
                 <div class="flex items-center gap-3 min-w-0">
-                  <RouterLink to="/" class="brand-mark shrink-0" aria-label="LuminalShine home">
-                    <span class="brand-mark-dot" aria-hidden="true"></span>
-                    <span>NortheBridge&nbsp;Foundation</span>
+                  <RouterLink
+                    to="/"
+                    class="brand-mark brand-mark--stacked shrink-0"
+                    aria-label="LuminalShine — NortheBridge Foundation home"
+                  >
+                    <img
+                      src="/images/logo-sunshine-45.png"
+                      alt=""
+                      aria-hidden="true"
+                      class="brand-mark-logo"
+                    />
+                    <span class="brand-mark-text">
+                      <span class="brand-mark-product">LuminalShine</span>
+                      <span class="brand-mark-org">NortheBridge&nbsp;Foundation</span>
+                    </span>
                   </RouterLink>
                   <span
                     class="hidden md:inline-block h-6 w-px bg-white/10"
