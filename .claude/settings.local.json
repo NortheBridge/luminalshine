@@ -99,7 +99,18 @@
       "Bash(awk '/^\\\\/Users.*\\\\/web\\\\/App\\\\.vue$/{p=1;next} /^\\\\/Users.*\\\\.vue$|^\\\\/Users.*\\\\.ts$|^\\\\/Users.*\\\\.js$/{p=0} p')",
       "Bash(awk '/^\\\\/Users.*\\\\/Login\\\\.vue$/{p=1;next} /^\\\\/Users.*\\\\.vue$|^\\\\/Users.*\\\\.ts$|^\\\\/Users.*\\\\.js$/{p=0} p')",
       "Bash(awk '/^\\\\/Users.*\\\\/naive-theme\\\\.ts$/{p=1;next} /^\\\\/Users.*\\\\.vue$|^\\\\/Users.*\\\\.ts$|^\\\\/Users.*\\\\.js$/{p=0} p')",
-      "Bash(npx prettier *)"
+      "Bash(npx prettier *)",
+      "Read(//Users/Avalon/**)",
+      "Bash(unzip -l /Users/Avalon/luminalshine_logs-20260514-154629.zip)",
+      "Bash(mkdir -p /tmp/luminal_logs)",
+      "Bash(unzip -q -o /Users/Avalon/luminalshine_logs-20260514-154629.zip -d /tmp/luminal_logs)",
+      "Bash(command -v brew)",
+      "Bash(brew --prefix boost)",
+      "Read(//opt/homebrew/include/**)",
+      "Bash(clang++ -std=c++17 -fsyntax-only -DBOOST_ALL_NO_LIB -Isrc -I/opt/homebrew/opt/boost/include -DTESTS_PLATFORM_HEADERS_NOT_AVAILABLE=1 src/state_storage.cpp)",
+      "Bash(find /opt/homebrew/Cellar/boost -name \"ptree_fwd.hpp\" 2>/dev/null | head -3 ; ls /opt/homebrew/opt/boost/include/ 2>/dev/null | head -3)",
+      "Read(//opt/homebrew/Cellar/**)",
+      "Read(//opt/homebrew/opt/boost/**)"
     ],
     "deny": [],
     "ask": []
