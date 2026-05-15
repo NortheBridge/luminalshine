@@ -110,7 +110,10 @@
       "Bash(clang++ -std=c++17 -fsyntax-only -DBOOST_ALL_NO_LIB -Isrc -I/opt/homebrew/opt/boost/include -DTESTS_PLATFORM_HEADERS_NOT_AVAILABLE=1 src/state_storage.cpp)",
       "Bash(find /opt/homebrew/Cellar/boost -name \"ptree_fwd.hpp\" 2>/dev/null | head -3 ; ls /opt/homebrew/opt/boost/include/ 2>/dev/null | head -3)",
       "Read(//opt/homebrew/Cellar/**)",
-      "Read(//opt/homebrew/opt/boost/**)"
+      "Read(//opt/homebrew/opt/boost/**)",
+      "Bash(mkdir -p /tmp/luminal_logs2)",
+      "Bash(rm -rf /tmp/luminal_logs2/*)",
+      "Bash(unzip -q -o /Users/Avalon/luminalshine_logs-20260515-155654.zip -d /tmp/luminal_logs2)"
     ],
     "deny": [],
     "ask": []
