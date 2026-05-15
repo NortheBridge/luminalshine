@@ -1,6 +1,34 @@
 param()
 
-$ErrorActionPreference = 'Stop'
+# Best-effort installer migrations. This script intentionally never aborts
+# the MSI transaction — see RunInstallerMigrations (Return="ignore") in
+# custom_actions.wxs. The C++ runtime carries the same migration logic and
+# fires on the first launch after install, so anything we skip here is
+# picked up there with no service contention.
+
+$ErrorActionPreference = 'Continue'
+
+# Tee output to a stable log path under %TEMP% so users can attach a
+# single file when reporting upgrade issues. The MSI session log captures
+# our stdout too, but it lives in a path that varies per install and is
+# discarded when the user closes the installer UI.
+$transcriptPath = $null
+try {
+    $tempDir = if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
+        [System.IO.Path]::GetTempPath()
+    } else {
+        $env:TEMP
+    }
+    if (-not [string]::IsNullOrWhiteSpace($tempDir)) {
+        $transcriptPath = Join-Path $tempDir 'luminalshine-installer-migration.log'
+        Start-Transcript -Path $transcriptPath -Append -Force | Out-Null
+        Write-Output ("=== LuminalShine installer-migrations.ps1 @ {0} ===" -f (Get-Date -Format 's'))
+    }
+} catch {
+    # Transcript is purely diagnostic; never let its failure derail the
+    # rest of the script.
+    $transcriptPath = $null
+}
 
 function Convert-LegacySplitEncodeValue {
     param(
@@ -39,6 +67,34 @@ function Convert-LegacySplitEncodeValue {
     }
 }
 
+function Test-JsonFileParseable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if ($item.Length -le 0) {
+            return $false
+        }
+    } catch {
+        return $false
+    }
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return $false
+        }
+        $null = $raw | ConvertFrom-Json -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Update-SplitFrameEncodingInConfig {
     param(
         [Parameter(Mandatory = $true)]
@@ -49,7 +105,12 @@ function Update-SplitFrameEncodingInConfig {
         return $false
     }
 
-    $original = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+    try {
+        $original = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+    } catch {
+        Write-Output ("Skipped {0}: {1}" -f $ConfigPath, $_.Exception.Message)
+        return $false
+    }
     if ([string]::IsNullOrWhiteSpace($original)) {
         return $false
     }
@@ -73,8 +134,13 @@ function Update-SplitFrameEncodingInConfig {
         return $false
     }
 
-    Set-Content -LiteralPath $ConfigPath -Value $updated -NoNewline -Encoding UTF8
-    return $true
+    try {
+        Set-Content -LiteralPath $ConfigPath -Value $updated -NoNewline -Encoding UTF8 -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Output ("Failed to rewrite {0}: {1}" -f $ConfigPath, $_.Exception.Message)
+        return $false
+    }
 }
 
 function Convert-SplitFrameEncodingJsonNode {
@@ -137,14 +203,28 @@ function Update-SplitFrameEncodingInJson {
         return $false
     }
 
-    $original = Get-Content -LiteralPath $JsonPath -Raw -ErrorAction Stop
+    # Skip files we can't even parse: an attempted rewrite would either
+    # clobber whatever salvageable bytes are still on disk or throw. The
+    # C++ runtime's recovery path handles those files.
+    if (-not (Test-JsonFileParseable -Path $JsonPath)) {
+        Write-Output ("Skipped {0}: not a parseable JSON document" -f $JsonPath)
+        return $false
+    }
+
+    try {
+        $original = Get-Content -LiteralPath $JsonPath -Raw -ErrorAction Stop
+    } catch {
+        Write-Output ("Skipped {0}: {1}" -f $JsonPath, $_.Exception.Message)
+        return $false
+    }
     if ([string]::IsNullOrWhiteSpace($original)) {
         return $false
     }
 
     try {
-        $parsed = $original | ConvertFrom-Json
+        $parsed = $original | ConvertFrom-Json -ErrorAction Stop
     } catch {
+        Write-Output ("Skipped {0}: invalid JSON ({1})" -f $JsonPath, $_.Exception.Message)
         return $false
     }
 
@@ -154,82 +234,38 @@ function Update-SplitFrameEncodingInJson {
         return $false
     }
 
-    $serialized = $updated | ConvertTo-Json -Depth 100
-    Set-Content -LiteralPath $JsonPath -Value $serialized -NoNewline -Encoding UTF8
-    return $true
+    try {
+        $serialized = $updated | ConvertTo-Json -Depth 100
+        Set-Content -LiteralPath $JsonPath -Value $serialized -NoNewline -Encoding UTF8 -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Output ("Failed to rewrite {0}: {1}" -f $JsonPath, $_.Exception.Message)
+        return $false
+    }
 }
 
-function Move-ConfigToProgramData {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$LegacyConfigDir
-    )
-
-    # Target lives under %ProgramData% so it survives Windows Insider Preview
-    # flight upgrades and cumulative updates that may "repair" Program Files
-    # subdirectories. The C++ runtime also resolves to this location.
+# Resolve the canonical %ProgramData%\LuminalShine\config\ path so we can
+# also inspect any state files the C++ runtime may have already created
+# there. We deliberately DO NOT copy from the legacy <INSTALL_ROOT>\config
+# directory anymore — that move happens in platf::appdata() at first
+# launch, where there is no service contention to race with.
+$programDataDir = $null
+try {
     $programData = $env:ProgramData
     if ([string]::IsNullOrWhiteSpace($programData)) {
         $programData = [Environment]::GetFolderPath('CommonApplicationData')
     }
-    if ([string]::IsNullOrWhiteSpace($programData)) {
-        Write-Output 'ProgramData path not resolvable; skipping config migration to ProgramData.'
-        return $null
+    if (-not [string]::IsNullOrWhiteSpace($programData)) {
+        $programDataDir = Join-Path $programData 'LuminalShine\config'
     }
-
-    $targetDir = Join-Path $programData 'LuminalShine\config'
-
-    try {
-        if (-not (Test-Path -LiteralPath $targetDir)) {
-            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        }
-    } catch {
-        Write-Output ("Failed to create target directory '{0}': {1}" -f $targetDir, $_.Exception.Message)
-        return $null
-    }
-
-    if (-not (Test-Path -LiteralPath $LegacyConfigDir)) {
-        return $targetDir
-    }
-
-    # Best-effort copy of every file/subdirectory from the legacy location.
-    # We never overwrite an existing destination — that keeps the migration
-    # idempotent and avoids clobbering data the user has already touched on
-    # the new build. Pairings (sunshine_state.json), credentials, apps.json,
-    # snapshot history, .bak siblings, etc. all come along.
-    try {
-        Get-ChildItem -LiteralPath $LegacyConfigDir -Force -ErrorAction Stop | ForEach-Object {
-            $dst = Join-Path $targetDir $_.Name
-            if (-not (Test-Path -LiteralPath $dst)) {
-                try {
-                    if ($_.PSIsContainer) {
-                        Copy-Item -LiteralPath $_.FullName -Destination $dst -Recurse -Force -ErrorAction Stop
-                    } else {
-                        Copy-Item -LiteralPath $_.FullName -Destination $dst -Force -ErrorAction Stop
-                    }
-                    Write-Output ("Migrated {0} -> {1}" -f $_.FullName, $dst)
-                } catch {
-                    Write-Output ("Failed to migrate '{0}': {1}" -f $_.FullName, $_.Exception.Message)
-                }
-            }
-        }
-    } catch {
-        Write-Output ("Failed to enumerate '{0}': {1}" -f $LegacyConfigDir, $_.Exception.Message)
-    }
-
-    return $targetDir
+} catch {
+    $programDataDir = $null
 }
 
 $rootDir = Split-Path -Parent $PSScriptRoot
-$legacyConfigDir = Join-Path $rootDir 'config'
-
-# Run the ProgramData migration before any in-file fix-ups so subsequent
-# steps operate on the canonical (new) location.
-$newConfigDir = Move-ConfigToProgramData -LegacyConfigDir $legacyConfigDir
-
 $candidateConfigs = @()
-if ($newConfigDir) {
-    $candidateConfigs += (Join-Path $newConfigDir 'sunshine.conf')
+if ($programDataDir) {
+    $candidateConfigs += (Join-Path $programDataDir 'sunshine.conf')
 }
 $candidateConfigs += @(
     (Join-Path $rootDir 'config\sunshine.conf'),
@@ -238,11 +274,11 @@ $candidateConfigs += @(
 $candidateConfigs = $candidateConfigs | Select-Object -Unique
 
 $candidateJsonFiles = @()
-if ($newConfigDir) {
+if ($programDataDir) {
     $candidateJsonFiles += @(
-        (Join-Path $newConfigDir 'apps.json'),
-        (Join-Path $newConfigDir 'sunshine_state.json'),
-        (Join-Path $newConfigDir 'luminalshine_state.json')
+        (Join-Path $programDataDir 'apps.json'),
+        (Join-Path $programDataDir 'sunshine_state.json'),
+        (Join-Path $programDataDir 'luminalshine_state.json')
     )
 }
 $candidateJsonFiles += @(
@@ -257,19 +293,39 @@ $candidateJsonFiles = $candidateJsonFiles | Select-Object -Unique
 
 $changedAny = $false
 foreach ($configPath in $candidateConfigs) {
-    if (Update-SplitFrameEncodingInConfig -ConfigPath $configPath) {
-        Write-Output "Migrated nvenc_force_split_encode to nvenc_split_encode in $configPath"
-        $changedAny = $true
+    try {
+        if (Update-SplitFrameEncodingInConfig -ConfigPath $configPath) {
+            Write-Output ("Migrated nvenc_force_split_encode to nvenc_split_encode in {0}" -f $configPath)
+            $changedAny = $true
+        }
+    } catch {
+        Write-Output ("Skipped {0}: {1}" -f $configPath, $_.Exception.Message)
     }
 }
 
 foreach ($jsonPath in $candidateJsonFiles) {
-    if (Update-SplitFrameEncodingInJson -JsonPath $jsonPath) {
-        Write-Output "Migrated nvenc_force_split_encode to nvenc_split_encode in $jsonPath"
-        $changedAny = $true
+    try {
+        if (Update-SplitFrameEncodingInJson -JsonPath $jsonPath) {
+            Write-Output ("Migrated nvenc_force_split_encode to nvenc_split_encode in {0}" -f $jsonPath)
+            $changedAny = $true
+        }
+    } catch {
+        Write-Output ("Skipped {0}: {1}" -f $jsonPath, $_.Exception.Message)
     }
 }
 
 if (-not $changedAny) {
     Write-Output 'No installer config migrations were needed.'
 }
+
+if ($transcriptPath) {
+    try {
+        Stop-Transcript | Out-Null
+    } catch {
+        # already stopped or never started — ignore
+    }
+}
+
+# Always exit 0. RunInstallerMigrations is also flagged Return="ignore"
+# in WiX, but belt-and-suspenders.
+exit 0

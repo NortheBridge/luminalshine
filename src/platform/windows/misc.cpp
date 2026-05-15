@@ -17,6 +17,8 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/program_options/parsers.hpp>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 
 // prevent clang format from "optimizing" the header include order
 // clang-format off
@@ -126,9 +128,39 @@ namespace platf {
   decltype(WlanEnumInterfaces) *fn_WlanEnumInterfaces = nullptr;
   decltype(WlanSetInterface) *fn_WlanSetInterface = nullptr;
 
+  namespace {
+    // True iff the file at `p` parses as JSON. Used by the runtime migration
+    // to refuse to copy zero-byte or otherwise corrupt *.json files from the
+    // legacy install-dir location — copying them would just propagate the
+    // corruption into %ProgramData% where nvhttp::load_state would then fail
+    // every boot. Empty files and files that aren't valid JSON both return
+    // false; the caller logs the skip and leaves the destination untouched.
+    bool file_parses_as_json(const std::filesystem::path &p) {
+      std::error_code ec;
+      const auto size = std::filesystem::file_size(p, ec);
+      if (ec || size == 0) {
+        return false;
+      }
+      try {
+        boost::property_tree::ptree tree;
+        boost::property_tree::read_json(p.string(), tree);
+        return true;
+      } catch (const std::exception &) {
+        return false;
+      }
+    }
+
+    bool path_has_json_extension(const std::filesystem::path &p) {
+      const auto ext = p.extension();
+      return ext == L".json" || ext == ".json";
+    }
+  }  // namespace
+
   std::filesystem::path appdata() {
-    // Resolved exactly once per process. We deliberately avoid BOOST_LOG here
-    // — this can be called before the logger has been initialised.
+    // Resolved exactly once per process. Migration warnings are emitted via
+    // BOOST_LOG; if the logger isn't yet initialised at the first call, the
+    // default sink silently drops them — no worse than not logging at all
+    // and far better than swallowing real Access Denied / copy failures.
     static const std::filesystem::path resolved = [] {
       // Legacy location: <exe_dir>\config\ — used by all builds prior to the
       // ProgramData move. Kept as a fallback target and as the source for the
@@ -159,29 +191,62 @@ namespace platf {
       }
 
       // Best-effort one-time migration from the legacy directory. Run on every
-      // process start; std::filesystem::copy with skip_existing makes this
-      // idempotent — files already present at the destination are left
-      // untouched, so a re-run never clobbers fresher data.
+      // process start; for each entry we use skip_existing so files already
+      // present at the destination are left untouched.
       std::error_code ec;
       std::filesystem::create_directories(target, ec);
-      if (!ec && std::filesystem::exists(legacy, ec) && legacy != target) {
-        for (auto it = std::filesystem::directory_iterator(legacy, ec);
-             !ec && it != std::filesystem::directory_iterator();
-             it.increment(ec)) {
-          const auto &src_path = it->path();
-          std::error_code copy_ec;
-          std::filesystem::copy(
-            src_path,
-            target / src_path.filename(),
-            std::filesystem::copy_options::recursive |
-              std::filesystem::copy_options::skip_existing,
-            copy_ec
-          );
-          // Intentionally ignore copy_ec — best effort. A failure here just
-          // means a single file didn't migrate; nvhttp::load_state still
-          // works with whatever made it across, and the legacy file remains
-          // in place as a recovery anchor.
+      if (ec) {
+        BOOST_LOG(warning) << "appdata: failed to create "sv << target.string()
+                           << ": "sv << ec.message();
+        return target;
+      }
+      if (!std::filesystem::exists(legacy, ec) || legacy == target) {
+        return target;
+      }
+      for (auto it = std::filesystem::directory_iterator(legacy, ec);
+           !ec && it != std::filesystem::directory_iterator();
+           it.increment(ec)) {
+        const auto &src_path = it->path();
+        const auto dst_path = target / src_path.filename();
+
+        // Don't propagate a corrupt *.json from the legacy location into the
+        // new home. If the source file is zero bytes or fails to parse, the
+        // user's existing state at that path is already lost; copying it
+        // would just make nvhttp::load_state fail every boot on the new
+        // location too (Phase 1's load_or_recover fallback still tries the
+        // .bak first, but if neither exists, the only path forward is to
+        // let save_state write fresh state on the next pair).
+        std::error_code stat_ec;
+        const bool is_regular = std::filesystem::is_regular_file(src_path, stat_ec);
+        if (!stat_ec && is_regular && path_has_json_extension(src_path)) {
+          if (!file_parses_as_json(src_path)) {
+            BOOST_LOG(warning) << "appdata: skipping unparseable JSON during migration: "sv
+                               << src_path.string();
+            continue;
+          }
         }
+
+        std::error_code copy_ec;
+        std::filesystem::copy(
+          src_path,
+          dst_path,
+          std::filesystem::copy_options::recursive |
+            std::filesystem::copy_options::skip_existing,
+          copy_ec
+        );
+        if (copy_ec) {
+          // Surface the real error (Access Denied, sharing violation,
+          // disk full, antivirus quarantine) rather than swallowing it.
+          // A per-file failure is still non-fatal — we continue with the
+          // rest of the directory and rely on the runtime recovery path.
+          BOOST_LOG(warning) << "appdata: failed to migrate "sv << src_path.string()
+                             << " -> "sv << dst_path.string()
+                             << ": "sv << copy_ec.message();
+        }
+      }
+      if (ec) {
+        BOOST_LOG(warning) << "appdata: directory iteration of "sv << legacy.string()
+                           << " ended with: "sv << ec.message();
       }
 
       return target;

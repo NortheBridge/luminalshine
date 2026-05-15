@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <format>
 #include <future>
@@ -773,13 +774,20 @@ namespace nvhttp {
 
     pt::ptree root;
 
-    if (fs::exists(sunshine_path)) {
-      try {
-        pt::read_json(sunshine_path, root);
-      } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't read "sv << sunshine_path << ": "sv << e.what();
-        return;
+    // Use the recovery-aware loader so a corrupt primary (the canonical
+    // Windows-servicing zero-byte outcome) falls back to "<path>.bak"
+    // instead of aborting the save. Critically: if BOTH primary and backup
+    // are unreadable, proceed with an empty tree and let atomic_write_json
+    // overwrite the corrupt primary with the new pairings. Previously
+    // this catch path called `return;`, which silently dropped every save
+    // after the first corruption and was the reason new pair attempts on
+    // a broken install never persisted.
+    if (!statefile::load_or_recover(sunshine_path, root)) {
+      if (fs::exists(sunshine_path)) {
+        BOOST_LOG(warning) << "save_state: "sv << sunshine_path
+                           << " unreadable and no usable backup; rewriting with current in-memory state"sv;
       }
+      root.clear();
     }
 
     pt::ptree root_node;
@@ -848,13 +856,8 @@ namespace nvhttp {
       };
 
       pt::ptree luminalshine_tree;
-      if (fs::exists(luminalshine_path)) {
-        try {
-          pt::read_json(luminalshine_path, luminalshine_tree);
-        } catch (std::exception &e) {
-          BOOST_LOG(error) << "Couldn't read "sv << luminalshine_path << ": "sv << e.what();
-          luminalshine_tree = {};
-        }
+      if (!statefile::load_or_recover(luminalshine_path, luminalshine_tree)) {
+        luminalshine_tree = {};
       }
 
       auto &vibe_root = ensure_root(luminalshine_tree);
@@ -897,8 +900,33 @@ namespace nvhttp {
       if (!fs::exists(sunshine_path)) {
         BOOST_LOG(info) << "File "sv << sunshine_path << " doesn't exist"sv;
       } else {
-        BOOST_LOG(error) << "Couldn't read "sv << sunshine_path
-                         << " and no usable backup; starting with empty state"sv;
+        // Phase-3 recovery: if the primary is exactly zero bytes and no
+        // backup is on disk, delete the empty primary so the next save_state
+        // can land cleanly. Without this, a stuck install (zero-byte file,
+        // no .bak, classic outcome of the previous beta's silent-abort bug)
+        // would never self-heal — every boot would read 0 bytes, every
+        // save would attempt to merge into the corrupt tree, and the
+        // user would have to manually elevate File Explorer to delete it.
+        std::error_code size_ec;
+        const auto size = fs::file_size(sunshine_path, size_ec);
+        fs::path bak_path = sunshine_path;
+        bak_path += ".bak";
+        std::error_code bak_ec;
+        const bool bak_exists = fs::exists(bak_path, bak_ec);
+        if (!size_ec && size == 0 && !bak_exists) {
+          std::error_code rm_ec;
+          fs::remove(sunshine_path, rm_ec);
+          if (!rm_ec) {
+            BOOST_LOG(info) << "load_state: removed empty "sv << sunshine_path
+                            << " so the next save can write cleanly"sv;
+          } else {
+            BOOST_LOG(warning) << "load_state: tried to remove empty "sv << sunshine_path
+                               << " but failed: "sv << rm_ec.message();
+          }
+        } else {
+          BOOST_LOG(error) << "Couldn't read "sv << sunshine_path
+                           << " and no usable backup; starting with empty state"sv;
+        }
       }
       http::unique_id = uuid_util::uuid_t::generate().string();
       update::state.last_notified_version.clear();
@@ -2614,6 +2642,103 @@ namespace nvhttp {
     client_root = client;
     cert_chain.clear();
     save_state();
+  }
+
+  reset_state_result_t reset_state() {
+    reset_state_result_t result {};
+    result.status = false;
+
+    // Build a UTC timestamp suffix like "20260515T173041Z". Done outside the
+    // critical section so the suffix is deterministic across every renamed
+    // file on this invocation — useful when bundling for support.
+    const auto now = std::chrono::system_clock::now();
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    std::time_t tt = static_cast<std::time_t>(secs);
+    std::tm utc {};
+#ifdef _WIN32
+    gmtime_s(&utc, &tt);
+#else
+    gmtime_r(&tt, &utc);
+#endif
+    char stamp[24] = {};
+    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%SZ", &utc);
+    const std::string suffix = std::string(".corrupt-") + stamp;
+
+    auto archive = [&](const fs::path &path) {
+      std::error_code ec;
+      if (!fs::exists(path, ec)) {
+        return;
+      }
+      fs::path archived = path;
+      archived += suffix;
+      // If something already exists at the destination (highly unlikely
+      // with a per-second timestamp, but possible on rapid double-click),
+      // append a counter so we never silently overwrite forensic data.
+      int counter = 1;
+      while (fs::exists(archived, ec)) {
+        archived = path;
+        archived += suffix;
+        archived += "-";
+        archived += std::to_string(counter++);
+      }
+      std::error_code mv_ec;
+      fs::rename(path, archived, mv_ec);
+      if (mv_ec) {
+        // rename can fail across volumes; fall back to copy + remove so
+        // the user's stuck file still gets out of the way.
+        std::error_code cp_ec;
+        fs::copy_file(path, archived, fs::copy_options::overwrite_existing, cp_ec);
+        if (!cp_ec) {
+          std::error_code rm_ec;
+          fs::remove(path, rm_ec);
+        }
+        if (cp_ec) {
+          BOOST_LOG(error) << "reset_state: failed to archive "sv << path.string()
+                           << " -> "sv << archived.string()
+                           << ": "sv << mv_ec.message();
+          result.error = "Failed to archive " + path.string() + ": " + mv_ec.message();
+          return;
+        }
+      }
+      BOOST_LOG(info) << "reset_state: archived "sv << path.string()
+                      << " -> "sv << archived.string();
+      result.archived.emplace_back(archived.string());
+    };
+
+    {
+      std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
+      const fs::path sunshine_path = statefile::sunshine_state_path();
+      const fs::path luminalshine_path = statefile::luminalshine_state_path();
+
+      // Move the on-disk pairing/state files out of the way (including
+      // their .bak siblings). Deliberately do NOT touch the dedicated
+      // credentials file — admin login survives.
+      for (const auto &p : {sunshine_path, luminalshine_path}) {
+        if (p.empty()) {
+          continue;
+        }
+        archive(p);
+        fs::path bak = p;
+        bak += ".bak";
+        archive(bak);
+      }
+      if (!result.error.empty()) {
+        return result;
+      }
+
+      // Wipe the in-memory state so subsequent reads don't reinstate the
+      // archived pairings into the freshly-written file.
+      client_root = client_t {};
+      cert_chain.clear();
+      http::unique_id = uuid_util::uuid_t::generate().string();
+    }
+
+    // save_state takes the lock itself. With in-memory pairings cleared
+    // and the old files archived, this writes a fresh primary + .bak.
+    save_state();
+
+    result.status = true;
+    return result;
   }
 
   bool update_device_info(

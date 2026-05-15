@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // lib includes
 #include <boost/property_tree/ptree.hpp>
@@ -247,4 +248,25 @@ namespace nvhttp {
    * @note Exposed so subsystems (e.g. update) can trigger a save after mutating persisted fields.
    */
   void save_state();
+
+  /**
+   * @brief Result of a state-file reset operation surfaced via the Troubleshooting UI.
+   */
+  struct reset_state_result_t {
+    bool status;  ///< True on full success.
+    std::string error;  ///< Empty on success; populated with a user-facing message otherwise.
+    std::vector<std::string> archived;  ///< Paths the original files were renamed to (.corrupt-<timestamp>).
+  };
+
+  /**
+   * @brief Reset the on-disk pairing/state files to a clean slate.
+   *
+   * Renames "sunshine_state.json" and "luminalshine_state.json" (plus their
+   * .bak siblings) to "<file>.corrupt-<UTC-timestamp>" so the user can
+   * still recover them by hand if needed, clears all in-memory pairings,
+   * generates a new host uniqueid, and persists the fresh state.
+   *
+   * Does NOT touch the dedicated credentials file — admin login survives.
+   */
+  reset_state_result_t reset_state();
 }  // namespace nvhttp

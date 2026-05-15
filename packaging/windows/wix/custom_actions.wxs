@@ -172,7 +172,14 @@
   <Fragment>
     <CustomAction Id="ResetAcls" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="MigrateConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
-    <CustomAction Id="RunInstallerMigrations" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
+    <!-- Best-effort config migrations: must NEVER roll back the install.
+         If installer-migrations.ps1 throws (e.g. Access Denied on a file
+         still held by an old helper process), MSI's transactional model
+         would otherwise tear down the whole transaction and leave the
+         user with a half-installed product. Return="ignore" lets the
+         install proceed; the C++ runtime carries the same migration
+         logic as a safety net on first launch. -->
+    <CustomAction Id="RunInstallerMigrations" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="InstallMttVdd" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="InstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
@@ -243,13 +250,19 @@
          that name; using a different property silently produces
          "Failed to get command line data" and skips the action. The two
          immediate setters below run in sequence (Set→CA, Set→CA), each
-         overwriting QtExecCmdLine just before its consumer runs. -->
+         overwriting QtExecCmdLine just before its consumer runs.
+
+         The body retries the stop up to 5 times with 1-second backoff so
+         transient "stopping" states from SCM don't leak past us. Without
+         the retry, an interactive upgrade can race the service's actual
+         release of sunshine.exe / sunshinesvc.exe, leaving the new MSI
+         laying files down while the old binary is still mapped. -->
     <CustomAction Id="SetStopSvcQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; $svc.WaitForStatus('Stopped','00:00:30') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
     <!-- Immediate setter to prune everything except the config directory -->
     <CustomAction Id="SetPruneButConfig"
                  Property="PruneButConfig"
@@ -259,13 +272,18 @@
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
                  Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
-    <!-- Immediate setters for quiet process kill and service removal on manual uninstall -->
+    <!-- Immediate setters for quiet process kill and service removal on
+         manual uninstall (and now also on every upgrade/repair, so file
+         replacement isn't racing helper processes that still have the old
+         sunshine.exe DLL set mapped). Added display_helper to the list
+         because it survives a service stop and has been observed holding
+         sunshine_*.dll open on Insider Preview builds. -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>

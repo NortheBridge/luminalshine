@@ -96,6 +96,56 @@
           </n-button>
         </div>
       </section>
+
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.reset_state', 'Reset Stored Pairings') }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.reset_state_desc',
+                  'Recovery escape hatch when sunshine_state.json is corrupt or unreadable. The current state files are renamed with a .corrupt-TIMESTAMP suffix (kept on disk for forensics) and a fresh empty state is written. All paired clients will need to re-pair. Admin credentials are NOT touched.',
+                )
+              }}
+            </p>
+          </div>
+          <n-button
+            type="error"
+            strong
+            :loading="resetStatePending"
+            :disabled="resetStatePending"
+            @click="confirmResetState"
+          >
+            {{
+              resetStatePending
+                ? translate('troubleshooting.reset_state_pending', 'Resetting...')
+                : translate('troubleshooting.reset_state', 'Reset Stored Pairings')
+            }}
+          </n-button>
+        </div>
+        <n-alert v-if="resetStateStatus === 'success'" type="success" class="mt-3">
+          {{
+            translate(
+              'troubleshooting.reset_state_success',
+              'State files reset. Re-pair Moonlight clients to resume streaming.',
+            )
+          }}
+          <ul v-if="resetStateArchived.length" class="list-disc pl-5 mt-2 text-xs opacity-80">
+            <li v-for="(p, i) in resetStateArchived" :key="i" class="font-mono break-all">
+              {{ p }}
+            </li>
+          </ul>
+        </n-alert>
+        <n-alert v-else-if="resetStateStatus === 'error'" type="error" class="mt-3">
+          {{
+            resetStateError ||
+            translate('troubleshooting.reset_state_error', 'Failed to reset stored state.')
+          }}
+        </n-alert>
+      </section>
     </div>
 
     <section class="troubleshoot-card space-y-4">
@@ -303,7 +353,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { NButton, NInput, NAlert, NScrollbar, NSelect } from 'naive-ui';
+import { NButton, NInput, NAlert, NScrollbar, NSelect, useDialog } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
@@ -322,6 +372,11 @@ const exportCrashPending = ref(false);
 const closeAppPressed = ref(false);
 const closeAppStatus = ref(null as null | boolean);
 const restartPressed = ref(false);
+const resetStatePending = ref(false);
+const resetStateStatus = ref<null | 'success' | 'error'>(null);
+const resetStateError = ref('');
+const resetStateArchived = ref<string[]>([]);
+const dialog = useDialog();
 
 const latestLogs = ref('Loading...');
 const displayedLogs = ref('Loading...');
@@ -950,6 +1005,49 @@ function restart() {
   restartPressed.value = true;
   setTimeout(() => (restartPressed.value = false), 5000);
   http.post('./api/restart', {}, { validateStatus: () => true });
+}
+
+async function doResetState() {
+  resetStatePending.value = true;
+  resetStateStatus.value = null;
+  resetStateError.value = '';
+  resetStateArchived.value = [];
+  try {
+    const r = await http.post('./api/state/reset', {}, { validateStatus: () => true });
+    const body = r.data || {};
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      resetStateStatus.value = 'success';
+      const archived = Array.isArray(body.archived) ? body.archived : [];
+      resetStateArchived.value = archived.filter(
+        (p: unknown): p is string => typeof p === 'string',
+      );
+    } else {
+      resetStateStatus.value = 'error';
+      resetStateError.value =
+        (body && typeof body.error === 'string' && body.error) || `HTTP ${r.status}`;
+    }
+  } catch (e: unknown) {
+    resetStateStatus.value = 'error';
+    resetStateError.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    resetStatePending.value = false;
+  }
+}
+
+function confirmResetState() {
+  if (resetStatePending.value) return;
+  dialog.warning({
+    title: translate('troubleshooting.reset_state_confirm_title', 'Reset stored pairings?'),
+    content: translate(
+      'troubleshooting.reset_state_confirm_body',
+      'All paired Moonlight clients will need to re-pair. Current sunshine_state.json and luminalshine_state.json files will be renamed with a .corrupt-TIMESTAMP suffix (kept on disk for forensics) and a fresh state will be written. Admin credentials are NOT touched. Continue?',
+    ),
+    positiveText: translate('troubleshooting.reset_state_confirm_yes', 'Reset stored state'),
+    negativeText: translate('troubleshooting.reset_state_confirm_no', 'Cancel'),
+    onPositiveClick: async () => {
+      await doResetState();
+    },
+  });
 }
 
 onMounted(async () => {

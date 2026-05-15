@@ -1763,6 +1763,37 @@ namespace confighttp {
   }
 
   /**
+   * @brief Reset the on-disk pairing/state files when they have become
+   *        corrupt. Archives the existing files as ".corrupt-<UTC>" so
+   *        they remain available for forensics, clears in-memory pairings,
+   *        and persists a fresh empty state. Admin credentials are NOT
+   *        touched — login survives the reset.
+   *
+   * @api_examples{/api/state/reset| POST| null}
+   */
+  void resetStoredState(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    proc::proc.terminate();
+    const auto result = nvhttp::reset_state();
+
+    nlohmann::json output_tree;
+    output_tree["status"] = result.status;
+    if (!result.error.empty()) {
+      output_tree["error"] = result.error;
+    }
+    output_tree["archived"] = result.archived;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Get the configuration settings.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -3744,6 +3775,7 @@ namespace confighttp {
     register_api_route("^/api/apps/([A-Fa-f0-9-]+)/cover$", "GET", getAppCover);
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);
     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
+    register_api_route("^/api/state/reset$", "POST", resetStoredState);
     register_api_route("^/api/clients/list$", "GET", getClients);
     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);
     register_api_route("^/api/clients/update$", "POST", updateClient);

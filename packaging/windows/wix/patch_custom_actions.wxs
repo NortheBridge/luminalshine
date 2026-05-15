@@ -36,15 +36,22 @@
       <!-- Remove conflicting products before installation starts. -->
       <Custom Action="RemoveConflictingProducts" After="InstallInitialize">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
 
-      <!-- Pre-validate stop/kill when UI can't prompt -->
-      <Custom Action="SetKillProcsQuietImmediate" Before="InstallValidate">(Installed AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="KillProcsQuietImmediate" After="SetKillProcsQuietImmediate">(Installed AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="SetStopSvcQuietImmediate" After="KillProcsQuietImmediate">(Installed AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate">(Installed AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <!-- Pre-validate stop/kill: fire across ALL UI levels (including the
+           interactive full-UI install path). Previously gated on UILevel < 5,
+           which left interactive upgrades dependent on Restart Manager to
+           detect file-in-use — that path is unreliable on Windows 11 Insider
+           Preview when Defender holds a scan handle on sunshine.exe and can
+           surface as "Access Denied" during InstallFiles, rolling the MSI
+           transaction back into an unusable state. -->
+      <Custom Action="SetKillProcsQuietImmediate" Before="InstallValidate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="KillProcsQuietImmediate" After="SetKillProcsQuietImmediate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="SetStopSvcQuietImmediate" After="KillProcsQuietImmediate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
-      <!-- Stop service proactively on repair or uninstall -->
-      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">(Installed AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">(Installed AND NOT REMOVE AND UILevel &lt; 5) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <!-- Deferred stop: same broadened condition. Idempotent against an
+           already-stopped service. -->
+      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
       <!-- Start quietly on repair with basic/silent UI -->
       <Custom Action="SetStartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>
