@@ -73,3 +73,6 @@
 [submodule "third-party/depot_tools"]
 	path = third-party/depot_tools
 	url = https://chromium.googlesource.com/chromium/tools/depot_tools.git
+[submodule "winget-pkgs"]
+	path = winget-pkgs
+	url = https://github.com/microsoft/winget-pkgs.git
