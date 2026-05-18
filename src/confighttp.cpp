@@ -228,6 +228,14 @@ namespace confighttp {
   // Forward declaration for error helper implemented later
   void bad_request(resp_https_t response, req_https_t request, const std::string &error_message);
 
+  // Forward declaration for the Content-Type validator implemented at
+  // line ~833. Needed because the Windows-only VDD recovery and TDR
+  // health endpoints (defined earlier in this TU around line ~600) call
+  // it; without the forward decl, only the post-~833 callers compile
+  // and the Windows test build fails with "use of undeclared identifier
+  // 'check_content_type'".
+  bool check_content_type(resp_https_t response, req_https_t request, const std::string_view &contentType);
+
 #ifdef _WIN32
   // Forward declarations for Playnite handlers implemented in confighttp_playnite.cpp
   void getPlayniteStatus(std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> request);
