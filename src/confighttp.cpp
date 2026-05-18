@@ -57,6 +57,9 @@
 #include "state_storage.h"
 #include "tdr_state.h"
 #include "webrtc_stream.h"
+#ifdef _WIN32
+  #include "platform/windows/sudovda_recovery.h"
+#endif
 
 #ifdef _WIN32
   #include "platform/windows/diag_info.h"
@@ -655,6 +658,78 @@ namespace confighttp {
     }
     send_response(response, out);
   }
+
+#ifdef _WIN32
+  /**
+   * @brief Manually restart the SudoVDA virtual display driver via the
+   *        PnP disable+enable cycle. Used as a recovery escape hatch
+   *        when the auto-ladder hasn't yet fired and the user knows or
+   *        suspects the virtual display is wedged.
+   *
+   * Authenticated. POST so it can't be triggered by accidental
+   * navigation. Body is ignored. Response includes the recovery level
+   * that ran and a human-readable message suitable for support tickets.
+   *
+   * @api_examples{/api/state/vdd-restart| POST| {"status":true,"level":2,"message":"PnP disable+enable completed; user handle recycled.","instance_id":"ROOT\\SUDOMAKER\\SUDOVDA\\0000"}}
+   */
+  void restartVirtualDisplayDriver(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    const auto result = platf::sudovda::manual_restart();
+
+    nlohmann::json out;
+    out["status"] = result.success;
+    out["level"] = static_cast<int>(result.level);
+    out["message"] = result.message;
+    if (!result.instance_id.empty()) {
+      out["instance_id"] = result.instance_id;
+    }
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Diagnostic snapshot of the SudoVDA virtual display driver
+   *        state. Drives the "Show diagnostic" support button in the
+   *        Troubleshooting view — the user copies the full payload
+   *        into a support ticket instead of having to open Device
+   *        Manager and screenshot it.
+   *
+   * Authenticated. GET so the Vue view can refresh it freely.
+   *
+   * @api_examples{/api/state/vdd-diagnostic| GET| {"status":true,"device_present":true,"instance_id":"ROOT\\SUDOMAKER\\SUDOVDA\\0000","hardware_ids":"root\\sudomaker\\sudovda","status_string":"Healthy (DN_STARTED)","problem_code":0}}
+   */
+  void getVirtualDisplayDiagnostic(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    const auto diag = platf::sudovda::collect_diagnostic();
+
+    nlohmann::json out;
+    out["status"] = true;
+    out["device_present"] = diag.device_present;
+    out["instance_id"] = diag.instance_id;
+    out["hardware_ids"] = diag.hardware_ids;
+    out["status_string"] = diag.status_string;
+    out["problem_code"] = diag.problem_code;
+    if (diag.last_recovery_at) {
+      const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+        diag.last_recovery_at->time_since_epoch()
+      ).count();
+      out["last_recovery_at"] = secs;
+    }
+    out["last_recovery_level"] = static_cast<int>(diag.last_recovery_level);
+    out["last_recovery_message"] = diag.last_recovery_message;
+    send_response(response, out);
+  }
+#endif
 
   /**
    * @brief Send a 404 Not Found response.
@@ -3803,6 +3878,8 @@ namespace confighttp {
     register_api_route("^/api/health/vigem$", "GET", getVigemHealth);
     register_api_route("^/api/health/crashdump$", "GET", getCrashDumpStatus);
     register_api_route("^/api/health/crashdump/dismiss$", "POST", postCrashDumpDismiss);
+    register_api_route("^/api/state/vdd-restart$", "POST", restartVirtualDisplayDriver);
+    register_api_route("^/api/state/vdd-diagnostic$", "GET", getVirtualDisplayDiagnostic);
 #endif
     register_api_route("^/api/apps/([A-Fa-f0-9-]+)/cover$", "GET", getAppCover);
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);

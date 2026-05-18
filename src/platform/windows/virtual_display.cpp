@@ -6,6 +6,7 @@
 #include "src/platform/windows/display_helper_coordinator.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
+#include "src/platform/windows/sudovda_recovery.h"
 #include "src/platform/windows/virtual_display_mtt.h"
 #include "src/process.h"
 #include "src/state_storage.h"
@@ -810,6 +811,53 @@ namespace VDISPLAY {
       BOOST_LOG(error) << "All DICS_ENABLE attempts failed after disable; device may be stuck disabled.";
       return false;
     }
+  }  // namespace (anonymous)
+
+  namespace recovery_bridge {
+    std::optional<std::wstring> sudovda_instance_id() {
+      return find_sudovda_device_instance_id();
+    }
+
+    bool sudovda_pnp_restart(const std::wstring &id) {
+      return restart_sudovda_device(id);
+    }
+
+    bool sudovda_is_disabled(const std::wstring &id) {
+      return is_device_disabled(id);
+    }
+
+    bool sudovda_try_reenable(const std::wstring &id) {
+      return try_reenable_disabled_device(id);
+    }
+
+    std::string sudovda_collect_hardware_ids(const std::wstring &id) {
+      DevInfoHandle dev_set(SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES));
+      if (!dev_set.valid()) {
+        return {};
+      }
+      SP_DEVINFO_DATA dev_info {};
+      dev_info.cbSize = sizeof(dev_info);
+      if (!SetupDiOpenDeviceInfoW(dev_set.get(), id.c_str(), nullptr, 0, &dev_info)) {
+        return {};
+      }
+      std::vector<wchar_t> hwids;
+      if (!load_device_property_multi_sz(dev_set.get(), dev_info, SPDRP_HARDWAREID, hwids)) {
+        return {};
+      }
+      std::string joined;
+      const wchar_t *cursor = hwids.data();
+      while (cursor && *cursor) {
+        if (!joined.empty()) {
+          joined += ", ";
+        }
+        joined += platf::to_utf8(std::wstring(cursor));
+        cursor += wcslen(cursor) + 1;
+      }
+      return joined;
+    }
+  }  // namespace recovery_bridge
+
+  namespace {
 
     struct ActiveVirtualDisplayTracker {
       void add(const uuid_util::uuid_t &guid) {
@@ -4063,9 +4111,23 @@ namespace VDISPLAY {
       // Done under the lock so two concurrent resolvers don't both try
       // to recycle the driver. The reset itself is idempotent but the
       // close+open pair shouldn't race.
-      closeVDisplayDevice();
-      proc::initVDisplayDriver();
-      return true;
+      //
+      // Escalate through the full recovery ladder: Level 1 (handle
+      // recycle) every time, Level 2 (PnP disable+enable) at most once
+      // per 5 minutes per the ladder's internal cooldown. When the WDDM
+      // stack is wedged after a TDR, Level 1 alone usually isn't enough
+      // — the user's 2026-05-17 incident exhausted three full Level-1
+      // cycles before the session aborted. Letting the ladder escalate
+      // is the actual fix.
+      const auto recovery = platf::sudovda::run_recovery_ladder(
+        platf::sudovda::recovery_level_t::pnp_restart,
+        /*force=*/false
+      );
+      BOOST_LOG(info) << "SudoVDA recovery ladder result: level="
+                      << static_cast<int>(recovery.level)
+                      << " success=" << (recovery.success ? "true" : "false")
+                      << " — " << recovery.message;
+      return recovery.success;
     }
 
     void note_enumerate_success() {
@@ -4302,7 +4364,238 @@ namespace VDISPLAY {
   }
 
   // END ISOLATED DISPLAY METHODS
+
+  // ----------------------------------------------------------------------
+  // Recovery bridge: thin pass-through accessors so the SudoVDA recovery
+  // ladder (implemented below in `namespace platf::sudovda`) can reach
+  // into the file-local helpers defined above in the anonymous namespace
+  // without us having to flatten that whole block. Each function here is
+  // a 1-line forwarder; behavior lives in the originals.
+  // ----------------------------------------------------------------------
+  namespace recovery_bridge {
+    std::optional<std::wstring> sudovda_instance_id();
+    bool sudovda_pnp_restart(const std::wstring &id);
+    bool sudovda_is_disabled(const std::wstring &id);
+    bool sudovda_try_reenable(const std::wstring &id);
+    std::string sudovda_collect_hardware_ids(const std::wstring &id);
+  }  // namespace recovery_bridge
 }  // namespace VDISPLAY
+
+// --------------------------------------------------------------------------
+// SudoVDA recovery ladder (see src/platform/windows/sudovda_recovery.h,
+// included at top of file).
+//
+// The implementation lives here so it can call the existing private helpers
+// (`find_sudovda_device_instance_id`, `restart_sudovda_device`,
+// `is_device_disabled`, etc.) defined earlier in this TU via the
+// `VDISPLAY::recovery_bridge::` thin pass-throughs.
+// --------------------------------------------------------------------------
+namespace platf::sudovda {
+
+  namespace {
+    std::mutex g_recovery_mutex;
+    std::chrono::steady_clock::time_point g_last_level1_at {};
+    std::chrono::steady_clock::time_point g_last_level2_at {};
+    constexpr std::chrono::seconds kLevel1Cooldown {15};
+    constexpr std::chrono::minutes kLevel2Cooldown {5};
+
+    // Mirror of the last recovery_result so the diagnostic endpoint can
+    // surface it without re-running the ladder. Kept under the same
+    // mutex as the cooldown timestamps so writes and reads are
+    // consistent.
+    std::optional<std::chrono::system_clock::time_point> g_last_recovery_at;
+    recovery_level_t g_last_recovery_level = recovery_level_t::none;
+    std::string g_last_recovery_message;
+
+    void record_last_recovery(const recovery_result_t &r) {
+      std::lock_guard<std::mutex> lk(g_recovery_mutex);
+      g_last_recovery_at = std::chrono::system_clock::now();
+      g_last_recovery_level = r.level;
+      g_last_recovery_message = r.message;
+    }
+  }  // namespace
+
+  recovery_result_t run_recovery_ladder(recovery_level_t max_level, bool force) {
+    recovery_result_t result {};
+    result.success = false;
+    result.level = recovery_level_t::none;
+
+    // Resolve the device instance ID up front. If we can't find it at
+    // all, no level of recovery applies — surface the failure with a
+    // useful diagnostic message.
+    auto instance = VDISPLAY::recovery_bridge::sudovda_instance_id();
+    if (instance) {
+      result.instance_id = platf::to_utf8(*instance);
+    } else {
+      result.message = "SudoVDA device not present in PnP tree (HWID 'root\\\\sudomaker\\\\sudovda' not found). "
+                       "The driver may have been uninstalled or never installed. "
+                       "Run \"Reconfigure LuminalShine\" from the Start Menu to reinstall.";
+      record_last_recovery(result);
+      return result;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+
+    // Level 1 — handle recycle. Cheap; rate-limited at 15s so the
+    // post-TDR auto-recovery doesn't recycle the handle every QDC
+    // failure inside a tight loop.
+    bool ran_level1 = false;
+    {
+      std::lock_guard<std::mutex> lk(g_recovery_mutex);
+      const bool cooldown_ok =
+        g_last_level1_at == std::chrono::steady_clock::time_point {}
+        || (now - g_last_level1_at) >= kLevel1Cooldown;
+      if (force || cooldown_ok) {
+        g_last_level1_at = now;
+        ran_level1 = true;
+      }
+    }
+    if (ran_level1) {
+      BOOST_LOG(info) << "SudoVDA recovery: level 1 (handle recycle).";
+      VDISPLAY::closeVDisplayDevice();
+      proc::initVDisplayDriver();
+      result.level = recovery_level_t::handle_recycle;
+      result.success = true;
+      result.message = "Handle recycle completed.";
+
+      // If the caller asked for level 1 only, return now.
+      if (max_level == recovery_level_t::handle_recycle) {
+        record_last_recovery(result);
+        return result;
+      }
+    } else {
+      result.message = "Handle recycle skipped (cooldown).";
+    }
+
+    if (max_level < recovery_level_t::pnp_restart) {
+      record_last_recovery(result);
+      return result;
+    }
+
+    // Level 2 — PnP disable+enable. Heavy hammer. Rate-limited at 5
+    // minutes so a permanently-broken driver isn't reset in a tight
+    // loop while the user is trying to play.
+    bool ran_level2 = false;
+    {
+      std::lock_guard<std::mutex> lk(g_recovery_mutex);
+      const bool cooldown_ok =
+        g_last_level2_at == std::chrono::steady_clock::time_point {}
+        || (now - g_last_level2_at) >= kLevel2Cooldown;
+      if (force || cooldown_ok) {
+        g_last_level2_at = now;
+        ran_level2 = true;
+      }
+    }
+    if (!ran_level2) {
+      // Level 1 may already have succeeded; preserve that signal.
+      result.message += " PnP restart skipped (cooldown).";
+      record_last_recovery(result);
+      return result;
+    }
+
+    BOOST_LOG(info) << "SudoVDA recovery: level 2 (PnP disable+enable) on instance "
+                    << result.instance_id;
+    const bool pnp_ok = VDISPLAY::recovery_bridge::sudovda_pnp_restart(*instance);
+    if (pnp_ok) {
+      // After a clean disable/enable, recycle the user handle so the
+      // next AddVirtualDisplay opens a fresh kernel binding.
+      VDISPLAY::closeVDisplayDevice();
+      proc::initVDisplayDriver();
+      result.level = recovery_level_t::pnp_restart;
+      result.success = true;
+      result.message = "PnP disable+enable completed; user handle recycled.";
+    } else {
+      // If the disable succeeded but enable didn't, the device can be
+      // stuck disabled. Try the targeted re-enable helper.
+      if (VDISPLAY::recovery_bridge::sudovda_is_disabled(*instance)) {
+        const bool recovered = VDISPLAY::recovery_bridge::sudovda_try_reenable(*instance);
+        if (recovered) {
+          VDISPLAY::closeVDisplayDevice();
+          proc::initVDisplayDriver();
+          result.level = recovery_level_t::pnp_restart;
+          result.success = true;
+          result.message = "PnP enable recovered SudoVDA from stuck-disabled state.";
+        } else {
+          result.message = "PnP restart left SudoVDA stuck in the disabled state. "
+                           "A reboot may be required.";
+        }
+      } else {
+        result.message = "PnP disable+enable failed; SudoVDA driver may be unresponsive.";
+      }
+    }
+
+    record_last_recovery(result);
+    return result;
+  }
+
+  recovery_result_t manual_restart() {
+    return run_recovery_ladder(recovery_level_t::pnp_restart, /*force=*/true);
+  }
+
+  diagnostic_t collect_diagnostic() {
+    diagnostic_t d {};
+    d.device_present = false;
+    d.problem_code = 0;
+    d.last_recovery_level = recovery_level_t::none;
+
+    {
+      std::lock_guard<std::mutex> lk(g_recovery_mutex);
+      d.last_recovery_at = g_last_recovery_at;
+      d.last_recovery_level = g_last_recovery_level;
+      d.last_recovery_message = g_last_recovery_message;
+    }
+
+    auto instance = VDISPLAY::recovery_bridge::sudovda_instance_id();
+    if (!instance) {
+      d.status_string = "Not present";
+      return d;
+    }
+
+    d.device_present = true;
+    d.instance_id = platf::to_utf8(*instance);
+    d.hardware_ids = VDISPLAY::recovery_bridge::sudovda_collect_hardware_ids(*instance);
+
+    // Probe device-node status: returns problem code and PnP flags.
+    DEVINST dev_inst = 0;
+    CONFIGRET cr = CM_Locate_DevNodeW(
+      &dev_inst,
+      const_cast<DEVINSTID_W>(instance->c_str()),
+      CM_LOCATE_DEVNODE_NORMAL
+    );
+    if (cr != CR_SUCCESS) {
+      cr = CM_Locate_DevNodeW(
+        &dev_inst,
+        const_cast<DEVINSTID_W>(instance->c_str()),
+        CM_LOCATE_DEVNODE_PHANTOM
+      );
+    }
+    if (cr == CR_SUCCESS) {
+      ULONG status = 0, problem = 0;
+      if (CM_Get_DevNode_Status(&status, &problem, dev_inst, 0) == CR_SUCCESS) {
+        d.problem_code = problem;
+        if (status & DN_HAS_PROBLEM) {
+          if (problem == CM_PROB_DISABLED) {
+            d.status_string = "Disabled (CM_PROB_DISABLED, code 22). "
+                              "Use \"Restart Virtual Display Driver\" to re-enable.";
+          } else {
+            d.status_string = "Has problem (CM_PROB code " + std::to_string(problem) + ")";
+          }
+        } else if (status & DN_STARTED) {
+          d.status_string = "Healthy (DN_STARTED)";
+        } else {
+          d.status_string = "Present but not started";
+        }
+      } else {
+        d.status_string = "Present (CM_Get_DevNode_Status failed)";
+      }
+    } else {
+      d.status_string = "Present (CM_Locate_DevNodeW failed, cr=" + std::to_string(cr) + ")";
+    }
+
+    return d;
+  }
+
+}  // namespace platf::sudovda
 
 bool VDISPLAY::has_active_physical_display() {
   auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);

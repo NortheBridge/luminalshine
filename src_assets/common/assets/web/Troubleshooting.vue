@@ -4,6 +4,37 @@
       {{ $t('troubleshooting.troubleshooting') }}
     </h1>
 
+    <!-- Persistent banner shown while the GPU/WDDM stack is mid-recovery
+         from a TDR. Driven by /api/health/tdr.recovery_recent. -->
+    <n-alert
+      v-if="tdrRecoveryRecent"
+      type="warning"
+      :show-icon="true"
+      class="mb-3 rounded-xl"
+      :title="
+        translate(
+          'troubleshooting.vdd_failure_banner_title',
+          'Virtual Display Adapter Failure detected',
+        )
+      "
+    >
+      <p class="text-sm">
+        {{
+          translate(
+            'troubleshooting.vdd_failure_banner_body',
+            'LuminalShine detected a GPU TDR (Timeout Detection and Recovery) event. New streaming sessions are temporarily refused while the display stack recovers. If a session was active it has been ended; the Moonlight client should reconnect once the recovery completes.',
+          )
+        }}
+      </p>
+      <div v-if="tdrLast" class="mt-2 text-xs opacity-80">
+        {{ translate('troubleshooting.tdr_last_source', 'Source') }}:
+        <span class="font-mono">{{ tdrLast.source }}</span>
+        <span class="mx-2">•</span>
+        {{ translate('troubleshooting.tdr_last_at', 'Last event') }}:
+        <span class="font-mono">{{ tdrLastAtDisplay }}</span>
+      </div>
+    </n-alert>
+
     <div class="troubleshoot-grid">
       <section class="troubleshoot-card">
         <div class="flex items-start justify-between gap-4 flex-wrap">
@@ -162,6 +193,70 @@
             <span>{{ translate('troubleshooting.refresh', 'Refresh') }}</span>
           </n-button>
         </div>
+      </section>
+
+      <section v-if="platform === 'windows'" class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div class="min-w-0">
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.vdd_card_title', 'Virtual Display Driver') }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.vdd_card_desc',
+                  'Manual recovery for the SudoVDA virtual display driver. Use "Restart Virtual Display Driver" to PnP-disable and re-enable the SudoVDA root device (same as right-click Disable / Enable in Device Manager, but run as SYSTEM and scoped to SudoVDA only — MTT VDD and other devices are not touched). Active streaming sessions will be torn down. Use "Show Diagnostic" to copy SudoVDA status into a support ticket without opening Device Manager.',
+                )
+              }}
+            </p>
+            <div v-if="vddDiag" class="mt-2 text-xs space-y-1">
+              <div>
+                <span class="opacity-70"
+                  >{{ translate('troubleshooting.vdd_status', 'Status') }}:</span
+                >
+                <span class="ml-1">{{ vddDiag.status_string }}</span>
+              </div>
+              <div v-if="vddDiag.instance_id">
+                <span class="opacity-70"
+                  >{{ translate('troubleshooting.vdd_instance', 'Instance') }}:</span
+                >
+                <span class="font-mono ml-1 break-all">{{ vddDiag.instance_id }}</span>
+              </div>
+              <div v-if="vddDiag.problem_code">
+                <span class="opacity-70">CM_PROB:</span>
+                <span class="font-mono ml-1">{{ vddDiag.problem_code }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="flex flex-col gap-2 shrink-0">
+            <n-button
+              type="primary"
+              strong
+              :loading="vddRestartPending"
+              :disabled="vddRestartPending"
+              @click="confirmRestartVdd"
+            >
+              <i class="fas fa-rotate-right" />
+              <span>
+                {{ translate('troubleshooting.vdd_restart', 'Restart Virtual Display Driver') }}
+              </span>
+            </n-button>
+            <n-button
+              :loading="vddDiagPending"
+              :disabled="vddDiagPending"
+              @click="showVddDiagnostic"
+            >
+              <i class="fas fa-circle-info" />
+              <span>{{ translate('troubleshooting.vdd_show_diag', 'Show Diagnostic') }}</span>
+            </n-button>
+          </div>
+        </div>
+        <n-alert v-if="vddRestartStatus === 'success'" type="success" class="mt-3">
+          {{ vddRestartMessage }}
+        </n-alert>
+        <n-alert v-else-if="vddRestartStatus === 'error'" type="error" class="mt-3">
+          {{ vddRestartMessage }}
+        </n-alert>
       </section>
 
       <section class="troubleshoot-card">
@@ -418,7 +513,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
+import { h, ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { NButton, NInput, NAlert, NScrollbar, NSelect, useDialog } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
@@ -496,6 +591,161 @@ async function refreshTdrHealth() {
   } finally {
     tdrRefreshing.value = false;
   }
+}
+
+// Virtual Display Driver (SudoVDA) recovery card state.
+type VddDiagnostic = {
+  device_present: boolean;
+  instance_id: string;
+  hardware_ids: string;
+  status_string: string;
+  problem_code: number;
+  last_recovery_at?: number;
+  last_recovery_level: number;
+  last_recovery_message: string;
+};
+const vddDiag = ref<VddDiagnostic | null>(null);
+const vddDiagPending = ref(false);
+const vddRestartPending = ref(false);
+const vddRestartStatus = ref<null | 'success' | 'error'>(null);
+const vddRestartMessage = ref('');
+
+async function refreshVddDiagnostic() {
+  if (platform.value !== 'windows') return;
+  vddDiagPending.value = true;
+  try {
+    const r = await http.get('./api/state/vdd-diagnostic', { validateStatus: () => true });
+    const body = (r.data || {}) as Partial<VddDiagnostic> & { status?: boolean };
+    if (r.status >= 200 && r.status < 300 && body.status !== false) {
+      vddDiag.value = {
+        device_present: body.device_present === true,
+        instance_id: typeof body.instance_id === 'string' ? body.instance_id : '',
+        hardware_ids: typeof body.hardware_ids === 'string' ? body.hardware_ids : '',
+        status_string: typeof body.status_string === 'string' ? body.status_string : 'Unknown',
+        problem_code: typeof body.problem_code === 'number' ? body.problem_code : 0,
+        last_recovery_at:
+          typeof body.last_recovery_at === 'number' ? body.last_recovery_at : undefined,
+        last_recovery_level:
+          typeof body.last_recovery_level === 'number' ? body.last_recovery_level : 0,
+        last_recovery_message:
+          typeof body.last_recovery_message === 'string' ? body.last_recovery_message : '',
+      };
+    }
+  } catch {
+    // leave previous value in place
+  } finally {
+    vddDiagPending.value = false;
+  }
+}
+
+function formatVddDiagnosticText(d: VddDiagnostic): string {
+  const lines: string[] = [];
+  lines.push('SudoVDA Virtual Display Driver diagnostic');
+  lines.push('=========================================');
+  lines.push(`Device present:  ${d.device_present ? 'yes' : 'no'}`);
+  lines.push(`Status:          ${d.status_string}`);
+  if (d.instance_id) lines.push(`Instance ID:     ${d.instance_id}`);
+  if (d.hardware_ids) lines.push(`Hardware IDs:    ${d.hardware_ids}`);
+  if (d.problem_code) lines.push(`CM_PROB code:    ${d.problem_code}`);
+  if (d.last_recovery_at) {
+    const ts = new Date(d.last_recovery_at * 1000).toLocaleString();
+    const levelLabel =
+      ['none', 'handle recycle', 'PnP restart'][d.last_recovery_level] ??
+      String(d.last_recovery_level);
+    lines.push(`Last recovery:   ${ts} (${levelLabel})`);
+    if (d.last_recovery_message) {
+      lines.push(`                 ${d.last_recovery_message}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function showVddDiagnostic() {
+  // Always refresh first so the modal shows the latest state.
+  await refreshVddDiagnostic();
+  const d = vddDiag.value;
+  if (!d) {
+    dialog.error({
+      title: translate('troubleshooting.vdd_diag_error', 'Could not collect diagnostic'),
+      content: translate(
+        'troubleshooting.vdd_diag_error_body',
+        'The SudoVDA diagnostic endpoint did not return data. Check the LuminalShine log for details.',
+      ),
+      positiveText: translate('troubleshooting.close', 'Close'),
+    });
+    return;
+  }
+  const text = formatVddDiagnosticText(d);
+  dialog.info({
+    title: translate('troubleshooting.vdd_diag_title', 'SudoVDA Diagnostic'),
+    content: () =>
+      h(
+        'pre',
+        {
+          class:
+            'whitespace-pre-wrap break-all text-xs font-mono p-2 rounded bg-dark/5 dark:bg-light/10',
+        },
+        text,
+      ),
+    positiveText: translate('troubleshooting.copy', 'Copy to clipboard'),
+    negativeText: translate('troubleshooting.close', 'Close'),
+    onPositiveClick: () => {
+      try {
+        void navigator.clipboard.writeText(text);
+      } catch {
+        // best-effort
+      }
+    },
+  });
+}
+
+async function doRestartVdd() {
+  vddRestartPending.value = true;
+  vddRestartStatus.value = null;
+  vddRestartMessage.value = '';
+  try {
+    const r = await http.post('./api/state/vdd-restart', {}, { validateStatus: () => true });
+    const body = (r.data || {}) as { status?: boolean; message?: string; level?: number };
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      vddRestartStatus.value = 'success';
+      vddRestartMessage.value =
+        typeof body.message === 'string' && body.message
+          ? body.message
+          : translate('troubleshooting.vdd_restart_success', 'Virtual display driver restarted.');
+    } else {
+      vddRestartStatus.value = 'error';
+      vddRestartMessage.value =
+        (typeof body.message === 'string' && body.message) || `HTTP ${r.status}`;
+    }
+  } catch (e: unknown) {
+    vddRestartStatus.value = 'error';
+    vddRestartMessage.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    vddRestartPending.value = false;
+    // Refresh both the diagnostic snapshot and the TDR health card —
+    // a successful restart should clear the recovery_recent flag.
+    void refreshVddDiagnostic();
+    void refreshTdrHealth();
+  }
+}
+
+function confirmRestartVdd() {
+  if (vddRestartPending.value) return;
+  dialog.warning({
+    title: translate(
+      'troubleshooting.vdd_restart_confirm_title',
+      'Restart Virtual Display Driver?',
+    ),
+    content: translate(
+      'troubleshooting.vdd_restart_confirm_body',
+      'This PnP-disables and re-enables the SudoVDA virtual display device. Any active streaming session using a virtual display will be ended; the Moonlight client will need to reconnect. MTT VDD and other devices are not affected.',
+    ),
+    positiveText: translate('troubleshooting.vdd_restart_yes', 'Restart driver'),
+    negativeText: translate('troubleshooting.cancel', 'Cancel'),
+    onPositiveClick: async () => {
+      await doRestartVdd();
+    },
+  });
 }
 
 const latestLogs = ref('Loading...');
@@ -1175,12 +1425,14 @@ onMounted(async () => {
     void refreshLogs();
     void refreshCrashDumpStatus();
     void refreshTdrHealth();
+    void refreshVddDiagnostic();
   });
 
   await authStore.waitForAuthentication();
 
   await refreshCrashDumpStatus();
   await refreshTdrHealth();
+  await refreshVddDiagnostic();
 
   nextTick(() => {
     if (getLogContainer()) scrollToBottom();
