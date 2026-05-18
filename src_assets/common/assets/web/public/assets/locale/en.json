@@ -169,6 +169,8 @@
     "amd_usage_transcoding": "transcoding -- transcoding (slowest)",
     "amd_usage_ultralowlatency": "ultralowlatency - ultra low latency (fastest; default)",
     "amd_usage_webcam": "webcam -- webcam (slow)",
+    "amd_split_encode": "AMF Dual-VCN Split Frame Encoding",
+    "amd_split_encode_desc": "Splits each frame into two tiles and lets the AMF driver dispatch them to separate hardware encoder instances on dual-VCN parts (RDNA 3 7900-series, RDNA 4 9070-series). Cuts encode latency under sustained 4K AV1 / HEVC load. 'Auto' enables it whenever the active GPU advertises ≥2 hardware encoder instances; 'Enabled' forces it on (silently falls back to single-tile on single-VCN parts); 'Disabled' never uses it. H.264 is not supported.",
     "amd_vbaq": "AMF Variance Based Adaptive Quantization (VBAQ)",
     "amd_vbaq_desc": "The human visual system is typically less sensitive to artifacts in highly textured areas. In VBAQ mode, pixel variance is used to indicate the complexity of spatial textures, allowing the encoder to allocate more bits to smoother areas. Enabling this feature leads to improvements in subjective visual quality with some content.",
     "apply_note": "Click 'Apply' to restart LuminalShine and apply changes. This will terminate any running sessions.",

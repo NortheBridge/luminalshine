@@ -770,7 +770,7 @@ namespace config {
       0,  // preanalysis
       1,  // vbaq
       (int) amd::coder_e::_auto,  // coder
-      "disabled"s,  // amd_split_encode — opt-in for now; PR 4 flips this to "auto"
+      "auto"s,  // amd_split_encode — on dual-VCN parts (RDNA 3 7900-series, RDNA 4 9070-series) this enables tile-based split encoding; single-VCN parts silently fall back to single-tile.
     },  // amd
 
     {
