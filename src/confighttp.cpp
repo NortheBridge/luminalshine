@@ -58,6 +58,7 @@
 #include "tdr_state.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
+  #include "amf/amf_caps.h"
   #include "platform/windows/render_stack_detect.h"
   #include "platform/windows/sudovda_recovery.h"
 #endif
@@ -736,6 +737,60 @@ namespace confighttp {
     }
     out["last_recovery_level"] = static_cast<int>(diag.last_recovery_level);
     out["last_recovery_message"] = diag.last_recovery_message;
+    send_response(response, out);
+  }
+
+  /**
+   * @brief AMD AMF encoder capability snapshot. Drives the
+   *        "amd_split_encode" UI control: the toggle is only offered
+   *        when the active AMD adapter exposes >=2 hardware encoder
+   *        instances for the codec the user has selected (RDNA 3 /
+   *        RDNA 4 dual-VCN cards). Probes `amfrt64.dll` directly, so
+   *        the answer matches what the encoder will actually see at
+   *        session start.
+   *
+   * Read-only, authenticated. Cached after the first call; pass
+   * `?refresh=1` to force a re-probe (e.g. after a driver update).
+   *
+   * @api_examples{/api/health/amd-encoder| GET| {"status":true,"runtime_available":true,"runtime_version":"1.4.36","adapter_description":"AMD Radeon RX 7900 XTX","av1":{"supported":true,"max_hw_instances":2},"hevc":{"supported":true,"max_hw_instances":2},"h264":{"supported":true,"max_hw_instances":1},"supports_multi_instance":true}}
+   */
+  void getAmdEncoderCaps(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    bool force = false;
+    if (request) {
+      const auto &query = request->parse_query_string();
+      auto it = query.find("refresh");
+      force = (it != query.end()) && (it->second == "1" || it->second == "true");
+    }
+    const auto caps = amf_caps::probe(force);
+
+    nlohmann::json out;
+    out["status"] = true;
+    out["runtime_available"] = caps.runtime_available;
+    out["runtime_version"] = caps.runtime_version;
+    out["adapter_description"] = caps.adapter_description;
+    out["probe_duration_ms"] = static_cast<long long>(caps.probe_duration.count());
+    out["supports_multi_instance"] = amf_caps::supports_multi_instance(caps);
+    if (!caps.error.empty()) {
+      out["error"] = caps.error;
+    }
+    auto codec_json = [](const amf_caps::codec_caps_t &c) {
+      nlohmann::json j;
+      j["supported"] = c.supported;
+      j["max_hw_instances"] = c.max_hw_instances;
+      if (!c.profile.empty()) {
+        j["profile"] = c.profile;
+      }
+      if (!c.max_resolution.empty()) {
+        j["max_resolution"] = c.max_resolution;
+      }
+      return j;
+    };
+    out["av1"] = codec_json(caps.av1);
+    out["hevc"] = codec_json(caps.hevc);
+    out["h264"] = codec_json(caps.h264);
     send_response(response, out);
   }
 
@@ -3934,6 +3989,7 @@ namespace confighttp {
     register_api_route("^/api/state/vdd-restart$", "POST", restartVirtualDisplayDriver);
     register_api_route("^/api/state/vdd-diagnostic$", "GET", getVirtualDisplayDiagnostic);
     register_api_route("^/api/health/render-stack$", "GET", getRenderStack);
+    register_api_route("^/api/health/amd-encoder$", "GET", getAmdEncoderCaps);
 #endif
     register_api_route("^/api/apps/([A-Fa-f0-9-]+)/cover$", "GET", getAppCover);
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);

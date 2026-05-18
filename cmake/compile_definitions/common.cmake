@@ -141,6 +141,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/state_storage.h"
         "${CMAKE_SOURCE_DIR}/src/tdr_state.cpp"
         "${CMAKE_SOURCE_DIR}/src/tdr_state.h"
+        "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.cpp"
+        "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.h"
         ${PLATFORM_TARGET_FILES})
 
 if(NOT SUNSHINE_ASSETS_DIR_DEF)
