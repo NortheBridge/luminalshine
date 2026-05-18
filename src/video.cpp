@@ -38,6 +38,7 @@ extern "C" {
 #include "video.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
+  #include "amf/amf_caps.h"
   #include "platform/windows/render_stack_detect.h"
   #include "system_tray.h"
 #endif
@@ -1008,6 +1009,45 @@ namespace video {
     PARALLEL_ENCODING | CBR_WITH_VBR | RELAXED_COMPLIANCE | NO_RC_BUF_LIMIT | YUV444_SUPPORT
   };
 
+  // Whether to enable AMF tile-based multi-instance encode for the
+  // active session. Resolves "auto" against the live amf_caps probe;
+  // returns 2 (dual-VCN on RDNA 3 / RDNA 4 dual-engine parts) or 1
+  // (single-engine fallback). Used as a lambda in the AV1 / HEVC AMF
+  // option lists below so the value is recomputed at session start.
+  //
+  // The AMF driver maps tile_columns >= 2 onto independent hardware
+  // encoder instances when available; on single-VCN cards the option
+  // is silently ignored and we encode normally. Either way the
+  // bitstream stays standards-compliant.
+  inline int resolve_amd_tile_columns_for_codec(int video_format) {
+#ifdef _WIN32
+    using namespace std::string_view_literals;
+    const auto &mode = config::video.amd.amd_split_encode;
+    if (mode == "disabled"sv || mode.empty()) {
+      return 1;
+    }
+    // Codec gate: H.264 (videoFormat == 0) has no parallel-tile
+    // story on AMF; only AV1 (2) and HEVC (1) are wired up.
+    if (video_format == 0) {
+      return 1;
+    }
+    if (mode == "enabled"sv) {
+      return 2;
+    }
+    // "auto" — consult the capability probe. probe() caches its
+    // result so this is cheap on repeated calls.
+    const auto caps = amf_caps::probe();
+    if (!caps.runtime_available) {
+      return 1;
+    }
+    const auto &codec_caps = (video_format == 2) ? caps.av1 : caps.hevc;
+    return codec_caps.max_hw_instances >= 2 ? 2 : 1;
+#else
+    (void) video_format;
+    return 1;
+#endif
+  }
+
   encoder_t amdvce {
     "amdvce"sv,
     std::make_unique<encoder_platform_formats_avcodec>(
@@ -1036,6 +1076,14 @@ namespace video {
         {"rc"s, &config::video.amd.amd_rc_av1},
         {"usage"s, &config::video.amd.amd_usage_av1},
         {"enforce_hrd"s, &config::video.amd.amd_enforce_hrd},
+        // Dual-VCN tile-based split encode. FFmpeg's amfenc_av1 maps
+        // tile_columns directly to AMF_VIDEO_ENCODER_AV1_TILE_COLUMNS_NUMBER;
+        // the AMF driver distributes tiles across hardware encoder
+        // instances when available. 1 = single-engine (default on
+        // single-VCN parts), 2 = dual-VCN.
+        {"tile_columns"s, []() {
+           return resolve_amd_tile_columns_for_codec(2 /* AV1 */);
+         }},
       },
       {},  // SDR-specific options
       {},  // HDR-specific options
@@ -1063,6 +1111,13 @@ namespace video {
         {"usage"s, &config::video.amd.amd_usage_hevc},
         {"vbaq"s, &config::video.amd.amd_vbaq},
         {"enforce_hrd"s, &config::video.amd.amd_enforce_hrd},
+        // Dual-VCN slice-based split encode for HEVC. FFmpeg's
+        // amfenc_hevc maps tile_columns to the AMF slice-partition
+        // property; the AMF driver distributes slices across hardware
+        // encoder instances when available.
+        {"tile_columns"s, []() {
+           return resolve_amd_tile_columns_for_codec(1 /* HEVC */);
+         }},
         {"level"s, [](const config_t &cfg) {
            auto size = cfg.width * cfg.height;
            // For 4K and below, try to use level 5.1 or 5.2 if possible
@@ -2550,6 +2605,28 @@ namespace video {
       BOOST_LOG(info) << "Color coding: " << color_coding;
       BOOST_LOG(info) << "Color depth: " << colorspace.bit_depth << "-bit";
       BOOST_LOG(info) << "Color range: " << (colorspace.full_range ? "JPEG" : "MPEG");
+
+#ifdef _WIN32
+      // Surface the resolved tile count for AMD AV1 / HEVC so users
+      // and support readers can confirm dual-VCN actually engaged
+      // without grepping FFmpeg's verbose log channel.
+      if ((encoder_name == "av1_amf"s || encoder_name == "hevc_amf"s)) {
+        const int video_format = (encoder_name == "av1_amf"s) ? 2 : 1;
+        const int tile_columns = resolve_amd_tile_columns_for_codec(video_format);
+        if (tile_columns >= 2) {
+          BOOST_LOG(info) << "AMF: dual-VCN tile encoding enabled (tile_columns="
+                          << tile_columns << ", codec=" << encoder_name
+                          << "). amd_split_encode='"
+                          << config::video.amd.amd_split_encode << "'.";
+        } else if (!config::video.amd.amd_split_encode.empty() &&
+                   config::video.amd.amd_split_encode != "disabled") {
+          BOOST_LOG(info) << "AMF: dual-VCN tile encoding NOT engaged for " << encoder_name
+                          << " (amd_split_encode='"
+                          << config::video.amd.amd_split_encode
+                          << "', adapter reports single-engine). Encoding single-tile.";
+        }
+      }
+#endif
 
 #ifdef _WIN32
       // Phase 0: emit a one-shot streaming tip when we're encoding 4K
