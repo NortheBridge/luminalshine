@@ -113,7 +113,14 @@
       "Read(//opt/homebrew/opt/boost/**)",
       "Bash(mkdir -p /tmp/luminal_logs2)",
       "Bash(rm -rf /tmp/luminal_logs2/*)",
-      "Bash(unzip -q -o /Users/Avalon/luminalshine_logs-20260515-155654.zip -d /tmp/luminal_logs2)"
+      "Bash(unzip -q -o /Users/Avalon/luminalshine_logs-20260515-155654.zip -d /tmp/luminal_logs2)",
+      "Bash(mkdir -p /tmp/luminal_logs3)",
+      "Bash(rm -rf /tmp/luminal_logs3/*)",
+      "Bash(unzip -q -o /Users/Avalon/Desktop/luminalshine_logs-20260518-000313.zip -d /tmp/luminal_logs3)",
+      "Bash(awk '/^\\\\[2026-05-17 23:5[0-7]/ && /Error|Fatal|Warning|terminate|video|encoder|TDR|D3D|capture|DXGI/' sunshine-20260516-031816-612.log)",
+      "Bash(awk '/^\\\\[2026-05-17 23:[3-5][0-9]/ && /\\(Info|Warning\\):/ && !/Frame capture sleep|Persisted|getDisplayScale|getHdrState|getSupportedDisplay|Returning cached|EnumOutputs|getErrorString|configLocale|api\\\\/|HTTP /' sunshine-20260516-031816-612.log)",
+      "Bash(grep -n \"^  }  // namespace$\\\\|^}  // namespace VDISPLAY\\\\|^}  // namespace$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)",
+      "Bash(grep -nE \"^namespace VDISPLAY \\\\{$|^  namespace \\\\{$|^}  // namespace$|^}  // namespace VDISPLAY$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)"
     ],
     "deny": [],
     "ask": []
