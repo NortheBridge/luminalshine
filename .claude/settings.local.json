@@ -120,7 +120,8 @@
       "Bash(awk '/^\\\\[2026-05-17 23:5[0-7]/ && /Error|Fatal|Warning|terminate|video|encoder|TDR|D3D|capture|DXGI/' sunshine-20260516-031816-612.log)",
       "Bash(awk '/^\\\\[2026-05-17 23:[3-5][0-9]/ && /\\(Info|Warning\\):/ && !/Frame capture sleep|Persisted|getDisplayScale|getHdrState|getSupportedDisplay|Returning cached|EnumOutputs|getErrorString|configLocale|api\\\\/|HTTP /' sunshine-20260516-031816-612.log)",
       "Bash(grep -n \"^  }  // namespace$\\\\|^}  // namespace VDISPLAY\\\\|^}  // namespace$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)",
-      "Bash(grep -nE \"^namespace VDISPLAY \\\\{$|^  namespace \\\\{$|^}  // namespace$|^}  // namespace VDISPLAY$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)"
+      "Bash(grep -nE \"^namespace VDISPLAY \\\\{$|^  namespace \\\\{$|^}  // namespace$|^}  // namespace VDISPLAY$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)",
+      "Bash(awk '/^  video_t video \\\\{/,/^  };/' /Users/Avalon/Git/luminalshine/src/config.cpp)"
     ],
     "deny": [],
     "ask": []
