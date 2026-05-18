@@ -58,6 +58,7 @@
 #include "tdr_state.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
+  #include "platform/windows/render_stack_detect.h"
   #include "platform/windows/sudovda_recovery.h"
 #endif
 
@@ -727,6 +728,50 @@ namespace confighttp {
     }
     out["last_recovery_level"] = static_cast<int>(diag.last_recovery_level);
     out["last_recovery_message"] = diag.last_recovery_message;
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Most recent render-stack snapshot the streaming session
+   *        evaluated. Drives the "Streaming environment" card in the
+   *        Troubleshooting view: shows whether the active game has
+   *        NVIDIA AI render passes loaded and reports the last soft
+   *        tip emitted (if any).
+   *
+   * Authenticated. Read-only. Returns an empty body (status=true,
+   * has_event=false) when no session has been evaluated yet.
+   *
+   * @api_examples{/api/health/render-stack| GET| {"status":true,"has_event":true,"any_match":true,"has_dlss_fg":true,"tip":"Streaming tip: ..."}}
+   */
+  void getRenderStack(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    nlohmann::json out;
+    out["status"] = true;
+    const auto ev = platf::render_stack::last_event();
+    out["has_event"] = ev.has_value();
+    if (ev) {
+      out["any_match"] = ev->detection.any_match;
+      out["has_dlss"] = ev->detection.has_dlss;
+      out["has_dlss_fg"] = ev->detection.has_dlss_fg;
+      out["has_dlaa"] = ev->detection.has_dlaa;
+      out["resolution_width"] = ev->resolution_width;
+      out["resolution_height"] = ev->resolution_height;
+      out["hdr_enabled"] = ev->hdr_enabled;
+      out["bit_depth"] = ev->bit_depth;
+      out["codec_label"] = ev->codec_label;
+      out["tip"] = ev->tip;
+      nlohmann::json matches = nlohmann::json::array();
+      for (const auto &m : ev->detection.matches) {
+        nlohmann::json one;
+        one["module"] = m.module_name;
+        one["pid"] = m.pid;
+        one["process"] = m.process_image;
+        matches.push_back(std::move(one));
+      }
+      out["matches"] = std::move(matches);
+    }
     send_response(response, out);
   }
 #endif
@@ -3880,6 +3925,7 @@ namespace confighttp {
     register_api_route("^/api/health/crashdump/dismiss$", "POST", postCrashDumpDismiss);
     register_api_route("^/api/state/vdd-restart$", "POST", restartVirtualDisplayDriver);
     register_api_route("^/api/state/vdd-diagnostic$", "GET", getVirtualDisplayDiagnostic);
+    register_api_route("^/api/health/render-stack$", "GET", getRenderStack);
 #endif
     register_api_route("^/api/apps/([A-Fa-f0-9-]+)/cover$", "GET", getAppCover);
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);

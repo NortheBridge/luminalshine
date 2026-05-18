@@ -195,6 +195,32 @@
         </div>
       </section>
 
+      <section v-if="platform === 'windows' && renderStackHasTip" class="troubleshoot-card">
+        <div class="flex items-start gap-3">
+          <i class="fas fa-circle-info text-primary mt-1" />
+          <div class="min-w-0">
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.render_stack_title', 'Streaming environment') }}
+            </h2>
+            <p class="text-xs opacity-80 leading-snug mt-1">
+              {{ renderStack?.tip }}
+            </p>
+            <div
+              v-if="renderStackBadges.length"
+              class="mt-2 flex flex-wrap items-center gap-1 text-xs"
+            >
+              <span
+                v-for="badge in renderStackBadges"
+                :key="badge"
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ badge }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section v-if="platform === 'windows'" class="troubleshoot-card">
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div class="min-w-0">
@@ -726,6 +752,57 @@ async function doRestartVdd() {
     // a successful restart should clear the recovery_recent flag.
     void refreshVddDiagnostic();
     void refreshTdrHealth();
+  }
+}
+
+// Phase 0 — render-stack detection (DLSS / DLAA / FG) tip surface.
+type RenderStackPayload = {
+  status?: boolean;
+  has_event: boolean;
+  any_match?: boolean;
+  has_dlss?: boolean;
+  has_dlss_fg?: boolean;
+  has_dlaa?: boolean;
+  resolution_width?: number;
+  resolution_height?: number;
+  hdr_enabled?: boolean;
+  bit_depth?: number;
+  codec_label?: string;
+  tip?: string;
+};
+const renderStack = ref<RenderStackPayload | null>(null);
+
+const renderStackHasTip = computed(() => {
+  const r = renderStack.value;
+  return !!(r && r.has_event && r.tip && r.tip.length > 0);
+});
+
+const renderStackBadges = computed<string[]>(() => {
+  const r = renderStack.value;
+  if (!r || !r.has_event) return [];
+  const badges: string[] = [];
+  if (r.has_dlss_fg) badges.push('DLSS Frame Gen');
+  else if (r.has_dlaa) badges.push('DLAA');
+  else if (r.has_dlss) badges.push('DLSS');
+  if (r.resolution_width && r.resolution_height) {
+    badges.push(`${r.resolution_width}×${r.resolution_height}`);
+  }
+  if (r.hdr_enabled) badges.push('HDR');
+  if (r.bit_depth) badges.push(`${r.bit_depth}-bit`);
+  if (r.codec_label) badges.push(r.codec_label);
+  return badges;
+});
+
+async function refreshRenderStack() {
+  if (platform.value !== 'windows') return;
+  try {
+    const r = await http.get('./api/health/render-stack', { validateStatus: () => true });
+    const body = (r.data || {}) as RenderStackPayload;
+    if (r.status >= 200 && r.status < 300 && body.status !== false) {
+      renderStack.value = body;
+    }
+  } catch {
+    // leave previous value in place
   }
 }
 
@@ -1426,6 +1503,7 @@ onMounted(async () => {
     void refreshCrashDumpStatus();
     void refreshTdrHealth();
     void refreshVddDiagnostic();
+    void refreshRenderStack();
   });
 
   await authStore.waitForAuthentication();
@@ -1433,6 +1511,7 @@ onMounted(async () => {
   await refreshCrashDumpStatus();
   await refreshTdrHealth();
   await refreshVddDiagnostic();
+  await refreshRenderStack();
 
   nextTick(() => {
     if (getLogContainer()) scrollToBottom();

@@ -37,6 +37,10 @@ extern "C" {
 #include "sync.h"
 #include "video.h"
 #include "webrtc_stream.h"
+#ifdef _WIN32
+  #include "platform/windows/render_stack_detect.h"
+  #include "system_tray.h"
+#endif
 
 #ifdef _WIN32
   #include "src/platform/windows/display_helper_integration.h"
@@ -2546,6 +2550,37 @@ namespace video {
       BOOST_LOG(info) << "Color coding: " << color_coding;
       BOOST_LOG(info) << "Color depth: " << colorspace.bit_depth << "-bit";
       BOOST_LOG(info) << "Color range: " << (colorspace.full_range ? "JPEG" : "MPEG");
+
+#ifdef _WIN32
+      // Phase 0: emit a one-shot streaming tip when we're encoding 4K
+      // HDR + NVENC and a foreground game has NVIDIA AI render modules
+      // loaded (DLSS / DLAA / FG). Frame-Gen + DLAA + AV1 NVENC at 4K is
+      // the known driver-level interaction that catalyses TDRs on RTX
+      // 40 / 50 series; the tip points at HEVC as a smoother
+      // alternative without claiming AV1 is broken. evaluate_and_tip
+      // handles dedup internally so this stays a one-time-per-session
+      // FYI even on rapid encoder rebuilds.
+      const bool hdr_enabled = colorspace.colorspace == colorspace_e::bt2020;
+      const auto tip = platf::render_stack::evaluate_and_tip(
+        config.width,
+        config.height,
+        hdr_enabled,
+        colorspace.bit_depth,
+        std::string(encoder_name)
+      );
+      if (!tip.empty()) {
+        try {
+          system_tray::tray_notify(
+            "LuminalShine: Streaming tip",
+            tip.c_str(),
+            nullptr
+          );
+        } catch (...) {
+          // tray may not be up; the BOOST_LOG inside evaluate_and_tip
+          // already surfaced the message
+        }
+      }
+#endif
     }
 
     if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {

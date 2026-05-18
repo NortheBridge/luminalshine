@@ -111,6 +111,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/sudovda_recovery.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/render_stack_detect.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/render_stack_detect.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_backend.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_backend.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_mtt.h"
