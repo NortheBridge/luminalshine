@@ -770,6 +770,7 @@ namespace config {
       0,  // preanalysis
       1,  // vbaq
       (int) amd::coder_e::_auto,  // coder
+      "disabled"s,  // amd_split_encode — opt-in for now; PR 4 flips this to "auto"
     },  // amd
 
     {
@@ -1503,6 +1504,17 @@ namespace config {
     bool_f(vars, "amd_preanalysis", (bool &) video.amd.amd_preanalysis);
     bool_f(vars, "amd_vbaq", (bool &) video.amd.amd_vbaq);
     bool_f(vars, "amd_enforce_hrd", (bool &) video.amd.amd_enforce_hrd);
+    string_f(vars, "amd_split_encode", video.amd.amd_split_encode);
+    // Normalise: empty / unknown values land back on "disabled" so the
+    // encoder path can branch on three known states only.
+    if (video.amd.amd_split_encode != "auto" && video.amd.amd_split_encode != "enabled" &&
+        video.amd.amd_split_encode != "disabled") {
+      if (!video.amd.amd_split_encode.empty()) {
+        BOOST_LOG(warning) << "config: unknown amd_split_encode value '"
+                           << video.amd.amd_split_encode << "', falling back to disabled.";
+      }
+      video.amd.amd_split_encode = "disabled";
+    }
 
     int_f(vars, "vt_coder", video.vt.vt_coder, vt::coder_from_view);
     int_f(vars, "vt_software", video.vt.vt_allow_sw, vt::allow_software_from_view);

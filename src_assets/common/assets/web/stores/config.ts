@@ -283,6 +283,7 @@ const defaultGroups = [
       amd_preanalysis: 'disabled',
       amd_vbaq: 'enabled',
       amd_coder: 'auto',
+      amd_split_encode: 'disabled',
     },
   },
   {

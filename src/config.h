@@ -85,6 +85,21 @@ namespace config {
       std::optional<int> amd_preanalysis;
       std::optional<int> amd_vbaq;
       int amd_coder;
+      /**
+       * Dual-VCN split-frame encoding on AMD AV1 / HEVC encoders.
+       *   "auto"     — enabled when amf_caps reports
+       *                supports_multi_instance for the active codec
+       *                AND the encoder is AV1 or HEVC. Default in
+       *                future PR; ships as "disabled" until the
+       *                encoder-side wiring lands.
+       *   "enabled"  — force tile-based split encode on (2 columns
+       *                for AV1, 2 slice rows for HEVC). Honored only
+       *                when the hardware actually supports it; falls
+       *                back to single-engine on single-VCN cards
+       *                with a single log line.
+       *   "disabled" — never use multi-instance encoding.
+       */
+      std::string amd_split_encode;
     } amd;
 
     struct {
