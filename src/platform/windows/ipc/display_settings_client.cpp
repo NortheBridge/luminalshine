@@ -60,6 +60,7 @@ namespace platf::display_helper_client {
     ApplyResult = 6,  ///< Helper acknowledgement for APPLY (payload: [u8 success][optional message...]).
     Disarm = 7,  ///< Cancel any pending restore/watchdog actions on the helper.
     SnapshotCurrent = 8,  ///< Save current session snapshot (rotate current->previous) without applying config.
+    WddmReset = 9,  ///< Synthesise Ctrl+Win+Shift+B in the user's desktop. No payload, no reply.
     Ping = 0xFE,  ///< Health check message; expects a response.
     Stop = 0xFF  ///< Request helper process to terminate gracefully.
   };
@@ -334,6 +335,21 @@ namespace platf::display_helper_client {
     std::vector<uint8_t> payload(json_payload.begin(), json_payload.end());
     auto &pipe = pipe_singleton();
     if (pipe && send_message(*pipe, MsgType::SnapshotCurrent, payload)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool send_wddm_reset() {
+    BOOST_LOG(info) << "Display helper IPC: WDDM_RESET request queued (synthesise Ctrl+Win+Shift+B)";
+    std::unique_lock<std::mutex> lk(pipe_mutex());
+    if (!ensure_connected_locked()) {
+      BOOST_LOG(warning) << "Display helper IPC: WDDM_RESET aborted - no connection";
+      return false;
+    }
+    std::vector<uint8_t> payload;
+    auto &pipe = pipe_singleton();
+    if (pipe && send_message(*pipe, MsgType::WddmReset, payload)) {
       return true;
     }
     return false;

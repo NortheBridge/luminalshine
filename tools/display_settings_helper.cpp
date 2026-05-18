@@ -170,9 +170,54 @@ namespace {
     ApplyResult = 6,  // payload: [u8 success][optional message...]
     Disarm = 7,  // cancel any pending restore requests/watchdogs
     SnapshotCurrent = 8,  // snapshot current session state (rotate current->previous) without applying
+    WddmReset = 9,  // synthesise Ctrl+Win+Shift+B in this user session (no payload)
     Ping = 0xFE,  // no payload, reply with Pong
     Stop = 0xFF  // no payload, terminate process
   };
+
+  // Synthesise the Ctrl+Win+Shift+B keystroke that triggers Windows'
+  // built-in WDDM reset. Helper runs in the interactive user session
+  // and so has the desktop integrity level required for SendInput to
+  // succeed. SYSTEM-context callers in the main service cannot do this
+  // directly; that's why this lives on the helper.
+  //
+  // The keystroke effect is system-wide — same as the user pressing it
+  // manually. We rate-limit the IPC call on the client side so this is
+  // only invoked when the auto-recovery ladder has exhausted its
+  // cheaper steps.
+  inline void synthesize_wddm_reset_keystroke() {
+    constexpr SHORT kVK_B = 0x42;
+    INPUT inputs[8] = {};
+    // Press: Ctrl, Win (LWIN), Shift, B
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].ki.wVk = VK_CONTROL;
+    inputs[1].type = INPUT_KEYBOARD;
+    inputs[1].ki.wVk = VK_LWIN;
+    inputs[2].type = INPUT_KEYBOARD;
+    inputs[2].ki.wVk = VK_SHIFT;
+    inputs[3].type = INPUT_KEYBOARD;
+    inputs[3].ki.wVk = static_cast<WORD>(kVK_B);
+    // Release in reverse order.
+    inputs[4].type = INPUT_KEYBOARD;
+    inputs[4].ki.wVk = static_cast<WORD>(kVK_B);
+    inputs[4].ki.dwFlags = KEYEVENTF_KEYUP;
+    inputs[5].type = INPUT_KEYBOARD;
+    inputs[5].ki.wVk = VK_SHIFT;
+    inputs[5].ki.dwFlags = KEYEVENTF_KEYUP;
+    inputs[6].type = INPUT_KEYBOARD;
+    inputs[6].ki.wVk = VK_LWIN;
+    inputs[6].ki.dwFlags = KEYEVENTF_KEYUP;
+    inputs[7].type = INPUT_KEYBOARD;
+    inputs[7].ki.wVk = VK_CONTROL;
+    inputs[7].ki.dwFlags = KEYEVENTF_KEYUP;
+    const UINT sent = SendInput(static_cast<UINT>(std::size(inputs)), inputs, sizeof(INPUT));
+    if (sent != std::size(inputs)) {
+      BOOST_LOG(warning) << "Display helper: WDDM_RESET SendInput sent only " << sent
+                         << " of " << std::size(inputs) << " events (err=" << GetLastError() << ").";
+    } else {
+      BOOST_LOG(info) << "Display helper: WDDM_RESET keystroke (Ctrl+Win+Shift+B) dispatched.";
+    }
+  }
 
   inline void send_framed_content(platf::dxgi::AsyncNamedPipe &pipe, MsgType type, std::span<const uint8_t> payload = {}) {
     std::vector<uint8_t> out(1 + payload.size());
@@ -4920,6 +4965,12 @@ namespace {
         return;
       }
       (void) state.refresh_current_snapshot_preserving_previous("snapshot-only");
+    } else if (type == MsgType::WddmReset) {
+      // Last-resort recovery: synthesise Ctrl+Win+Shift+B in this
+      // interactive session to trigger Windows' built-in WDDM reset.
+      // No reply — fire-and-forget. The IPC client rate-limits this so
+      // we never see it more often than the configured cooldown.
+      synthesize_wddm_reset_keystroke();
     } else if (type == MsgType::Ping) {
       state.record_heartbeat_ping();
       send_framed_content(async_pipe, MsgType::Ping);

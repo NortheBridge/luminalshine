@@ -42,6 +42,9 @@ extern "C" {
 #include "system_tray.h"
 #include "tdr_state.h"
 #include "thread_safe.h"
+#ifdef _WIN32
+  #include "platform/windows/display.h"
+#endif
 #include "update.h"
 #include "utility.h"
 #include "webrtc_stream.h"
@@ -2399,6 +2402,31 @@ namespace stream {
           << "). The client should retry after the display stack settles.";
         return -1;
       }
+
+#ifdef _WIN32
+      // Phase 5 pre-flight: even when tdr::recovery_recent() is clean
+      // (e.g. an explicit reset cleared the flag, or the process just
+      // restarted), actively probe D3D11 to catch a wedged WDDM stack
+      // before we hand a session off to the encoder. One D3D11CreateDevice
+      // call, immediate release. ~5 ms on a healthy machine; 0x887A0004
+      // (DXGI_ERROR_UNSUPPORTED) and friends on a wedged one.
+      const HRESULT probe_hr = platf::dxgi::D3D11ProbeDeviceHealth();
+      if (FAILED(probe_hr)) {
+        BOOST_LOG(warning)
+          << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
+          << std::hex << probe_hr << std::dec
+          << "). The GPU driver appears mid-recovery; the client should retry shortly.";
+        // Record so the Troubleshooting card reflects it the way a
+        // post-TDR event would, even though the encoder/QDC paths
+        // didn't fire it from inside an active stream.
+        tdr::mark_event(
+          tdr::source_t::dd_test_d3d11,
+          static_cast<long>(probe_hr),
+          "Pre-flight D3D11 health check failed at session start"
+        );
+        return -1;
+      }
+#endif
 
       session.input = input::alloc(session.mail);
 

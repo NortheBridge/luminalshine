@@ -544,6 +544,43 @@ namespace platf::dxgi {
     return status;
   }
 
+  HRESULT D3D11ProbeDeviceHealth() noexcept {
+    // Default adapter, no retries, immediate release. Sole purpose is
+    // to detect a wedged WDDM context up front so the streaming
+    // session-start path can refuse a new session before it hangs the
+    // encoder thread in display init. We pass nullptr for the adapter
+    // pointer so D3D11 picks whichever adapter the driver currently
+    // considers the default — that's the same code path the encoder
+    // and DD test eventually exercise, so this is a meaningful probe.
+    constexpr D3D_FEATURE_LEVEL kFeatureLevels[] = {
+      D3D_FEATURE_LEVEL_11_1,
+      D3D_FEATURE_LEVEL_11_0,
+      D3D_FEATURE_LEVEL_10_1,
+      D3D_FEATURE_LEVEL_10_0,
+    };
+    ID3D11Device *device = nullptr;
+    ID3D11DeviceContext *context = nullptr;
+    const HRESULT hr = D3D11CreateDevice(
+      nullptr,
+      D3D_DRIVER_TYPE_HARDWARE,
+      nullptr,
+      D3D11_CREATE_DEVICE_FLAGS,
+      kFeatureLevels,
+      static_cast<UINT>(std::size(kFeatureLevels)),
+      D3D11_SDK_VERSION,
+      &device,
+      nullptr,
+      &context
+    );
+    if (device) {
+      device->Release();
+    }
+    if (context) {
+      context->Release();
+    }
+    return hr;
+  }
+
   // Hand off ownership of a util::safe_ptr<T> COM wrapper to seh_safe_release_com_,
   // ensuring the auto-destruction of the safe_ptr afterwards is a no-op (it sees null).
   // Logs the SEH code at warning level so a swallowed AV is visible in support bundles.

@@ -32,6 +32,21 @@ namespace platf::display_helper_client {
   // Reset helper-side persistence/state (best-effort)
   bool send_reset();
 
+  /**
+   * @brief Synthesise Ctrl+Win+Shift+B in the user's interactive desktop.
+   *
+   * This is Windows' built-in WDDM reset shortcut. Routed through the
+   * display helper because SYSTEM-context callers cannot SendInput to
+   * an interactive session — the helper, which runs in the user
+   * session, can. Used as the highest level of the SudoVDA recovery
+   * ladder when handle-recycle + PnP disable/enable have already been
+   * tried and the entire WDDM context is suspected stuck.
+   *
+   * Fire-and-forget; the helper has no synchronous reply for this
+   * message type. The keystroke takes effect within ~1-2 seconds.
+   */
+  bool send_wddm_reset();
+
   // Request helper process to terminate gracefully.
   bool send_stop();
 

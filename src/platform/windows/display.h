@@ -75,6 +75,24 @@ namespace platf::dxgi {
     ID3D11DeviceContext **context,
     const char *call_site) noexcept;
 
+  /**
+   * @brief Single-attempt D3D11 device-creation probe for the
+   *        pre-flight check at session start.
+   *
+   * Unlike D3D11CreateDeviceWithRecovery (which retries with backoff
+   * for up to ~15 s after a TDR), this is a fast yes/no health check:
+   * one D3D11CreateDevice call against the default adapter, release
+   * immediately, return the HRESULT verbatim. The streaming session
+   * gate uses this to refuse a new session up front when the GPU
+   * stack is wedged — gives the Moonlight client an immediate,
+   * intelligible failure instead of the encoder thread hanging in
+   * display init.
+   *
+   * Returns S_OK on healthy, the underlying HRESULT (typically
+   * DXGI_ERROR_UNSUPPORTED 0x887A0004) on a wedged stack.
+   */
+  HRESULT D3D11ProbeDeviceHealth() noexcept;
+
   using factory1_t = util::safe_ptr<IDXGIFactory1, Release<IDXGIFactory1>>;
   using dxgi_t = util::safe_ptr<IDXGIDevice, Release<IDXGIDevice>>;
 

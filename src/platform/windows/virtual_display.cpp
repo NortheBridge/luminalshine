@@ -4,6 +4,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/display_helper_coordinator.h"
+#include "src/platform/windows/ipc/display_settings_client.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/platform/windows/sudovda_recovery.h"
@@ -4396,8 +4397,10 @@ namespace platf::sudovda {
     std::mutex g_recovery_mutex;
     std::chrono::steady_clock::time_point g_last_level1_at {};
     std::chrono::steady_clock::time_point g_last_level2_at {};
+    std::chrono::steady_clock::time_point g_last_level3_at {};
     constexpr std::chrono::seconds kLevel1Cooldown {15};
     constexpr std::chrono::minutes kLevel2Cooldown {5};
+    constexpr std::chrono::minutes kLevel3Cooldown {15};
 
     // Mirror of the last recovery_result so the diagnostic endpoint can
     // surface it without re-running the ladder. Kept under the same
@@ -4486,49 +4489,106 @@ namespace platf::sudovda {
         ran_level2 = true;
       }
     }
-    if (!ran_level2) {
-      // Level 1 may already have succeeded; preserve that signal.
+    bool l2_succeeded = false;
+    if (ran_level2) {
+      BOOST_LOG(info) << "SudoVDA recovery: level 2 (PnP disable+enable) on instance "
+                      << result.instance_id;
+      const bool pnp_ok = VDISPLAY::recovery_bridge::sudovda_pnp_restart(*instance);
+      if (pnp_ok) {
+        // After a clean disable/enable, recycle the user handle so the
+        // next AddVirtualDisplay opens a fresh kernel binding.
+        VDISPLAY::closeVDisplayDevice();
+        proc::initVDisplayDriver();
+        result.level = recovery_level_t::pnp_restart;
+        result.success = true;
+        l2_succeeded = true;
+        result.message = "PnP disable+enable completed; user handle recycled.";
+      } else {
+        // If the disable succeeded but enable didn't, the device can be
+        // stuck disabled. Try the targeted re-enable helper.
+        if (VDISPLAY::recovery_bridge::sudovda_is_disabled(*instance)) {
+          const bool recovered = VDISPLAY::recovery_bridge::sudovda_try_reenable(*instance);
+          if (recovered) {
+            VDISPLAY::closeVDisplayDevice();
+            proc::initVDisplayDriver();
+            result.level = recovery_level_t::pnp_restart;
+            result.success = true;
+            l2_succeeded = true;
+            result.message = "PnP enable recovered SudoVDA from stuck-disabled state.";
+          } else {
+            result.message = "PnP restart left SudoVDA stuck in the disabled state. "
+                             "A reboot may be required.";
+          }
+        } else {
+          result.message = "PnP disable+enable failed; SudoVDA driver may be unresponsive.";
+        }
+      }
+    } else {
       result.message += " PnP restart skipped (cooldown).";
+    }
+
+    if (max_level < recovery_level_t::wddm_reset) {
       record_last_recovery(result);
       return result;
     }
 
-    BOOST_LOG(info) << "SudoVDA recovery: level 2 (PnP disable+enable) on instance "
-                    << result.instance_id;
-    const bool pnp_ok = VDISPLAY::recovery_bridge::sudovda_pnp_restart(*instance);
-    if (pnp_ok) {
-      // After a clean disable/enable, recycle the user handle so the
-      // next AddVirtualDisplay opens a fresh kernel binding.
-      VDISPLAY::closeVDisplayDevice();
-      proc::initVDisplayDriver();
-      result.level = recovery_level_t::pnp_restart;
-      result.success = true;
-      result.message = "PnP disable+enable completed; user handle recycled.";
-    } else {
-      // If the disable succeeded but enable didn't, the device can be
-      // stuck disabled. Try the targeted re-enable helper.
-      if (VDISPLAY::recovery_bridge::sudovda_is_disabled(*instance)) {
-        const bool recovered = VDISPLAY::recovery_bridge::sudovda_try_reenable(*instance);
-        if (recovered) {
-          VDISPLAY::closeVDisplayDevice();
-          proc::initVDisplayDriver();
-          result.level = recovery_level_t::pnp_restart;
-          result.success = true;
-          result.message = "PnP enable recovered SudoVDA from stuck-disabled state.";
-        } else {
-          result.message = "PnP restart left SudoVDA stuck in the disabled state. "
-                           "A reboot may be required.";
-        }
-      } else {
-        result.message = "PnP disable+enable failed; SudoVDA driver may be unresponsive.";
+    // Level 3 — WDDM reset via Ctrl+Win+Shift+B synthesised by the
+    // display helper (which runs in the user session and has the
+    // desktop integrity level required for SendInput). Only fires
+    // when Level 2 did NOT succeed (no point in nudging WDDM if the
+    // PnP cycle already brought SudoVDA back) and the per-process
+    // cooldown allows it. Last-resort recovery; rate-limited at 15
+    // minutes to avoid hammering a permanently-broken adapter.
+    if (l2_succeeded) {
+      record_last_recovery(result);
+      return result;
+    }
+
+    bool ran_level3 = false;
+    {
+      std::lock_guard<std::mutex> lk(g_recovery_mutex);
+      const bool cooldown_ok =
+        g_last_level3_at == std::chrono::steady_clock::time_point {}
+        || (now - g_last_level3_at) >= kLevel3Cooldown;
+      if (force || cooldown_ok) {
+        g_last_level3_at = now;
+        ran_level3 = true;
       }
     }
+    if (!ran_level3) {
+      result.message += " WDDM reset skipped (cooldown).";
+      record_last_recovery(result);
+      return result;
+    }
+
+    BOOST_LOG(info) << "SudoVDA recovery: level 3 (WDDM reset via Ctrl+Win+Shift+B).";
+    const bool keystroke_sent = platf::display_helper_client::send_wddm_reset();
+    if (!keystroke_sent) {
+      result.message += " WDDM reset failed to dispatch (display helper not reachable).";
+      record_last_recovery(result);
+      return result;
+    }
+
+    // Give Windows ~3 s to settle after the WDDM reset, then recycle
+    // our SudoVDA handle so the next AddVirtualDisplay opens a fresh
+    // kernel binding against the recovered display port.
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    VDISPLAY::closeVDisplayDevice();
+    proc::initVDisplayDriver();
+    result.level = recovery_level_t::wddm_reset;
+    result.success = true;
+    result.message = "WDDM reset dispatched (Ctrl+Win+Shift+B); user handle recycled.";
 
     record_last_recovery(result);
     return result;
   }
 
   recovery_result_t manual_restart() {
+    // Manual restart deliberately tops out at Level 2 (PnP) — the
+    // WDDM-reset Level 3 synthesises a keystroke that briefly blanks
+    // the user's entire desktop, so we never trigger it without the
+    // auto-recovery having tried Level 2 first. Power users can still
+    // press Ctrl+Win+Shift+B themselves any time.
     return run_recovery_ladder(recovery_level_t::pnp_restart, /*force=*/true);
   }
 

@@ -46,6 +46,12 @@ namespace platf::sudovda {
     handle_recycle = 1,
     /// SudoVDA root device was PnP-disabled and re-enabled.
     pnp_restart = 2,
+    /// Display helper synthesised Ctrl+Win+Shift+B to trigger a system-
+    /// wide WDDM reset, then the SudoVDA handle was recycled again so
+    /// the next AddVirtualDisplay opens a fresh kernel binding against
+    /// the recovered display port. Last resort; requires an interactive
+    /// user session and is rate-limited at 15 minutes per process.
+    wddm_reset = 3,
   };
 
   struct recovery_result_t {
@@ -70,15 +76,16 @@ namespace platf::sudovda {
    * in a tight loop. Lower levels have shorter cooldowns. Pass `force`
    * to bypass cooldowns — used by the manual Restart button.
    *
-   * @param max_level Highest level to attempt. Pass `pnp_restart` for
-   *                  full ladder, `handle_recycle` for the cheap recycle
-   *                  only.
+   * @param max_level Highest level to attempt. Pass `wddm_reset` for
+   *                  the full ladder, `pnp_restart` to stop short of
+   *                  the user-disruptive keystroke synthesis, or
+   *                  `handle_recycle` for the cheap recycle only.
    * @param force When true, ignore the per-level cooldown gates. Use
    *              this for user-initiated recovery; auto-recovery from
    *              the post-TDR detection path should leave it false.
    */
   recovery_result_t run_recovery_ladder(
-    recovery_level_t max_level = recovery_level_t::pnp_restart,
+    recovery_level_t max_level = recovery_level_t::wddm_reset,
     bool force = false
   );
 
