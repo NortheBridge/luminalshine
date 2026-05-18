@@ -139,6 +139,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/http_auth.cpp"
         "${CMAKE_SOURCE_DIR}/src/state_storage.cpp"
         "${CMAKE_SOURCE_DIR}/src/state_storage.h"
+        "${CMAKE_SOURCE_DIR}/src/tdr_state.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tdr_state.h"
         ${PLATFORM_TARGET_FILES})
 
 if(NOT SUNSHINE_ASSETS_DIR_DEF)

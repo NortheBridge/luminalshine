@@ -38,6 +38,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "src/display_device.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/tdr_state.h"
 #include "src/video.h"
 #include "utf_utils.h"
 
@@ -508,6 +509,23 @@ namespace platf::dxgi {
         // Either the failure mode isn't recoverable by waiting (E_FAIL,
         // E_INVALIDARG, etc.) or we've exhausted the backoff schedule.
         // Caller logs the final HRESULT.
+        if (is_transient) {
+          // We retried for the full window and the GPU never came back —
+          // record the TDR escalation so the high-signal log line, tray
+          // toast, and session-start gate fire from one place. The
+          // call_site string ("encoder" / "DD test") drives which tdr
+          // source category we record under so the Web UI can show the
+          // user which subsystem detected it.
+          const auto src = (call_site != nullptr && std::string_view(call_site) == "encoder")
+            ? tdr::source_t::encoder_d3d11
+            : tdr::source_t::dd_test_d3d11;
+          std::string detail = "D3D11CreateDevice exhausted ";
+          detail += std::to_string(max_attempts);
+          detail += " retries (";
+          detail += (call_site ? call_site : "unknown");
+          detail += " call site)";
+          tdr::mark_event(src, static_cast<long>(status), std::move(detail));
+        }
         return status;
       }
 

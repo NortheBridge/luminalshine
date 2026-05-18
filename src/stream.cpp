@@ -40,6 +40,7 @@ extern "C" {
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
+#include "tdr_state.h"
 #include "thread_safe.h"
 #include "update.h"
 #include "utility.h"
@@ -2382,6 +2383,23 @@ namespace stream {
     }
 
     int start(session_t &session, const std::string &addr_string) {
+      // Phase 2: don't start a new session while the GPU/WDDM stack is
+      // still recovering from a recent TDR. The 2026-05-17 incident had a
+      // reconnecting client trigger a new session ~2.5 minutes after the
+      // original TDR; the new session's videoThread wedged inside display
+      // init because QueryDisplayConfig was still returning
+      // ERROR_NOT_SUPPORTED, which only surfaced as a generic 10s "Hang
+      // detected" fatal. Refusing the start here means Moonlight gets an
+      // immediate, intelligible failure instead of a frozen-stream window.
+      if (tdr::recovery_recent()) {
+        const auto last = tdr::last_event();
+        BOOST_LOG(warning)
+          << "Refusing to start new streaming session: GPU TDR recovery in progress ("
+          << (last ? tdr::source_label(last->source) : "unknown")
+          << "). The client should retry after the display stack settles.";
+        return -1;
+      }
+
       session.input = input::alloc(session.mail);
 
       session.broadcast_ref = broadcast.ref();

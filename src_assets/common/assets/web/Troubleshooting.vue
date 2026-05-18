@@ -99,6 +99,73 @@
 
       <section class="troubleshoot-card">
         <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div class="min-w-0">
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.tdr_card_title', 'GPU / Display Stack Health') }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.tdr_card_desc',
+                  'Tracks NVIDIA GPU TDR (Timeout Detection and Recovery) events and WDDM display-stack failures that LuminalShine detected. A TDR can end an active stream and momentarily wedge SudoVDA; the active session is refused while recovery is in progress so the client gets a quick failure instead of a frozen stream.',
+                )
+              }}
+            </p>
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10"
+              >
+                <i class="fas fa-bolt" />
+                {{ translate('troubleshooting.tdr_count_label', 'Events since process start') }}:
+                <strong>{{ tdrCount }}</strong>
+              </span>
+              <span
+                v-if="tdrRecoveryRecent"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-warning/15 text-warning"
+              >
+                <i class="fas fa-triangle-exclamation" />
+                {{
+                  translate(
+                    'troubleshooting.tdr_recovery_in_progress',
+                    'Recovery in progress (new sessions refused)',
+                  )
+                }}
+              </span>
+            </div>
+            <div v-if="tdrLast" class="mt-3 text-xs space-y-1">
+              <div>
+                <span class="opacity-70"
+                  >{{ translate('troubleshooting.tdr_last_at', 'Last event') }}:</span
+                >
+                <span class="font-mono ml-1">{{ tdrLastAtDisplay }}</span>
+              </div>
+              <div>
+                <span class="opacity-70"
+                  >{{ translate('troubleshooting.tdr_last_source', 'Source') }}:</span
+                >
+                <span class="ml-1">{{ tdrLast.source }}</span>
+              </div>
+              <div v-if="tdrLast.hresult">
+                <span class="opacity-70">HRESULT:</span>
+                <span class="font-mono ml-1">0x{{ tdrLastHresultHex }}</span>
+              </div>
+              <div v-if="tdrLast.detail" class="opacity-80 break-words">
+                {{ tdrLast.detail }}
+              </div>
+            </div>
+            <p v-else class="mt-2 text-xs opacity-60 italic">
+              {{ translate('troubleshooting.tdr_none', 'No TDR events recorded.') }}
+            </p>
+          </div>
+          <n-button :loading="tdrRefreshing" :disabled="tdrRefreshing" @click="refreshTdrHealth">
+            <i class="fas fa-rotate" />
+            <span>{{ translate('troubleshooting.refresh', 'Refresh') }}</span>
+          </n-button>
+        </div>
+      </section>
+
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 class="text-base font-semibold text-dark dark:text-light">
               {{ translate('troubleshooting.reset_state', 'Reset Stored Pairings') }}
@@ -377,6 +444,59 @@ const resetStateStatus = ref<null | 'success' | 'error'>(null);
 const resetStateError = ref('');
 const resetStateArchived = ref<string[]>([]);
 const dialog = useDialog();
+
+type TdrLast = {
+  at: number;
+  source: string;
+  hresult: number;
+  detail: string;
+};
+const tdrCount = ref(0);
+const tdrRecoveryRecent = ref(false);
+const tdrLast = ref<TdrLast | null>(null);
+const tdrRefreshing = ref(false);
+
+const tdrLastAtDisplay = computed(() => {
+  if (!tdrLast.value) return '';
+  try {
+    return new Date(tdrLast.value.at * 1000).toLocaleString();
+  } catch {
+    return String(tdrLast.value.at);
+  }
+});
+
+const tdrLastHresultHex = computed(() => {
+  if (!tdrLast.value || !tdrLast.value.hresult) return '';
+  const v = tdrLast.value.hresult >>> 0;
+  return v.toString(16).toUpperCase().padStart(8, '0');
+});
+
+async function refreshTdrHealth() {
+  tdrRefreshing.value = true;
+  try {
+    const r = await http.get('./api/health/tdr', { validateStatus: () => true });
+    const body = (r.data || {}) as Record<string, unknown>;
+    if (r.status >= 200 && r.status < 300) {
+      tdrCount.value = typeof body.count === 'number' ? body.count : 0;
+      tdrRecoveryRecent.value = body.recovery_recent === true;
+      const last = body.last as Partial<TdrLast> | undefined;
+      if (last && typeof last.at === 'number' && typeof last.source === 'string') {
+        tdrLast.value = {
+          at: last.at,
+          source: last.source,
+          hresult: typeof last.hresult === 'number' ? last.hresult : 0,
+          detail: typeof last.detail === 'string' ? last.detail : '',
+        };
+      } else {
+        tdrLast.value = null;
+      }
+    }
+  } catch {
+    // surface as no-data rather than blocking the page
+  } finally {
+    tdrRefreshing.value = false;
+  }
+}
 
 const latestLogs = ref('Loading...');
 const displayedLogs = ref('Loading...');
@@ -1054,11 +1174,13 @@ onMounted(async () => {
   loginDisposer = authStore.onLogin(() => {
     void refreshLogs();
     void refreshCrashDumpStatus();
+    void refreshTdrHealth();
   });
 
   await authStore.waitForAuthentication();
 
   await refreshCrashDumpStatus();
+  await refreshTdrHealth();
 
   nextTick(() => {
     if (getLogContainer()) scrollToBottom();

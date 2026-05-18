@@ -55,6 +55,7 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "state_storage.h"
+#include "tdr_state.h"
 #include "webrtc_stream.h"
 
 #ifdef _WIN32
@@ -623,6 +624,37 @@ namespace confighttp {
     }
   }
 #endif
+
+  /**
+   * @brief GPU / WDDM stack health. Returns the most recent TDR-class
+   *        incident the streaming stack detected, or an empty body when
+   *        no incidents have been recorded since process start. Drives
+   *        the "GPU / Display Stack Health" card in the Troubleshooting
+   *        view.
+   *
+   * @api_examples{/api/health/tdr| GET| {"count":1,"recovery_recent":false,"last":{"at":1715990443,"source":"encoder D3D11","hresult":2289565700,"detail":"..."}}}
+   */
+  void getTdrHealth(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    nlohmann::json out;
+    out["status"] = true;
+    out["count"] = tdr::event_count();
+    out["recovery_recent"] = tdr::recovery_recent();
+    if (auto ev = tdr::last_event(); ev) {
+      const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+        ev->at.time_since_epoch()
+      ).count();
+      nlohmann::json last;
+      last["at"] = secs;
+      last["source"] = tdr::source_label(ev->source);
+      last["hresult"] = ev->hresult;
+      last["detail"] = ev->detail;
+      out["last"] = std::move(last);
+    }
+    send_response(response, out);
+  }
 
   /**
    * @brief Send a 404 Not Found response.
@@ -3776,6 +3808,7 @@ namespace confighttp {
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);
     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
     register_api_route("^/api/state/reset$", "POST", resetStoredState);
+    register_api_route("^/api/health/tdr$", "GET", getTdrHealth);
     register_api_route("^/api/clients/list$", "GET", getClients);
     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);
     register_api_route("^/api/clients/update$", "POST", updateClient);

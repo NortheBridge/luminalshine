@@ -9,6 +9,7 @@
 #include "src/platform/windows/virtual_display_mtt.h"
 #include "src/process.h"
 #include "src/state_storage.h"
+#include "src/tdr_state.h"
 #include "src/uuid.h"
 
 #include <algorithm>
@@ -3237,6 +3238,18 @@ namespace VDISPLAY {
       const auto now = std::chrono::steady_clock::now();
       if (!enumerated_at && now - start >= enumeration_timeout) {
         BOOST_LOG(warning) << "Timed out waiting for Windows to enumerate virtual display.";
+        // Record this as a TDR escalation source: when Windows accepts the
+        // AddVirtualDisplay call but never enumerates the new surface, the
+        // upstream cause is almost always a wedged WDDM context after a
+        // GPU TDR. The high-signal log line + tray toast fire on the
+        // first such failure in a recovery window so the user sees what
+        // happened and so the Troubleshooting "Virtual Display Adapter
+        // Failure" card can surface the most recent occurrence.
+        tdr::mark_event(
+          tdr::source_t::virtual_display_enumerate,
+          0,
+          "Windows did not enumerate the SudoVDA / VDD virtual display within the timeout"
+        );
         return false;
       }
       if (enumerated_at && now - *enumerated_at >= activation_grace) {
@@ -4035,6 +4048,18 @@ namespace VDISPLAY {
                       << kQdcFailureResetThreshold
                       << " consecutive enumerate calls; resetting virtual display driver handle "
                          "to break a likely post-TDR stuck state.";
+      // Record this as the canonical "QueryDisplayConfig wedged" TDR
+      // signal. The high-signal log line + tray toast fire from
+      // tdr::mark_event so the Troubleshooting card and the user-facing
+      // notification see this incident class even when the encoder D3D11
+      // path never reaches retry exhaustion (e.g. session not active).
+      tdr::mark_event(
+        tdr::source_t::query_display_config,
+        0,
+        "QueryDisplayConfig returned ERROR_NOT_SUPPORTED for "
+          + std::to_string(kQdcFailureResetThreshold)
+          + " consecutive enumerate calls"
+      );
       // Done under the lock so two concurrent resolvers don't both try
       // to recycle the driver. The reset itself is idempotent but the
       // close+open pair shouldn't race.
