@@ -73,7 +73,7 @@ Full documentation — installation, configuration, driver selection, WebRTC set
 
 ### [gitdocs.northebridge.com](https://gitdocs.northebridge.com)
 
-`gitdocs.northebridge.com` is the **official documentation portal for the NortheBridge Software Foundation**, hosting versioned docs for LuminalShine and related projects. Issues, contributing guidelines, and release notes are mirrored there alongside this repository's GitHub Issues tracker.
+`gitdocs.northebridge.com` is the **official documentation portal for the NortheBridge Foundation**, hosting versioned docs for LuminalShine and related projects. Issues, contributing guidelines, and release notes are mirrored there alongside this repository's GitHub Issues tracker.
 
 ---
 
