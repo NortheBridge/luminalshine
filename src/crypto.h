@@ -85,6 +85,25 @@ namespace crypto {
    */
   bool argon2id_available();
 
+  /**
+   * @brief Securely zero a byte buffer in a way that compilers cannot
+   *        optimise away. Wraps SecureZeroMemory on Windows and
+   *        explicit_bzero on POSIX, with a `volatile`-pointer fallback
+   *        when neither is available. Intended for short-lived
+   *        plaintext buffers (decoded credential blobs, candidate
+   *        passwords during verification, intermediate hash output)
+   *        that should not linger in process memory after use.
+   */
+  void secure_wipe(void *data, std::size_t bytes);
+
+  /**
+   * @brief std::string overload that wipes the underlying storage in
+   *        place. The string is left logically the same size with zero
+   *        bytes; callers typically let it go out of scope immediately
+   *        after.
+   */
+  void secure_wipe(std::string &s);
+
   aes_t gen_aes_key(const std::array<uint8_t, 16> &salt, const std::string_view &pin);
   x509_t x509(const std::string_view &x);
   pkey_t pkey(const std::string_view &k);

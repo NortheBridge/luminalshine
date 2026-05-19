@@ -72,4 +72,15 @@ namespace cred_store::tpm_seal {
    */
   bool unseal(std::string_view sealed, std::string &plaintext_out);
 
+  /**
+   * @brief Delete the persisted RSA wrapping key from the Microsoft
+   *        Platform Crypto Provider. Returns true if the key was
+   *        removed or was never present. Called from the MSI uninstall
+   *        custom action (via `sunshine.exe reset-admin-credentials`)
+   *        and from `cred_store::erase` on Windows, so an uninstall or
+   *        Reset Admin Credentials gesture leaves no LuminalShine
+   *        material in the TPM.
+   */
+  bool clear();
+
 }  // namespace cred_store::tpm_seal

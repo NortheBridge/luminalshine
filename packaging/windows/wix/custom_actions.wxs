@@ -199,6 +199,15 @@
     <CustomAction Id="RemoveServiceQuiet" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="UninstallMttVdd" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="UninstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <!-- Clear the WCM entry + TPM-bound wrapping key on uninstall so an
+         uninstall leaves no LuminalShine secrets in the host's credential
+         vault or TPM. The actual work happens inside sunshine.exe (which
+         has the cred_store + tpm_seal logic) so the uninstaller doesn't
+         need to know the WCM target name or KSP details. Best-effort:
+         a missing or unloadable sunshine.exe (rollback after partial
+         install) must not surface as 1603 — cleanup is not load-bearing
+         for the uninstall transaction. -->
+    <CustomAction Id="ResetAdminCredentials" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="DeleteInstallDir" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <!-- Remove everything but config on manual uninstalls when user chooses to keep data -->
     <CustomAction Id="PruneButConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
@@ -232,6 +241,16 @@
     <CustomAction Id="SetRestoreNvPrefsUndo"
                  Property="RestoreNvPrefsUndo"
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo)) &amp; exit /b 0"/>
+
+    <!-- Mirror of the NV prefs guard: only invoke sunshine.exe if it
+         still exists, and swallow its exit code so a rollback path
+         after partial install doesn't trip the installer transaction.
+         The CLI command itself is offline (it grabs the state mutex
+         and calls cred_store::erase + tpm_seal::clear) so it doesn't
+         need the service to be running. -->
+    <CustomAction Id="SetResetAdminCredentials"
+                 Property="ResetAdminCredentials"
+                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; reset-admin-credentials)) &amp; exit /b 0"/>
 
 
     <CustomAction Id="SetUninstallMttVdd"

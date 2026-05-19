@@ -12,6 +12,7 @@
 // local includes
 #include "config.h"
 #include "confighttp.h"
+#include "cred_store/cred_store.h"
 #include "entry_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -19,6 +20,10 @@
 #include "network.h"
 #include "platform/common.h"
 #include "state_storage.h"
+
+#ifdef _WIN32
+  #include "cred_store/tpm_seal_windows.h"
+#endif
 
 extern "C" {
 #ifdef _WIN32
@@ -72,6 +77,36 @@ namespace args {
     return 0;
   }
 #endif
+
+  int reset_admin_credentials() {
+    // Use the same lock the save/load paths use so a concurrent
+    // service-side credential write can't race the uninstaller. This
+    // mode runs offline; contention is theoretical.
+    std::lock_guard<std::mutex> guard(statefile::state_mutex());
+
+    const std::string key = cred_store::default_key();
+    const bool erase_ok = cred_store::erase(key);
+    if (!erase_ok) {
+      BOOST_LOG(error) << "reset_admin_credentials: cred_store::erase failed for key "
+                       << key;
+    }
+
+#ifdef _WIN32
+    // The TPM-bound wrapping key is shared by all sealed records; deleting
+    // it here is the cleanup step for the MSI uninstall path. On non-Windows
+    // there is no equivalent persisted key.
+    const bool tpm_ok = cred_store::tpm_seal::clear();
+    if (!tpm_ok) {
+      BOOST_LOG(warning) << "reset_admin_credentials: TPM key delete failed; the key "
+                         << "may persist in the Microsoft Platform Crypto Provider "
+                         << "and will be regenerated on next credential save.";
+    }
+#endif
+
+    BOOST_LOG(info) << "reset_admin_credentials: cleared credential record"
+                    << (erase_ok ? "" : " (with errors; see log)") << ".";
+    return erase_ok ? 0 : 1;
+  }
 }  // namespace args
 
 namespace lifetime {

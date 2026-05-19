@@ -517,6 +517,7 @@ namespace http {
           outputTree.clear();
         }
       }
+      crypto::secure_wipe(existing_blob);
     }
 
     const auto salt = crypto::rand_alphabet(16);
@@ -559,7 +560,15 @@ namespace http {
       BOOST_LOG(error) << "save_user_creds: failed to serialise blob: " << e.what();
       return -1;
     }
-    if (!cred_store::store(file, serialized.str())) {
+    // Pull the serialised JSON into a named string we can wipe after
+    // the store call. The ptree itself still holds the password hash
+    // until outputTree falls out of scope at function exit; that's a
+    // brief window and out of scope of this PR.
+    std::string serialized_blob = serialized.str();
+    auto serialized_guard = util::fail_guard([&]() {
+      crypto::secure_wipe(serialized_blob);
+    });
+    if (!cred_store::store(file, serialized_blob)) {
       BOOST_LOG(error) << "error writing credentials via "sv
                        << cred_store::backend_name() << " at "sv << file
                        << " - try running as an administrator if this persists"sv;
@@ -575,6 +584,9 @@ namespace http {
     if (!cred_store::load(file, blob) || blob.empty()) {
       return false;
     }
+    auto blob_guard = util::fail_guard([&]() {
+      crypto::secure_wipe(blob);
+    });
     pt::ptree inputTree;
     try {
       std::istringstream in {blob};
@@ -597,6 +609,13 @@ namespace http {
                        << file;
       return -1;
     }
+    // Wipe the loaded credential blob from the local string before
+    // returning regardless of which code path we take below. The
+    // parsed fields live in config::sunshine; the raw JSON blob has
+    // no business outliving this function.
+    auto blob_guard = util::fail_guard([&]() {
+      crypto::secure_wipe(blob);
+    });
     pt::ptree inputTree;
     try {
       std::istringstream in {blob};
@@ -663,6 +682,14 @@ namespace http {
                          << "' is not recognised; refusing login.";
       return false;
     }
+
+    // Wipe the computed hash from local memory on every exit path,
+    // success or failure. The persisted hash in config::sunshine.password
+    // is what's authoritative and necessarily lives in RAM; this
+    // intermediate derivation has no business outliving the compare.
+    auto computed_guard = util::fail_guard([&]() {
+      crypto::secure_wipe(computed);
+    });
 
     if (computed.empty() || computed != config::sunshine.password) {
       return false;

@@ -460,4 +460,33 @@ namespace cred_store::tpm_seal {
     return true;
   }
 
+  bool clear() {
+    NCRYPT_PROV_HANDLE prov = 0;
+    if (!open_provider(prov)) {
+      // No provider == no key to delete; nothing to do.
+      return true;
+    }
+    NCRYPT_KEY_HANDLE key = 0;
+    SECURITY_STATUS s = NCryptOpenKey(prov, &key, kKeyName, 0, NCRYPT_MACHINE_KEY_FLAG);
+    if (s == NTE_BAD_KEYSET) {
+      NCryptFreeObject(prov);
+      return true;
+    }
+    if (s != ERROR_SUCCESS) {
+      BOOST_LOG(warning) << "tpm_seal: NCryptOpenKey during clear failed (0x"
+                         << std::hex << s << ")";
+      NCryptFreeObject(prov);
+      return false;
+    }
+    s = NCryptDeleteKey(key, 0);
+    NCryptFreeObject(prov);
+    if (s != ERROR_SUCCESS) {
+      BOOST_LOG(warning) << "tpm_seal: NCryptDeleteKey failed (0x"
+                         << std::hex << s << ")";
+      return false;
+    }
+    BOOST_LOG(info) << "tpm_seal: deleted TPM-bound RSA wrapping key.";
+    return true;
+  }
+
 }  // namespace cred_store::tpm_seal

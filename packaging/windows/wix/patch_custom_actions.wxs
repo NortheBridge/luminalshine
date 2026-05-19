@@ -83,6 +83,14 @@
       <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles">REMOVE="ALL"</Custom>
       <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo">REMOVE="ALL"</Custom>
 
+      <!-- Clear admin credentials (WCM entry + TPM-bound wrapping key)
+           on a real uninstall. Skipped during upgrades so the new build
+           inherits the user's existing credentials. KEEPADMINCREDENTIALS=1
+           opts out for advanced users who want to keep the credential
+           material on disk for restoration with a future install. -->
+      <Custom Action="SetResetAdminCredentials" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS &lt;&gt; "1"</Custom>
+      <Custom Action="ResetAdminCredentials" After="SetResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS &lt;&gt; "1"</Custom>
+
       <!-- Remove Virtual Display Drivers only when explicitly requested by uninstall properties.
            Both backends are uninstalled when REMOVEVIRTUALDISPLAYDRIVER=1; if only one was
            installed the corresponding script is a no-op. -->

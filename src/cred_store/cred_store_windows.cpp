@@ -315,17 +315,24 @@ namespace cred_store {
 
   bool erase(std::string_view key) {
     (void) key;
+    bool ok = true;
     if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
       const DWORD err = GetLastError();
-      if (err == ERROR_NOT_FOUND) {
-        return true;
+      if (err != ERROR_NOT_FOUND) {
+        BOOST_LOG(warning) << "cred_store(wcm): CredDelete failed (err=" << err << ")";
+        ok = false;
       }
-      BOOST_LOG(warning) << "cred_store(wcm): CredDelete failed (err=" << err << ")";
-      return false;
+    } else {
+      BOOST_LOG(info) << "cred_store(wcm): credential entry " << "LuminalShine/AdminCredentials"
+                      << " removed.";
     }
-    BOOST_LOG(info) << "cred_store(wcm): credential entry " << "LuminalShine/AdminCredentials"
-                    << " removed.";
-    return true;
+    // Also delete the TPM-bound wrapping key. A future credential save
+    // will regenerate it (cheap on TPM 2.0 hardware) so this gives the
+    // user a fully clean slate without breaking subsequent operations.
+    if (!tpm_seal::clear()) {
+      ok = false;
+    }
+    return ok;
   }
 
 }  // namespace cred_store

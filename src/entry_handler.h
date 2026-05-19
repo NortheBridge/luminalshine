@@ -66,6 +66,21 @@ namespace args {
    */
   int restore_nvprefs_undo();
 #endif
+
+  /**
+   * @brief Clear the persisted admin credentials.
+   * Erases the credential record from the active system store (Windows
+   * Credential Manager / libsecret / macOS Keychain / file backend) and,
+   * on Windows builds, also deletes the TPM-bound RSA wrapping key from
+   * the Microsoft Platform Crypto Provider. Used by the MSI custom
+   * action so an uninstall leaves no LuminalShine secrets behind on the
+   * host. Returns 0 on success / nothing-to-clear, non-zero on hard
+   * failure (logged).
+   * @examples
+   * reset_admin_credentials();
+   * @examples_end
+   */
+  int reset_admin_credentials();
 }  // namespace args
 
 /**

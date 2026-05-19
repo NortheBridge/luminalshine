@@ -75,6 +75,9 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
      return args::restore_nvprefs_undo();
    }},
 #endif
+  {"reset-admin-credentials"sv, [](const char *name, int argc, char **argv) {
+     return args::reset_admin_credentials();
+   }},
 };
 
 #ifdef _WIN32

@@ -13,6 +13,12 @@
 #include "crypto.h"
 #include "logging.h"
 
+#if defined(_WIN32)
+  #include <windows.h>
+#elif defined(__APPLE__) || defined(__linux__) || defined(__FreeBSD__)
+  #include <strings.h>
+#endif
+
 // OpenSSL 3.2+ ships Argon2id as a built-in KDF; older builds don't
 // expose EVP_KDF_ARGON2ID at all. Detect at compile time so we can
 // drop a clean stub on older toolchains while keeping the code path
@@ -363,6 +369,37 @@ namespace crypto {
     }
 #endif
     return false;
+  }
+
+  void secure_wipe(void *data, std::size_t bytes) {
+    if (!data || bytes == 0) {
+      return;
+    }
+#if defined(_WIN32)
+    SecureZeroMemory(data, bytes);
+#elif defined(__APPLE__) || defined(__linux__) || defined(__FreeBSD__)
+    explicit_bzero(data, bytes);
+#else
+    // Portable fallback: a volatile-pointer write loop the compiler is
+    // not allowed to elide. Slower than the platform primitives but
+    // semantically equivalent for our short buffer sizes.
+    volatile unsigned char *p = static_cast<volatile unsigned char *>(data);
+    while (bytes--) {
+      *p++ = 0;
+    }
+#endif
+  }
+
+  void secure_wipe(std::string &s) {
+    if (s.empty()) {
+      return;
+    }
+    // std::string::data() is non-const since C++17 and points at the
+    // underlying contiguous storage (whether SSO or heap). Zeroing it
+    // in place is well-defined; the size() value is unaffected, so
+    // callers typically let the string go out of scope immediately
+    // after.
+    secure_wipe(s.data(), s.size());
   }
 
   std::string argon2id(
