@@ -28,6 +28,7 @@
 
 // local includes
 #include "config.h"
+#include "cred_store/cred_store.h"
 #include "crypto.h"
 #include "file_handler.h"
 #include "httpcommon.h"
@@ -408,9 +409,24 @@ namespace http {
       creds_tree.put("salt", *salt);
       creds_tree.put("password", *password);
 
-      if (!statefile::atomic_write_json(creds_file, creds_tree)) {
-        BOOST_LOG(error) << "Credential migration: failed to write "sv << creds_file
-                         << "; admin credentials remain in shared state file"sv;
+      // Route through cred_store::store so the legacy credentials end
+      // up wherever the platform backend persists them — file on
+      // PR 2, Windows Credential Manager on PR 3+, libsecret/Keychain
+      // on PR 4+. The cred_store key matches the legacy `creds_file`
+      // path on the file backend, and the canonical vault target on
+      // the others.
+      std::ostringstream creds_blob;
+      try {
+        pt::write_json(creds_blob, creds_tree);
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Credential migration: failed to serialise creds for "sv
+                         << creds_file << ": " << e.what();
+        return;
+      }
+      if (!cred_store::store(creds_file, creds_blob.str())) {
+        BOOST_LOG(error) << "Credential migration: cred_store("sv
+                         << cred_store::backend_name() << ") rejected the write at "sv
+                         << creds_file << "; admin credentials remain in shared state file"sv;
         return;
       }
 
@@ -483,12 +499,25 @@ namespace http {
   int save_user_creds(const std::string &file, const std::string &username, const std::string &password, bool run_our_mouth) {
     pt::ptree outputTree;
 
-    // load_or_recover returns false if neither the primary file nor the .bak
-    // is readable — equivalent to "no existing creds", which is the
-    // first-run path. We intentionally do NOT bail in that case; we want
-    // to write fresh credentials over a corrupted-without-backup file
-    // because the alternative is leaving the user permanently locked out.
-    (void) statefile::load_or_recover(file, outputTree);
+    // Read the existing record via the credential store abstraction so
+    // we preserve any extra top-level keys that may have accumulated
+    // (e.g. legacy fields the migration path didn't strip). Failure to
+    // load is non-fatal — that's the "no existing creds" first-run
+    // path, and we intentionally do NOT bail because the alternative
+    // is leaving the user permanently locked out when the underlying
+    // store has been corrupted without an available backup.
+    {
+      std::string existing_blob;
+      if (cred_store::load(file, existing_blob) && !existing_blob.empty()) {
+        try {
+          std::istringstream in {existing_blob};
+          pt::read_json(in, outputTree);
+        } catch (const std::exception &) {
+          // Corrupt blob; proceed with a fresh tree.
+          outputTree.clear();
+        }
+      }
+    }
 
     const auto salt = crypto::rand_alphabet(16);
     outputTree.put("username", username);
@@ -523,8 +552,16 @@ namespace http {
       outputTree.put("password", util::hex(crypto::hash(password + salt)).to_string());
     }
 
-    if (!statefile::atomic_write_json(file, outputTree)) {
-      BOOST_LOG(error) << "error writing to the credentials file at "sv << file
+    std::ostringstream serialized;
+    try {
+      pt::write_json(serialized, outputTree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "save_user_creds: failed to serialise blob: " << e.what();
+      return -1;
+    }
+    if (!cred_store::store(file, serialized.str())) {
+      BOOST_LOG(error) << "error writing credentials via "sv
+                       << cred_store::backend_name() << " at "sv << file
                        << " - try running as an administrator if this persists"sv;
       return -1;
     }
@@ -534,8 +571,15 @@ namespace http {
   }
 
   bool user_creds_exist(const std::string &file) {
+    std::string blob;
+    if (!cred_store::load(file, blob) || blob.empty()) {
+      return false;
+    }
     pt::ptree inputTree;
-    if (!statefile::load_or_recover(file, inputTree)) {
+    try {
+      std::istringstream in {blob};
+      pt::read_json(in, inputTree);
+    } catch (const std::exception &) {
       return false;
     }
     return inputTree.find("username") != inputTree.not_found() &&
@@ -546,9 +590,19 @@ namespace http {
   // Caller must hold statefile::state_mutex() so the file we read isn't
   // being concurrently rewritten by save_user_creds or save_state.
   int reload_user_creds(const std::string &file) {
+    std::string blob;
+    if (!cred_store::load(file, blob) || blob.empty()) {
+      BOOST_LOG(error) << "loading user credentials: cred_store("sv
+                       << cred_store::backend_name() << ") returned no record for "sv
+                       << file;
+      return -1;
+    }
     pt::ptree inputTree;
-    if (!statefile::load_or_recover(file, inputTree)) {
-      BOOST_LOG(error) << "loading user credentials: unreadable file (no usable backup): "sv << file;
+    try {
+      std::istringstream in {blob};
+      pt::read_json(in, inputTree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "loading user credentials: parse failure (" << e.what() << ")";
       return -1;
     }
     try {
