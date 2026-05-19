@@ -25,6 +25,12 @@ const familyShareDisabled = computed(() => config.steam_auto_sync !== true);
       :disabled="familyShareDisabled"
       class="mb-6"
     />
+
+    <ConfigFieldRenderer
+      setting-key="nonsteam_shortcuts_auto_sync"
+      v-model="config.nonsteam_shortcuts_auto_sync"
+      class="mb-6"
+    />
   </div>
 </template>
 

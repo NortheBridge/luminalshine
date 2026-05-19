@@ -557,6 +557,8 @@
     "sw_tune_grain": "grain -- preserves the grain structure in old, grainy film material",
     "sw_tune_stillimage": "stillimage -- good for slideshow-like content",
     "sw_tune_zerolatency": "zerolatency -- good for fast encoding and low-latency streaming (default)",
+    "nonsteam_shortcuts_auto_sync": "Auto-sync non-Steam shortcuts",
+    "nonsteam_shortcuts_auto_sync_desc": "Also scan every Steam user's 'Add a Non-Steam Game' shortcuts (kept in each user's shortcuts.vdf) and surface them in Moonlight after the Steam Games section. Each shortcut launches via its stored Exe path with the StartDir as the working directory and any LaunchOptions appended — the same way Steam itself launches them. Generated entries live in a separate nonsg_apps.json file. Independent of the main Steam auto-sync toggle: you can enable shortcuts without enabling the full Steam library, or vice versa.",
     "steam_auto_sync": "Auto-sync Steam library",
     "steam_auto_sync_desc": "Scan the local Steam install for every installed game and surface them in the Moonlight app list under a dedicated 'Steam Games' section. The scan is read-only — LuminalShine never modifies Steam's own files — and runs every 30 seconds in the background so newly-installed games appear automatically. Generated entries live in a separate steam_apps.json file so they cannot corrupt your hand-curated apps.json; disabling this toggle hides the entries from Moonlight, and 'Clear Steam Library Cache' in Troubleshooting deletes the file from disk. Each game launches via the steam://rungameid/<appid> URL protocol so Steam handles the actual game launch whether the client is already running or not.",
     "steam_include_family_shared": "Include Family-Shared games",

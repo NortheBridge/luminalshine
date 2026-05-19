@@ -905,6 +905,7 @@ namespace config {
     // doesn't require a service restart.
     false,  // auto_sync
     true,   // include_family_shared
+    false,  // nonsteam_shortcuts_auto_sync
   };
 
   namespace {
@@ -1651,6 +1652,7 @@ namespace config {
     // same as pre-feature builds until the user opts in.
     bool_f(vars, "steam_auto_sync", config::steam.auto_sync);
     bool_f(vars, "steam_include_family_shared", config::steam.include_family_shared);
+    bool_f(vars, "nonsteam_shortcuts_auto_sync", config::steam.nonsteam_shortcuts_auto_sync);
 
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);

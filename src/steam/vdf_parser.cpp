@@ -263,4 +263,120 @@ namespace steam::vdf {
     return root;
   }
 
+  namespace {
+
+    enum BinaryTag : std::uint8_t {
+      kBinTagBlock = 0x00,
+      kBinTagString = 0x01,
+      kBinTagInt32 = 0x02,
+      kBinTagEndBlock = 0x08,
+    };
+
+    struct BinCursor {
+      const unsigned char *data;
+      size_t size;
+      size_t pos {0};
+
+      bool has(size_t n) const {
+        return pos + n <= size;
+      }
+
+      std::uint8_t read_u8() {
+        return data[pos++];
+      }
+
+      std::int32_t read_i32_le() {
+        const auto a = static_cast<std::uint32_t>(data[pos]);
+        const auto b = static_cast<std::uint32_t>(data[pos + 1]);
+        const auto c = static_cast<std::uint32_t>(data[pos + 2]);
+        const auto d = static_cast<std::uint32_t>(data[pos + 3]);
+        pos += 4;
+        return static_cast<std::int32_t>(a | (b << 8) | (c << 16) | (d << 24));
+      }
+
+      /// Read a null-terminated UTF-8 string. Returns nullopt if no
+      /// terminator is found before EOF (malformed input).
+      std::optional<std::string> read_cstr() {
+        size_t end = pos;
+        while (end < size && data[end] != 0) {
+          ++end;
+        }
+        if (end >= size) {
+          return std::nullopt;
+        }
+        std::string out(reinterpret_cast<const char *>(data + pos), end - pos);
+        pos = end + 1;  // skip the null
+        return out;
+      }
+    };
+
+    bool parse_bin_block(BinCursor &c, std::vector<Node> &out) {
+      for (;;) {
+        if (!c.has(1)) {
+          return false;
+        }
+        const auto tag = c.read_u8();
+        if (tag == kBinTagEndBlock) {
+          return true;
+        }
+        auto key = c.read_cstr();
+        if (!key) {
+          return false;
+        }
+        Node node;
+        node.key = std::move(*key);
+        if (tag == kBinTagBlock) {
+          node.value = std::vector<Node> {};
+          if (!parse_bin_block(c, std::get<std::vector<Node>>(node.value))) {
+            return false;
+          }
+        } else if (tag == kBinTagString) {
+          auto val = c.read_cstr();
+          if (!val) {
+            return false;
+          }
+          node.value = std::move(*val);
+        } else if (tag == kBinTagInt32) {
+          if (!c.has(4)) {
+            return false;
+          }
+          const auto v = c.read_i32_le();
+          node.value = std::to_string(v);
+        } else {
+          // Unknown tag — fail closed rather than guess at the layout.
+          return false;
+        }
+        out.emplace_back(std::move(node));
+      }
+    }
+
+  }  // namespace
+
+  std::unique_ptr<Node> parse_binary(std::string_view content) {
+    if (content.empty()) {
+      return nullptr;
+    }
+    BinCursor c {reinterpret_cast<const unsigned char *>(content.data()),
+                 content.size(),
+                 0};
+    // Top-level: a single 0x00-tagged block named "shortcuts" (or
+    // whatever the document's root key is). Mirror the text-parser
+    // behaviour: synthesise a root Node carrying the top-level key
+    // + its children.
+    if (!c.has(1) || c.read_u8() != kBinTagBlock) {
+      return nullptr;
+    }
+    auto root_key = c.read_cstr();
+    if (!root_key) {
+      return nullptr;
+    }
+    auto root = std::make_unique<Node>();
+    root->key = std::move(*root_key);
+    root->value = std::vector<Node> {};
+    if (!parse_bin_block(c, std::get<std::vector<Node>>(root->value))) {
+      return nullptr;
+    }
+    return root;
+  }
+
 }  // namespace steam::vdf

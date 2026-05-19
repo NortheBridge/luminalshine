@@ -154,6 +154,124 @@ TEST(VdfParserTests, LegacyLibraryfoldersFormatIsParseable) {
   EXPECT_EQ(root->find_string("2"), "E:\\OtherDrive\\Steam");
 }
 
+TEST(VdfParserTests, BinaryParsesShortcutsLikeBlob) {
+  // Hand-built fixture mirroring the shape of Steam's
+  // shortcuts.vdf. Top-level "shortcuts" block holding one indexed
+  // "0" child shortcut. We cover all three value tags (0x00 nested
+  // block, 0x01 string, 0x02 int32) plus the 0x08 end-of-block
+  // sentinel so the parser exercises every branch.
+  const std::string blob = std::string(
+                             "\x00"
+                             "shortcuts\x00"
+                             "\x00"
+                             "0\x00"
+                             "\x02"
+                             "appid\x00"
+                             "\x40\x30\x20\x10"  // 0x10203040 little-endian
+                             "\x01"
+                             "AppName\x00"
+                             "My Game\x00"
+                             "\x01"
+                             "Exe\x00"
+                             "\"C:\\Games\\game.exe\"\x00"
+                             "\x01"
+                             "StartDir\x00"
+                             "\"C:\\Games\\\"\x00"
+                             "\x01"
+                             "LaunchOptions\x00"
+                             "-foo -bar\x00"
+                             "\x00"
+                             "tags\x00"
+                             "\x08"
+                             "\x08"
+                             "\x08",
+                             // sizeof above char array (including the
+                             // intermediate NUL bytes that std::string
+                             // would otherwise truncate at)
+                             sizeof(
+                               "\x00"
+                               "shortcuts\x00"
+                               "\x00"
+                               "0\x00"
+                               "\x02"
+                               "appid\x00"
+                               "\x40\x30\x20\x10"
+                               "\x01"
+                               "AppName\x00"
+                               "My Game\x00"
+                               "\x01"
+                               "Exe\x00"
+                               "\"C:\\Games\\game.exe\"\x00"
+                               "\x01"
+                               "StartDir\x00"
+                               "\"C:\\Games\\\"\x00"
+                               "\x01"
+                               "LaunchOptions\x00"
+                               "-foo -bar\x00"
+                               "\x00"
+                               "tags\x00"
+                               "\x08"
+                               "\x08"
+                               "\x08"
+                             ) -
+                               1
+  );
+  auto root = vdf::parse_binary(blob);
+  ASSERT_NE(root, nullptr);
+  EXPECT_EQ(root->key, "shortcuts");
+  const auto *shortcut = root->find("0");
+  ASSERT_NE(shortcut, nullptr);
+  EXPECT_FALSE(shortcut->is_string());
+  EXPECT_EQ(shortcut->find_string("AppName"), "My Game");
+  EXPECT_EQ(shortcut->find_string("Exe"), "\"C:\\Games\\game.exe\"");
+  EXPECT_EQ(shortcut->find_string("StartDir"), "\"C:\\Games\\\"");
+  EXPECT_EQ(shortcut->find_string("LaunchOptions"), "-foo -bar");
+  EXPECT_EQ(shortcut->find_string("appid"), std::to_string(0x10203040));
+  // Empty nested block "tags" parses successfully even with no
+  // children — the 0x08 sentinel terminates it cleanly.
+  const auto *tags = shortcut->find("tags");
+  ASSERT_NE(tags, nullptr);
+  EXPECT_FALSE(tags->is_string());
+  EXPECT_EQ(tags->children().size(), 0u);
+}
+
+TEST(VdfParserTests, BinaryRejectsTruncatedInput) {
+  // Truncated mid-value-string: the close-NUL is missing.
+  const std::string blob(
+    "\x00"
+    "shortcuts\x00"
+    "\x01"
+    "key\x00"
+    "unterminated value",  // no trailing NUL
+    sizeof("\x00"
+           "shortcuts\x00"
+           "\x01"
+           "key\x00"
+           "unterminated value") -
+      1
+  );
+  EXPECT_EQ(vdf::parse_binary(blob), nullptr);
+}
+
+TEST(VdfParserTests, BinaryRejectsUnknownTag) {
+  // Unknown tag 0x05 must fail closed rather than silently swallow
+  // the rest of the stream.
+  const std::string blob(
+    "\x00"
+    "shortcuts\x00"
+    "\x05"
+    "weird\x00"
+    "\x08",
+    sizeof("\x00"
+           "shortcuts\x00"
+           "\x05"
+           "weird\x00"
+           "\x08") -
+      1
+  );
+  EXPECT_EQ(vdf::parse_binary(blob), nullptr);
+}
+
 TEST(VdfParserTests, AppManifestRealisticShape) {
   // Trimmed but structurally accurate sample of what Steam writes to
   // appmanifest_<appid>.acf for an installed game.

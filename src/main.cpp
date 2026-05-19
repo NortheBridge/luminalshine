@@ -19,6 +19,7 @@
 #include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
+#include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
 #include "system_tray.h"
 #include "update.h"
@@ -425,6 +426,13 @@ int main(int argc, char *argv[]) {
   // One-shot kick so an auto-sync that's already enabled at boot
   // doesn't wait the full 30s tick before surfacing entries.
   steam::sync::run_once(config::stream.file_apps);
+
+  // Non-Steam shortcuts auto-sync runs as its own worker; the two
+  // are independent (different files, different toggles) so a
+  // failure in one cannot stall the other.
+  auto nonsteam_shortcuts_sync_guard =
+    steam::sync_shortcuts::start_worker(config::stream.file_apps);
+  steam::sync_shortcuts::run_once(config::stream.file_apps);
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.

@@ -80,4 +80,30 @@ namespace steam::vdf {
    */
   std::unique_ptr<Node> parse(std::string_view content);
 
+  /**
+   * @brief Parse a Valve KeyValues v1 *binary* document. This is the
+   *        format Steam uses for `<userdata>/<steamid3>/config/
+   *        shortcuts.vdf` — a length-prefixed binary stream rather
+   *        than the quoted-string text format the rest of Steam
+   *        uses.
+   *
+   *        Wire format (per-entry):
+   *          [1 byte type tag]
+   *          [null-terminated key name]
+   *          [value bytes per type tag]
+   *
+   *        Type tags:
+   *          0x00 — nested block; followed by child entries until 0x08
+   *          0x01 — null-terminated UTF-8 string
+   *          0x02 — int32 little-endian (4 bytes)
+   *          0x08 — end-of-block sentinel (consumes no key, no value)
+   *
+   *        The returned tree's leaves carry strings — int32 values
+   *        are formatted as decimal strings on load so callers don't
+   *        have to thread the type information. Anything beyond the
+   *        documented type tags causes the parse to fail closed
+   *        (returns nullptr) rather than silently mis-interpret.
+   */
+  std::unique_ptr<Node> parse_binary(std::string_view content);
+
 }  // namespace steam::vdf

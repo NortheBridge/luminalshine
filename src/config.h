@@ -318,6 +318,15 @@ namespace config {
     /// default ON because family-shared games are launchable
     /// exactly like owned games.
     bool include_family_shared {true};
+
+    /// Auto-sync non-Steam shortcuts (the "Add a Non-Steam Game"
+    /// entries each Steam user has under
+    /// `<userdata>/<steamid3>/config/shortcuts.vdf`). When enabled,
+    /// the shortcut catalogue is written to `nonsg_apps.json` next
+    /// to apps.json and surfaced in Moonlight after the Steam Games
+    /// section. Default OFF; users opt in via the same Settings tab
+    /// as the master Steam toggle.
+    bool nonsteam_shortcuts_auto_sync {false};
   };
 
   namespace flag {

@@ -205,9 +205,13 @@ const defaultGroups = [
     options: {
       // Defaults mirror the C++ struct: feature OFF until the user
       // opts in; family-shared inclusion ON (the natural state for a
-      // user who has them in their library).
+      // user who has them in their library). Non-Steam shortcuts
+      // auto-sync is also OFF — it's an independent opt-in for users
+      // who have curated non-Steam games via Steam's "Add a Non-Steam
+      // Game" workflow.
       steam_auto_sync: false,
       steam_include_family_shared: true,
+      nonsteam_shortcuts_auto_sync: false,
     },
   },
   {

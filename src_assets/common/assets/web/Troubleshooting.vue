@@ -377,6 +377,57 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{
+                translate(
+                  'troubleshooting.clear_nonsteam_shortcuts',
+                  'Clear Non-Steam Shortcuts Cache',
+                )
+              }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.clear_nonsteam_shortcuts_desc',
+                  "Deletes the nonsg_apps.json catalogue written by the non-Steam shortcuts auto-sync. The Moonlight app list reverts to whatever your apps.json and (optionally) steam_apps.json produce. Toggling the shortcuts auto-sync off in Settings hides these entries from Moonlight without deleting the file; this card deletes the file from disk.",
+                )
+              }}
+            </p>
+          </div>
+          <n-button
+            type="error"
+            strong
+            :loading="clearNonsteamShortcutsPending"
+            :disabled="clearNonsteamShortcutsPending"
+            @click="confirmClearNonsteamShortcuts"
+          >
+            {{
+              clearNonsteamShortcutsPending
+                ? translate('troubleshooting.clear_nonsteam_shortcuts_pending', 'Clearing...')
+                : translate(
+                    'troubleshooting.clear_nonsteam_shortcuts',
+                    'Clear Non-Steam Shortcuts Cache',
+                  )
+            }}
+          </n-button>
+        </div>
+        <n-alert v-if="clearNonsteamShortcutsStatus === 'success'" type="success" class="mt-3">
+          {{
+            clearNonsteamShortcutsMessage ||
+            translate(
+              'troubleshooting.clear_nonsteam_shortcuts_success',
+              'Non-Steam shortcuts cache cleared.',
+            )
+          }}
+        </n-alert>
+        <n-alert v-else-if="clearNonsteamShortcutsStatus === 'error'" type="error" class="mt-3">
+          {{ clearNonsteamShortcutsMessage }}
+        </n-alert>
+      </section>
+
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 class="text-base font-semibold text-dark dark:text-light">
               {{ translate('troubleshooting.reset_state', 'Reset Stored Pairings') }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
@@ -658,6 +709,9 @@ const resetAdminCredsMessage = ref('');
 const clearSteamLibraryPending = ref(false);
 const clearSteamLibraryStatus = ref<null | 'success' | 'error'>(null);
 const clearSteamLibraryMessage = ref('');
+const clearNonsteamShortcutsPending = ref(false);
+const clearNonsteamShortcutsStatus = ref<null | 'success' | 'error'>(null);
+const clearNonsteamShortcutsMessage = ref('');
 const dialog = useDialog();
 
 type TdrLast = {
@@ -995,6 +1049,60 @@ function confirmClearSteamLibrary() {
     negativeText: translate('troubleshooting.cancel', 'Cancel'),
     onPositiveClick: async () => {
       await doClearSteamLibrary();
+    },
+  });
+}
+
+async function doClearNonsteamShortcuts() {
+  clearNonsteamShortcutsPending.value = true;
+  clearNonsteamShortcutsStatus.value = null;
+  clearNonsteamShortcutsMessage.value = '';
+  try {
+    const r = await http.post(
+      './api/state/reset-nonsteam-shortcuts-cache',
+      {},
+      { validateStatus: () => true },
+    );
+    const body = (r.data || {}) as { status?: boolean; message?: string };
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      clearNonsteamShortcutsStatus.value = 'success';
+      clearNonsteamShortcutsMessage.value =
+        (typeof body.message === 'string' && body.message) ||
+        translate(
+          'troubleshooting.clear_nonsteam_shortcuts_success',
+          'Non-Steam shortcuts cache cleared.',
+        );
+    } else {
+      clearNonsteamShortcutsStatus.value = 'error';
+      clearNonsteamShortcutsMessage.value =
+        (typeof body.message === 'string' && body.message) || `HTTP ${r.status}`;
+    }
+  } catch (e: unknown) {
+    clearNonsteamShortcutsStatus.value = 'error';
+    clearNonsteamShortcutsMessage.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    clearNonsteamShortcutsPending.value = false;
+  }
+}
+
+function confirmClearNonsteamShortcuts() {
+  if (clearNonsteamShortcutsPending.value) return;
+  dialog.warning({
+    title: translate(
+      'troubleshooting.clear_nonsteam_shortcuts_confirm_title',
+      'Clear Non-Steam Shortcuts Cache?',
+    ),
+    content: translate(
+      'troubleshooting.clear_nonsteam_shortcuts_confirm_body',
+      'The nonsg_apps.json catalogue will be deleted from disk and the non-Steam shortcut entries will disappear from Moonlight. Your hand-curated apps.json (Desktop, Steam, anything you added by hand) and the Steam library catalogue are NOT touched. If the non-Steam shortcuts auto-sync toggle is still ON, the catalogue will be re-generated on the next 30-second sync tick. Continue?',
+    ),
+    positiveText: translate(
+      'troubleshooting.clear_nonsteam_shortcuts_confirm_yes',
+      'Clear cache',
+    ),
+    negativeText: translate('troubleshooting.cancel', 'Cancel'),
+    onPositiveClick: async () => {
+      await doClearNonsteamShortcuts();
     },
   });
 }

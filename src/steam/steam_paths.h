@@ -69,4 +69,26 @@ namespace steam::paths {
    */
   std::optional<std::filesystem::path> librarycache_dir();
 
+  /**
+   * @brief One per-user Steam profile directory under
+   *        `<steam_root>/userdata/<steamid3>/`. The Steam ID is a
+   *        decimal string (the SteamID3 32-bit account number).
+   *        Used by the non-Steam shortcuts sync (PR 3) to locate
+   *        each user's `config/shortcuts.vdf` and `config/grid/`
+   *        artwork directory.
+   */
+  struct UserdataDir {
+    std::string steamid3;
+    std::filesystem::path path;
+  };
+
+  /**
+   * @brief Enumerate every `<root>/userdata/<steamid3>/` subdirectory
+   *        on the host. Returns empty when Steam isn't installed or
+   *        no user has signed in (the `userdata/` dir doesn't exist
+   *        until first Steam login). Excludes the special "0/" and
+   *        "anonymous" subdirectories Steam uses for offline profiles.
+   */
+  std::vector<UserdataDir> userdata_dirs();
+
 }  // namespace steam::paths

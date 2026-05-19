@@ -10,6 +10,8 @@
 #include "src/logging.h"
 #include "src/steam/vdf_parser.h"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 
@@ -192,6 +194,42 @@ namespace steam::paths {
       return std::nullopt;
     }
     return cache;
+  }
+
+  std::vector<UserdataDir> userdata_dirs() {
+    std::vector<UserdataDir> out;
+    const auto root = steam_install_root();
+    if (!root) {
+      return out;
+    }
+    const fs::path udata = *root / "userdata";
+    std::error_code ec;
+    if (!fs::exists(udata, ec) || !fs::is_directory(udata, ec)) {
+      return out;
+    }
+    for (const auto &entry : fs::directory_iterator(udata, ec)) {
+      if (ec) {
+        break;
+      }
+      if (!entry.is_directory()) {
+        continue;
+      }
+      const auto name = entry.path().filename().string();
+      // Steam uses "0" for offline / anonymous profiles. Skip those —
+      // they don't carry usable shortcuts.vdf content for the
+      // logged-in user's library view.
+      if (name == "0" || name == "anonymous") {
+        continue;
+      }
+      // SteamID3 is a decimal account number; reject anything else
+      // (Steam itself doesn't write non-numeric subdirs but third
+      // -party tools occasionally drop scratch files in userdata/).
+      if (name.empty() || !std::all_of(name.begin(), name.end(), ::isdigit)) {
+        continue;
+      }
+      out.push_back({name, entry.path()});
+    }
+    return out;
   }
 
 }  // namespace steam::paths

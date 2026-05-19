@@ -63,6 +63,7 @@
   #include "platform/windows/sudovda_recovery.h"
 #endif
 #include "cred_store/cred_store.h"
+#include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
 
 #ifdef _WIN32
@@ -829,6 +830,34 @@ namespace confighttp {
       steam::sync::clear_cache(config::stream.file_apps);
       out["status"] = true;
       out["message"] = "Steam library cache cleared.";
+    } catch (const std::exception &e) {
+      out["status"] = false;
+      out["message"] = std::string {"clear_cache threw: "} + e.what();
+    }
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Clear the non-Steam shortcuts catalogue. Mirror of
+   *        resetSteamLibraryCache for the second auto-sync source.
+   *        Deletes `nonsg_apps.json` and refreshes proc.
+   *
+   * @api_examples{/api/state/reset-nonsteam-shortcuts-cache| POST| {"status":true,"message":"Non-Steam shortcuts cache cleared."}}
+   */
+  void resetNonsteamShortcutsCache(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    nlohmann::json out;
+    try {
+      steam::sync_shortcuts::clear_cache(config::stream.file_apps);
+      out["status"] = true;
+      out["message"] = "Non-Steam shortcuts cache cleared.";
     } catch (const std::exception &e) {
       out["status"] = false;
       out["message"] = std::string {"clear_cache threw: "} + e.what();
@@ -2443,14 +2472,15 @@ namespace confighttp {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;
-          // The Steam Library auto-sync toggle gates whether the
+          // The Steam Library Integration toggles gate whether the
           // generated entries are surfaced to Moonlight. Toggling
-          // it ON (or flipping the family-share preference) should
-          // not require waiting for the 30s background tick — kick
-          // a one-shot sync and refresh now so the change is
-          // instantly visible. Both calls are cheap no-ops when the
+          // any of them ON should not require waiting for the 30s
+          // background tick — kick a one-shot sync from each worker
+          // and refresh proc so the change is instantly visible.
+          // All three calls are cheap no-ops when their respective
           // master toggle ends up off or when Steam isn't installed.
           steam::sync::run_once(config::stream.file_apps);
+          steam::sync_shortcuts::run_once(config::stream.file_apps);
           proc::refresh(config::stream.file_apps);
         } else {
           config::mark_deferred_reload();
@@ -4109,6 +4139,7 @@ namespace confighttp {
     register_api_route("^/api/state/reset$", "POST", resetStoredState);
     register_api_route("^/api/state/reset-admin-credentials$", "POST", resetAdminCredentials);
     register_api_route("^/api/state/reset-steam-library-cache$", "POST", resetSteamLibraryCache);
+    register_api_route("^/api/state/reset-nonsteam-shortcuts-cache$", "POST", resetNonsteamShortcutsCache);
     register_api_route("^/api/health/tdr$", "GET", getTdrHealth);
     register_api_route("^/api/clients/list$", "GET", getClients);
     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);
