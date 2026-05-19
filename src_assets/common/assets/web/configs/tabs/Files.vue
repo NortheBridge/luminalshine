@@ -1,9 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+import { storeToRefs } from 'pinia';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
 import { useConfigStore } from '@/stores/config';
 
 const store = useConfigStore();
+const { metadata } = storeToRefs(store);
 const config = store.config;
+const platform = computed(() => (metadata.value?.platform || '').toString().toLowerCase());
 </script>
 
 <template>
@@ -20,6 +24,13 @@ const config = store.config;
       v-model="config.credentials_file"
       class="mb-6"
       placeholder="sunshine_state.json"
+    />
+
+    <ConfigFieldRenderer
+      v-if="platform === 'windows'"
+      setting-key="tpm_binding"
+      v-model="config.tpm_binding"
+      class="mb-6"
     />
 
     <ConfigFieldRenderer

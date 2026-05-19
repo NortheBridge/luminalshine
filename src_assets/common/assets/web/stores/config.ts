@@ -191,6 +191,7 @@ const defaultGroups = [
     options: {
       file_apps: '',
       credentials_file: '',
+      tpm_binding: true,
       log_path: '',
       pkey: '',
       cert: '',

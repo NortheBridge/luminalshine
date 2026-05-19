@@ -1630,6 +1630,11 @@ namespace config {
     }
     path_f(vars, "credentials_file", config::sunshine.credentials_file);
 
+    // tpm_binding is read every save() in cred_store_windows.cpp so the
+    // toggle takes effect on the next credential write — no restart
+    // needed. On non-Windows the flag is parsed but ignored.
+    bool_f(vars, "tpm_binding", config::sunshine.tpm_binding);
+
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
 

@@ -559,6 +559,8 @@
     "sw_tune_zerolatency": "zerolatency -- good for fast encoding and low-latency streaming (default)",
     "system_tray": "Enable system tray",
     "system_tray_desc": "Show icon in system tray and display desktop notifications",
+    "tpm_binding": "TPM-bind admin credentials (Windows)",
+    "tpm_binding_desc": "When enabled, the saved admin username and password blob is encrypted with a non-exportable RSA-2048 key sealed in the local TPM (Microsoft Platform Crypto Provider) before being written to Windows Credential Manager. An attacker who acquires the credential bytes — for example by booting a recovery OS and reading the WCM database — cannot decrypt them without the original TPM. Silently does nothing on hosts without a TPM 2.0 chip. Toggling this off rewrites the credential as plain on the next save; toggling it on rewrites it sealed on the next save. Recovery via 'Reset Admin Credentials' in Troubleshooting works either way.",
     "touchpad_as_ds4": "Emulate a DS4 gamepad if the client gamepad reports a touchpad is present",
     "touchpad_as_ds4_desc": "If disabled, touchpad presence will not be taken into account during gamepad type selection.",
     "upnp": "UPnP",

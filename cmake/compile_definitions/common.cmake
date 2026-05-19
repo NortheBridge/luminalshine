@@ -156,7 +156,9 @@ set(SUNSHINE_TARGET_FILES
 # system secret store ship the plain file backend.
 if(WIN32)
     list(APPEND SUNSHINE_TARGET_FILES
-        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_windows.cpp")
+        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_windows.cpp"
+        "${CMAKE_SOURCE_DIR}/src/cred_store/tpm_seal_windows.cpp"
+        "${CMAKE_SOURCE_DIR}/src/cred_store/tpm_seal_windows.h")
 elseif(APPLE)
     list(APPEND SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_macos.cpp")

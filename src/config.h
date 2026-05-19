@@ -350,6 +350,21 @@ namespace config {
     std::uint32_t argon2_t_cost {3};          ///< Iteration count (Argon2id only). 3 default.
     std::uint32_t argon2_parallel {1};        ///< Parallelism / lanes (Argon2id only). 1 default.
 
+    /**
+     * Wrap the persisted admin credential blob with a TPM-bound RSA-2048
+     * key before storing it. The field is platform-agnostic so the
+     * config parser doesn't need a per-OS branch, but the value is only
+     * consulted by the Windows cred_store backend (via the Microsoft
+     * Platform Crypto Provider). Default true so Windows 10+ users with
+     * a TPM 2.0 chip gain drive-theft resistance without needing to flip
+     * a setting; silently ignored when the TPM is missing or the
+     * provider can't be opened. The toggle is read every time
+     * cred_store::store() is called, so flipping it propagates on the
+     * next credential save (login, password change, etc.). Load
+     * auto-detects the sealing envelope independent of this flag.
+     */
+    bool tpm_binding {true};
+
     std::string config_file;
 
     struct cmd_t {

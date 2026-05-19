@@ -32,6 +32,7 @@
 #include "src/cred_store/cred_store.h"
 
 #include "src/config.h"
+#include "src/cred_store/tpm_seal_windows.h"
 #include "src/logging.h"
 
 #include <boost/property_tree/json_parser.hpp>
@@ -204,6 +205,9 @@ namespace cred_store {
   }  // namespace
 
   std::string backend_name() {
+    if (config::sunshine.tpm_binding && tpm_seal::available()) {
+      return std::string {kBackendName} + " + tpm";
+    }
     return kBackendName;
   }
 
@@ -238,8 +242,9 @@ namespace cred_store {
     if (!cred) {
       return false;
     }
+    std::string raw;
     if (cred->CredentialBlobSize > 0 && cred->CredentialBlob) {
-      out.assign(
+      raw.assign(
         reinterpret_cast<const char *>(cred->CredentialBlob),
         static_cast<size_t>(cred->CredentialBlobSize)
       );
@@ -248,6 +253,26 @@ namespace cred_store {
     // caller is expected to SecureZeroMemory the returned string when
     // done (PR 6 lands that discipline on the verification paths).
     CredFree(cred);
+    if (raw.empty()) {
+      return false;
+    }
+
+    // Transparently unseal if the entry was written by a TPM-binding
+    // build. We do this regardless of the current tpm_binding setting
+    // — flipping the toggle to "off" should still let the user log in
+    // with credentials that were last written under "on", and a
+    // subsequent save will rewrite them as plain.
+    if (tpm_seal::looks_sealed(raw)) {
+      if (!tpm_seal::unseal(raw, out)) {
+        BOOST_LOG(error) << "cred_store(wcm): credential entry is TPM-sealed but "
+                         << "unseal failed; the credential cannot be read on this "
+                         << "host. Use Troubleshooting -> Reset Admin Credentials "
+                         << "to recover.";
+        return false;
+      }
+      return !out.empty();
+    }
+    out = std::move(raw);
     return !out.empty();
   }
 
@@ -256,11 +281,26 @@ namespace cred_store {
                  // only consulted for the legacy-file import probe.
     maybe_import_file_once(key);
 
+    // Decide whether to wrap the blob with the TPM before persistence.
+    // tpm_binding is default-true on Windows; when the TPM is missing
+    // we silently store plaintext (matches the pre-PR-5 behaviour) so
+    // a TPM-less host is never bricked by a config default.
+    std::string sealed;
+    std::string_view to_store = blob;
+    if (config::sunshine.tpm_binding && tpm_seal::available()) {
+      if (tpm_seal::seal(blob, sealed)) {
+        to_store = sealed;
+      } else {
+        BOOST_LOG(warning) << "cred_store(wcm): TPM seal failed; falling back to "
+                           << "unwrapped storage for this write.";
+      }
+    }
+
     CREDENTIALW cred {};
     cred.Type = CRED_TYPE_GENERIC;
     cred.TargetName = const_cast<LPWSTR>(kTargetName);
-    cred.CredentialBlobSize = static_cast<DWORD>(blob.size());
-    cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(blob.data()));
+    cred.CredentialBlobSize = static_cast<DWORD>(to_store.size());
+    cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(to_store.data()));
     cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
     std::wstring username_label = L"LuminalShine";
     cred.UserName = username_label.data();
