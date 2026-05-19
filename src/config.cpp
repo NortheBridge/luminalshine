@@ -897,6 +897,16 @@ namespace config {
     false  // legacy_auto_detect
   };
 
+  steam_t steam {
+    // Steam Library Integration — defaults: feature OFF; if enabled,
+    // family-shared games are included. The bool_f parser reads the
+    // live values from sunshine.conf each parse pass; the background
+    // worker reads them via the extern on every 30s tick so toggling
+    // doesn't require a service restart.
+    false,  // auto_sync
+    true,   // include_family_shared
+  };
+
   namespace {
     constexpr int default_min_log_level() {
 #ifdef PROJECT_VERSION_PRERELEASE
@@ -1633,6 +1643,14 @@ namespace config {
     // toggle takes effect on the next credential write — no restart
     // needed. On non-Windows the flag is parsed but ignored.
     bool_f(vars, "tpm_binding", config::sunshine.tpm_binding);
+
+    // Steam Library Integration toggles. The background sync worker
+    // reads these live on every 30s tick, so flipping the toggle via
+    // /api/config takes effect on the next tick (or immediately on
+    // service restart). Defaults OFF — fresh installs behave the
+    // same as pre-feature builds until the user opts in.
+    bool_f(vars, "steam_auto_sync", config::steam.auto_sync);
+    bool_f(vars, "steam_include_family_shared", config::steam.include_family_shared);
 
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);

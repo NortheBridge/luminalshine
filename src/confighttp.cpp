@@ -63,6 +63,7 @@
   #include "platform/windows/sudovda_recovery.h"
 #endif
 #include "cred_store/cred_store.h"
+#include "steam/steam_sync.h"
 
 #ifdef _WIN32
   #include "platform/windows/diag_info.h"
@@ -796,6 +797,42 @@ namespace confighttp {
     out["message"] = "Admin credentials removed; next Web UI visit will prompt for a new user.";
     BOOST_LOG(warning) << "Admin credentials reset via /api/state/reset-admin-credentials "
                        << "(backend=" << cred_store::backend_name() << ").";
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Clear the Steam library auto-sync catalogue. Deletes the
+   *        `steam_apps.json` file next to apps.json and refreshes the
+   *        in-memory proc state so the entries disappear from
+   *        Moonlight immediately. The hand-curated apps.json is not
+   *        touched.
+   *
+   *        If the Steam auto-sync toggle is still on, the background
+   *        worker will re-generate the file on its next 30-second
+   *        tick. Users who want the cache to stay gone should turn
+   *        the toggle off first (or in either order — clearing the
+   *        file while the toggle is on is safe, just temporary).
+   *
+   * @api_examples{/api/state/reset-steam-library-cache| POST| {"status":true,"message":"Steam library cache cleared."}}
+   */
+  void resetSteamLibraryCache(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    nlohmann::json out;
+    try {
+      steam::sync::clear_cache(config::stream.file_apps);
+      out["status"] = true;
+      out["message"] = "Steam library cache cleared.";
+    } catch (const std::exception &e) {
+      out["status"] = false;
+      out["message"] = std::string {"clear_cache threw: "} + e.what();
+    }
     send_response(response, out);
   }
 
@@ -2406,6 +2443,15 @@ namespace confighttp {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;
+          // The Steam Library auto-sync toggle gates whether the
+          // generated entries are surfaced to Moonlight. Toggling
+          // it ON (or flipping the family-share preference) should
+          // not require waiting for the 30s background tick — kick
+          // a one-shot sync and refresh now so the change is
+          // instantly visible. Both calls are cheap no-ops when the
+          // master toggle ends up off or when Steam isn't installed.
+          steam::sync::run_once(config::stream.file_apps);
+          proc::refresh(config::stream.file_apps);
         } else {
           config::mark_deferred_reload();
           deferred = true;
@@ -4062,6 +4108,7 @@ namespace confighttp {
     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
     register_api_route("^/api/state/reset$", "POST", resetStoredState);
     register_api_route("^/api/state/reset-admin-credentials$", "POST", resetAdminCredentials);
+    register_api_route("^/api/state/reset-steam-library-cache$", "POST", resetSteamLibraryCache);
     register_api_route("^/api/health/tdr$", "GET", getTdrHealth);
     register_api_route("^/api/clients/list$", "GET", getClients);
     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);

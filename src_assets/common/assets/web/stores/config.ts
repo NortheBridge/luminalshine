@@ -200,10 +200,21 @@ const defaultGroups = [
     },
   },
   {
+    id: 'steamlibrary',
+    name: 'Steam Library Integration',
+    options: {
+      // Defaults mirror the C++ struct: feature OFF until the user
+      // opts in; family-shared inclusion ON (the natural state for a
+      // user who has them in their library).
+      steam_auto_sync: false,
+      steam_include_family_shared: true,
+    },
+  },
+  {
     id: 'playnite',
     name: 'Playnite',
     options: {
-      playnite_auto_sync: true,
+      playnite_auto_sync: false,
       playnite_sync_all_installed: false,
       playnite_recent_games: 10,
       playnite_recent_max_age_days: 0,

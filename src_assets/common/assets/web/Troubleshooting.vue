@@ -332,6 +332,51 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{
+                translate('troubleshooting.clear_steam_library', 'Clear Steam Library Cache')
+              }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.clear_steam_library_desc',
+                  'Deletes the steam_apps.json catalogue written by the Steam library auto-sync. The Moonlight app list reverts to just your hand-curated apps.json entries until the next sync tick (or until you reload apps.json). Toggling Steam auto-sync off in Settings hides these entries from Moonlight without deleting the file; this card deletes the file from disk.',
+                )
+              }}
+            </p>
+          </div>
+          <n-button
+            type="error"
+            strong
+            :loading="clearSteamLibraryPending"
+            :disabled="clearSteamLibraryPending"
+            @click="confirmClearSteamLibrary"
+          >
+            {{
+              clearSteamLibraryPending
+                ? translate('troubleshooting.clear_steam_library_pending', 'Clearing...')
+                : translate('troubleshooting.clear_steam_library', 'Clear Steam Library Cache')
+            }}
+          </n-button>
+        </div>
+        <n-alert v-if="clearSteamLibraryStatus === 'success'" type="success" class="mt-3">
+          {{
+            clearSteamLibraryMessage ||
+            translate(
+              'troubleshooting.clear_steam_library_success',
+              'Steam library cache cleared.',
+            )
+          }}
+        </n-alert>
+        <n-alert v-else-if="clearSteamLibraryStatus === 'error'" type="error" class="mt-3">
+          {{ clearSteamLibraryMessage }}
+        </n-alert>
+      </section>
+
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 class="text-base font-semibold text-dark dark:text-light">
               {{ translate('troubleshooting.reset_state', 'Reset Stored Pairings') }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
@@ -610,6 +655,9 @@ const resetStateArchived = ref<string[]>([]);
 const resetAdminCredsPending = ref(false);
 const resetAdminCredsStatus = ref<null | 'success' | 'error'>(null);
 const resetAdminCredsMessage = ref('');
+const clearSteamLibraryPending = ref(false);
+const clearSteamLibraryStatus = ref<null | 'success' | 'error'>(null);
+const clearSteamLibraryMessage = ref('');
 const dialog = useDialog();
 
 type TdrLast = {
@@ -893,6 +941,60 @@ function confirmResetAdminCreds() {
     negativeText: translate('troubleshooting.cancel', 'Cancel'),
     onPositiveClick: async () => {
       await doResetAdminCreds();
+    },
+  });
+}
+
+async function doClearSteamLibrary() {
+  clearSteamLibraryPending.value = true;
+  clearSteamLibraryStatus.value = null;
+  clearSteamLibraryMessage.value = '';
+  try {
+    const r = await http.post(
+      './api/state/reset-steam-library-cache',
+      {},
+      { validateStatus: () => true },
+    );
+    const body = (r.data || {}) as { status?: boolean; message?: string };
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      clearSteamLibraryStatus.value = 'success';
+      clearSteamLibraryMessage.value =
+        (typeof body.message === 'string' && body.message) ||
+        translate(
+          'troubleshooting.clear_steam_library_success',
+          'Steam library cache cleared.',
+        );
+    } else {
+      clearSteamLibraryStatus.value = 'error';
+      clearSteamLibraryMessage.value =
+        (typeof body.message === 'string' && body.message) || `HTTP ${r.status}`;
+    }
+  } catch (e: unknown) {
+    clearSteamLibraryStatus.value = 'error';
+    clearSteamLibraryMessage.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    clearSteamLibraryPending.value = false;
+  }
+}
+
+function confirmClearSteamLibrary() {
+  if (clearSteamLibraryPending.value) return;
+  dialog.warning({
+    title: translate(
+      'troubleshooting.clear_steam_library_confirm_title',
+      'Clear Steam Library Cache?',
+    ),
+    content: translate(
+      'troubleshooting.clear_steam_library_confirm_body',
+      'The steam_apps.json catalogue will be deleted from disk and the Steam game entries will disappear from Moonlight. Your hand-curated apps.json (Desktop, Steam, anything you added by hand) is NOT touched. If the Steam auto-sync toggle is still ON, the catalogue will be re-generated on the next 30-second sync tick. Continue?',
+    ),
+    positiveText: translate(
+      'troubleshooting.clear_steam_library_confirm_yes',
+      'Clear cache',
+    ),
+    negativeText: translate('troubleshooting.cancel', 'Cancel'),
+    onPositiveClick: async () => {
+      await doClearSteamLibrary();
     },
   });
 }

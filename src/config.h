@@ -296,6 +296,30 @@ namespace config {
     bool legacy_auto_detect {false};
   };
 
+  /**
+   * @brief Steam Library Integration settings. Drives the Steam
+   *        auto-sync feature that scans installed Steam games on
+   *        the host and exposes them as launchable LuminalShine apps
+   *        in a separate `steam_apps.json` catalogue.
+   *
+   *        Default OFF — a fresh install behaves identically to
+   *        pre-feature builds; the user opts in via the new
+   *        "Steam Library" Settings tab.
+   */
+  struct steam_t {
+    /// Master toggle for the Steam library auto-sync feature.
+    /// When false, the background worker tick is a no-op and the
+    /// catalogue file is left untouched.
+    bool auto_sync {false};
+
+    /// Whether to include games that the user has access to via
+    /// Steam Family Sharing (vs. only games they own outright).
+    /// Detected from the `SharedDepots` block in each appmanifest;
+    /// default ON because family-shared games are launchable
+    /// exactly like owned games.
+    bool include_family_shared {true};
+  };
+
   namespace flag {
     enum flag_e : std::size_t {
       PIN_STDIN = 0,  ///< Read PIN from stdin instead of http
@@ -395,6 +419,7 @@ namespace config {
   extern frame_limiter_t frame_limiter;
   extern rtss_t rtss;
   extern lossless_scaling_t lossless_scaling;
+  extern steam_t steam;
   extern sunshine_t sunshine;
 
   int parse(int argc, char *argv[]);

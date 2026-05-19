@@ -19,6 +19,7 @@
 #include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
+#include "steam/steam_sync.h"
 #include "system_tray.h"
 #include "update.h"
 #include "upnp.h"
@@ -413,6 +414,17 @@ int main(int argc, char *argv[]) {
 #endif
 
   proc::refresh(config::stream.file_apps);
+
+  // Steam library auto-sync worker. Started unconditionally — the
+  // worker reads `config::steam.auto_sync` live on every 30s tick and
+  // no-ops when the toggle is off, so the cost of always starting it
+  // is one sleeping thread. Returning the guard here ties its lifetime
+  // to the rest of `main`'s scope; the destructor stops the thread on
+  // shutdown.
+  auto steam_sync_guard = steam::sync::start_worker(config::stream.file_apps);
+  // One-shot kick so an auto-sync that's already enabled at boot
+  // doesn't wait the full 30s tick before surfacing entries.
+  steam::sync::run_once(config::stream.file_apps);
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.

@@ -2692,7 +2692,16 @@ namespace proc {
     const std::string steam_apps_path = (base / "steam_apps.json").string();
     const std::string nonsg_apps_path = (base / "nonsg_apps.json").string();
 
-    auto steam_apps = parse_auto_apps(steam_apps_path, env, used_ids, "steam:"sv);
+    // Each auto-apps source is gated by its master toggle so flipping
+    // the toggle off immediately hides the entries from Moonlight,
+    // even though the on-disk catalogue file is left alone (deletion
+    // is the explicit "Clear Cache" Troubleshooting action). The
+    // nonsteam toggle doesn't exist yet — PR 3 wires it; for now the
+    // nonsg_apps.json file is read unconditionally and the absence
+    // of the file is the off state.
+    auto steam_apps = config::steam.auto_sync
+                        ? parse_auto_apps(steam_apps_path, env, used_ids, "steam:"sv)
+                        : std::vector<ctx_t> {};
     auto nonsg_apps = parse_auto_apps(nonsg_apps_path, env, used_ids, "nonsg:"sv);
 
     auto merged = merge_app_lists(
