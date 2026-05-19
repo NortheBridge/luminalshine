@@ -2,8 +2,7 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+The following versions of LuminalShine are currently supported, depreciated, or have reached end of life (EOL).
 
 | Version   | Supported          |
 | --------- | ------------------ |
