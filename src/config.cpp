@@ -909,26 +909,25 @@ namespace config {
     }
   }  // namespace
 
+  // Designated initializers so the init is robust against struct
+  // reordering. Fields not listed take their in-class defaults
+  // (password_kdf, argon2_*, tpm_binding, etc.). Prior positional form
+  // got out of sync with the credential-hardening series' added
+  // fields; under -std=gnu++23 the narrowing conversions surface as
+  // hard errors.
   sunshine_t sunshine {
-    "en",  // locale
-    default_min_log_level(),  // min_log_level
-    0,  // flags
-    {},  // User file
-    {},  // Username
-    {},  // Password
-    {},  // Password Salt
-    platf::appdata().string() + "/sunshine.conf",  // config file
-    {},  // cmd args
-    47989,  // Base port number
-    "ipv4",  // Address family
-    {},  // Bind address
-    platf::appdata().string() + "/sunshine.log",  // log file
-    true,  // notify_pre_releases (default-on so Windows Insider Preview hosts get prerelease fixes; falls back to GA when no newer prerelease exists)
-    true,  // system_tray
-    {},  // prep commands
-    std::chrono::hours {2},  // session_token_ttl default 2h
-    std::chrono::hours {24 * 7},  // remember_me_refresh_token_ttl default 7d
-    86400  // update_check_interval_seconds default 24h
+    .locale = "en",
+    .min_log_level = default_min_log_level(),
+    .flags = 0,
+    .config_file = platf::appdata().string() + "/sunshine.conf",
+    .port = 47989,
+    .address_family = "ipv4",
+    .log_file = platf::appdata().string() + "/sunshine.log",
+    .notify_pre_releases = true,  // default-on so Insider Preview hosts get prerelease fixes; falls back to GA when none newer exists
+    .system_tray = true,
+    .session_token_ttl = std::chrono::hours {2},
+    .remember_me_refresh_token_ttl = std::chrono::hours {24 * 7},
+    .update_check_interval_seconds = 86400,  // 24h
   };
 
   namespace {

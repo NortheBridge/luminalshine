@@ -29,6 +29,14 @@
   #define LUMINALSHINE_HAVE_ARGON2ID 0
 #endif
 
+// `OSSL_KDF_NAME_ARGON2ID` is the canonical macro from
+// <openssl/core_names.h>, but some 3.2+ distributions (notably the
+// MSYS2 UCRT64 packaging exercised by the coverage CI) ship a
+// core_names.h that doesn't expose it. Reference the algorithm by its
+// OpenSSL canonical name string directly so the fetch works regardless
+// of which macro vocabulary the SDK has.
+#define LUMINALSHINE_ARGON2ID_NAME "argon2id"
+
 namespace crypto {
   using asn1_string_t = util::safe_ptr<ASN1_STRING, ASN1_STRING_free>;
 
@@ -362,7 +370,7 @@ namespace crypto {
 
   bool argon2id_available() {
 #if LUMINALSHINE_HAVE_ARGON2ID
-    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, OSSL_KDF_NAME_ARGON2ID, nullptr);
+    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, LUMINALSHINE_ARGON2ID_NAME, nullptr);
     if (kdf) {
       EVP_KDF_free(kdf);
       return true;
@@ -416,7 +424,7 @@ namespace crypto {
       return {};
     }
 
-    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, OSSL_KDF_NAME_ARGON2ID, nullptr);
+    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, LUMINALSHINE_ARGON2ID_NAME, nullptr);
     if (!kdf) {
       // OpenSSL built without ARGON2ID provider — should be caught by
       // argon2id_available() at startup, but guard here too.
