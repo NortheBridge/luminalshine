@@ -28,6 +28,7 @@ LuminalShine began as a fork of **Vibeshine** specifically to address deficienci
 | **RAM** | 8 GB | 16 GB+ |
 | **Display Stack** | WDDM 3.0 | WDDM 3.2+ with HDR-capable physical or virtual display at 240 Hz for frame-gen capture |
 | **Network** | 1 Gbps wired or Wi-Fi 6 | 2.5 Gbps wired or Wi-Fi 6E/7 |
+| **PowerShell** | Windows PowerShell 5.1 | [PowerShell 7](https://github.com/PowerShell/PowerShell) <sub>*— PowerShell 7 supersedes Windows PowerShell as Microsoft's current shell; LuminalShine's MSI custom actions automatically prefer it when installed.*</sub> |
 | **Privileges** | Local administrator for install and service registration | TPM 2.0 (used for credential sealing) |
 
 > LuminalShine is **Windows-only by design**. Linux and macOS support from upstream Sunshine has been deprecated to allow the team to focus entirely on the Windows platform. Multi-platform support may return in the future but is not on the current roadmap.
