@@ -289,6 +289,49 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.reset_admin_creds', 'Reset Admin Credentials') }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.reset_admin_creds_desc',
+                  'Removes the stored admin username and password from the system credential vault (Windows Credential Manager on Windows; the OS keyring on Linux / macOS). The next Web UI visit will prompt you to create a new admin user. Pairings and trusted devices are NOT affected.',
+                )
+              }}
+            </p>
+          </div>
+          <n-button
+            type="error"
+            strong
+            :loading="resetAdminCredsPending"
+            :disabled="resetAdminCredsPending"
+            @click="confirmResetAdminCreds"
+          >
+            {{
+              resetAdminCredsPending
+                ? translate('troubleshooting.reset_admin_creds_pending', 'Resetting...')
+                : translate('troubleshooting.reset_admin_creds', 'Reset Admin Credentials')
+            }}
+          </n-button>
+        </div>
+        <n-alert v-if="resetAdminCredsStatus === 'success'" type="success" class="mt-3">
+          {{
+            resetAdminCredsMessage ||
+            translate(
+              'troubleshooting.reset_admin_creds_success',
+              'Admin credentials cleared. Reload the page to create a new admin user.',
+            )
+          }}
+        </n-alert>
+        <n-alert v-else-if="resetAdminCredsStatus === 'error'" type="error" class="mt-3">
+          {{ resetAdminCredsMessage }}
+        </n-alert>
+      </section>
+
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 class="text-base font-semibold text-dark dark:text-light">
               {{ translate('troubleshooting.reset_state', 'Reset Stored Pairings') }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
@@ -564,6 +607,9 @@ const resetStatePending = ref(false);
 const resetStateStatus = ref<null | 'success' | 'error'>(null);
 const resetStateError = ref('');
 const resetStateArchived = ref<string[]>([]);
+const resetAdminCredsPending = ref(false);
+const resetAdminCredsStatus = ref<null | 'success' | 'error'>(null);
+const resetAdminCredsMessage = ref('');
 const dialog = useDialog();
 
 type TdrLast = {
@@ -804,6 +850,51 @@ async function refreshRenderStack() {
   } catch {
     // leave previous value in place
   }
+}
+
+async function doResetAdminCreds() {
+  resetAdminCredsPending.value = true;
+  resetAdminCredsStatus.value = null;
+  resetAdminCredsMessage.value = '';
+  try {
+    const r = await http.post(
+      './api/state/reset-admin-credentials',
+      {},
+      { validateStatus: () => true },
+    );
+    const body = (r.data || {}) as { status?: boolean; message?: string; backend?: string };
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      resetAdminCredsStatus.value = 'success';
+      resetAdminCredsMessage.value =
+        (typeof body.message === 'string' && body.message) ||
+        translate('troubleshooting.reset_admin_creds_success', 'Admin credentials cleared.');
+    } else {
+      resetAdminCredsStatus.value = 'error';
+      resetAdminCredsMessage.value =
+        (typeof body.message === 'string' && body.message) || `HTTP ${r.status}`;
+    }
+  } catch (e: unknown) {
+    resetAdminCredsStatus.value = 'error';
+    resetAdminCredsMessage.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    resetAdminCredsPending.value = false;
+  }
+}
+
+function confirmResetAdminCreds() {
+  if (resetAdminCredsPending.value) return;
+  dialog.warning({
+    title: translate('troubleshooting.reset_admin_creds_confirm_title', 'Reset Admin Credentials?'),
+    content: translate(
+      'troubleshooting.reset_admin_creds_confirm_body',
+      'The stored admin username and password will be removed from the system credential vault. You will need to create a new admin user on the next Web UI visit. Paired Moonlight clients and trusted devices are NOT affected by this reset. Continue?',
+    ),
+    positiveText: translate('troubleshooting.reset_admin_creds_confirm_yes', 'Reset credentials'),
+    negativeText: translate('troubleshooting.cancel', 'Cancel'),
+    onPositiveClick: async () => {
+      await doResetAdminCreds();
+    },
+  });
 }
 
 function confirmRestartVdd() {

@@ -1,0 +1,291 @@
+/**
+ * @file src/cred_store/cred_store_windows.cpp
+ * @brief Windows Credential Manager backend for the cred_store
+ *        abstraction. Replaces cred_store_file.cpp on Windows builds
+ *        via CMake conditional.
+ *
+ * Credentials are stored as a `CRED_TYPE_GENERIC` entry persisted at
+ * `CRED_PERSIST_LOCAL_MACHINE` scope. The credential payload is the
+ * exact same JSON blob that the file backend would write to
+ * sunshine_credentials.json — including the Argon2id record from PR 1.
+ *
+ * Under the hood, WCM stores the blob in the per-machine vault under
+ * `%SystemRoot%\System32\config\systemprofile\AppData\Local\Microsoft\Credentials\`
+ * encrypted with DPAPI under the SYSTEM-account master key. On
+ * Windows 11 (and Windows Server 2022+) the master key chain is TPM-
+ * bound by default, so the credential blob is unrecoverable by an
+ * attacker who removes the drive and mounts it on different hardware.
+ *
+ * The first invocation also runs a one-shot import: if no credential
+ * exists at the requested key in WCM but a plaintext file exists on
+ * disk at that path, the file's contents are imported into WCM, the
+ * file is renamed with a `.migrated-<UTC>` suffix as a forensic
+ * recovery anchor, and `cred_store::exists/load` start returning the
+ * WCM-backed value.
+ *
+ * Keys passed in by the credential layer are normalised to the WCM
+ * target name `LuminalShine/AdminCredentials` — see `wcm_target_name`
+ * below. We deliberately do NOT key WCM entries by file path because
+ * a host where the user has overridden `credentials_file` in
+ * sunshine.conf should still resolve to the same vault entry.
+ */
+#include "src/cred_store/cred_store.h"
+
+#include "src/config.h"
+#include "src/logging.h"
+
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <mutex>
+#include <sstream>
+#include <string>
+
+// clang-format off
+#include <winsock2.h>
+#include <windows.h>
+#include <wincred.h>
+// clang-format on
+
+namespace cred_store {
+
+  namespace {
+    constexpr wchar_t kTargetName[] = L"LuminalShine/AdminCredentials";
+    constexpr const char *kBackendName = "windows-credential-manager";
+
+    // Guards the one-shot import path. We need this lock because the
+    // file-to-WCM migration and a concurrent save_user_creds could
+    // race on first call.
+    std::mutex &import_mutex() {
+      static std::mutex m;
+      return m;
+    }
+
+    // Per-process cache of whether the one-shot file -> WCM import
+    // has run. Stored as an atomic-bool-like state and consulted from
+    // every public entry point so the import is at-most-once per
+    // process even on hosts that have neither WCM nor file artifacts.
+    bool &import_attempted_flag() {
+      static bool attempted = false;
+      return attempted;
+    }
+
+    /// UTF-8 → UTF-16 helper. Cheap; returns empty on conversion
+    /// failure (rare for ASCII LuminalShine vault names).
+    std::wstring to_wide(std::string_view s) {
+      if (s.empty()) {
+        return {};
+      }
+      const int needed = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+      if (needed <= 0) {
+        return {};
+      }
+      std::wstring out(static_cast<size_t>(needed), L'\0');
+      MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), needed);
+      return out;
+    }
+
+    std::string utf8_timestamp_now() {
+      using namespace std::chrono;
+      const auto secs = duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+      std::time_t tt = static_cast<std::time_t>(secs);
+      std::tm utc {};
+#ifdef _WIN32
+      gmtime_s(&utc, &tt);
+#else
+      gmtime_r(&tt, &utc);
+#endif
+      char buf[24] = {};
+      std::strftime(buf, sizeof(buf), "%Y%m%dT%H%M%SZ", &utc);
+      return buf;
+    }
+
+    /// One-shot import: if `key` looks like a filesystem path AND the
+    /// file exists AND no WCM entry is present, load the file, store
+    /// it in WCM, and rename the file with a `.migrated-<UTC>` suffix
+    /// for forensic recovery. Idempotent and safe to call from any
+    /// path.
+    void maybe_import_file_once(std::string_view key) {
+      std::lock_guard<std::mutex> lk(import_mutex());
+      if (import_attempted_flag()) {
+        return;
+      }
+      import_attempted_flag() = true;
+
+      // Skip if WCM already has the entry — nothing to import over.
+      PCREDENTIALW existing = nullptr;
+      if (CredReadW(kTargetName, CRED_TYPE_GENERIC, 0, &existing)) {
+        if (existing) {
+          CredFree(existing);
+        }
+        return;
+      }
+      const DWORD read_err = GetLastError();
+      if (read_err != ERROR_NOT_FOUND) {
+        BOOST_LOG(warning) << "cred_store(wcm): unexpected CredRead error "
+                           << read_err << " during import probe";
+      }
+
+      if (key.empty()) {
+        return;
+      }
+      namespace fs = std::filesystem;
+      fs::path legacy_path(std::string {key});
+      std::error_code ec;
+      if (!fs::exists(legacy_path, ec)) {
+        return;
+      }
+
+      // Read the legacy file via the property tree so a corrupt blob
+      // is detected before we go to all the trouble of writing it
+      // into WCM.
+      boost::property_tree::ptree tree;
+      try {
+        boost::property_tree::read_json(legacy_path.string(), tree);
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "cred_store(wcm): legacy credentials file at "
+                           << legacy_path.string() << " is unparseable ("
+                           << e.what() << "); skipping import. The Web UI's "
+                           << "create-first-user flow will run on next visit.";
+        return;
+      }
+
+      std::ostringstream blob;
+      try {
+        boost::property_tree::write_json(blob, tree);
+      } catch (...) {
+        return;
+      }
+
+      const auto wide = to_wide(blob.str());
+      (void) wide;  // CredWrite takes a byte buffer, not a wide string;
+                   // we send the UTF-8 bytes directly so the WCM read
+                   // path can round-trip the same JSON we'd have written
+                   // to disk.
+
+      CREDENTIALW cred {};
+      cred.Type = CRED_TYPE_GENERIC;
+      cred.TargetName = const_cast<LPWSTR>(kTargetName);
+      cred.CredentialBlobSize = static_cast<DWORD>(blob.str().size());
+      cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(blob.str().data()));
+      cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+      // UserName isn't part of the auth payload — it's just metadata
+      // surfaced in the Credential Manager UI. Use a stable label.
+      std::wstring username_label = L"LuminalShine";
+      cred.UserName = username_label.data();
+
+      if (!CredWriteW(&cred, 0)) {
+        BOOST_LOG(error) << "cred_store(wcm): CredWrite during import failed (err="
+                         << GetLastError() << "). Legacy file left in place.";
+        return;
+      }
+
+      // Rename the legacy file as `.migrated-<UTC>` so an operator can
+      // verify the import succeeded and recover from a corrupted WCM
+      // by hand if necessary.
+      fs::path archive_path = legacy_path;
+      archive_path += ".migrated-" + utf8_timestamp_now();
+      std::error_code rename_ec;
+      fs::rename(legacy_path, archive_path, rename_ec);
+      if (rename_ec) {
+        BOOST_LOG(warning) << "cred_store(wcm): imported credentials into WCM but "
+                           << "could not rename source file ("
+                           << legacy_path.string() << " -> "
+                           << archive_path.string() << "): "
+                           << rename_ec.message();
+      } else {
+        BOOST_LOG(info) << "cred_store(wcm): migrated legacy credentials from "
+                        << legacy_path.string() << " into Windows Credential Manager "
+                        << "(archived as " << archive_path.string() << ").";
+      }
+    }
+  }  // namespace
+
+  std::string backend_name() {
+    return kBackendName;
+  }
+
+  std::string default_key() {
+    return config::sunshine.credentials_file;
+  }
+
+  bool exists(std::string_view key) {
+    maybe_import_file_once(key);
+    PCREDENTIALW cred = nullptr;
+    if (!CredReadW(kTargetName, CRED_TYPE_GENERIC, 0, &cred)) {
+      return false;
+    }
+    if (cred) {
+      CredFree(cred);
+    }
+    return true;
+  }
+
+  bool load(std::string_view key, std::string &out) {
+    out.clear();
+    maybe_import_file_once(key);
+
+    PCREDENTIALW cred = nullptr;
+    if (!CredReadW(kTargetName, CRED_TYPE_GENERIC, 0, &cred)) {
+      const DWORD err = GetLastError();
+      if (err != ERROR_NOT_FOUND) {
+        BOOST_LOG(warning) << "cred_store(wcm): CredRead failed (err=" << err << ")";
+      }
+      return false;
+    }
+    if (!cred) {
+      return false;
+    }
+    if (cred->CredentialBlobSize > 0 && cred->CredentialBlob) {
+      out.assign(
+        reinterpret_cast<const char *>(cred->CredentialBlob),
+        static_cast<size_t>(cred->CredentialBlobSize)
+      );
+    }
+    // CredFree wipes the structure but not necessarily the blob; the
+    // caller is expected to SecureZeroMemory the returned string when
+    // done (PR 6 lands that discipline on the verification paths).
+    CredFree(cred);
+    return !out.empty();
+  }
+
+  bool store(std::string_view key, std::string_view blob) {
+    (void) key;  // WCM target name is fixed; the per-config key is
+                 // only consulted for the legacy-file import probe.
+    maybe_import_file_once(key);
+
+    CREDENTIALW cred {};
+    cred.Type = CRED_TYPE_GENERIC;
+    cred.TargetName = const_cast<LPWSTR>(kTargetName);
+    cred.CredentialBlobSize = static_cast<DWORD>(blob.size());
+    cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(blob.data()));
+    cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+    std::wstring username_label = L"LuminalShine";
+    cred.UserName = username_label.data();
+
+    if (!CredWriteW(&cred, 0)) {
+      const DWORD err = GetLastError();
+      BOOST_LOG(error) << "cred_store(wcm): CredWrite failed (err=" << err << ")";
+      return false;
+    }
+    return true;
+  }
+
+  bool erase(std::string_view key) {
+    (void) key;
+    if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
+      const DWORD err = GetLastError();
+      if (err == ERROR_NOT_FOUND) {
+        return true;
+      }
+      BOOST_LOG(warning) << "cred_store(wcm): CredDelete failed (err=" << err << ")";
+      return false;
+    }
+    BOOST_LOG(info) << "cred_store(wcm): credential entry " << "LuminalShine/AdminCredentials"
+                    << " removed.";
+    return true;
+  }
+
+}  // namespace cred_store

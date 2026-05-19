@@ -62,6 +62,7 @@
   #include "platform/windows/render_stack_detect.h"
   #include "platform/windows/sudovda_recovery.h"
 #endif
+#include "cred_store/cred_store.h"
 
 #ifdef _WIN32
   #include "platform/windows/diag_info.h"
@@ -737,6 +738,64 @@ namespace confighttp {
     }
     out["last_recovery_level"] = static_cast<int>(diag.last_recovery_level);
     out["last_recovery_message"] = diag.last_recovery_message;
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Reset the admin credentials by removing the cred_store
+   *        entry. After this returns, `user_creds_exist` reports
+   *        false and the next Web UI visit lands on the
+   *        create-first-user form. Pairings and saved tokens are NOT
+   *        affected — those live in a separate cred_store key /
+   *        on-disk file by design.
+   *
+   * Authenticated. POST so accidental navigation can't trigger it.
+   * The current login session is invalidated as a side effect (the
+   * client gets a 200, then any subsequent request will return 401).
+   *
+   * @api_examples{/api/state/reset-admin-credentials| POST| {"status":true,"backend":"windows-credential-manager","message":"Admin credentials removed; next Web UI visit will prompt for a new user."}}
+   */
+  void resetAdminCredentials(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    nlohmann::json out;
+    out["backend"] = cred_store::backend_name();
+
+    const auto key = cred_store::default_key();
+    if (key.empty()) {
+      out["status"] = false;
+      out["message"] = "credentials_file not configured; cannot reset.";
+      send_response(response, out);
+      return;
+    }
+
+    const bool ok = cred_store::erase(key);
+    if (!ok) {
+      out["status"] = false;
+      out["message"] = "cred_store backend rejected the erase request. Check service logs.";
+      send_response(response, out);
+      return;
+    }
+
+    // Clear in-memory state so the next /api/auth/* request
+    // immediately observes the reset (without waiting for a service
+    // restart). The first_user fallback path then prompts the Web UI
+    // to create a fresh credential.
+    config::sunshine.username.clear();
+    config::sunshine.password.clear();
+    config::sunshine.salt.clear();
+    config::sunshine.password_kdf.clear();
+
+    out["status"] = true;
+    out["message"] = "Admin credentials removed; next Web UI visit will prompt for a new user.";
+    BOOST_LOG(warning) << "Admin credentials reset via /api/state/reset-admin-credentials "
+                       << "(backend=" << cred_store::backend_name() << ").";
     send_response(response, out);
   }
 
@@ -4002,6 +4061,7 @@ namespace confighttp {
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);
     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
     register_api_route("^/api/state/reset$", "POST", resetStoredState);
+    register_api_route("^/api/state/reset-admin-credentials$", "POST", resetAdminCredentials);
     register_api_route("^/api/health/tdr$", "GET", getTdrHealth);
     register_api_route("^/api/clients/list$", "GET", getClients);
     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);

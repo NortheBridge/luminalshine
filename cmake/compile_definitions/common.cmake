@@ -144,8 +144,19 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.cpp"
         "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.h"
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store.h"
-        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_file.cpp"
         ${PLATFORM_TARGET_FILES})
+
+# cred_store backend selection. Windows uses the Credential Manager
+# (DPAPI / TPM-backed on Windows 11); everything else falls back to
+# the file backend. PR 4 in the credential-hardening series will
+# extend this to libsecret on Linux and Keychain on macOS.
+if(WIN32)
+    list(APPEND SUNSHINE_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_windows.cpp")
+else()
+    list(APPEND SUNSHINE_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_file.cpp")
+endif()
 
 if(NOT SUNSHINE_ASSETS_DIR_DEF)
     set(SUNSHINE_ASSETS_DIR_DEF "${SUNSHINE_ASSETS_DIR}")
