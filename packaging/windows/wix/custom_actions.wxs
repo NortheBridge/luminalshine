@@ -34,20 +34,35 @@
          silently fall back to the always-present 5.1 otherwise.
 
          Lives in this fragment (with the always-included FeatureRef) so the
-         Property and SetProperty are guaranteed to be linked into the final
-         MSI even though no <PropertyRef> references them — WiX 3 only
-         tracks compile-time references, not runtime [PropName] expansions
-         inside CA Value strings.
+         Property, PropertyRef and SetProperty actions are guaranteed to be
+         linked into the final MSI even though no <PropertyRef> references
+         them from elsewhere — WiX 3 only tracks compile-time references,
+         not runtime [PropName] expansions inside CA Value strings.
 
-         Probe layout:
+         Resolution flow:
          - PWSH7_FOUND_PATH gets populated by AppSearch from chained
            DirectorySearch+FileSearch over the standard PS 7 install path.
            If pwsh.exe isn't there it stays empty.
-         - POWERSHELL_PATH defaults to the bundled Windows PowerShell 5.1.
-         - If PWSH7_FOUND_PATH is non-empty, an immediate SetProperty CA
-           (scheduled After=AppSearch in the execute sequence, before any
-           deferred PS-launching setters fire) flips POWERSHELL_PATH to the
-           resolved pwsh.exe path. -->
+         - The declarative <Property Id="POWERSHELL_PATH" Value="..."/>
+           default is intentionally empty. We do NOT default it to
+           "[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" via the
+           declarative attribute because MSI's property formatter only
+           expands one level deep when [POWERSHELL_PATH] is substituted
+           into a CA command line — the nested [SystemFolder] token would
+           survive as a literal and the resulting "path" wouldn't exist,
+           tripping ERROR_FILE_NOT_FOUND (0x80070002) inside WixQuietExec
+           on every PS-launching CA. SudoVDA install + RunInstallerMigrations
+           hit exactly this on PS-5-only hosts before this fix.
+         - Instead, two Type-51 immediate CAs run after AppSearch (in the
+           execute sequence, before any deferred PS-launching setters
+           fire). Type-51 CA Value= attributes ARE formatted at execute
+           time, so nested [SystemFolder] expansion works correctly:
+           * SetPowerShell5AsPath: unconditional, anchors POWERSHELL_PATH
+             to the always-present Windows PowerShell 5.1 in System32.
+           * SetPwsh7AsPowerShellPath: conditional on PWSH7_FOUND_PATH
+             being non-empty, overrides POWERSHELL_PATH to the resolved
+             pwsh.exe path. Scheduled After=SetPowerShell5AsPath so the
+             order is deterministic. -->
     <Property Id="PWSH7_FOUND_PATH" Secure="yes">
       <DirectorySearch Id="Pwsh7ProgramFiles" Path="[ProgramFiles64Folder]" Depth="0">
         <DirectorySearch Id="Pwsh7Folder" Path="PowerShell" Depth="0">
@@ -57,12 +72,17 @@
         </DirectorySearch>
       </DirectorySearch>
     </Property>
-    <Property Id="POWERSHELL_PATH" Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe" Secure="yes" />
+    <Property Id="POWERSHELL_PATH" Value="" Secure="yes" />
+    <SetProperty Id="POWERSHELL_PATH"
+                 Action="SetPowerShell5AsPath"
+                 Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
+                 Sequence="execute"
+                 After="AppSearch"/>
     <SetProperty Id="POWERSHELL_PATH"
                  Action="SetPwsh7AsPowerShellPath"
                  Value="[PWSH7_FOUND_PATH]"
                  Sequence="execute"
-                 After="AppSearch">PWSH7_FOUND_PATH</SetProperty>
+                 After="SetPowerShell5AsPath">PWSH7_FOUND_PATH</SetProperty>
 
   </Fragment>
 
