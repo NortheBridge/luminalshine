@@ -146,6 +146,10 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store.h"
         "${CMAKE_SOURCE_DIR}/src/cred_store/file_backend.h"
         "${CMAKE_SOURCE_DIR}/src/cred_store/file_backend.cpp"
+        "${CMAKE_SOURCE_DIR}/src/steam/vdf_parser.h"
+        "${CMAKE_SOURCE_DIR}/src/steam/vdf_parser.cpp"
+        "${CMAKE_SOURCE_DIR}/src/steam/steam_paths.h"
+        "${CMAKE_SOURCE_DIR}/src/steam/steam_paths.cpp"
         ${PLATFORM_TARGET_FILES})
 
 # cred_store backend selection. Windows uses the Credential Manager

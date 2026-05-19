@@ -2532,6 +2532,140 @@ namespace proc {
     return std::nullopt;
   }
 
+  std::vector<ctx_t> parse_auto_apps(
+    const std::string &file_name,
+    bp::environment &this_env,
+    std::set<std::string> &existing_ids,
+    std::string_view id_prefix
+  ) {
+    std::vector<ctx_t> apps;
+
+    std::ifstream in(file_name, std::ios::binary);
+    if (!in) {
+      // File doesn't exist (the corresponding sync feature is off, or
+      // a fresh install). Not an error.
+      return apps;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string content = ss.str();
+    if (content.empty()) {
+      return apps;
+    }
+
+    pt::ptree tree;
+    try {
+      std::istringstream is(content);
+      pt::read_json(is, tree);
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "parse_auto_apps: failed to parse "sv << file_name
+                         << ": "sv << e.what();
+      return apps;
+    }
+
+    auto apps_node_opt = tree.get_child_optional("apps"s);
+    if (!apps_node_opt) {
+      return apps;
+    }
+
+    int index = 0;
+    for (auto &[_, app_node] : *apps_node_opt) {
+      ctx_t ctx;
+
+      auto name_opt = app_node.get_optional<std::string>("name"s);
+      if (!name_opt || name_opt->empty()) {
+        ++index;
+        continue;
+      }
+      ctx.name = parse_env_val(this_env, *name_opt);
+
+      if (auto v = app_node.get_optional<std::string>("cmd"s); v) {
+        ctx.cmd = parse_env_val(this_env, *v);
+      }
+      if (auto v = app_node.get_optional<std::string>("working-dir"s); v) {
+        ctx.working_dir = parse_env_val(this_env, *v);
+#ifdef _WIN32
+        boost::erase_all(ctx.working_dir, "\"");
+#endif
+      }
+      if (auto v = app_node.get_optional<std::string>("image-path"s); v) {
+        ctx.image_path = parse_env_val(this_env, *v);
+      }
+      if (auto v = app_node.get_optional<std::string>("output"s); v) {
+        ctx.output = parse_env_val(this_env, *v);
+      }
+      if (auto detached_nodes_opt = app_node.get_child_optional("detached"s); detached_nodes_opt) {
+        for (auto &[__, detached_val] : *detached_nodes_opt) {
+          ctx.detached.emplace_back(parse_env_val(this_env, detached_val.get_value<std::string>()));
+        }
+      }
+      ctx.auto_detach = app_node.get_optional<bool>("auto-detach"s).value_or(true);
+      ctx.wait_all = app_node.get_optional<bool>("wait-all"s).value_or(true);
+      ctx.exit_timeout = std::chrono::seconds {
+        app_node.get_optional<int>("exit-timeout"s).value_or(10)
+      };
+      ctx.elevated = app_node.get_optional<bool>("elevated"s).value_or(false);
+      ctx.virtual_screen = app_node.get_optional<bool>("virtual-screen"s).value_or(false);
+      ctx.playnite_fullscreen = false;
+      ctx.frame_gen_limiter_fix = false;
+      ctx.gen1_framegen_fix = false;
+      ctx.gen2_framegen_fix = false;
+
+      // Generate a stable id by hashing `<prefix><name><image_path>`.
+      // Prefix keeps auto-apps from colliding with hand-curated
+      // entries even when name + image happen to match. On collision
+      // (extremely unlikely with CRC32) we fall back to the
+      // index-suffixed variant — same scheme apps.json uses.
+      const std::string hash_name = std::string {id_prefix} + ctx.name;
+      auto possible_ids = calculate_app_id(hash_name, ctx.image_path, index);
+      ctx.id = (existing_ids.count(std::get<0>(possible_ids)) == 0)
+                 ? std::get<0>(possible_ids)
+                 : std::get<1>(possible_ids);
+      existing_ids.insert(ctx.id);
+      ++index;
+
+      apps.emplace_back(std::move(ctx));
+    }
+
+    return apps;
+  }
+
+  std::vector<ctx_t> merge_app_lists(
+    std::vector<ctx_t> &&apps_json,
+    std::vector<ctx_t> &&steam_apps,
+    std::vector<ctx_t> &&nonsg_apps
+  ) {
+    std::vector<ctx_t> desktop_bucket;
+    std::vector<ctx_t> steam_bucket;
+    std::vector<ctx_t> user_added;
+
+    desktop_bucket.reserve(1);
+    steam_bucket.reserve(1);
+    user_added.reserve(apps_json.size());
+
+    for (auto &app : apps_json) {
+      if (desktop_bucket.empty() && boost::iequals(app.name, "Desktop")) {
+        desktop_bucket.emplace_back(std::move(app));
+      } else if (steam_bucket.empty() && boost::iequals(app.name, "Steam")) {
+        steam_bucket.emplace_back(std::move(app));
+      } else {
+        user_added.emplace_back(std::move(app));
+      }
+    }
+
+    std::vector<ctx_t> merged;
+    merged.reserve(
+      desktop_bucket.size() + steam_bucket.size() + user_added.size() +
+      steam_apps.size() + nonsg_apps.size()
+    );
+    std::move(desktop_bucket.begin(), desktop_bucket.end(), std::back_inserter(merged));
+    std::move(steam_bucket.begin(), steam_bucket.end(), std::back_inserter(merged));
+    std::move(user_added.begin(), user_added.end(), std::back_inserter(merged));
+    std::move(steam_apps.begin(), steam_apps.end(), std::back_inserter(merged));
+    std::move(nonsg_apps.begin(), nonsg_apps.end(), std::back_inserter(merged));
+    return merged;
+  }
+
   void refresh(const std::string &file_name) {
     auto proc_opt = proc::parse(file_name);
 
@@ -2539,18 +2673,43 @@ namespace proc {
       return;
     }
 
+    // Pull the user-curated apps and the merged environment out of
+    // the just-parsed proc_t so we can merge in any auto-sync entries
+    // that live alongside apps.json. The auto-sync files are
+    // optional — when they don't exist (default-off feature, or fresh
+    // install), parse_auto_apps returns an empty vector and the merge
+    // is a no-op.
+    auto env = proc_opt->release_env();
+    auto user_apps = proc_opt->release_apps();
+
+    std::set<std::string> used_ids;
+    for (const auto &app : user_apps) {
+      used_ids.insert(app.id);
+    }
+
+    namespace fs_local = std::filesystem;
+    const fs_local::path base = fs_local::path(file_name).parent_path();
+    const std::string steam_apps_path = (base / "steam_apps.json").string();
+    const std::string nonsg_apps_path = (base / "nonsg_apps.json").string();
+
+    auto steam_apps = parse_auto_apps(steam_apps_path, env, used_ids, "steam:"sv);
+    auto nonsg_apps = parse_auto_apps(nonsg_apps_path, env, used_ids, "nonsg:"sv);
+
+    auto merged = merge_app_lists(
+      std::move(user_apps),
+      std::move(steam_apps),
+      std::move(nonsg_apps)
+    );
+
     // If an app is currently running, do not replace the entire proc_t instance.
     // Replacing it would drop tracking state and cause the active stream loop
     // to think no app is running, prematurely terminating the session.
     // Instead, update only the applications list to reflect the latest config.
     if (proc.running() > 0) {
-      // Move the parsed apps list and environment into the existing proc instance
-      // Use proc.update_apps(...) which safely replaces the app list and env
-      proc.update_apps(proc_opt->release_apps(), proc_opt->release_env());
-
+      proc.update_apps(std::move(merged), std::move(env));
     } else {
       // No app running: safe to refresh full state (env + apps)
-      proc = std::move(*proc_opt);
+      proc = proc_t(std::move(env), std::move(merged));
     }
   }
 

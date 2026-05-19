@@ -13,6 +13,8 @@
 #include <chrono>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -233,6 +235,66 @@ namespace proc {
   std::string validate_app_image_path(std::string app_image_path);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);
+
+  /**
+   * @brief Parse a supplemental "auto-apps" JSON file (e.g.
+   *        `steam_apps.json` written by the Steam library auto-sync,
+   *        or `nonsg_apps.json` written by the non-Steam shortcuts
+   *        auto-sync). Returns an empty vector when the file does
+   *        not exist — absence is the expected state when the
+   *        corresponding sync feature is disabled, so it is not
+   *        logged as an error.
+   *
+   *        Auto-apps support a deliberately narrower schema than
+   *        apps.json: no `env`, no per-app `config-overrides`, no
+   *        global prep commands — only the fields a machine-generated
+   *        catalogue needs (name, cmd, detached, image-path,
+   *        working-dir, exit-timeout, auto-detach, wait-all). The
+   *        @p id_prefix is used to namespace ID generation so an
+   *        auto-app's id cannot collide with a hand-curated entry.
+   *
+   * @param file_name      Path to the auto-apps JSON file.
+   * @param this_env       Environment used for `$VAR` expansion in
+   *                       string fields (taken from the apps.json
+   *                       parse pass so substitutions stay
+   *                       consistent).
+   * @param existing_ids   Set of IDs already in use by entries from
+   *                       apps.json; parsed auto-app IDs are guaranteed
+   *                       not to collide with anything in this set.
+   *                       Mutated to also include the new auto-app
+   *                       IDs so the caller can chain this for two
+   *                       auto-apps files.
+   * @param id_prefix      Short tag inserted into the ID hash input
+   *                       so steam_apps.json and nonsg_apps.json
+   *                       cannot collide with each other or with
+   *                       apps.json. Examples: "steam:", "nonsg:".
+   */
+  std::vector<ctx_t> parse_auto_apps(
+    const std::string &file_name,
+    bp::environment &this_env,
+    std::set<std::string> &existing_ids,
+    std::string_view id_prefix
+  );
+
+  /**
+   * @brief Re-order the three parsed app lists into LuminalShine's
+   *        canonical display order:
+   *          Desktop → Steam → user-added (rest of apps.json) →
+   *          steam_apps entries → nonsg_apps entries
+   *
+   *        "Desktop" and "Steam" inside @p apps_json are recognised
+   *        by case-insensitive name match — they're the two
+   *        well-known entries shipped in the default apps.json
+   *        template and can appear at any position in the user's
+   *        file. Any duplicate "Desktop" or "Steam" entries are
+   *        coalesced to the first occurrence to preserve the user's
+   *        chosen ID.
+   */
+  std::vector<ctx_t> merge_app_lists(
+    std::vector<ctx_t> &&apps_json,
+    std::vector<ctx_t> &&steam_apps,
+    std::vector<ctx_t> &&nonsg_apps
+  );
 
   /**
    * @brief Initialize proc functions
