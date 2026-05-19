@@ -137,10 +137,14 @@ namespace webrtc_stream {
     constexpr int kDefaultFps = 60;
     constexpr int kDefaultAudioChannels = 2;
     constexpr int kDefaultAudioPacketMs = 10;
-    constexpr std::size_t kEncodedPrefixLogLimit = 5;
-    constexpr auto kKeyframeRequestInterval = std::chrono::milliseconds {100};
-    constexpr std::size_t kKeyframeConsecutiveDrops = 3;
-    constexpr auto kKeyframeResyncInterval = std::chrono::seconds {2};
+    // Several of these constants are referenced only by the WebRTC code
+    // paths gated on SUNSHINE_ENABLE_WEBRTC. The test_sunshine target on
+    // the coverage CI is built without that define, so the unused ones
+    // need [[maybe_unused]] to keep the build clean under -Wall.
+    [[maybe_unused]] constexpr std::size_t kEncodedPrefixLogLimit = 5;
+    [[maybe_unused]] constexpr auto kKeyframeRequestInterval = std::chrono::milliseconds {100};
+    [[maybe_unused]] constexpr std::size_t kKeyframeConsecutiveDrops = 3;
+    [[maybe_unused]] constexpr auto kKeyframeResyncInterval = std::chrono::seconds {2};
     constexpr auto kVideoPacingSlackLatency = std::chrono::milliseconds {0};
     constexpr auto kVideoPacingSlackBalanced = std::chrono::milliseconds {2};
     constexpr auto kVideoPacingSlackSmooth = std::chrono::milliseconds {3};
@@ -148,21 +152,21 @@ namespace webrtc_stream {
     constexpr auto kVideoPacingSlackMax = std::chrono::milliseconds {10};
     constexpr auto kVideoMaxFrameAgeMin = std::chrono::milliseconds {5};
     constexpr auto kVideoMaxFrameAgeMax = std::chrono::milliseconds {100};
-    constexpr auto kAudioMaxFrameAge = std::chrono::milliseconds {kDefaultAudioPacketMs * kMaxAudioFrames};
-    constexpr auto kWebrtcStartupKeyframeHold = std::chrono::milliseconds {3000};
-    constexpr auto kWebrtcStartupKeyframeDeadline = std::chrono::milliseconds {8000};
-    constexpr auto kWebrtcStartupExitKeyframeFreshness = std::chrono::milliseconds {250};
-    constexpr std::size_t kVideoInflightFramesMin = 2;
-    constexpr std::size_t kVideoInflightFramesMax = 6;
-    constexpr std::size_t kVideoInflightKeyframeExtra = 2;
-    constexpr auto kWebrtcIdleGracePeriod = std::chrono::minutes {5};
+    [[maybe_unused]] constexpr auto kAudioMaxFrameAge = std::chrono::milliseconds {kDefaultAudioPacketMs * kMaxAudioFrames};
+    [[maybe_unused]] constexpr auto kWebrtcStartupKeyframeHold = std::chrono::milliseconds {3000};
+    [[maybe_unused]] constexpr auto kWebrtcStartupKeyframeDeadline = std::chrono::milliseconds {8000};
+    [[maybe_unused]] constexpr auto kWebrtcStartupExitKeyframeFreshness = std::chrono::milliseconds {250};
+    [[maybe_unused]] constexpr std::size_t kVideoInflightFramesMin = 2;
+    [[maybe_unused]] constexpr std::size_t kVideoInflightFramesMax = 6;
+    [[maybe_unused]] constexpr std::size_t kVideoInflightKeyframeExtra = 2;
+    [[maybe_unused]] constexpr auto kWebrtcIdleGracePeriod = std::chrono::minutes {5};
 
     struct SharedEncodedPayloadReleaseContext {
       std::shared_ptr<std::vector<std::uint8_t>> payload;
       std::shared_ptr<std::atomic_uint32_t> inflight;
     };
 
-    void release_shared_encoded_payload(void *user) noexcept {
+    [[maybe_unused]] void release_shared_encoded_payload(void *user) noexcept {
       auto *context = static_cast<SharedEncodedPayloadReleaseContext *>(user);
       if (!context) {
         return;
@@ -590,7 +594,7 @@ namespace webrtc_stream {
       }
     }
 
-    bool starts_with_annexb(const std::vector<std::uint8_t> &data) {
+    [[maybe_unused]] bool starts_with_annexb(const std::vector<std::uint8_t> &data) {
       if (data.size() < 3) {
         return false;
       }
@@ -600,7 +604,7 @@ namespace webrtc_stream {
       return data.size() >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1;
     }
 
-    std::string hex_prefix(const std::vector<std::uint8_t> &data, std::size_t max_bytes = 8) {
+    [[maybe_unused]] std::string hex_prefix(const std::vector<std::uint8_t> &data, std::size_t max_bytes = 8) {
       std::ostringstream oss;
       const std::size_t count = std::min(data.size(), max_bytes);
       for (std::size_t i = 0; i < count; ++i) {
@@ -828,7 +832,7 @@ namespace webrtc_stream {
       return input_context;
     }
 
-    void reset_input_context() {
+    [[maybe_unused]] void reset_input_context() {
       std::lock_guard lg {input_mutex};
       if (input_context) {
         input::reset(input_context);
@@ -1241,7 +1245,7 @@ namespace webrtc_stream {
       return 0;
     }
 
-    void handle_input_message(std::string_view payload) {
+    [[maybe_unused]] void handle_input_message(std::string_view payload) {
       if (payload.empty()) {
         return;
       }
@@ -1553,7 +1557,7 @@ namespace webrtc_stream {
       return webrtc_capture.mail;
     }
 
-    std::optional<std::string> build_gamepad_feedback_payload(const platf::gamepad_feedback_msg_t &msg) {
+    [[maybe_unused]] std::optional<std::string> build_gamepad_feedback_payload(const platf::gamepad_feedback_msg_t &msg) {
       nlohmann::json payload;
       payload["type"] = "gamepad_feedback";
       payload["id"] = msg.id;
@@ -1616,7 +1620,7 @@ namespace webrtc_stream {
     }
 #endif
 
-    void request_keyframe(std::string_view reason) {
+    [[maybe_unused]] void request_keyframe(std::string_view reason) {
       auto mail = current_capture_mail();
       if (!mail) {
         if (rtsp_sessions_active.load(std::memory_order_relaxed)) {
@@ -1689,7 +1693,7 @@ namespace webrtc_stream {
       std::string tier {"0"};
     };
 
-    bool av1_params_equal(
+    [[maybe_unused]] bool av1_params_equal(
       const std::optional<Av1FmtpParams> &left,
       const std::optional<Av1FmtpParams> &right
     ) {
@@ -1719,7 +1723,7 @@ namespace webrtc_stream {
       std::optional<Av1FmtpParams> fmtp;
     };
 
-    Av1OfferInfo parse_av1_offer(std::string_view sdp) {
+    [[maybe_unused]] Av1OfferInfo parse_av1_offer(std::string_view sdp) {
       std::unordered_map<int, Av1FmtpParams> fmtp_params;
       std::vector<int> av1_payloads;
 
@@ -1816,7 +1820,7 @@ namespace webrtc_stream {
       std::optional<std::string> fmtp;
     };
 
-    HevcOfferInfo parse_hevc_offer(std::string_view sdp) {
+    [[maybe_unused]] HevcOfferInfo parse_hevc_offer(std::string_view sdp) {
       std::unordered_map<int, std::string> fmtp_params;
       std::vector<int> h265_payloads;
 
@@ -1893,7 +1897,7 @@ namespace webrtc_stream {
      * @param channels Number of audio channels (2 for stereo, 6 for 5.1, 8 for 7.1)
      * @return Modified SDP string
      */
-    std::string apply_opus_audio_params(std::string_view sdp, int channels) {
+    [[maybe_unused]] std::string apply_opus_audio_params(std::string_view sdp, int channels) {
       // Determine bitrate based on channel count (matching audio.cpp stream_configs)
       // Using HIGH_QUALITY bitrates since WebRTC config sets HIGH_QUALITY = true
       int bitrate = 512000;  // stereo high quality
@@ -4574,7 +4578,12 @@ namespace webrtc_stream {
     std::shared_ptr<SessionKeyframeContext> keyframe_context;
 #endif
     bool removed = false;
-    bool last_session = false;
+    // last_session is read only inside #ifdef SUNSHINE_ENABLE_WEBRTC
+    // below, but assigned unconditionally so the active-session counter
+    // stays accurate in builds without the WebRTC code path linked
+    // (notably the test_sunshine target on the coverage CI). Mark as
+    // maybe_unused so non-WebRTC builds don't trip -Wunused-but-set.
+    [[maybe_unused]] bool last_session = false;
     {
       std::lock_guard lg {session_mutex};
       auto it = sessions.find(std::string {id});

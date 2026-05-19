@@ -80,7 +80,7 @@ namespace {
     tree.put_child("root.api_tokens", tokens_tree);
   }
 
-  void FillPtreeWithMalformedScopeData(pt::ptree &tree) {
+  [[maybe_unused]] void FillPtreeWithMalformedScopeData(pt::ptree &tree) {
     pt::ptree tokens_tree;
     // Add valid token
     {

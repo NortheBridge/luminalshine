@@ -3364,11 +3364,9 @@ namespace confighttp {
       nlohmann::json file_tree = nlohmann::json::parse(file);
       auto &apps_node = file_tree["apps"];
 
-      int removed = 0;
       for (auto &app : apps_node) {
         std::string managed = app.contains("playnite-managed") && app["playnite-managed"].is_string() ? app["playnite-managed"].get<std::string>() : std::string();
         if (managed == "auto") {
-          ++removed;
           continue;
         }
         new_apps.push_back(app);
