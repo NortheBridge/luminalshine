@@ -179,6 +179,7 @@ function add_arch_deps() {
     'libmfx'
     'libnotify'
     'libpulse'
+    'libsecret'
     'libva'
     'libx11'
     'libxcb'
@@ -236,6 +237,7 @@ function add_debian_based_deps() {
     "libopus-dev"
     "libpipewire-0.3-dev"
     "libpulse-dev"
+    "libsecret-1-dev"
     "libssl-dev"
     "libsystemd-dev"
     "libudev-dev"
@@ -307,6 +309,7 @@ function add_fedora_deps() {
     "libdrm-devel"
     "libevdev-devel"
     "libnotify-devel"
+    "libsecret-devel"
     "libX11-devel"  # X11
     "libxcb-devel"  # X11
     "libXcursor-devel"  # X11

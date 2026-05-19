@@ -275,6 +275,21 @@ list(APPEND PLATFORM_LIBRARIES
         pulse
         pulse-simple)
 
+# libsecret (Secret Service / GNOME Keyring / KWallet via D-Bus). The
+# cred_store layer prefers this when available; missing libsecret
+# silently falls back to the file backend at build time.
+pkg_check_modules(LIBSECRET libsecret-1)
+if(LIBSECRET_FOUND)
+    set(SUNSHINE_HAVE_LIBSECRET ON)
+    include_directories(SYSTEM ${LIBSECRET_INCLUDE_DIRS})
+    link_directories(${LIBSECRET_LIBRARY_DIRS})
+    list(APPEND PLATFORM_LIBRARIES ${LIBSECRET_LIBRARIES})
+    message(STATUS "libsecret found: cred_store will use the Secret Service backend "
+                   "(with file-backend fallback if the service is unreachable at runtime).")
+else()
+    message(STATUS "libsecret not found: cred_store will use the file backend only.")
+endif()
+
 include_directories(
         SYSTEM
         "${CMAKE_SOURCE_DIR}/third-party/glad/include")

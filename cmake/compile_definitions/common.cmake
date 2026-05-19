@@ -144,15 +144,25 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.cpp"
         "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.h"
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store.h"
+        "${CMAKE_SOURCE_DIR}/src/cred_store/file_backend.h"
+        "${CMAKE_SOURCE_DIR}/src/cred_store/file_backend.cpp"
         ${PLATFORM_TARGET_FILES})
 
 # cred_store backend selection. Windows uses the Credential Manager
-# (DPAPI / TPM-backed on Windows 11); everything else falls back to
-# the file backend. PR 4 in the credential-hardening series will
-# extend this to libsecret on Linux and Keychain on macOS.
+# (DPAPI / TPM-backed on Windows 11); macOS uses the Keychain; Linux
+# uses libsecret when available (Secret Service / GNOME Keyring /
+# KWallet via D-Bus) with a silent runtime fallback to the file
+# backend if the secret service can't be reached. Hosts without any
+# system secret store ship the plain file backend.
 if(WIN32)
     list(APPEND SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_windows.cpp")
+elseif(APPLE)
+    list(APPEND SUNSHINE_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_macos.cpp")
+elseif(SUNSHINE_HAVE_LIBSECRET)
+    list(APPEND SUNSHINE_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_linux.cpp")
 else()
     list(APPEND SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store_file.cpp")
