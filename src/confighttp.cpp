@@ -3350,8 +3350,11 @@ namespace confighttp {
       if (newUsername.empty()) {
         errors.emplace_back("Invalid Username");
       } else {
-        auto hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-        if (config::sunshine.username.empty() || (boost::iequals(username, config::sunshine.username) && hash == config::sunshine.password)) {
+        // First-user creation skips the credential check; otherwise
+        // dispatch through the cross-KDF verifier so legacy SHA-256
+        // records still authenticate and get upgraded.
+        const bool first_user = config::sunshine.username.empty();
+        if (first_user || http::verify_user_password(username, password)) {
           if (newPassword.empty() || newPassword != confirmPassword) {
             errors.emplace_back("Password Mismatch");
           } else {
@@ -3372,8 +3375,12 @@ namespace confighttp {
             // don't work at login) immediately at save time rather than at
             // the next login attempt. Logs the file path but no secrets.
             if (save_ok) {
-              const auto verify_hash = util::hex(crypto::hash(newPassword + config::sunshine.salt)).to_string();
-              if (!boost::iequals(config::sunshine.username, newUsername) || verify_hash != config::sunshine.password) {
+              // Cross-KDF read-back: dispatches to Argon2id or
+              // SHA-256 based on what reload_user_creds just put into
+              // memory. A successful save followed by a failed verify
+              // here means the on-disk file didn't survive the round
+              // trip — typically a filesystem ACL problem.
+              if (!http::verify_user_password(newUsername, newPassword)) {
                 BOOST_LOG(error) << "Credential save verification FAILED: in-memory state does not match newly-saved file ("
                                  << config::sunshine.credentials_file << "). Check filesystem permissions on the credentials file directory.";
                 save_ok = false;

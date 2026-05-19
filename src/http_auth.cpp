@@ -1188,11 +1188,10 @@ namespace confighttp {
   }
 
   bool SessionTokenAPI::validate_credentials(const std::string &username, const std::string &password) const {
-    if (auto hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-        !boost::iequals(username, config::sunshine.username) || hash != config::sunshine.password) {
-      return false;
-    }
-    return true;
+    // Delegates to the cross-KDF verifier (PR 1). Handles both legacy
+    // SHA-256 and modern Argon2id records, and opportunistically
+    // upgrades a successful legacy match.
+    return http::verify_user_password(username, password);
   }
 
   namespace {
@@ -1278,8 +1277,7 @@ namespace confighttp {
       if (config::sunshine.username.empty()) {
         return false;
       }
-      auto hashed = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-      return boost::iequals(username, config::sunshine.username) && hashed == config::sunshine.password;
+      return http::verify_user_password(username, password);
     }
   }  // namespace
 

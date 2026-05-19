@@ -23,6 +23,25 @@ namespace http {
   );
 
   int reload_user_creds(const std::string &file);
+
+  /**
+   * @brief Verify a plaintext username + password against the in-memory
+   *        credential record loaded by `reload_user_creds`.
+   *
+   * Dispatches to the appropriate KDF based on `config::sunshine.password_kdf`
+   * (Argon2id or legacy SHA-256), compares the computed hash with the
+   * stored value, and — on a successful match against a legacy SHA-256
+   * record — opportunistically upgrades the on-disk record to Argon2id
+   * using the configured Argon2 parameters. The upgrade is best-effort;
+   * a write failure does not change the login outcome.
+   *
+   * Username comparison is case-insensitive (matches existing behaviour
+   * at the three login call sites).
+   *
+   * @return true iff the credentials matched.
+   */
+  bool verify_user_password(const std::string &username, const std::string &password);
+
   bool download_file(const std::string &url, const std::string &file, long ssl_version = CURL_SSLVERSION_TLSv1_2);
   bool configure_curl_tls(CURL *curl);
   std::string url_escape(const std::string &url);

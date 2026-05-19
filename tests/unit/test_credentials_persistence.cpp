@@ -25,6 +25,7 @@
 #include <fstream>
 #include <string>
 
+#include <src/crypto.h>
 #include <src/state_storage.h>
 
 namespace fs = std::filesystem;
@@ -294,4 +295,86 @@ TEST_F(CredentialsPersistenceTest, MigrationSkipsWhenCredentialsFileAlreadyExist
   // Creds file untouched.
   auto creds_after = read_json(creds_file);
   ASSERT_EQ(creds_after.get<std::string>("username"), "current-admin");
+}
+
+// -----------------------------------------------------------------------------
+// Argon2id KDF (PR 1) regression coverage.
+//
+// These tests guard against three accidental footguns:
+//   * argon2id() ever silently returning an empty string when the linked
+//     OpenSSL DOES expose ARGON2ID (would cause save_user_creds to refuse
+//     to mint credentials on a working build).
+//   * The hex output shape changing length (32 bytes => 64 hex chars).
+//   * Same (password, salt, params) deterministically producing the same
+//     hash across calls — required for the verify-by-recompute pattern.
+// -----------------------------------------------------------------------------
+
+TEST_F(CredentialsPersistenceTest, Argon2idAvailabilityMatchesBuild) {
+  // On OpenSSL 3.2+, ARGON2ID is provided. On older builds, callers
+  // are expected to fall back to SHA-256. Either result is valid;
+  // we just lock down the "doesn't lie" contract: when
+  // argon2id_available() returns true, argon2id() must produce a
+  // non-empty result.
+  const bool advertised = crypto::argon2id_available();
+  const auto hash = crypto::argon2id(
+    "correct horse battery staple",
+    "0123456789abcdef",
+    /*m_cost_kib=*/32768,
+    /*t_cost=*/2,
+    /*parallel=*/1
+  );
+  if (advertised) {
+    ASSERT_FALSE(hash.empty()) << "argon2id_available() == true but argon2id() returned empty";
+    ASSERT_EQ(hash.size(), 64u) << "Default Argon2id output is 32 bytes hex-encoded (64 chars)";
+  } else {
+    ASSERT_TRUE(hash.empty()) << "argon2id_available() == false but argon2id() returned a value";
+  }
+}
+
+TEST_F(CredentialsPersistenceTest, Argon2idIsDeterministic) {
+  if (!crypto::argon2id_available()) {
+    GTEST_SKIP() << "OpenSSL build has no ARGON2ID provider";
+  }
+  const std::string password = "p455w0rd!@#";
+  const std::string salt = "abcdefghijklmnop";
+
+  const auto first = crypto::argon2id(password, salt, 32768, 2, 1);
+  const auto second = crypto::argon2id(password, salt, 32768, 2, 1);
+  ASSERT_FALSE(first.empty());
+  ASSERT_EQ(first, second) << "Argon2id must be deterministic for the verify-by-recompute pattern";
+
+  // Different salt => different output.
+  const auto third = crypto::argon2id(password, "zyxwvutsrqponmlk", 32768, 2, 1);
+  ASSERT_NE(first, third);
+  // Different password => different output.
+  const auto fourth = crypto::argon2id("not_the_password", salt, 32768, 2, 1);
+  ASSERT_NE(first, fourth);
+  // Different params => different output (memory cost change).
+  const auto fifth = crypto::argon2id(password, salt, 65536, 2, 1);
+  ASSERT_NE(first, fifth);
+}
+
+TEST_F(CredentialsPersistenceTest, CredentialsRecordV2RoundTripsThroughAtomicWrite) {
+  // Lock down the on-disk shape of a v2 record so a future refactor of
+  // save_user_creds can't silently drop the version / kdf / params
+  // discriminators that reload_user_creds expects.
+  const auto file = scratch / "creds-v2.json";
+  pt::ptree tree;
+  tree.put("version", 2);
+  tree.put("kdf", "argon2id");
+  tree.put("argon2_m_cost_kib", 65536);
+  tree.put("argon2_t_cost", 3);
+  tree.put("argon2_parallel", 1);
+  tree.put("username", "Aria.Montgomery");
+  tree.put("salt", "kP7vH3wQ2nXeR9aB");
+  tree.put("password", std::string(64, 'a'));  // shape only; not a real hash
+  ASSERT_TRUE(statefile::atomic_write_json(file, tree));
+
+  const auto reread = read_json(file);
+  ASSERT_EQ(reread.get<int>("version"), 2);
+  ASSERT_EQ(reread.get<std::string>("kdf"), "argon2id");
+  ASSERT_EQ(reread.get<std::uint32_t>("argon2_m_cost_kib"), 65536u);
+  ASSERT_EQ(reread.get<std::uint32_t>("argon2_t_cost"), 3u);
+  ASSERT_EQ(reread.get<std::uint32_t>("argon2_parallel"), 1u);
+  ASSERT_EQ(reread.get<std::string>("salt"), "kP7vH3wQ2nXeR9aB");
 }

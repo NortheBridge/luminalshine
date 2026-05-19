@@ -17,6 +17,7 @@
 
 // lib includes
 #include <boost/asio/ssl/context.hpp>
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
@@ -468,6 +469,17 @@ namespace http {
   // concurrent save_state() / migrate_recent_state_keys() invocations that
   // touch the same file (when credentials_file and file_state are the same
   // path under legacy config).
+  namespace {
+    // Per-call default Argon2 parameters when we mint a fresh record.
+    // Kept inside the .cpp so future tuning is a one-touch change. The
+    // runtime can also pick these up from config::sunshine.argon2_*
+    // when an existing record is being upgraded.
+    constexpr std::uint32_t kArgon2DefaultMemCostKib = 65536;  // 64 MiB
+    constexpr std::uint32_t kArgon2DefaultTimeCost = 3;
+    constexpr std::uint32_t kArgon2DefaultParallel = 1;
+    constexpr int kCredentialsRecordVersion = 2;
+  }  // namespace
+
   int save_user_creds(const std::string &file, const std::string &username, const std::string &password, bool run_our_mouth) {
     pt::ptree outputTree;
 
@@ -478,10 +490,39 @@ namespace http {
     // because the alternative is leaving the user permanently locked out.
     (void) statefile::load_or_recover(file, outputTree);
 
-    auto salt = crypto::rand_alphabet(16);
+    const auto salt = crypto::rand_alphabet(16);
     outputTree.put("username", username);
     outputTree.put("salt", salt);
-    outputTree.put("password", util::hex(crypto::hash(password + salt)).to_string());
+
+    // Prefer Argon2id when the linked OpenSSL build supports it; fall
+    // back to SHA-256 only on OpenSSL < 3.2. Per-record `version` +
+    // `kdf` discriminator lets the reload path pick the right verifier
+    // regardless of when the record was written.
+    if (crypto::argon2id_available()) {
+      const auto hash = crypto::argon2id(
+        password,
+        salt,
+        kArgon2DefaultMemCostKib,
+        kArgon2DefaultTimeCost,
+        kArgon2DefaultParallel
+      );
+      if (hash.empty()) {
+        BOOST_LOG(error) << "save_user_creds: Argon2id hash failed; refusing to write weak credentials";
+        return -1;
+      }
+      outputTree.put("version", kCredentialsRecordVersion);
+      outputTree.put("kdf", "argon2id");
+      outputTree.put("argon2_m_cost_kib", kArgon2DefaultMemCostKib);
+      outputTree.put("argon2_t_cost", kArgon2DefaultTimeCost);
+      outputTree.put("argon2_parallel", kArgon2DefaultParallel);
+      outputTree.put("password", hash);
+    } else {
+      // Legacy SHA-256 fallback. Old builds wrote no `kdf` key; we
+      // continue to omit it so a downgrade to a pre-PR1 build still
+      // reads the record correctly.
+      outputTree.put("password", util::hex(crypto::hash(password + salt)).to_string());
+    }
+
     if (!statefile::atomic_write_json(file, outputTree)) {
       BOOST_LOG(error) << "error writing to the credentials file at "sv << file
                        << " - try running as an administrator if this persists"sv;
@@ -514,11 +555,88 @@ namespace http {
       config::sunshine.username = inputTree.get<std::string>("username");
       config::sunshine.password = inputTree.get<std::string>("password");
       config::sunshine.salt = inputTree.get<std::string>("salt");
+
+      // Detect KDF. Legacy records have no `kdf` key and are
+      // SHA-256(password || salt). v2 records carry `kdf=argon2id`
+      // plus the parameters. Anything else is treated as legacy too,
+      // with a warning.
+      const auto kdf = inputTree.get<std::string>("kdf", "");
+      if (kdf.empty()) {
+        config::sunshine.password_kdf = "sha256";
+      } else if (kdf == "argon2id") {
+        config::sunshine.password_kdf = kdf;
+        config::sunshine.argon2_m_cost_kib =
+          inputTree.get<std::uint32_t>("argon2_m_cost_kib", kArgon2DefaultMemCostKib);
+        config::sunshine.argon2_t_cost =
+          inputTree.get<std::uint32_t>("argon2_t_cost", kArgon2DefaultTimeCost);
+        config::sunshine.argon2_parallel =
+          inputTree.get<std::uint32_t>("argon2_parallel", kArgon2DefaultParallel);
+      } else {
+        BOOST_LOG(warning) << "Unknown KDF '" << kdf
+                           << "' in credentials record; treating as legacy SHA-256.";
+        config::sunshine.password_kdf = "sha256";
+      }
     } catch (std::exception &e) {
       BOOST_LOG(error) << "loading user credentials: "sv << e.what();
       return -1;
     }
     return 0;
+  }
+
+  bool verify_user_password(const std::string &username, const std::string &password) {
+    // Case-insensitive username comparison preserves the existing
+    // behaviour of all three login sites; the encoded password hash
+    // is compared byte-for-byte.
+    if (!boost::iequals(username, config::sunshine.username)) {
+      return false;
+    }
+    const auto &kdf = config::sunshine.password_kdf;
+    const bool legacy = (kdf.empty() || kdf == "sha256");
+
+    std::string computed;
+    if (legacy) {
+      computed = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
+    } else if (kdf == "argon2id") {
+      computed = crypto::argon2id(
+        password,
+        config::sunshine.salt,
+        config::sunshine.argon2_m_cost_kib,
+        config::sunshine.argon2_t_cost,
+        config::sunshine.argon2_parallel
+      );
+    } else {
+      BOOST_LOG(warning) << "verify_user_password: stored KDF '" << kdf
+                         << "' is not recognised; refusing login.";
+      return false;
+    }
+
+    if (computed.empty() || computed != config::sunshine.password) {
+      return false;
+    }
+
+    // Match. If the record is legacy SHA-256 and Argon2id is available,
+    // opportunistically upgrade so the next read is on the modern KDF.
+    // Failure to upgrade does NOT change the login outcome — the user
+    // just stays on SHA-256 until the next successful login.
+    if (legacy && crypto::argon2id_available()) {
+      std::lock_guard<std::mutex> guard(statefile::state_mutex());
+      const int rc = save_user_creds(
+        config::sunshine.credentials_file,
+        username,
+        password,
+        /*run_our_mouth=*/false
+      );
+      if (rc == 0) {
+        // Refresh the cached in-memory record so subsequent verifies
+        // use the new KDF without waiting for a service restart.
+        (void) reload_user_creds(config::sunshine.credentials_file);
+        BOOST_LOG(info) << "Credentials transparently upgraded to Argon2id after successful login.";
+      } else {
+        BOOST_LOG(warning) << "Credentials Argon2id upgrade write failed; will retry on next login.";
+      }
+    }
+
+    return true;
   }
 
   int create_creds(const std::string &pkey, const std::string &cert) {

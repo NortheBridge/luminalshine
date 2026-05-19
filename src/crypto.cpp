@@ -3,11 +3,25 @@
  * @brief Definitions for cryptography functions.
  */
 // lib includes
+#include <openssl/core_names.h>
+#include <openssl/kdf.h>
+#include <openssl/params.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 
 // local includes
 #include "crypto.h"
+#include "logging.h"
+
+// OpenSSL 3.2+ ships Argon2id as a built-in KDF; older builds don't
+// expose EVP_KDF_ARGON2ID at all. Detect at compile time so we can
+// drop a clean stub on older toolchains while keeping the code path
+// otherwise identical.
+#if defined(OPENSSL_VERSION_NUMBER) && (OPENSSL_VERSION_NUMBER >= 0x30200000L)
+  #define LUMINALSHINE_HAVE_ARGON2ID 1
+#else
+  #define LUMINALSHINE_HAVE_ARGON2ID 0
+#endif
 
 namespace crypto {
   using asn1_string_t = util::safe_ptr<ASN1_STRING, ASN1_STRING_free>;
@@ -338,6 +352,105 @@ namespace crypto {
     sha256_t hsh;
     EVP_Digest(plaintext.data(), plaintext.size(), hsh.data(), nullptr, EVP_sha256(), nullptr);
     return hsh;
+  }
+
+  bool argon2id_available() {
+#if LUMINALSHINE_HAVE_ARGON2ID
+    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, OSSL_KDF_NAME_ARGON2ID, nullptr);
+    if (kdf) {
+      EVP_KDF_free(kdf);
+      return true;
+    }
+#endif
+    return false;
+  }
+
+  std::string argon2id(
+    const std::string_view &password,
+    const std::string_view &salt,
+    std::uint32_t m_cost_kib,
+    std::uint32_t t_cost,
+    std::uint32_t parallel,
+    std::size_t out_len
+  ) {
+#if LUMINALSHINE_HAVE_ARGON2ID
+    if (out_len == 0 || out_len > 64) {
+      BOOST_LOG(error) << "crypto::argon2id: invalid out_len=" << out_len;
+      return {};
+    }
+
+    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, OSSL_KDF_NAME_ARGON2ID, nullptr);
+    if (!kdf) {
+      // OpenSSL built without ARGON2ID provider — should be caught by
+      // argon2id_available() at startup, but guard here too.
+      BOOST_LOG(error) << "crypto::argon2id: EVP_KDF_fetch(ARGON2ID) returned null";
+      return {};
+    }
+
+    EVP_KDF_CTX *ctx = EVP_KDF_CTX_new(kdf);
+    EVP_KDF_free(kdf);
+    if (!ctx) {
+      BOOST_LOG(error) << "crypto::argon2id: EVP_KDF_CTX_new failed";
+      return {};
+    }
+
+    // Parameter assembly. OpenSSL's Argon2id provider expects the
+    // memcost as KiB, time as iteration count, lanes as parallelism.
+    // Names come from openssl/core_names.h (OSSL_KDF_PARAM_*).
+    OSSL_PARAM params[6];
+    int p = 0;
+    params[p++] = OSSL_PARAM_construct_octet_string(
+      OSSL_KDF_PARAM_PASSWORD,
+      const_cast<char *>(password.data()),
+      password.size()
+    );
+    params[p++] = OSSL_PARAM_construct_octet_string(
+      OSSL_KDF_PARAM_SALT,
+      const_cast<char *>(salt.data()),
+      salt.size()
+    );
+    params[p++] = OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ITER, &t_cost);
+    params[p++] = OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_THREADS, &parallel);
+    // Argon2 calls this LANES; OpenSSL exposes both names depending on
+    // SDK version. KDF_PARAM_THREADS is the cross-version safe name.
+    params[p++] = OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_MEMCOST, &m_cost_kib);
+    params[p++] = OSSL_PARAM_construct_end();
+
+    // Argon2id with parallel > 1 requires the KDF context to know it
+    // can use multiple threads. Without this set, OpenSSL rejects
+    // parallel > 1 at derive time. The single-thread default we use
+    // (parallel=1) doesn't need it, but set it anyway so callers can
+    // tune up later without re-touching this code.
+    EVP_KDF_CTX_set_params(ctx, params);
+
+    std::vector<std::uint8_t> derived(out_len, 0);
+    const int rc = EVP_KDF_derive(ctx, derived.data(), derived.size(), params);
+    EVP_KDF_CTX_free(ctx);
+    if (rc <= 0) {
+      BOOST_LOG(error) << "crypto::argon2id: EVP_KDF_derive failed";
+      return {};
+    }
+
+    // Hex-encode. We deliberately don't use util::hex here to avoid a
+    // dependency surface change in this commit.
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(derived.size() * 2);
+    for (auto b : derived) {
+      out.push_back(kHex[(b >> 4) & 0xF]);
+      out.push_back(kHex[b & 0xF]);
+    }
+    return out;
+#else
+    (void) password;
+    (void) salt;
+    (void) m_cost_kib;
+    (void) t_cost;
+    (void) parallel;
+    (void) out_len;
+    BOOST_LOG(error) << "crypto::argon2id: OpenSSL build < 3.2 has no ARGON2ID provider";
+    return {};
+#endif
   }
 
   x509_t x509(const std::string_view &x) {

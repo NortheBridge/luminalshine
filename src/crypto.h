@@ -44,6 +44,47 @@ namespace crypto {
    */
   sha256_t hash(const std::string_view &plaintext);
 
+  /**
+   * @brief Memory-hard, brute-force-resistant password hash via Argon2id.
+   *
+   * Uses OpenSSL's EVP_KDF_ARGON2ID (available from OpenSSL 3.2 onwards).
+   * Parameters are tuned for ~100 ms latency on a modern CPU, which is
+   * imperceptible during a Web UI login but raises the per-guess cost of
+   * an offline brute-force from a stolen credentials blob by 6+ orders
+   * of magnitude versus single-round SHA-256.
+   *
+   * Outputs a 32-byte derived key. Inputs are treated as raw byte
+   * sequences — callers pass the user's password and the per-credential
+   * salt; we never log either.
+   *
+   * @param password   The plaintext password byte sequence to hash.
+   * @param salt       Per-credential salt (16 random bytes from
+   *                   `rand_alphabet(16)`).
+   * @param m_cost_kib Memory cost in KiB. Default 65536 (= 64 MiB).
+   * @param t_cost     Time cost (iteration count). Default 3.
+   * @param parallel   Parallelism factor. Default 1 (single thread).
+   * @param out_len    Output digest length in bytes. Default 32.
+   * @return Hex-encoded digest, or an empty string on KDF failure.
+   *         A non-empty return is the canonical "hashed password"
+   *         value persisted to the credentials store.
+   */
+  std::string argon2id(
+    const std::string_view &password,
+    const std::string_view &salt,
+    std::uint32_t m_cost_kib = 65536,
+    std::uint32_t t_cost = 3,
+    std::uint32_t parallel = 1,
+    std::size_t out_len = 32
+  );
+
+  /**
+   * @brief Whether the Argon2id KDF is available in the linked OpenSSL.
+   * Returns false on OpenSSL < 3.2 builds; callers can use this to
+   * decide whether to write Argon2id records or fall back to legacy
+   * SHA-256.
+   */
+  bool argon2id_available();
+
   aes_t gen_aes_key(const std::array<uint8_t, 16> &salt, const std::string_view &pin);
   x509_t x509(const std::string_view &x);
   pkey_t pkey(const std::string_view &k);

@@ -334,6 +334,22 @@ namespace config {
     std::string password;
     std::string salt;
 
+    /**
+     * Password KDF for the in-memory `password` hex value.
+     *   "sha256"   — legacy single-round SHA-256(password || salt). Pre-PR 1
+     *                builds wrote this; new builds still accept it for
+     *                verification and opportunistically upgrade on next
+     *                successful login.
+     *   "argon2id" — Argon2id with the parameters in the three argon2_*
+     *                fields below. Standard for all new credentials
+     *                created on PR 1 builds and later.
+     * Empty == treat as "sha256" (legacy records that predate the field).
+     */
+    std::string password_kdf;
+    std::uint32_t argon2_m_cost_kib {65536};  ///< Memory cost in KiB (Argon2id only). 64 MiB default.
+    std::uint32_t argon2_t_cost {3};          ///< Iteration count (Argon2id only). 3 default.
+    std::uint32_t argon2_parallel {1};        ///< Parallelism / lanes (Argon2id only). 1 default.
+
     std::string config_file;
 
     struct cmd_t {
