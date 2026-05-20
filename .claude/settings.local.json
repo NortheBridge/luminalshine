@@ -122,7 +122,8 @@
       "Bash(grep -n \"^  }  // namespace$\\\\|^}  // namespace VDISPLAY\\\\|^}  // namespace$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)",
       "Bash(grep -nE \"^namespace VDISPLAY \\\\{$|^  namespace \\\\{$|^}  // namespace$|^}  // namespace VDISPLAY$\" /Users/Avalon/Git/luminalshine/src/platform/windows/virtual_display.cpp)",
       "Bash(awk '/^  video_t video \\\\{/,/^  };/' /Users/Avalon/Git/luminalshine/src/config.cpp)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "Bash(CODECOV_TOKEN=fake-local-test-token npm run build)"
     ],
     "deny": [],
     "ask": [],
