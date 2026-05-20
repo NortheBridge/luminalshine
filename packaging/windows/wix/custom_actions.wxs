@@ -72,7 +72,14 @@
         </DirectorySearch>
       </DirectorySearch>
     </Property>
-    <Property Id="POWERSHELL_PATH" Value="" Secure="yes" />
+    <!-- No declarative default Value=. WiX 3 rejects Value="" with
+         CNDL0006, and a literal "[SystemFolder]..." default would not
+         survive nested property substitution at CA-formatting time
+         (that's the bug this two-CA setup exists to work around). The
+         Type-51 SetProperty actions below populate POWERSHELL_PATH
+         after AppSearch and before any deferred PS-launching CA runs,
+         so a missing initial value is fine. -->
+    <Property Id="POWERSHELL_PATH" Secure="yes" />
     <SetProperty Id="POWERSHELL_PATH"
                  Action="SetPowerShell5AsPath"
                  Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
