@@ -38,6 +38,16 @@ export default defineConfig({
     setupFiles: [resolve(repoRoot, 'tests/frontend/setup.ts')],
     include: [resolve(repoRoot, 'tests/frontend/**/*.test.ts')],
     css: true,
+    // Emit JUnit XML alongside the default console reporter so the
+    // coverage-web GitHub Actions workflow can upload it to Codecov
+    // Test Analytics. The dashboard ingests per-test pass/fail/flake
+    // signals from this file; lcov.info handles line coverage
+    // separately. Local `npm test` runs also emit the XML — it's
+    // cheap (~kB) and removes the CI-vs-local config drift.
+    reporters: ['default', 'junit'],
+    outputFile: {
+      junit: resolve(repoRoot, 'coverage/web/junit.xml'),
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'json'],

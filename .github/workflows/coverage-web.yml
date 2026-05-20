@@ -75,3 +75,24 @@ jobs:
           # propagates.
           fail_ci_if_error: true
           verbose: true
+
+      - name: Upload test results to Codecov Test Analytics
+        # Run even when the test step above failed so the dashboard
+        # records the failing test (Test Analytics keys flake tracking
+        # off pass/fail history; suppressing the upload on red runs
+        # would lose that signal). `!cancelled()` skips only manual
+        # workflow cancellation.
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # JUnit XML emitted by Vitest via the reporter wired in
+          # src_assets/common/assets/web/vitest.config.ts.
+          files: ../../../../coverage/web/junit.xml
+          flags: web
+          name: web-vitest-results
+          # Non-blocking: a test-results upload failure is observability
+          # noise, not a correctness signal — the test-coverage upload
+          # above is what gates the PR.
+          fail_ci_if_error: false
+          verbose: true

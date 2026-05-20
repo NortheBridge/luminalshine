@@ -206,3 +206,23 @@ jobs:
           name: windows-amd64
           fail_ci_if_error: false
           verbose: true
+
+      - name: Upload test results to Codecov Test Analytics
+        # `--gtest_output=xml:test_results.xml` above already emits the
+        # JUnit-compatible XML; this step just ships it. Run even when
+        # the test step exited non-zero (continue-on-error keeps the
+        # workflow alive) so the Test Analytics dashboard records
+        # failing / flaky tests — those are the ones worth tracking,
+        # and suppressing the upload on red runs would lose the signal.
+        if: always() && steps.test.outcome != 'cancelled'
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: build/tests/test_results.xml
+          flags: windows
+          name: windows-amd64-results
+          # Non-blocking: a test-results upload failure is observability
+          # noise, not a correctness signal — the coverage upload above
+          # is what carries the gating data.
+          fail_ci_if_error: false
+          verbose: true

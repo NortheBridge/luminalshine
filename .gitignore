@@ -46,6 +46,10 @@ build/
 cmake-*/
 docs/doxyconfig*
 
+# Vitest coverage + JUnit XML output (consumed by Codecov in CI; never
+# committed). Includes coverage/web/lcov.info and coverage/web/junit.xml.
+coverage/
+
 # npm
 node_modules/
 
