@@ -5,6 +5,7 @@ import Components from 'unplugin-vue-components/vite';
 import { NaiveUiResolver } from 'unplugin-vue-components/resolvers';
 import vue from '@vitejs/plugin-vue';
 import { ViteEjsPlugin } from 'vite-plugin-ejs';
+import { codecovVitePlugin } from '@codecov/vite-plugin';
 import { fileURLToPath } from 'url';
 
 // Resolve directory of this config file (works even if the folder was moved)
@@ -133,6 +134,25 @@ export default defineConfig(({ mode }) => {
         dts: false,
       }),
       ViteEjsPlugin({ header }),
+      // Codecov bundle analysis. Per the plugin's docs the codecov
+      // plugin must come LAST in this array so it sees the final
+      // emitted asset graph after every other transformer has run.
+      // - enableBundleAnalysis is gated on CODECOV_TOKEN being present
+      //   AND mode being prod, so debug/watch builds skip the upload
+      //   entirely (no token noise during local development).
+      // - uploadToken comes from CODECOV_TOKEN. For PRs from forks the
+      //   token is unavailable; the plugin's GitHub tokenless path
+      //   covers that case automatically because this is a public repo.
+      // - bundleName is "luminalshine-web"; Codecov keys historical
+      //   trend data by this name, so renaming it would orphan the
+      //   existing series. Don't change without a deliberate reset.
+      codecovVitePlugin({
+        enableBundleAnalysis:
+          process.env.CODECOV_TOKEN !== undefined && mode === 'prod',
+        bundleName: 'luminalshine-web',
+        uploadToken: process.env.CODECOV_TOKEN,
+        gitService: 'github',
+      }),
     ],
     css: {
       // Include CSS sources in sourcemaps during debug

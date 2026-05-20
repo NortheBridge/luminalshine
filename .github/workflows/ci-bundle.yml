@@ -1,34 +1,64 @@
 ---
+# Codecov bundle analysis for the Vue/TypeScript web UI. Runs a prod
+# Vite build with the @codecov/vite-plugin wired in (see
+# src_assets/common/assets/web/vite.config.ts). The plugin walks the
+# emitted asset graph, produces a bundle-stats payload, and uploads it
+# to Codecov so the dashboard can plot per-chunk size trends and PRs
+# get a "this PR adds N kB to the bundle" comment.
+#
+# Non-blocking: a Codecov upload failure or transient outage on the
+# Codecov side must not red-X the PR — bundle analysis is observability,
+# not a correctness check. The plugin already handles upload errors
+# internally (logs but does not throw), so the npm-build step succeeding
+# is enough to consider this job green.
+
 name: CI-Bundle
 permissions: {}
 
 on:
-  workflow_call:
-    secrets:
-      CODECOV_TOKEN:
-        required: false
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-bundle-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   bundle_analysis:
+    name: Codecov Bundle Analysis
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # All npm scripts and the vite build live in the web package dir.
+        working-directory: src_assets/common/assets/web
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Full history so the Codecov plugin can derive correct PR
+          # base / branch context for the bundle-size delta comment.
+          fetch-depth: 0
 
-      - name: Setup node
-        id: node
+      - name: Setup Node.js
         uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src_assets/common/assets/web/package-lock.json
 
-      - name: Install npm dependencies
-        run: npm install --ignore-scripts
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Debug install
-        if: always()
-        run: cat "${HOME}/.npm/_logs/*-debug-0.log" || true
-
-      - name: Build
+      - name: Build (with Codecov bundle analysis)
         env:
+          # CODECOV_TOKEN gates the plugin's enableBundleAnalysis flag in
+          # vite.config.ts. For PRs from forks the secret is not exposed
+          # and the plugin's tokenless GitHub Actions path engages
+          # automatically (LuminalShine is a public repo). Internal PRs
+          # use the token directly.
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         run: npm run build
