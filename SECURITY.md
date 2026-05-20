@@ -6,7 +6,7 @@ The following versions of LuminalShine are currently supported, depreciated, or 
 
 | Version   | Supported          |
 | --------- | ------------------ |
-| 26.xx.0   | :white_check_mark: |
+|    26     | :white_check_mark: |
 
 
 ## Reporting a Vulnerability
