@@ -129,7 +129,11 @@
       "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/ci.yml','utf8'\\)\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/ci-windows.yml','utf8'\\)\\); console.log\\('OK'\\)\")",
       "Bash(curl -sf \"https://api.github.com/repos/NortheBridge/luminalshine/actions/workflows/coverage-windows.yml/runs?per_page=3\")",
       "Bash(curl -sf \"https://api.github.com/repos/NortheBridge/luminalshine/actions/workflows/coverage-windows.yml/runs?per_page=3&status=success\")",
-      "Bash(curl -sf \"https://api.github.com/repos/NortheBridge/luminalshine/actions/runs/$\\(curl -sf \"https://api.github.com/repos/NortheBridge/luminalshine/actions/workflows/coverage-windows.yml/runs?per_page=3&status=success\")"
+      "Bash(curl -sf \"https://api.github.com/repos/NortheBridge/luminalshine/actions/runs/$\\(curl -sf \"https://api.github.com/repos/NortheBridge/luminalshine/actions/workflows/coverage-windows.yml/runs?per_page=3&status=success\")",
+      "Bash(curl -s -L https://gitdocs.northebridge.com/)",
+      "Bash(bundle install *)",
+      "Bash(bundle config *)",
+      "Bash(python3 -)"
     ],
     "deny": [],
     "ask": [],
