@@ -125,7 +125,8 @@
       "Bash(npm test *)",
       "Bash(CODECOV_TOKEN=fake-local-test-token npm run build)",
       "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('.github/workflows/ci.yml'\\)\\)\")",
-      "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/ci.yml','utf8'\\)\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/ci.yml','utf8'\\)\\); console.log\\('OK'\\)\")",
+      "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/ci.yml','utf8'\\)\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/ci-windows.yml','utf8'\\)\\); console.log\\('OK'\\)\")"
     ],
     "deny": [],
     "ask": [],
