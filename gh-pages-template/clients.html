@@ -1,0 +1,282 @@
+---
+layout: null
+title: Moonlight Clients
+description: Moonlight client compatibility for LuminalShine across phones, tablets, TVs, handhelds, and the browser.
+permalink: /clients.html
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDW66C09S1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XDW66C09S1');
+    </script>
+    <title>Moonlight Clients &mdash; LuminalShine</title>
+    <meta name="description" content="LuminalShine works with any Moonlight client. Browse the official and community clients for phones, tablets, TVs, handhelds, and the browser." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ site.baseurl }}/assets/css/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="nav-brand" href="{{ site.baseurl }}/">
+        <span class="nav-dot" aria-hidden="true"></span>
+        LuminalShine
+      </a>
+      <div class="nav-links">
+        <a href="{{ site.baseurl }}/#features">Features</a>
+        <a href="{{ site.baseurl }}/clients.html">Clients</a>
+        <a href="{{ site.baseurl }}/#community">Community</a>
+        <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+
+    <div class="container">
+      <a class="back-link" href="{{ site.baseurl }}/">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+        Back to overview
+      </a>
+
+      <header class="hero">
+        <span class="brand-mark">
+          <span class="dot" aria-hidden="true"></span>
+          Moonlight compatibility
+        </span>
+        <h1>Stream anywhere Moonlight runs.</h1>
+        <p class="lead">
+          LuminalShine speaks the standard Moonlight streaming protocol. Any official or community Moonlight client can pair with a LuminalShine host &mdash; or skip the client entirely and stream straight to your browser via the built-in WebRTC endpoint.
+        </p>
+      </header>
+
+      <main>
+        <section aria-labelledby="builtin-label">
+          <h2 class="section-label" id="builtin-label">Built into LuminalShine</h2>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+                </div>
+                <h3>WebRTC Browser Client</h3>
+              </div>
+              <p class="card-desc">
+                Browse to <code style="font-size:0.85em;">/webrtc</code> on your LuminalShine host from Chrome, Edge, Safari, or Firefox &mdash; no separate app to install. Useful on locked-down devices and for quick sessions from a guest machine.
+              </p>
+              <div class="card-footer">
+                <div class="card-tags">
+                  <span class="tag tag-official">First-party</span>
+                  <span class="tag">Browser</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+                </div>
+                <h3>Twilight (LG webOS)</h3>
+              </div>
+              <p class="card-desc">
+                NortheBridge&rsquo;s sister project for LG webOS OLED TVs. Brings low-latency PC gaming directly to the living room, available on the webOS App Store.
+              </p>
+              <div class="card-footer">
+                <div class="card-tags">
+                  <span class="tag tag-official">NortheBridge</span>
+                  <span class="tag">LG webOS</span>
+                </div>
+                <a class="card-arrow" href="https://github.com/NortheBridge/Twilight" target="_blank" rel="noopener" style="text-decoration:none;">
+                  GitHub
+                  <svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg>
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="official-label">
+          <h2 class="section-label" id="official-label">Official Moonlight clients</h2>
+          <div class="cards cards-3">
+            <a class="card" href="https://github.com/moonlight-stream/moonlight-android" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2" /><path d="M10 21h4" /></svg>
+                </div>
+                <h3>Android</h3>
+              </div>
+              <p class="card-desc">Play Store, Amazon Appstore, and F-Droid. Phones, tablets, Chromebooks, and Android TV.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-official">Official</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/moonlight-stream/moonlight-ios" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 19h2" /></svg>
+                </div>
+                <h3>iOS &amp; tvOS</h3>
+              </div>
+              <p class="card-desc">App Store on iPhone, iPad, and Apple TV. Universal binary &mdash; one purchase covers all three.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-official">Official</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/moonlight-stream/moonlight-qt" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2" /><path d="M7 21h10M9 17v4M15 17v4" /></svg>
+                </div>
+                <h3>Moonlight QT</h3>
+              </div>
+              <p class="card-desc">The desktop client for Windows, macOS, Linux, and Steam Deck. Available on Steam.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-official">Official</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/moonlight-stream/moonlight-chrome" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3" /><path d="M12 9h9M7.5 16.5L3 9M16.5 16.5L12 9" /></svg>
+                </div>
+                <h3>ChromeOS</h3>
+              </div>
+              <p class="card-desc">Chrome Web Store. Native NaCl-free build for Chromebooks and ChromeOS Flex devices.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-official">Official</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/moonlight-stream/moonlight-embedded" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" /></svg>
+                </div>
+                <h3>Embedded</h3>
+              </div>
+              <p class="card-desc">Raspberry Pi, Odroid, and other ARM SBCs. Lightweight binary streaming directly to the framebuffer.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-official">Official</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/TheElixZammuto/moonlight-xbox" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M5.5 5.5c3 1 5 4 6.5 7M18.5 5.5c-3 1-5 4-6.5 7" /></svg>
+                </div>
+                <h3>Xbox One / Series</h3>
+              </div>
+              <p class="card-desc">Microsoft Store. Run Moonlight on your console in Developer Mode.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-community">Community</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/mariotaku/moonlight-tv" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+                </div>
+                <h3>LG webOS TV (legacy)</h3>
+              </div>
+              <p class="card-desc">Community webOS port. For newer LG OLED TVs, see <a href="https://github.com/NortheBridge/Twilight" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;">Twilight</a> from NortheBridge.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-community">Community</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/XITRIX/Moonlight-Switch" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 4v16M16 4v16" /></svg>
+                </div>
+                <h3>Nintendo Switch</h3>
+              </div>
+              <p class="card-desc">Community homebrew port. Also supports several other platforms in a single binary.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-community">Community</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/xyzz/vita-moonlight" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="3" /><circle cx="7" cy="12" r="1.5" /><circle cx="17" cy="12" r="1.5" /></svg>
+                </div>
+                <h3>PS Vita</h3>
+              </div>
+              <p class="card-desc">Community homebrew. Requires a hacked Vita running HENkaku / Enso.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-community">Community</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/GaryOderNichts/moonlight-wiiu" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" /><circle cx="8" cy="12" r="1.5" /></svg>
+                </div>
+                <h3>Nintendo Wii U</h3>
+              </div>
+              <p class="card-desc">Community homebrew port. GamePad and Pro Controller supported.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-community">Community</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/zoeyjodon/moonlight-N3DS" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M5 12h14" /></svg>
+                </div>
+                <h3>New Nintendo 3DS</h3>
+              </div>
+              <p class="card-desc">Community homebrew. Limited bitrate &mdash; best for indies and turn-based games.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag tag-community">Community</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+          </div>
+        </section>
+
+        <hr class="divider" />
+
+        <p class="text-muted" style="font-size:0.88rem;">
+          LuminalShine is not affiliated with the upstream Moonlight project. Client links above point to the respective maintainers&rsquo; repositories.
+        </p>
+      </main>
+
+      <footer class="site-footer">
+        <span>&copy; NortheBridge Foundation &middot; LuminalShine is licensed under the GNU GPL-v3.</span>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="{{ site.baseurl }}/license.html">License</a>
+          <a href="{{ site.baseurl }}/contributing.html">Contributing</a>
+          <a href="{{ site.baseurl }}/security.html">Security</a>
+          <a href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">Docs</a>
+          <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>

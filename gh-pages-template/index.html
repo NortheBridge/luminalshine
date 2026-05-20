@@ -1,927 +1,490 @@
 ---
-title: Sunshine
-subtitle: A LizardByte project
-layout: page
-full-width: true
-after-content:
-  - donate.html
-  - support.html
-cover-img:
-  - /luminalshine/assets/img/banners/AdobeStock_305732536_1920x1280.jpg
-  - /luminalshine/assets/img/banners/AdobeStock_231616343_1920x1280.jpg
-  - /luminalshine/assets/img/banners/AdobeStock_303330124_1920x1280.jpg
-ext-js:
-  - https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js
+layout: null
+title: LuminalShine
+description: A modern, self-hosted, Sunshine-based game streaming platform purpose-built for Modern Windows 11.
+permalink: /
 ---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDW66C09S1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XDW66C09S1');
+    </script>
+    <title>LuminalShine &mdash; Modern Windows 11 Game Streaming</title>
+    <meta name="description" content="A modern, self-hosted, Sunshine-based game streaming platform purpose-built for Modern Windows 11. From the NortheBridge Foundation." />
+    <meta property="og:title" content="LuminalShine" />
+    <meta property="og:description" content="A modern, self-hosted, Sunshine-based game streaming platform purpose-built for Modern Windows 11." />
+    <meta property="og:type" content="website" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ site.baseurl }}/assets/css/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="nav-brand" href="{{ site.baseurl }}/">
+        <span class="nav-dot" aria-hidden="true"></span>
+        LuminalShine
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#clients">Clients</a>
+        <a href="#community">Community</a>
+        <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
 
-<!-- About section-->
-<section class="py-5" id="About">
-  <div class="container px-auto">
-    <p class="lead text-center text-white mx-auto mt-0 mb-5">
-      Sunshine is a self-hosted game stream host for Moonlight. Offering low latency, cloud gaming
-      server capabilities with support for AMD, Intel, and Nvidia GPUs for hardware encoding.
-      Software encoding is also available. You can connect to Sunshine from any Moonlight client on
-      a variety of devices. A web UI is provided to allow configuration, and client pairing, from
-      your favorite web browser. Pair from the local server or any mobile device.
-    </p>
-  </div>
-</section>
+    <div class="container">
 
-<!-- Features section-->
-<section class="py-5" id="Features">
-  <div class="container px-auto">
-    <h2 class="text-center text-white fw-bolder my-5">Features</h2>
-    <!-- Create a card for each feature -->
-    <div class="row gx-5">
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <i class="fa-fw fa-2x fas fa-server"></i>
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">Self-hosted</h5>
-                <p class="mb-0">
-                  Run Sunshine on your own hardware. No need to pay monthly fees to a cloud gaming
-                  provider.
-                </p>
-              </div>
-            </div>
-          </div>
+      <header class="hero">
+        <a class="brand-mark" href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">
+          <span class="dot" aria-hidden="true"></span>
+          NortheBridge Foundation
+        </a>
+        <h1>Game streaming, rebuilt&nbsp;for modern&nbsp;Windows.</h1>
+        <p class="lead">
+          LuminalShine is a self-hosted, low-latency game stream host &mdash; a hardened, modernized descendant of Sunshine focused exclusively on delivering a stable streaming experience on current Windows 11 releases, including the Insider Preview Canary and Dev channels.
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://github.com/NortheBridge/luminalshine/releases/latest" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" /></svg>
+            Download latest release
+          </a>
+          <a class="btn" href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.04 1.53 1.04.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.86v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z" /></svg>
+            View on GitHub
+          </a>
+          <a class="btn" href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V5z" /><path d="M4 17a2 2 0 0 1 2-2h14" /></svg>
+            Read the docs
+          </a>
         </div>
-      </div>
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="icon"
-                  src="https://moonlight-stream.org/images/moonlight.svg"
-                  alt="Moonlight"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">Moonlight Support</h5>
-                <p class="mb-0">
-                  Connect to Sunshine from any Moonlight client. Moonlight is available for Windows,
-                  macOS, Linux, Android, iOS, Xbox, and more. See
-                  <a class="text-white" href="#Clients">clients</a> for more information.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <i class="fa-fw fa-2x fas fa-microchip"></i>
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">Hardware Encoding</h5>
-                <p class="mb-0">
-                  Sunshine supports AMD, Intel, and Nvidia GPUs for hardware encoding. Software
-                  encoding is also available.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-6 col-lg-4 mb-5 mb-lg-0">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <i class="fa-fw fa-2x fas fa-globe"></i>
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">Low Latency</h5>
-                <p class="mb-0">
-                  Sunshine is designed to provide the lowest latency possible to achieve optimal
-                  gaming performance.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-6 col-lg-4 mb-5 mb-lg-0">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <i class="fa-fw fa-2x fas fa-gamepad"></i>
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">Control</h5>
-                <p class="mb-0">
-                  Sunshine emulates an Xbox, PlayStation, or Nintendo Switch controller. Use nearly
-                  any controller on your Moonlight client!<br />
-                  <small>
-                    <ul>
-                      <li>Nintendo Switch emulation is only available on Linux.</li>
-                      <li>Gamepad emulation is not currently supported on macOS.</li>
-                    </ul>
-                  </small>
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-md-6 col-lg-4 mb-5 mb-lg-0">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <i class="fa-fw fa-2x fas fa-gear"></i>
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">Configurable</h5>
-                <p class="mb-0">
-                  Sunshine offers many configuration options to customize your experience.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
+      </header>
 
-<!-- Clients section-->
-<section class="py-5" id="Clients">
-  <div class="container px-auto">
-    <h2 class="text-center text-white fw-bolder my-5">Clients</h2>
-    <!-- Create a card for each client -->
-    <div class="row gx-5">
-      <!-- Android -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/android.svg"
-                  alt="Android"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/moonlight-stream/moonlight-android"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    Android
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-info rounded-pill">Official</span>
+      <main>
+        <!-- ============================================================ -->
+        <!-- ABOUT                                                         -->
+        <!-- ============================================================ -->
+        <section id="about" aria-labelledby="about-label">
+          <h2 class="section-label" id="about-label">About LuminalShine</h2>
+          <div class="card card-block">
+            <p class="card-desc">
+              LuminalShine is a Windows-first game streaming host developed by the <strong>NortheBridge Software Foundation</strong>. It is a hardened, modernized descendant of <a href="https://github.com/LizardByte/Sunshine" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);">Sunshine</a> by way of Vibeshine, focused exclusively on delivering a stable, low-latency streaming experience on current Windows 11 releases &mdash; including the <strong>Windows Insider Preview Canary and Dev channels</strong> &mdash; paired with any Moonlight client or the built-in WebRTC browser client.
+            </p>
+            <p class="card-desc">
+              LuminalShine began as a fork of <strong>Vibeshine</strong> specifically to address deficiencies on the Windows 11 Insider Preview platform that upstream maintainers were unwilling to investigate. Since then it has diverged substantially in architecture, driver support, and capture pipeline.
+            </p>
+            <div class="card-footer">
+              <div class="card-tags">
+                <span class="tag">Windows 11</span>
+                <span class="tag">Insider Preview</span>
+                <span class="tag">Sunshine-compatible</span>
+                <span class="tag">GPL-v3</span>
               </div>
             </div>
           </div>
-          <div class="card-footer p-3 px-4">
-            <div>
-              <a href="https://play.google.com/store/apps/details?id=com.limelight" target="_blank">
-                <img
-                  alt="Get it on Google Play"
-                  src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"
-                  height="60"
-                />
-              </a>
-            </div>
-            <div>
-              <a href="https://www.amazon.com/gp/product/B00JK4MFN2" target="_blank">
-                <img
-                  alt="Available at Amazon Appstore"
-                  src="https://images-na.ssl-images-amazon.com/images/G/01/mobile-apps/devportal2/res/images/amazon-appstore-badge-english-black.png"
-                  height="60"
-                  style="padding: 10px"
-                />
-              </a>
-            </div>
-            <div>
-              <a href="https://f-droid.org/packages/com.limelight" target="_blank">
-                <img
-                  alt="Get it on F-Droid"
-                  src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
-                  height="60"
-                />
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
+        </section>
 
-      <!-- ChromeOS -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/chromewebstore.svg"
-                  alt="Chrome Web Store"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/moonlight-stream/moonlight-chrome"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    ChromeOS
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-info rounded-pill">Official</span>
-              </div>
-            </div>
+        <!-- ============================================================ -->
+        <!-- SYSTEM REQUIREMENTS                                           -->
+        <!-- ============================================================ -->
+        <section id="requirements" aria-labelledby="requirements-label">
+          <h2 class="section-label" id="requirements-label">System Requirements</h2>
+          <p class="section-intro">LuminalShine is <strong>Windows-only by design</strong>. Linux and macOS support from upstream Sunshine has been deprecated to allow the team to focus entirely on the Windows platform.</p>
+          <div class="spec-table-wrap">
+            <table class="spec-table">
+              <thead>
+                <tr>
+                  <th scope="col">Component</th>
+                  <th scope="col">Minimum</th>
+                  <th scope="col">Recommended</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>OS</td>
+                  <td>Windows 11 23H2 (x64)</td>
+                  <td>Windows 11 24H2 or Insider Preview (Canary / Dev)</td>
+                </tr>
+                <tr>
+                  <td>CPU</td>
+                  <td>Quad-core x86-64 with AVX2</td>
+                  <td>6+ cores, recent Intel / AMD / Snapdragon X</td>
+                </tr>
+                <tr>
+                  <td>GPU</td>
+                  <td>DirectX 12 capable, HEVC encode</td>
+                  <td>NVIDIA RTX 40/50, AMD RDNA 3/4, or Intel Arc with AV1 encode</td>
+                </tr>
+                <tr>
+                  <td>RAM</td>
+                  <td>8 GB</td>
+                  <td>16 GB+</td>
+                </tr>
+                <tr>
+                  <td>Display Stack</td>
+                  <td>WDDM 3.0</td>
+                  <td>WDDM 3.2+ with HDR-capable physical or virtual display at 240 Hz</td>
+                </tr>
+                <tr>
+                  <td>Network</td>
+                  <td>1 Gbps wired or Wi-Fi 6</td>
+                  <td>2.5 Gbps wired or Wi-Fi 6E/7</td>
+                </tr>
+                <tr>
+                  <td>PowerShell</td>
+                  <td>Windows PowerShell 5.1</td>
+                  <td>PowerShell 7 (auto-preferred by MSI when installed)</td>
+                </tr>
+                <tr>
+                  <td>Privileges</td>
+                  <td>Local administrator for install &amp; service registration</td>
+                  <td>TPM 2.0 (used for credential sealing)</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://chrome.google.com/webstore/detail/moonlight-game-streaming/gemamigbbenahjlfnmlfdjhdnkpbkfjj"
-                target="_blank"
-                class="btn btn-outline-light"
-              >
-                <img
-                  alt="Available in the Chrome Web Store"
-                  src="https://developer.chrome.com/static/docs/webstore/branding/image/206x58-chrome-web-043497a3d766e.png"
-                  height="30"
-                />
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
+        </section>
 
-      <!-- iOS -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/ios.svg"
-                  alt="iOS"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/appletv.svg"
-                  alt="Apple TV"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/moonlight-stream/moonlight-ios"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    iOS
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-info rounded-pill">Official</span>
-              </div>
+        <!-- ============================================================ -->
+        <!-- KEY FEATURES                                                  -->
+        <!-- ============================================================ -->
+        <section id="features" aria-labelledby="features-label">
+          <h2 class="section-label" id="features-label">Key Features</h2>
+          <p class="section-intro">A focused feature set tuned for low-latency streaming on the latest Windows builds.</p>
+          <div class="feature-grid">
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Native Windows 11 + Insider Preview</h3>
+              <p class="feature-body">Engineered against the latest Canary and Dev channel builds; works around <code style="font-size:0.85em;">dxgi.dll</code> quirks introduced in recent flights.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>HEVC and AV1, with HDR</h3>
+              <p class="feature-body">Modern codec paths are the default. H.264 remains supported on older builds.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>WGC in Service Mode</h3>
+              <p class="feature-body">Windows Graphics Capture captures full frame-generated frame rates, survives VRAM exhaustion, and falls back so login &amp; UAC prompts stay capturable.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>SudoVDA Virtual Display</h3>
+              <p class="feature-body">Default virtual display driver. Supports automatic or explicit GPU binding, including hybrid-GPU laptops &mdash; ideal for headless setups.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>MTT VDD as Alternative</h3>
+              <p class="feature-body">Available for niche hardware configurations. Read the notice in the installer before selecting MTT VDD.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>LuminalVGD<span class="feature-soon">Soon</span></h3>
+              <p class="feature-body">A first-party virtual display driver developed in-house to eventually supersede both SudoVDA and MTT VDD as the default.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Display Setting Automation</h3>
+              <p class="feature-body">Restores display layout after crashes, shutdowns, or reboots; safeguards against unreleased dummy plugs and virtual displays.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Modern WebUI</h3>
+              <p class="feature-body">Fully responsive; manage your library and configuration from a phone or tablet without restarting the service.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>WebRTC Browser Streaming</h3>
+              <p class="feature-body">Stream directly to the browser via the <code style="font-size:0.85em;">/webrtc</code> endpoint &mdash; no separate client install needed. Moonlight path is still available.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>TPM-bound Credential Sealing</h3>
+              <p class="feature-body">Admin credentials are sealed to the TPM by default, with platform-native fallbacks (Credential Manager, libsecret, Keychain) elsewhere.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>RTSS &amp; NVIDIA Control Panel</h3>
+              <p class="feature-body">Applies the correct frame limit and disables V-Sync before streaming for noticeably smoother frame pacing.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Frame-Generation Capture Fixes</h3>
+              <p class="feature-body">DLSS, FSR, and XeSS frame-gen titles capture at full rate without micro-stutter (requires a 240 Hz display).</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Lossless Scaling &amp; Smooth Motion</h3>
+              <p class="feature-body">Optional per-app frame generation; NVIDIA Smooth Motion supported on RTX 40 / 50 series.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Playnite Integration</h3>
+              <p class="feature-body">Auto-sync recently played games with per-category rules. Artwork, launching, and clean termination handled for you.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Scoped API Tokens</h3>
+              <p class="feature-body">Method-level scoping so automation scripts never need full admin rights.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Session-Based Auth</h3>
+              <p class="feature-body">Password-manager friendly, with an opt-in &ldquo;remember me&rdquo; flow.</p>
+            </div>
+            <div class="feature">
+              <h3 class="feature-title"><span class="feature-dot"></span>Pre-Release &amp; GA Channels</h3>
+              <p class="feature-body">Side-by-side update channels so you can pull in-development fixes the moment they land.</p>
             </div>
           </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://apps.apple.com/us/app/moonlight-game-streaming/id1000551566"
-                target="_blank"
-              >
-                <img
-                  alt="Download on the App Store"
-                  src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
-                  height="40"
-                />
-              </a>
-            </div>
-            <div class="pb-3">
-              <a
-                href="https://apps.apple.com/us/app/moonlight-game-streaming/id1000551566"
-                target="_blank"
-              >
-                <img
-                  alt="Download on Apple TV"
-                  src="https://developer.apple.com/app-store/marketing/guidelines/images/badge-download-on-apple-tv.svg"
-                  height="40"
-                />
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
+        </section>
 
-      <!-- Moonlight-QT -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/linux.svg"
-                  alt="Linux"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/macos.svg"
-                  alt="macOS"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/icons/windows.svg"
-                  alt="Windows"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/steam.svg"
-                  alt="Steam"
-                />
+        <!-- ============================================================ -->
+        <!-- MOONLIGHT CLIENTS                                             -->
+        <!-- ============================================================ -->
+        <section id="clients" aria-labelledby="clients-label">
+          <h2 class="section-label" id="clients-label">Moonlight Client Compatibility</h2>
+          <a class="card client-card" href="{{ site.baseurl }}/clients.html">
+            <div class="card-header">
+              <div class="card-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
               </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/moonlight-stream/moonlight-qt"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    QT
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-info rounded-pill">Official</span>
-              </div>
+              <h3>Pair with any Moonlight client</h3>
             </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/moonlight-stream/moonlight-qt/releases"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fab fa-github"></i> Download on GitHub
-              </a>
+            <p class="card-desc">
+              LuminalShine speaks the standard Moonlight streaming protocol &mdash; pair from anything Moonlight supports, including phones, tablets, TVs, handhelds, and the desktop Moonlight-QT app. Or skip the client entirely and stream straight to your browser via WebRTC.
+            </p>
+            <div class="client-platforms">
+              <span class="platform-chip">Android</span>
+              <span class="platform-chip">iOS / tvOS</span>
+              <span class="platform-chip">Windows</span>
+              <span class="platform-chip">macOS</span>
+              <span class="platform-chip">Linux</span>
+              <span class="platform-chip">ChromeOS</span>
+              <span class="platform-chip">Xbox</span>
+              <span class="platform-chip">LG webOS</span>
+              <span class="platform-chip">Raspberry Pi</span>
+              <span class="platform-chip">Nintendo Switch</span>
+              <span class="platform-chip">PS Vita</span>
+              <span class="platform-chip">Browser (WebRTC)</span>
             </div>
-          </div>
-        </div>
-      </div>
+            <div class="card-footer">
+              <div class="card-tags">
+                <span class="tag tag-official">Official clients</span>
+                <span class="tag tag-community">Community clients</span>
+              </div>
+              <span class="card-arrow">
+                See all clients
+                <svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg>
+              </span>
+            </div>
+          </a>
+        </section>
 
-      <!-- Embedded -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/raspberrypi.svg"
-                  alt="Raspberry Pi"
-                />
+        <!-- ============================================================ -->
+        <!-- LINEAGE                                                       -->
+        <!-- ============================================================ -->
+        <section id="lineage" aria-labelledby="lineage-label">
+          <h2 class="section-label" id="lineage-label">Relationship to Sunshine &amp; Vibeshine</h2>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1" /></svg>
+                </div>
+                <h3>A complementary fork</h3>
               </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/moonlight-stream/moonlight-embedded"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    Embedded
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-info rounded-pill">Official</span>
-              </div>
+              <p class="card-desc">
+                LuminalShine is a <strong>complementary fork</strong>, not a replacement. Sunshine remains the right choice for cross-platform deployments, and Vibeshine remains its own project. Each project covers a distinct surface.
+              </p>
+              <p class="card-desc">
+                LuminalShine remains free and open source under the <strong>GNU GPL-v3</strong> license and will not be sold or offered commercially.
+              </p>
             </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/irtimmer/moonlight-embedded/wiki/Packages"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fas fa-download"></i> Download
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Xbox One/Series -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/icons/xbox.svg"
-                  alt="Xbox"
-                />
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 9 9 9 9 0 0 1-9 9 9 9 0 0 1-9-9z" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>
+                </div>
+                <h3>No backports planned</h3>
               </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/TheElixZammuto/moonlight-xbox"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    Xbox One/Series
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-warning rounded-pill">Community</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://apps.microsoft.com/store/detail/moonlight-uwp/9MW1BS08ZBTH"
-                target="_blank"
-              >
-                <img
-                  alt="Get it from Microsoft"
-                  src="https://get.microsoft.com/images/en-us%20dark.svg"
-                  height="40"
-                />
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- PS Vita -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/playstationvita.svg"
-                  alt="PlayStation Vita"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/xyzz/vita-moonlight"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    PS Vita
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-warning rounded-pill">Community</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/xyzz/vita-moonlight/releases"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fab fa-github"></i> Download on GitHub
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Nintendo Switch -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/icons/nintendo-switch.svg"
-                  alt="Nintendo Switch"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/android.svg"
-                  alt="Android"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/appletv.svg"
-                  alt="Apple TV"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/ios.svg"
-                  alt="iOS"
-                />
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/macos.svg"
-                  alt="macOS"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/XITRIX/Moonlight-Switch"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    Moonlight Switch
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-warning rounded-pill">Community</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/XITRIX/Moonlight-Switch/releases"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fab fa-github"></i> Download on GitHub
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Nintendo Wii U -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v12/icons/wiiu.svg"
-                  alt="Wii U"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/GaryOderNichts/moonlight-wiiu"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    Nintendo Wii U
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-warning rounded-pill">Community</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/GaryOderNichts/moonlight-wiiu#quick-start"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fas fa-download"></i> Download
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- New Nintendo 3DS -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v12/icons/nintendo3ds.svg"
-                  alt="3DS"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/zoeyjodon/moonlight-N3DS"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    New Nintendo 3DS
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-warning rounded-pill">Community</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/zoeyjodon/moonlight-N3DS"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fas fa-download"></i> Download
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- LG webOS TV -->
-      <div class="col-md-6 col-lg-4 mb-5">
-        <div class="card bg-dark text-white rounded-0">
-          <div class="card-body p-4">
-            <div class="d-flex align-items-center">
-              <div class="icon text-white">
-                <img
-                  class="invert"
-                  src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/lg.svg"
-                  alt="LG webOS TV"
-                />
-              </div>
-              <div class="ms-3">
-                <h5 class="fw-bolder mb-0">
-                  <a
-                    href="https://github.com/mariotaku/moonlight-tv"
-                    target="_blank"
-                    class="text-white text-decoration-none"
-                  >
-                    LG webOS TV
-                  </a>
-                </h5>
-              </div>
-              <div class="ms-auto">
-                <span class="badge text-bg-warning rounded-pill">Community</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-footer p-3 px-4">
-            <div class="pb-3">
-              <a
-                href="https://github.com/mariotaku/moonlight-tv#download"
-                target="_blank"
-                class="btn btn-info"
-              >
-                <i class="fas fa-download"></i> Download
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- More cards -->
-<div class="container py-5 px-auto">
-  <div class="container col-md-10">
-    <!-- Docs section -->
-    <section class="py-4" id="Docs">
-      <div class="card bg-dark text-white rounded-0">
-        <div class="card-body p-4">
-          <div class="d-flex align-items-center">
-            <i class="fa-fw fa-2x fas fa-book"></i>
-            <div class="ms-3">
-              <h2 class="fw-bolder mb-0">Documentation</h2>
-              <p class="mb-0">
-                Read the documentation to learn how to install, use, and configure Sunshine.
+              <p class="card-desc">
+                <strong>LuminalShine features will not be backported to Sunshine or Vibeshine.</strong> Driver changes, the WGC service architecture, Insider Preview workarounds, and the pace of development make maintaining backports impractical.
+              </p>
+              <p class="card-desc">
+                The codebase has diverged far enough that upstreaming would no longer be a clean merge &mdash; it would be a rewrite.
               </p>
             </div>
           </div>
-        </div>
-        <div class="card-footer p-3 px-4">
-          <a
-            class="btn btn-outline-light me-3 mb-3"
-            href="https://docs.lizardbyte.dev/projects/sunshine"
-            target="_blank"
-          >
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/readthedocs.svg"
-              alt="ReadTheDocs"
-            />
-            Read the Docs
-          </a>
-        </div>
-      </div>
-    </section>
+        </section>
 
-    <!-- Download section -->
-    <section class="py-4" id="Download">
-      <div class="card bg-dark text-white rounded-0">
-        <div class="card-body p-4">
-          <div class="d-flex align-items-center">
-            <i class="fa-fw fa-2x fas fa-download"></i>
-            <div class="ms-3">
-              <h2 class="fw-bolder mb-0">Download</h2>
-              <p class="mb-0">Download Sunshine for your platform.</p>
+        <!-- ============================================================ -->
+        <!-- ORIGIN OF THE NAME                                            -->
+        <!-- ============================================================ -->
+        <section id="name" aria-labelledby="name-label">
+          <h2 class="section-label" id="name-label">Origin of the Name</h2>
+          <div class="card card-block">
+            <div class="card-header">
+              <div class="card-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26A7 7 0 0 0 12 2z" /><path d="M10 22h4" /></svg>
+              </div>
+              <h3>Luminal &mdash; from <em>lumen</em>, the SI unit of luminous flux</h3>
             </div>
+            <p class="card-desc">
+              <strong>&ldquo;LuminalShine&rdquo;</strong> is the adjective form of <em>lumen</em> &mdash; the SI unit for luminous flux &mdash; riffing on the first half of <em>Sunshine</em>. It signals what the project is: a continuation of the Sunshine lineage, refined and focused, named for the physics of the light it pushes down the wire.
+            </p>
           </div>
-        </div>
-        <div class="card-footer p-3 px-4">
-          <a
-            class="latest-button btn btn-outline-light me-3 mb-3 d-none"
-            href="https://github.com/LizardByte/Sunshine/releases/latest"
-            target="_blank"
-          >
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/github.svg"
-              alt="GitHub"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/icons/windows.svg"
-              alt="Windows"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/debian.svg"
-              alt="Debian"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/ubuntu.svg"
-              alt="Ubuntu"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/flatpak.svg"
-              alt="Flatpak"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/linux.svg"
-              alt="AppImage"
-            />
-            Latest: <span id="latest-version" class="crowdin-ignore"></span>
-          </a>
-          <a class="beta-button btn btn-outline-light me-3 mb-3 d-none" href="#" target="_blank">
-            <i class="fa-fw fa-lg fas fa-flask"></i>
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/icons/windows.svg"
-              alt="Windows"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/debian.svg"
-              alt="Debian"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/ubuntu.svg"
-              alt="Ubuntu"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/flatpak.svg"
-              alt="Flatpak"
-            />
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/linux.svg"
-              alt="AppImage"
-            />
-            Beta: <span id="beta-version" class="crowdin-ignore"></span>
-          </a>
-          <a
-            class="btn btn-outline-light me-3 mb-3"
-            href="https://github.com/LizardByte/pacman-repo"
-            target="_blank"
-          >
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/archlinux.svg"
-              alt="Arch Linux"
-            />
-            Arch Linux
-          </a>
-          <a
-            class="btn btn-outline-light me-3 mb-3"
-            href="https://hub.docker.com/r/lizardbyte/sunshine"
-            target="_blank"
-          >
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/docker.svg"
-              alt="Docker"
-            />
-            Docker
-          </a>
-          <a
-            class="btn btn-outline-light me-3 mb-3"
-            href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"
-            target="_blank"
-          >
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/flathub.svg"
-              alt="Flathub"
-            />
-            Flathub
-          </a>
-          <a
-            class="btn btn-outline-light me-3 mb-3"
-            href="https://github.com/LizardByte/homebrew-homebrew"
-            target="_blank"
-          >
-            <img
-              class="icon-sm invert"
-              src="https://cdn.jsdelivr.net/npm/simple-icons@v14/icons/homebrew.svg"
-              alt="Homebrew"
-            />
-            Homebrew
-          </a>
-        </div>
-      </div>
-    </section>
-  </div>
-</div>
+        </section>
 
-<!-- TODO: Move this to website repo, and make it accept arguments for the repo name -->
-<script>
-  // Fetch the releases from the GitHub API
-  fetch('https://api.github.com/repos/LizardByte/Sunshine/releases')
-    .then((response) => response.json())
-    .then((data) => {
-      // Filter the releases to get only the pre-releases
-      const preReleases = data.filter((release) => release.prerelease);
-      // Filter the releases to get only the stable releases
-      const stableReleases = data.filter((release) => !release.prerelease);
+        <!-- ============================================================ -->
+        <!-- RESOURCES                                                     -->
+        <!-- ============================================================ -->
+        <section id="resources" aria-labelledby="resources-label">
+          <h2 class="section-label" id="resources-label">Get LuminalShine</h2>
+          <div class="cards cards-3">
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/releases" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" /></svg>
+                </div>
+                <h3>Releases</h3>
+              </div>
+              <p class="card-desc">Latest stable installers and pre-release builds on GitHub. Side-by-side GA and pre-release channels.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">MSI</span><span class="tag">EXE</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
 
-      const latestButton = document.querySelector('.latest-button');
-      const latestVersion = document.querySelector('#latest-version');
-      const betaButton = document.querySelector('.beta-button');
-      const betaVersion = document.querySelector('#beta-version');
+            <a class="card" href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V5z" /><path d="M4 17a2 2 0 0 1 2-2h14" /></svg>
+                </div>
+                <h3>Documentation</h3>
+              </div>
+              <p class="card-desc">Installation, configuration, driver selection, WebRTC, and troubleshooting at <code style="font-size:0.85em;">gitdocs.northebridge.com</code>.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">Guides</span><span class="tag">API</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
 
-      // If there are no stable releases, hide the latest download button
-      if (stableReleases.length === 0) {
-        latestButton.classList.add('d-none');
-      } else {
-        // Show the latest download button
-        latestButton.classList.remove('d-none');
+            <a class="card" href="{{ site.baseurl }}/license.html">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M9 12h6M9 16h6M9 8h6" /><path d="M6 3h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /></svg>
+                </div>
+                <h3>License</h3>
+              </div>
+              <p class="card-desc">Distributed under the GNU GPL-v3. Contributions are welcomed under the same terms.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">GPL-v3</span><span class="tag">Free &amp; open source</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
 
-        // Get the latest stable release
-        const latestStableRelease = stableReleases[0];
-        latestVersion.textContent = latestStableRelease.tag_name;
+            <a class="card" href="{{ site.baseurl }}/contributing.html">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="8.5" cy="7" r="4" /><path d="M20 8v6M23 11h-6" /></svg>
+                </div>
+                <h3>Contributing</h3>
+              </div>
+              <p class="card-desc">How to file good bug reports, build LuminalShine from source, and submit a clean pull request.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">Pull requests</span><span class="tag">Builds</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
 
-        // If there is a pre-release, update the href attribute of the anchor tag
-        if (preReleases.length > 0) {
-          const latestPreRelease = preReleases[0];
+            <a class="card" href="{{ site.baseurl }}/security.html">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" /><path d="M9 12l2 2 4-4" /></svg>
+                </div>
+                <h3>Security Policy</h3>
+              </div>
+              <p class="card-desc">Responsible disclosure, supported versions, and how to privately report a vulnerability.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">Advisories</span><span class="tag">Supported versions</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
 
-          // Compare the date of the latest pre-release with the date of the latest stable release
-          const preReleaseDate = new Date(latestPreRelease.published_at);
-          const stableReleaseDate = new Date(latestStableRelease.published_at);
+            <a class="card" href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.04 1.53 1.04.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.86v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z" /></svg>
+                </div>
+                <h3>Source code</h3>
+              </div>
+              <p class="card-desc">Browse the repository, watch the project, or fork it on GitHub.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">C++ / Clang</span><span class="tag">Vue + Tailwind</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+          </div>
+        </section>
 
-          // If the pre-release is newer, update the href attribute of the anchor tag
-          if (preReleaseDate > stableReleaseDate) {
-            betaButton.href = latestPreRelease.html_url;
-            betaVersion.textContent = latestPreRelease.tag_name;
-            betaButton.classList.remove('d-none');
-          } else {
-            // If the pre-release is older, hide the button
-            betaButton.classList.add('d-none');
-          }
-        } else {
-          // If there is no pre-release, hide the button
-          betaButton.classList.add('d-none');
-        }
-      }
-    });
-</script>
+        <!-- ============================================================ -->
+        <!-- COMMUNITY                                                     -->
+        <!-- ============================================================ -->
+        <section id="community" aria-labelledby="community-label">
+          <h2 class="section-label" id="community-label">Community &amp; Support</h2>
+          <p class="section-intro">Two channels, two purposes: open-ended conversation in Discussions, actionable bug reports in Issues.</p>
+          <div class="cards cards-2">
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/discussions" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 20l1.1-4.8a8.38 8.38 0 0 1-.6-3.2 8.5 8.5 0 0 1 8.5-8.5 8.38 8.38 0 0 1 8 8z" /></svg>
+                </div>
+                <h3>GitHub Discussions</h3>
+              </div>
+              <p class="card-desc">
+                The place for open-ended conversation: configuration questions, hardware recommendations, ideas for new features, and show-and-tell. Start here if you&rsquo;re not sure whether something is a bug.
+              </p>
+              <div class="card-footer">
+                <div class="card-tags">
+                  <span class="tag">Q&amp;A</span>
+                  <span class="tag">Ideas</span>
+                  <span class="tag">Show &amp; tell</span>
+                </div>
+                <span class="card-arrow">
+                  Join discussions
+                  <svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg>
+                </span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/issues" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>
+                </div>
+                <h3>GitHub Issues</h3>
+              </div>
+              <p class="card-desc">
+                Use Issues for reproducible bugs, crashes, and concrete feature requests. Please include your Windows build (winver), GPU, driver version, and the relevant section of <code style="font-size:0.85em;">sunshine.log</code>. Issue templates will walk you through what we need.
+              </p>
+              <div class="card-footer">
+                <div class="card-tags">
+                  <span class="tag">Bugs</span>
+                  <span class="tag">Feature requests</span>
+                </div>
+                <span class="card-arrow">
+                  File an issue
+                  <svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg>
+                </span>
+              </div>
+            </a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>&copy; NortheBridge Foundation &middot; LuminalShine is licensed under the GNU GPL-v3.</span>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="{{ site.baseurl }}/license.html">License</a>
+          <a href="{{ site.baseurl }}/contributing.html">Contributing</a>
+          <a href="{{ site.baseurl }}/security.html">Security</a>
+          <a href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">Docs</a>
+          <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>

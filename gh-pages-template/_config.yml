@@ -1,4 +1,34 @@
 ---
-# See https://github.com/daattali/beautiful-jekyll/blob/master/_config.yml for documented options
+# LuminalShine GH-Pages config.
+# The build workflow (_jekyll-build.yml) merges in the LizardByte beautiful-jekyll
+# theme's _layouts / _includes / _sass / assets. Each page in this repo sets
+# `layout: null` in its front matter so the LizardByte theme chrome (navbar,
+# beautiful-jekyll wrappers) does not wrap our custom aurora design.
 
-avatar: "/luminalshine/assets/img/navbar-avatar.png"
+title: LuminalShine
+description: A modern, self-hosted, Sunshine-based game streaming platform purpose-built for Modern Windows 11.
+url: https://gitdocs.northebridge.com
+# baseurl is injected at build time by the workflow (`_config_ci.yml`, value `_auto`).
+
+author:
+  name: NortheBridge Foundation
+  url: https://github.com/NortheBridge
+
+# Don't run inherited theme defaults across our pages.
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: null
+
+# Don't auto-process anything from the theme that isn't ours.
+exclude:
+  - README.md
+  - LICENSE
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+
+# Keep things stable.
+permalink: pretty
+plugins: []

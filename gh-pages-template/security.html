@@ -1,0 +1,180 @@
+---
+layout: null
+title: Security Policy
+description: How to privately report a security vulnerability in LuminalShine, and which versions are currently supported.
+permalink: /security.html
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDW66C09S1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XDW66C09S1');
+    </script>
+    <title>Security Policy &mdash; LuminalShine</title>
+    <meta name="description" content="LuminalShine security policy: supported versions and how to privately report a vulnerability." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ site.baseurl }}/assets/css/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="nav-brand" href="{{ site.baseurl }}/">
+        <span class="nav-dot" aria-hidden="true"></span>
+        LuminalShine
+      </a>
+      <div class="nav-links">
+        <a href="{{ site.baseurl }}/#features">Features</a>
+        <a href="{{ site.baseurl }}/clients.html">Clients</a>
+        <a href="{{ site.baseurl }}/#community">Community</a>
+        <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+
+    <div class="container narrow">
+      <a class="back-link" href="{{ site.baseurl }}/">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+        Back to overview
+      </a>
+
+      <header class="hero">
+        <span class="brand-mark">
+          <span class="dot" aria-hidden="true"></span>
+          Security Policy
+        </span>
+        <h1>Report a vulnerability privately.</h1>
+        <p class="lead">
+          If you believe you have found a security vulnerability in LuminalShine, please report it through GitHub&rsquo;s private security advisory channel &mdash; not as a public issue. The team will triage, investigate, and develop a fix, and keep you informed at each step.
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://github.com/NortheBridge/luminalshine/security/advisories/new" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" /><path d="M9 12l2 2 4-4" /></svg>
+            Report a security issue
+          </a>
+          <a class="btn" href="https://github.com/NortheBridge/luminalshine/security/advisories" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V5z" /><path d="M9 8h6M9 12h6M9 16h4" /></svg>
+            Published advisories
+          </a>
+        </div>
+      </header>
+
+      <main>
+        <section aria-labelledby="response-label">
+          <h2 class="section-label" id="response-label">Response targets</h2>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+                </div>
+                <h3>Initial response</h3>
+              </div>
+              <p class="card-desc">
+                We aim to respond within <strong>72 hours</strong> (excluding weekends) acknowledging receipt and assigning a triage owner.
+              </p>
+            </div>
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0z" /><path d="M8 12l3 3 5-6" /></svg>
+                </div>
+                <h3>Coordinated disclosure</h3>
+              </div>
+              <p class="card-desc">
+                Once a fix is ready, the advisory is published with credit to the reporter (unless you ask to remain anonymous), a CVE if applicable, and notes on affected and fixed versions.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="versions-label">
+          <h2 class="section-label" id="versions-label">Supported versions</h2>
+          <p class="section-intro">Only the versions listed below receive security fixes. Older releases may carry known unpatched issues.</p>
+          <div class="spec-table-wrap">
+            <table class="spec-table">
+              <thead>
+                <tr>
+                  <th scope="col">Major version</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>26.x</td>
+                  <td><span class="tag tag-official" style="white-space:nowrap;">Supported</span></td>
+                  <td>Current GA and pre-release line. Receives security and bugfix updates.</td>
+                </tr>
+                <tr>
+                  <td>&lt; 26</td>
+                  <td><span class="tag tag-community" style="white-space:nowrap;">End of life</span></td>
+                  <td>Pre-LuminalShine branches (Sunshine / Vibeshine forks). Upgrade to the current LuminalShine release.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="scope-label">
+          <h2 class="section-label" id="scope-label">Scope</h2>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
+                </div>
+                <h3>In scope</h3>
+              </div>
+              <p class="card-desc">
+                The LuminalShine service, MSI / EXE installer custom actions, WebRTC and HTTPS endpoints, paired-client authentication, and the in-tree drivers we maintain.
+              </p>
+            </div>
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M9 9h.01M15 9h.01M9 16c1-1 2-1.5 3-1.5s2 .5 3 1.5" /></svg>
+                </div>
+                <h3>Out of scope</h3>
+              </div>
+              <p class="card-desc">
+                Upstream Sunshine vulnerabilities &mdash; please report those at <a href="https://github.com/LizardByte/Sunshine/security" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;">LizardByte/Sunshine</a>. Third-party Moonlight clients are not maintained by NortheBridge.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="report-label">
+          <h2 class="section-label" id="report-label">What to include in a report</h2>
+          <div class="card card-block">
+            <p class="card-desc">A useful report typically contains:</p>
+            <ul style="margin:0 0 0.5rem 1.2rem; padding:0; color:var(--text-secondary); font-size:0.95rem; line-height:1.7;">
+              <li>A clear description of the vulnerability and impact.</li>
+              <li>Reproduction steps and the affected LuminalShine version.</li>
+              <li>Your Windows build (<code style="font-size:0.85em;">winver</code>), GPU, and driver version where relevant.</li>
+              <li>Any proof-of-concept code or captured traffic (please trim secrets).</li>
+              <li>Suggested CVSS, if you have a confident assessment.</li>
+            </ul>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>&copy; NortheBridge Foundation &middot; LuminalShine is licensed under the GNU GPL-v3.</span>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="{{ site.baseurl }}/license.html">License</a>
+          <a href="{{ site.baseurl }}/contributing.html">Contributing</a>
+          <a href="{{ site.baseurl }}/security.html">Security</a>
+          <a href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">Docs</a>
+          <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,189 @@
+---
+layout: null
+title: Contributing
+description: How to file good bug reports, build LuminalShine from source, and submit a clean pull request.
+permalink: /contributing.html
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDW66C09S1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XDW66C09S1');
+    </script>
+    <title>Contributing &mdash; LuminalShine</title>
+    <meta name="description" content="How to contribute to LuminalShine: filing bug reports, building from source, and submitting a clean pull request." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ site.baseurl }}/assets/css/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="nav-brand" href="{{ site.baseurl }}/">
+        <span class="nav-dot" aria-hidden="true"></span>
+        LuminalShine
+      </a>
+      <div class="nav-links">
+        <a href="{{ site.baseurl }}/#features">Features</a>
+        <a href="{{ site.baseurl }}/clients.html">Clients</a>
+        <a href="{{ site.baseurl }}/#community">Community</a>
+        <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+
+    <div class="container narrow">
+      <a class="back-link" href="{{ site.baseurl }}/">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+        Back to overview
+      </a>
+
+      <header class="hero">
+        <span class="brand-mark">
+          <span class="dot" aria-hidden="true"></span>
+          Contributing
+        </span>
+        <h1>Help build the next release.</h1>
+        <p class="lead">
+          LuminalShine is a small project with a big surface area. Issue reports, documentation fixes, driver compatibility notes, and code changes are all genuinely useful &mdash; whatever your level of experience.
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://github.com/NortheBridge/luminalshine/blob/main/docs/contributing.md" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M9 12h6M9 16h6M9 8h6" /><path d="M6 3h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /></svg>
+            Full contributing guide
+          </a>
+          <a class="btn" href="https://github.com/NortheBridge/luminalshine/blob/main/docs/building.md" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
+            Build instructions
+          </a>
+        </div>
+      </header>
+
+      <main>
+        <section aria-labelledby="ways-label">
+          <h2 class="section-label" id="ways-label">Ways to contribute</h2>
+          <div class="cards cards-2">
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/issues/new/choose" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>
+                </div>
+                <h3>File a bug report</h3>
+              </div>
+              <p class="card-desc">Issue templates walk you through the minimum we need: Windows build (<code style="font-size:0.85em;">winver</code>), GPU and driver version, the failing scenario, and the relevant slice of <code style="font-size:0.85em;">sunshine.log</code>.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">Bug report</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/discussions" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-9 8.4 8.5 8.5 0 0 1-4-1L3 20l1.1-4.8a8.38 8.38 0 0 1-.6-3.2 8.5 8.5 0 0 1 8.5-8.5 8.38 8.38 0 0 1 8 8z" /></svg>
+                </div>
+                <h3>Propose an idea</h3>
+              </div>
+              <p class="card-desc">Big design changes start as a Discussion thread, not an Issue. Float the rough shape of the change first so we don&rsquo;t waste your time on a PR that won&rsquo;t land.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">Ideas</span><span class="tag">RFC</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/pulls" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><circle cx="18" cy="6" r="3" /><path d="M9 6h7M9 18h6M18 9v6" /></svg>
+                </div>
+                <h3>Open a pull request</h3>
+              </div>
+              <p class="card-desc">Small, focused PRs land fastest. Match the existing code style (<code style="font-size:0.85em;">.clang-format</code>, <code style="font-size:0.85em;">.prettierrc</code>) and include a brief test plan in the description.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">PR</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+
+            <a class="card" href="https://github.com/NortheBridge/luminalshine/blob/main/docs/" target="_blank" rel="noopener">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V5z" /><path d="M4 17a2 2 0 0 1 2-2h14" /></svg>
+                </div>
+                <h3>Improve the docs</h3>
+              </div>
+              <p class="card-desc">Docs PRs are first-class &mdash; especially troubleshooting notes, hardware compatibility, and clarifications to the configuration reference.</p>
+              <div class="card-footer">
+                <div class="card-tags"><span class="tag">Docs</span></div>
+                <span class="card-arrow"><svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg></span>
+              </div>
+            </a>
+          </div>
+        </section>
+
+        <section aria-labelledby="stack-label">
+          <h2 class="section-label" id="stack-label">Build &amp; tooling at a glance</h2>
+          <div class="card card-block">
+            <p class="card-desc">
+              LuminalShine builds on Windows using <strong>clang with <code style="font-size:0.85em;">--fms-extensions</code></strong> &mdash; this differs from upstream Sunshine, and is what lets us pull in MSVC-specific Win32 features without committing to the full MSVC build chain. The Web UI is built with Vite, Vue 3, and Tailwind CSS, with Lucide and Simple Icons for iconography.
+            </p>
+            <div class="card-footer">
+              <div class="card-tags">
+                <span class="tag">CMake</span>
+                <span class="tag">Clang + fms-extensions</span>
+                <span class="tag">Vite</span>
+                <span class="tag">Vue 3</span>
+                <span class="tag">Tailwind CSS</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="cla-label">
+          <h2 class="section-label" id="cla-label">Licensing of contributions</h2>
+          <div class="card card-block">
+            <p class="card-desc">
+              By submitting a pull request you agree that your contribution is licensed under the same terms as the project &mdash; <strong>GNU GPL-v3</strong>. There is no CLA. We do ask that you only submit code you have the right to license.
+            </p>
+            <div class="card-footer">
+              <div class="card-tags">
+                <span class="tag">GPL-v3</span>
+                <span class="tag">No CLA</span>
+              </div>
+              <a class="card-arrow" href="{{ site.baseurl }}/license.html" style="text-decoration:none;">
+                License page
+                <svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8" /></svg>
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="conduct-label">
+          <h2 class="section-label" id="conduct-label">Code of conduct</h2>
+          <div class="card card-block">
+            <p class="card-desc">
+              Be respectful, assume good faith, and keep discussions focused on the technical work. The NortheBridge Foundation reserves the right to remove comments and contributors that are disruptive to the project or hostile to other participants.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>&copy; NortheBridge Foundation &middot; LuminalShine is licensed under the GNU GPL-v3.</span>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="{{ site.baseurl }}/license.html">License</a>
+          <a href="{{ site.baseurl }}/contributing.html">Contributing</a>
+          <a href="{{ site.baseurl }}/security.html">Security</a>
+          <a href="https://gitdocs.northebridge.com/" target="_blank" rel="noopener">Docs</a>
+          <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>
