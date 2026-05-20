@@ -133,7 +133,8 @@
       "Bash(curl -s -L https://gitdocs.northebridge.com/)",
       "Bash(bundle install *)",
       "Bash(bundle config *)",
-      "Bash(python3 -)"
+      "Bash(python3 -)",
+      "Bash(echo \"exit: $?\")"
     ],
     "deny": [],
     "ask": [],
