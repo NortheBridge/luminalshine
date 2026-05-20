@@ -100,12 +100,26 @@ jobs:
       - name: Debug artifacts
         run: ls -l artifacts
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (draft)
+        # `draft: true` so the release is created in the unpublished
+        # "Draft" state. Maintainer edits release notes via the GitHub
+        # UI, then clicks "Publish release" when ready. The Publish
+        # action is what flips draft → published, which fires the
+        # downstream `released` notifiers (_release-notifier.yml,
+        # release-notifier-moonlight.yml) and the fixed-issue follow-up
+        # (fixed-issue-follow-up.yml — already filtered on
+        # `!github.event.release.draft`). All three of those workflows
+        # are safe with drafts in flight; they simply don't fire until
+        # the maintainer publishes.
+        #
+        # `prerelease` is independent of `draft` and is preserved: an
+        # rc tag still gets the prerelease badge when published.
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
           body: ${{ needs.release-setup.outputs.release_body }}
           generate_release_notes: ${{ needs.release-setup.outputs.release_generate_release_notes }}
           name: ${{ needs.release-setup.outputs.release_tag }}
+          draft: true
           prerelease: ${{ needs.release-setup.outputs.prerelease }}
           tag_name: ${{ needs.release-setup.outputs.release_tag }}
           files: artifacts/*
