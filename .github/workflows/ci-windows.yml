@@ -338,14 +338,16 @@ jobs:
 
           # All three of MSI, bootstrapper EXE and portable ZIP are
           # promoted to the artifacts directory. The release job in
-          # ci.yml (softprops/action-gh-release) attaches the MSI and
-          # ZIP but explicitly NOT the .exe — the bootstrapper still
-          # builds and is preserved in the build-Windows-AMD64
-          # Actions artifact for internal access, but published
-          # downloads on the GitHub release page are the raw MSI plus
-          # the portable ZIP. build_bootstrapper.ps1 still embeds the
-          # MSI inside the .exe via `/resource:...,Payload.msi`; the
-          # files are the same payload in two different wrappers.
+          # ci.yml (softprops/action-gh-release) attaches the EXE and
+          # ZIP but explicitly NOT the .msi — the raw MSI still builds
+          # and is preserved in the build-Windows-AMD64 Actions
+          # artifact for internal access, but published downloads on
+          # the GitHub release page are the bootstrapper .exe plus the
+          # portable ZIP. build_bootstrapper.ps1 embeds the MSI inside
+          # the .exe via `/resource:...,Payload.msi`; the .exe is what
+          # users run, and the standalone MSI is the same payload
+          # exposed for advanced operators who want to drive msiexec
+          # directly via the CI artifact.
           #
           # File naming is fixed-string `LuminalShine_x64-...` rather
           # than the per-matrix shape because the matrix has exactly

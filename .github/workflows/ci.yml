@@ -122,16 +122,16 @@ jobs:
           draft: true
           prerelease: ${{ needs.release-setup.outputs.prerelease }}
           tag_name: ${{ needs.release-setup.outputs.release_tag }}
-          # Explicit file list — the bootstrapper .exe is intentionally
-          # excluded from the published release. The .exe still ships
-          # inside the build-Windows-AMD64 Actions artifact for internal
-          # / debugging access, but customer-facing downloads on the
-          # GitHub release page are: the raw MSI (the actual installer
-          # payload the .exe was wrapping), the portable ZIP, and the
-          # debuginfo 7z. Switch to `artifacts/*` to publish the .exe
-          # again.
+          # Explicit file list — the raw MSI is intentionally excluded
+          # from the published release. The MSI still ships inside the
+          # build-Windows-AMD64 Actions artifact for internal /
+          # debugging access (and as build_bootstrapper.ps1's embedded
+          # payload), but customer-facing downloads on the GitHub
+          # release page are: the bootstrapper .exe (the user-facing
+          # installer), the portable ZIP, and the debuginfo 7z. Switch
+          # to `artifacts/*` to publish the MSI again.
           files: |
-            artifacts/LuminalShine_x64-installer.msi
+            artifacts/LuminalShine_x64-installer.exe
             artifacts/LuminalShine_x64-portable.zip
             artifacts/LuminalShine_x64-debuginfo.7z
           fail_on_unmatched_files: true
