@@ -15,7 +15,7 @@
 
 ## What is LuminalShine?
 
-LuminalShine is a Windows-first game streaming host developed by the **NortheBridge Software Foundation**. It is a hardened, modernized descendant of [Sunshine](https://github.com/LizardByte/Sunshine) by way of Vibeshine, focused exclusively on delivering a stable, low-latency streaming experience on current Windows 11 releases — including the **Windows Insider Preview Canary and Dev channels** — paired with any Moonlight client or the built-in WebRTC browser client.
+LuminalShine is a Windows-first game streaming host developed by the **NortheBridge Foundation**. It is a hardened, modernized descendant of [Sunshine](https://github.com/LizardByte/Sunshine) by way of Vibeshine, focused exclusively on delivering a stable, low-latency streaming experience on current Windows 11 releases — including the **Windows Insider Preview Canary and Dev channels** — paired with any Moonlight client or the built-in WebRTC browser client.
 
 LuminalShine began as a fork of **Vibeshine** specifically to address deficiencies on the Windows 11 Insider Preview platform that upstream maintainers were unwilling to investigate. Since then it has diverged substantially in architecture, driver support, and capture pipeline.
 
