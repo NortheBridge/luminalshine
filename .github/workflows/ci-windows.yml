@@ -336,21 +336,32 @@ jobs:
             echo "::error::No portable ZIP produced in ./cpack_artifacts/"; exit 1
           fi
 
-          # NOTE: The standalone MSI is intentionally NOT promoted to the
-          # release artifacts directory. The MSI is still built (cpack -G WIX
-          # above) and is still required — build_bootstrapper.ps1 embeds it
-          # inside the .exe via `/resource:...,Payload.msi`. We just don't
-          # publish it as a separate downloadable; users get the bootstrapper
-          # .exe (which contains the MSI) and the portable .zip. Uncomment
-          # the two msi_file lines below to restore standalone MSI publishing.
-          # msi_file="${msi_files[0]}"
+          # All three of MSI, bootstrapper EXE and portable ZIP are
+          # promoted to the artifacts directory. The release job in
+          # ci.yml (softprops/action-gh-release) attaches the MSI and
+          # ZIP but explicitly NOT the .exe — the bootstrapper still
+          # builds and is preserved in the build-Windows-AMD64
+          # Actions artifact for internal access, but published
+          # downloads on the GitHub release page are the raw MSI plus
+          # the portable ZIP. build_bootstrapper.ps1 still embeds the
+          # MSI inside the .exe via `/resource:...,Payload.msi`; the
+          # files are the same payload in two different wrappers.
+          #
+          # File naming is fixed-string `LuminalShine_x64-...` rather
+          # than the per-matrix shape because the matrix has exactly
+          # one entry (Windows-AMD64) and the customer-facing release
+          # assets shouldn't carry the CI's internal job-name shape.
+          # If a 32-bit or ARM64 matrix entry is added later, add a
+          # per-entry arch_label input to the matrix and substitute
+          # it into the prefix below.
+          msi_file="${msi_files[0]}"
           installer_exe="${installer_files[0]}"
           portable_zip="${zip_files[0]}"
 
           # move
-          # mv "${msi_file}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.msi
-          mv "${installer_exe}" ../artifacts/LuminalShine-${{ matrix.name }}-installer.exe
-          mv "${portable_zip}" ../artifacts/LuminalShine-${{ matrix.name }}-portable.zip
+          mv "${msi_file}" ../artifacts/LuminalShine_x64-installer.msi
+          mv "${installer_exe}" ../artifacts/LuminalShine_x64-installer.exe
+          mv "${portable_zip}" ../artifacts/LuminalShine_x64-portable.zip
 
       # Diagnostic dumps for packaging failures. CPack's "Fatal WiX
       # Generator Error" / "Problem running WiX" messages by themselves
@@ -433,7 +444,7 @@ jobs:
           7z -r `
             "-xr!CMakeFiles" `
             "-xr!cpack_artifacts" `
-            a "../artifacts/LuminalShine-${{ matrix.name }}-debuginfo.7z" "*.dbg"
+            a "../artifacts/LuminalShine_x64-debuginfo.7z" "*.dbg"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
