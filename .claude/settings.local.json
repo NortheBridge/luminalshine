@@ -134,7 +134,8 @@
       "Bash(bundle install *)",
       "Bash(bundle config *)",
       "Bash(python3 -)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(gh auth *)"
     ],
     "deny": [],
     "ask": [],
