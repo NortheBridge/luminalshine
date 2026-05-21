@@ -1,0 +1,452 @@
+---
+layout: null
+title: Compare
+description: How LuminalShine compares to Sunshine, Apollo, Vibeshine, and Vibepollo across platform support, capture pipeline, security disclosure, and development model.
+permalink: /compare.html
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDW66C09S1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XDW66C09S1');
+    </script>
+    <title>Compare &mdash; LuminalShine</title>
+    <meta name="description" content="A side-by-side comparison of LuminalShine, Sunshine, Apollo, Vibeshine, and Vibepollo: platform focus, capture pipeline, security disclosure, and development model." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ site.baseurl }}/assets/css/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="nav-brand" href="{{ site.baseurl }}/">
+        <span class="nav-dot" aria-hidden="true"></span>
+        LuminalShine
+      </a>
+      <div class="nav-links">
+        <a href="{{ site.baseurl }}/#features">Features</a>
+        <a href="{{ site.baseurl }}/clients.html">Clients</a>
+        <a href="{{ site.baseurl }}/compare.html">Compare</a>
+        <a href="{{ site.baseurl }}/#community">Community</a>
+        <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+
+    <div class="container">
+      <a class="back-link" href="{{ site.baseurl }}/">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+        Back to overview
+      </a>
+
+      <header class="hero">
+        <span class="brand-mark">
+          <span class="dot" aria-hidden="true"></span>
+          Project comparison
+        </span>
+        <h1>LuminalShine vs.&nbsp;the wider Sunshine&nbsp;family.</h1>
+        <p class="lead">
+          Sunshine, Apollo, Vibeshine, Vibepollo, and LuminalShine all descend from the same Sunshine codebase and all speak the Moonlight streaming protocol. They differ sharply in scope, platform focus, security posture, and development model. This page is a sourced, side-by-side comparison so you can pick the right project for your hardware and risk tolerance.
+        </p>
+        <p class="text-muted" style="font-size:0.85rem;">All claims below are linked to the upstream project&rsquo;s own README, security policy, or GitHub repository state. If anything here is out of date or misrepresents a project, please <a href="https://github.com/NortheBridge/luminalshine/issues/new/choose" target="_blank" rel="noopener" style="color:var(--aurora-1);">open an issue</a>.</p>
+      </header>
+
+      <main>
+        <!-- ============================================================ -->
+        <!-- LINEAGE                                                       -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="lineage-label">
+          <h2 class="section-label" id="lineage-label">Fork lineage</h2>
+          <p class="section-intro">All five projects share a common ancestor in Sunshine. They diverged in two branches: one through Apollo, one through Vibeshine.</p>
+          <div class="lineage" aria-label="Fork lineage diagram">
+<pre>
+<strong>Sunshine</strong>                                    &mdash; LizardByte (base, ~37k stars)
+  &boxv;
+  &boxv;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+  &boxv;                                       &boxv;
+  &boxvr;&mdash;&mdash; <strong>Apollo</strong>                            &boxvr;&mdash;&mdash; <strong>Vibeshine</strong>     &mdash; Nonary (~261 stars)
+  &boxv;     &mdash; ClassicOldSong (~9.5k)         &boxv;       <em>fork of Sunshine</em>
+  &boxv;     <em>fork of Sunshine</em>                  &boxv;
+  &boxv;     &boxv;                                 &boxur;&mdash;&mdash; <strong>LuminalShine</strong> &mdash; NortheBridge Foundation
+  &boxv;     &boxv;                                         <em>fork of Vibeshine</em>
+  &boxv;     &boxur;&mdash;&mdash; <strong>Vibepollo</strong>   &mdash; Nonary (~435 stars)
+  &boxv;             <em>fork of Apollo</em>
+  &boxv;
+  &boxur;&mdash;&mdash; <em>(other downstream forks not covered here)</em>
+</pre>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- PUBLISHERS                                                    -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="publishers-label">
+          <h2 class="section-label" id="publishers-label">Publishers at a glance</h2>
+          <div class="cards cards-3">
+            <div class="card card-block">
+              <div class="card-header">
+                <span class="proj-chip proj-chip-self"><span class="proj-dot"></span>LuminalShine</span>
+              </div>
+              <p class="card-desc"><strong>NortheBridge Foundation.</strong> A small open-source foundation focused on game streaming and living-room computing. LuminalShine is one of two projects, alongside the Twilight Moonlight client for LG webOS.</p>
+            </div>
+            <div class="card card-block">
+              <div class="card-header">
+                <span class="proj-chip proj-chip-sunshine"><span class="proj-dot"></span>Sunshine</span>
+              </div>
+              <p class="card-desc"><strong>LizardByte.</strong> An established open-source organization with multiple maintained projects and a long-running release cadence. The de facto upstream for this entire family.</p>
+            </div>
+            <div class="card card-block">
+              <div class="card-header">
+                <span class="proj-chip proj-chip-apollo"><span class="proj-dot"></span>Apollo</span>
+              </div>
+              <p class="card-desc"><strong>ClassicOldSong.</strong> Individual maintainer. Companion to the Artemis (Moonlight Noir) client. Focuses on virtual display + resolution-matching features.</p>
+            </div>
+            <div class="card card-block">
+              <div class="card-header">
+                <span class="proj-chip proj-chip-vibeshine"><span class="proj-dot"></span>Vibeshine</span>
+              </div>
+              <p class="card-desc"><strong>Nonary.</strong> Individual maintainer. The project openly describes itself as &ldquo;<em>an AI-enhanced version of Sunshine</em>&rdquo; with &ldquo;<em>approximately 99% of Vibeshine&rsquo;s code is AI-generated</em>.&rdquo;</p>
+            </div>
+            <div class="card card-block">
+              <div class="card-header">
+                <span class="proj-chip proj-chip-vibepollo"><span class="proj-dot"></span>Vibepollo</span>
+              </div>
+              <p class="card-desc"><strong>Nonary.</strong> Individual maintainer; same author as Vibeshine. Self-describes as &ldquo;<em>an AI-enhanced version of Apollo</em>&rdquo; with the same &ldquo;<em>approximately 99%&hellip;AI-generated</em>&rdquo; description.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- AT-A-GLANCE MATRIX                                            -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="matrix-label">
+          <h2 class="section-label" id="matrix-label">At a glance</h2>
+          <p class="section-intro">A summary matrix. Cells link to the longer per-axis sections below.</p>
+          <div class="spec-table-wrap">
+            <table class="spec-table compare-table">
+              <thead>
+                <tr>
+                  <th scope="col" style="min-width:180px;">&nbsp;</th>
+                  <th scope="col" class="compare-col-self">LuminalShine</th>
+                  <th scope="col">Sunshine</th>
+                  <th scope="col">Apollo</th>
+                  <th scope="col">Vibeshine</th>
+                  <th scope="col">Vibepollo</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Publisher</td>
+                  <td class="compare-col-self">NortheBridge Foundation</td>
+                  <td>LizardByte</td>
+                  <td>ClassicOldSong</td>
+                  <td>Nonary</td>
+                  <td>Nonary</td>
+                </tr>
+                <tr>
+                  <td>License</td>
+                  <td class="compare-col-self">GPL-v3</td>
+                  <td>GPL-v3</td>
+                  <td>GPL-v3</td>
+                  <td>GPL-v3</td>
+                  <td>GPL-v3</td>
+                </tr>
+                <tr>
+                  <td>Forked from</td>
+                  <td class="compare-col-self">Vibeshine</td>
+                  <td>&mdash; (base)</td>
+                  <td>Sunshine</td>
+                  <td>Sunshine</td>
+                  <td>Apollo</td>
+                </tr>
+                <tr>
+                  <td>Platforms</td>
+                  <td class="compare-col-self">Windows 11 only<span class="compare-note">By design &mdash; non-Windows code is removed.</span></td>
+                  <td>Win, Linux, macOS, FreeBSD<span class="compare-note">Broadest platform support.</span></td>
+                  <td>Win 10+, macOS 12+, Linux</td>
+                  <td>Largely Windows<span class="compare-note">Inherits Sunshine&rsquo;s cross-platform code but features target Windows.</span></td>
+                  <td>Largely Windows<span class="compare-note">Inherits Apollo&rsquo;s code; features target Windows.</span></td>
+                </tr>
+                <tr>
+                  <td>Win 11 Insider Preview <em>(Canary/Dev)</em></td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Yes</span><span class="compare-note">Primary target. Works around recent <code>dxgi.dll</code> quirks.</span></td>
+                  <td><span class="compare-status compare-no">Not targeted</span></td>
+                  <td><span class="compare-status compare-no">Not targeted</span></td>
+                  <td><span class="compare-status compare-partial">Unspecified</span></td>
+                  <td><span class="compare-status compare-partial">Unspecified</span></td>
+                </tr>
+                <tr>
+                  <td>WGC capture in service mode</td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Yes</span></td>
+                  <td><span class="compare-status compare-partial">Limited</span><span class="compare-note">DXGI capture in service; WGC handling differs.</span></td>
+                  <td><span class="compare-status compare-partial">Limited</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span><span class="compare-note">Inherited / parallel work.</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span><span class="compare-note">Inherited / parallel work.</span></td>
+                </tr>
+                <tr>
+                  <td>Bundled virtual display driver</td>
+                  <td class="compare-col-self">SudoVDA default, MTT VDD opt-in, LuminalVGD planned</td>
+                  <td>None bundled</td>
+                  <td>Built-in virtual display (SudoVDA-based)</td>
+                  <td>Bundled VDD options</td>
+                  <td>Bundled VDD options</td>
+                </tr>
+                <tr>
+                  <td>WebRTC browser streaming</td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Yes</span> <span class="compare-note">First-party <code>/webrtc</code> endpoint.</span></td>
+                  <td><span class="compare-status compare-no">No</span></td>
+                  <td><span class="compare-status compare-no">No</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span></td>
+                </tr>
+                <tr>
+                  <td>TPM-bound credential sealing</td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Yes</span></td>
+                  <td><span class="compare-status compare-no">No</span></td>
+                  <td><span class="compare-status compare-no">No</span></td>
+                  <td><span class="compare-status compare-no">No</span></td>
+                  <td><span class="compare-status compare-no">No</span></td>
+                </tr>
+                <tr>
+                  <td>Scoped API tokens</td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Method-level</span></td>
+                  <td><span class="compare-status compare-partial">API exists</span></td>
+                  <td><span class="compare-status compare-partial">API exists</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span></td>
+                </tr>
+                <tr>
+                  <td>Formal SECURITY.md</td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Yes</span> <span class="compare-note">Private advisory, 72h response target.</span></td>
+                  <td><span class="compare-status compare-yes">Yes</span> <span class="compare-note">Private reporting via GitHub Security tab.</span></td>
+                  <td><span class="compare-status compare-no">None</span> <span class="compare-note">&ldquo;<em>No security policy detected. This project has not set up a SECURITY.md file yet.</em>&rdquo;</span></td>
+                  <td><span class="compare-status compare-no">None</span> <span class="compare-note">Same GitHub notice.</span></td>
+                  <td><span class="compare-status compare-no">None</span> <span class="compare-note">Same GitHub notice.</span></td>
+                </tr>
+                <tr>
+                  <td>Self-described AI-generated code</td>
+                  <td class="compare-col-self"><span class="compare-status compare-na">Not claimed</span></td>
+                  <td><span class="compare-status compare-na">Not claimed</span></td>
+                  <td><span class="compare-status compare-na">Not claimed</span></td>
+                  <td>&ldquo;~99% AI-generated&rdquo;<span class="compare-note">Maintainer&rsquo;s own README.</span></td>
+                  <td>&ldquo;~99% AI-generated&rdquo;<span class="compare-note">Maintainer&rsquo;s own README.</span></td>
+                </tr>
+                <tr>
+                  <td>Approx. GitHub stars <em>(at time of writing)</em></td>
+                  <td class="compare-col-self">&mdash;<span class="compare-note">Newest project; community building.</span></td>
+                  <td>~37,200</td>
+                  <td>~9,500</td>
+                  <td>~261</td>
+                  <td>~435</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- PLATFORM FOCUS                                                -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="platform-label">
+          <h2 class="section-label" id="platform-label">Platform focus</h2>
+          <p class="section-intro">The single biggest axis of difference.</p>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <h3>Sunshine: the broad option</h3>
+              <p class="card-desc">
+                Sunshine remains the only project in this family that actively supports Windows, Linux (multiple distributions), macOS, and FreeBSD as first-class targets. If you need to stream from a non-Windows host, or you want a single project that runs on the broadest matrix of hardware, Sunshine is the right pick.
+              </p>
+            </div>
+            <div class="card card-block">
+              <h3>LuminalShine: Windows-only by design</h3>
+              <p class="card-desc">
+                LuminalShine has <strong>removed</strong> Linux and macOS code paths so the team can focus on the Windows 11 platform &mdash; including the Insider Preview Canary and Dev channels, which other projects do not target. This is an intentional tradeoff: less platform coverage, deeper investment per platform. If you need cross-platform support, use Sunshine.
+              </p>
+            </div>
+            <div class="card card-block">
+              <h3>Apollo &amp; Vibe* projects: Windows-centric, multi-platform code retained</h3>
+              <p class="card-desc">
+                Apollo, Vibeshine, and Vibepollo all inherit Sunshine&rsquo;s cross-platform code, but their headline features (virtual display, capture changes, WebUI work) are developed against Windows. Linux and macOS builds may still produce binaries, but new feature work is not driven by those platforms.
+              </p>
+            </div>
+            <div class="card card-block">
+              <h3>Windows Insider Preview support</h3>
+              <p class="card-desc">
+                Only LuminalShine claims active support for the Windows 11 Insider Preview Canary and Dev channels. Recent Insider builds have shipped breaking changes to <code style="font-size:0.85em;">dxgi.dll</code> that affect capture pipelines; LuminalShine ships workarounds for those. Sunshine, Apollo, and the Vibe* projects target stable Windows 11 release channels.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECURITY & DISCLOSURE                                         -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="security-label">
+          <h2 class="section-label" id="security-label">Security &amp; disclosure</h2>
+          <p class="section-intro">Game stream hosts run with elevated privileges, capture the desktop, accept paired clients over the network, and (in some cases) load virtual display drivers into the kernel. A documented disclosure process matters.</p>
+
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z" /><path d="M9 12l2 2 4-4" /></svg>
+                </div>
+                <h3>Projects with a published SECURITY.md</h3>
+              </div>
+              <p class="card-desc">
+                <strong>Sunshine</strong> and <strong>LuminalShine</strong> both publish a security policy and accept vulnerability reports privately via GitHub Security Advisories. LuminalShine commits to a 72-hour initial-response target (excluding weekends) and explicitly enumerates supported versions and scope.
+              </p>
+              <div class="btn-row" style="margin-top:1rem;">
+                <a class="btn" href="{{ site.baseurl }}/security.html">LuminalShine policy</a>
+                <a class="btn" href="https://github.com/LizardByte/Sunshine/security/policy" target="_blank" rel="noopener">Sunshine policy</a>
+              </div>
+            </div>
+
+            <div class="card card-block">
+              <div class="card-header">
+                <div class="card-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>
+                </div>
+                <h3>Projects with no SECURITY.md</h3>
+              </div>
+              <p class="card-desc">
+                As of the date this page was written, <strong>Apollo</strong>, <strong>Vibeshine</strong>, and <strong>Vibepollo</strong> do not publish a security policy. GitHub displays the standard notice: <em>&ldquo;No security policy detected. This project has not set up a SECURITY.md file yet.&rdquo;</em>
+              </p>
+              <p class="card-desc">
+                That doesn&rsquo;t mean the projects are insecure &mdash; it means there is no documented private channel for reporting a vulnerability, no stated response time, and no defined supported-version window. Users who discover an issue have to choose between filing a public GitHub issue (which discloses the bug before any fix lands) or attempting to reach the maintainer through informal channels.
+              </p>
+            </div>
+          </div>
+
+          <h3 style="margin-top:2rem;">Why this matters more than usual here</h3>
+          <p class="prose" style="margin-top:0.75rem;">
+            Game streaming hosts in this family run as a privileged Windows service, hold long-lived paired-client credentials, expose an HTTP(S) management UI, and on some forks bundle kernel-level virtual display drivers. The blast radius of a vulnerability is the entire desktop session. A documented private disclosure process and a defined supported-version window are baseline expectations for software in that role; their absence is a real operational concern, not a paperwork nit.
+          </p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- DEVELOPMENT MODEL                                             -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="devmodel-label">
+          <h2 class="section-label" id="devmodel-label">Development model</h2>
+          <p class="section-intro">How the code is produced. Two of these projects have made a notable, explicit declaration about their authoring process.</p>
+
+          <div class="quote-card">
+            &ldquo;Vibeshine is an AI-enhanced version of Sunshine, a popular remote streaming application&hellip; approximately <strong>99% of Vibeshine&rsquo;s code is AI-generated</strong>.&rdquo;
+            <cite>&mdash; <a href="https://github.com/Nonary/vibeshine#readme" target="_blank" rel="noopener">Vibeshine README, Nonary</a></cite>
+          </div>
+
+          <div class="quote-card" style="margin-top:1rem;">
+            &ldquo;Vibepollo is an AI-enhanced version of Apollo, a popular remote streaming application&hellip; approximately <strong>99% of Vibepollo&rsquo;s code is AI-generated</strong>.&rdquo;
+            <cite>&mdash; <a href="https://github.com/Nonary/Vibepollo#readme" target="_blank" rel="noopener">Vibepollo README, Nonary</a></cite>
+          </div>
+
+          <p class="prose" style="margin-top:1.5rem;">
+            These statements come from the maintainer&rsquo;s own README and reflect a deliberate development model that prioritises velocity over hand-review of every change. Vibeshine&rsquo;s own README puts it plainly: &ldquo;<em>I&rsquo;m trading minor, manageable debt for massive development velocity &mdash; and that trade is almost always worth it.</em>&rdquo; The same README also says AI-generated code &ldquo;<em>works on the first try around 90% of the time</em>&rdquo;.
+          </p>
+
+          <p class="prose">
+            Whether that tradeoff is right for you depends on how you weigh feature velocity against the value of a human reviewer having read every line of code that runs as a privileged Windows service in your home network. There is no &ldquo;correct&rdquo; answer here &mdash; but you should know what you&rsquo;re installing.
+          </p>
+
+          <p class="prose">
+            <strong>LuminalShine, Sunshine, and Apollo</strong> do not make any equivalent claim about AI-generated code in their READMEs.
+          </p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- COMMUNITY & MAINTENANCE                                       -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="community-label">
+          <h2 class="section-label" id="community-label">Community &amp; maintenance</h2>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <h3>Sunshine</h3>
+              <p class="card-desc">By far the largest community in this family (~37,000 stars). Multiple maintainers under the LizardByte org. Consistent release cadence going back years. The natural choice if &ldquo;many eyes&rdquo; matters to you.</p>
+            </div>
+            <div class="card card-block">
+              <h3>Apollo</h3>
+              <p class="card-desc">Active single-maintainer project (~9,500 stars). Companion to the Artemis client. Recent releases continue; no formal SECURITY.md as of writing.</p>
+            </div>
+            <div class="card card-block">
+              <h3>Vibeshine / Vibepollo</h3>
+              <p class="card-desc">Both maintained by the same individual (Nonary). Active commit history and frequent releases. Small communities (a few hundred stars each). No formal SECURITY.md as of writing.</p>
+            </div>
+            <div class="card card-block">
+              <h3>LuminalShine</h3>
+              <p class="card-desc">Newest project of the five. Maintained by the NortheBridge Foundation. Smaller community than Sunshine or Apollo &mdash; balanced against an opinionated, narrow Windows-11-only scope and a documented security disclosure process. <a href="{{ site.baseurl }}/contributing.html" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);">Contributors welcome</a>.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- WHEN TO PICK WHAT                                             -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="pick-label">
+          <h2 class="section-label" id="pick-label">When to pick what</h2>
+          <div class="cards cards-2">
+            <div class="card card-block">
+              <h3>Pick Sunshine if&hellip;</h3>
+              <p class="card-desc">You stream from Linux, macOS, or FreeBSD. You want the project with the largest community, the most maintainers, and the longest track record. You don&rsquo;t need Insider Preview support or in-tree virtual display drivers.</p>
+            </div>
+            <div class="card card-block">
+              <h3>Pick Apollo if&hellip;</h3>
+              <p class="card-desc">You&rsquo;re an Artemis (Moonlight Noir) user, you want bundled virtual display with automatic resolution matching, and the lack of a documented security disclosure process is acceptable for your threat model.</p>
+            </div>
+            <div class="card card-block">
+              <h3>Pick LuminalShine if&hellip;</h3>
+              <p class="card-desc">You&rsquo;re on modern Windows 11 (especially Insider Preview Canary/Dev). You want TPM-bound credential sealing, WGC capture in service mode, a built-in WebRTC browser endpoint, and a host with a documented private security disclosure process. You&rsquo;re comfortable with a Windows-only project.</p>
+            </div>
+            <div class="card card-block">
+              <h3>Pick Vibeshine or Vibepollo if&hellip;</h3>
+              <p class="card-desc">You actively want to track a fast-moving, largely-AI-authored fork and you accept the tradeoffs (no documented security disclosure process, small community, the maintainer&rsquo;s own description of the codebase&rsquo;s authorship). Most users who want similar features but a different development model are better served by Sunshine, Apollo, or LuminalShine.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- METHODOLOGY                                                   -->
+        <!-- ============================================================ -->
+        <section aria-labelledby="method-label">
+          <h2 class="section-label" id="method-label">Methodology &amp; sources</h2>
+          <div class="card card-block">
+            <p class="card-desc">
+              This comparison was assembled from each project&rsquo;s own public materials: README files on GitHub, repository metadata (license, fork lineage, star count), and the project&rsquo;s GitHub Security Policy page. Where a project is quoted, the quote is taken verbatim from the maintainer&rsquo;s own README and cited inline. Where a project lacks a security policy, the statement reflects GitHub&rsquo;s standard &ldquo;<em>No security policy detected</em>&rdquo; notice on the project&rsquo;s <code style="font-size:0.85em;">/security/policy</code> page at the time of writing.
+            </p>
+            <p class="card-desc">
+              Software changes. Star counts move, features ship, security policies are added, README disclosures get edited. If you spot a fact on this page that&rsquo;s gone stale or that you believe is unfair to the project being described, please <a href="https://github.com/NortheBridge/luminalshine/issues/new/choose" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);">open an issue</a> with the corrected text and a source &mdash; we&rsquo;ll update it.
+            </p>
+            <div class="card-footer">
+              <div class="card-tags">
+                <span class="tag"><a href="https://github.com/LizardByte/Sunshine" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">Sunshine repo</a></span>
+                <span class="tag"><a href="https://github.com/ClassicOldSong/Apollo" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">Apollo repo</a></span>
+                <span class="tag"><a href="https://github.com/Nonary/vibeshine" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">Vibeshine repo</a></span>
+                <span class="tag"><a href="https://github.com/Nonary/Vibepollo" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">Vibepollo repo</a></span>
+                <span class="tag"><a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">LuminalShine repo</a></span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>&copy; NortheBridge Foundation &middot; LuminalShine is licensed under the GNU GPL-v3.</span>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="{{ site.baseurl }}/license.html">License</a>
+          <a href="{{ site.baseurl }}/contributing.html">Contributing</a>
+          <a href="{{ site.baseurl }}/security.html">Security</a>
+          <a href="{{ site.baseurl }}/compare.html">Compare</a>
+          <a class="js-docs-modal" href="https://github.com/NortheBridge/luminalshine/discussions" rel="noopener">Docs</a>
+          <a href="https://github.com/NortheBridge/luminalshine" target="_blank" rel="noopener">GitHub</a>
+        </nav>
+      </footer>
+    </div>
+    <script src="{{ site.baseurl }}/assets/js/docs-modal.js" defer></script>
+  </body>
+</html>

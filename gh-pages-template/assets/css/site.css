@@ -808,6 +808,179 @@ footer.site-footer a:hover { color: var(--aurora-1); }
   stroke-linejoin: round;
 }
 
+/* ===== Comparison Matrix ===== */
+
+table.compare-table {
+  min-width: 880px;
+  font-size: 0.88rem;
+}
+
+.compare-table thead th {
+  text-align: left;
+  vertical-align: bottom;
+  padding: 1.1rem 0.85rem;
+  font-size: 0.72rem;
+}
+
+.compare-table thead th.compare-col-self {
+  color: var(--aurora-1);
+}
+
+.compare-table tbody td {
+  padding: 0.85rem 0.85rem;
+  vertical-align: top;
+  font-size: 0.88rem;
+}
+
+.compare-table tbody td.compare-col-self {
+  background: rgba(30, 200, 255, 0.04);
+}
+
+.compare-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.compare-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.compare-yes {
+  color: var(--aurora-4);
+  border-color: rgba(0, 224, 198, 0.35);
+  background: rgba(0, 224, 198, 0.08);
+}
+
+.compare-no {
+  color: rgba(255, 140, 140, 0.95);
+  border-color: rgba(255, 140, 140, 0.3);
+  background: rgba(255, 140, 140, 0.06);
+}
+
+.compare-partial {
+  color: var(--aurora-warn);
+  border-color: rgba(255, 180, 84, 0.35);
+  background: rgba(255, 180, 84, 0.06);
+}
+
+.compare-na {
+  color: var(--text-muted);
+  border-color: var(--glass-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.compare-note {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+/* ===== Project chip ===== */
+
+.proj-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.22rem 0.7rem 0.22rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.proj-chip .proj-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.proj-chip-self { color: var(--aurora-1); border-color: rgba(30, 200, 255, 0.4); background: rgba(30, 200, 255, 0.08); }
+.proj-chip-self .proj-dot { background: linear-gradient(135deg, var(--aurora-1), var(--aurora-4)); }
+.proj-chip-sunshine .proj-dot { background: #ffd166; }
+.proj-chip-apollo .proj-dot { background: #c084fc; }
+.proj-chip-vibeshine .proj-dot { background: #fb7185; }
+.proj-chip-vibepollo .proj-dot { background: #f97316; }
+
+/* ===== Lineage diagram ===== */
+
+.lineage {
+  position: relative;
+  padding: 2rem 1.5rem;
+  border-radius: 18px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  overflow-x: auto;
+}
+
+.lineage pre {
+  margin: 0;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre;
+}
+
+.lineage pre strong {
+  color: var(--aurora-1);
+  font-weight: 600;
+}
+
+.lineage pre em {
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+/* ===== Quote callout ===== */
+
+.quote-card {
+  position: relative;
+  padding: 1.5rem 1.65rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--aurora-warn);
+  color: var(--text-secondary);
+  font-size: 0.93rem;
+  line-height: 1.65;
+}
+
+.quote-card cite {
+  display: block;
+  margin-top: 0.85rem;
+  font-style: normal;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+.quote-card cite a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(180, 195, 230, 0.35);
+}
+
+.quote-card cite a:hover { color: var(--aurora-1); border-bottom-color: var(--aurora-1); }
+
 /* ===== Docs Modal ===== */
 
 .modal {
