@@ -152,7 +152,9 @@
       "Bash(git checkout *)",
       "Bash(git fetch *)",
       "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-web.yml','utf8'\\)\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-windows.yml','utf8'\\)\\); console.log\\('OK'\\)\")",
-      "Bash(echo \"exit_status=$?\")"
+      "Bash(echo \"exit_status=$?\")",
+      "Bash(grep -n \"platform/windows/input\\\\|platform/windows/misc\\\\|add_library.*sunshine\\\\|target_sources\" /Users/Glazo/Git/luminalshine/cmake/targets/common.cmake | head -30)",
+      "Read(//Users/Glazo/Git/luminalshine/cmake/targets/**)"
     ],
     "deny": [],
     "ask": [],
