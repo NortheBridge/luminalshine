@@ -82,10 +82,19 @@ jobs:
         # off pass/fail history; suppressing the upload on red runs
         # would lose that signal). `!cancelled()` skips only manual
         # workflow cancellation.
+        #
+        # codecov-action@v5+ subsumed the standalone test-results-action
+        # via `report_type: test_results` — codecov/test-results-action
+        # is being deprecated, and the v1 release also ships on
+        # Node.js 20 which the GitHub Actions runner is sunsetting on
+        # 2026-09-16. Reusing the v6.0.0 SHA already pinned for the
+        # coverage upload above keeps both uploads on the same action
+        # version with no second SHA to keep in sync.
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          report_type: test_results
           # JUnit XML emitted by Vitest via the reporter wired in
           # src_assets/common/assets/web/vitest.config.ts.
           files: ../../../../coverage/web/junit.xml
