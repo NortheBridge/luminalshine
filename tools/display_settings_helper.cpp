@@ -35,6 +35,7 @@
 
 // third-party (libdisplaydevice)
   #include "src/logging.h"
+  #include "src/platform/windows/ipc/display_settings_client.h"
   #include "src/platform/windows/ipc/pipes.h"
 
   #include <display_device/json.h>
@@ -2260,7 +2261,7 @@ namespace {
 
     void thread_proc(std::stop_token st) {
       const auto hinst = GetModuleHandleW(nullptr);
-      const wchar_t *klass = L"SunshineDisplayEventWindow";
+      const wchar_t *klass = L"LuminalShineDisplayEventWindow";
 
       WNDCLASSEXW wc = {};
       wc.cbSize = sizeof(wc);
@@ -4132,9 +4133,15 @@ namespace {
   }
 
   bool ensure_single_instance(HANDLE &out_handle) {
-    out_handle = make_named_mutex(L"Global\\SunshineDisplayHelper");
+    // Renamed mutex names so a LuminalShine display helper coexists safely
+    // on a host that also has an upstream Sunshine install (different
+    // mutex namespace = no single-instance contention between products).
+    // The MSI's KillProcs custom action kills any pre-existing legacy
+    // sunshine_display_helper.exe before we ever take this mutex, so the
+    // rename does not introduce a new race window.
+    out_handle = make_named_mutex(L"Global\\LuminalShineDisplayHelper");
     if (!out_handle && GetLastError() == ERROR_ACCESS_DENIED) {
-      out_handle = make_named_mutex(L"Local\\SunshineDisplayHelper");
+      out_handle = make_named_mutex(L"Local\\LuminalShineDisplayHelper");
     }
     if (!out_handle) {
       return true;  // continue; best-effort singleton failed
@@ -4323,7 +4330,7 @@ namespace {
     IRegistrationInfo *reg_info = nullptr;
     hr = task->get_RegistrationInfo(&reg_info);
     if (SUCCEEDED(hr)) {
-      reg_info->put_Author(_bstr_t(L"Sunshine Display Helper"));
+      reg_info->put_Author(_bstr_t(L"LuminalShine Display Helper"));
       reg_info->put_Description(_bstr_t(L"Automatically restores display settings after reboot"));
       reg_info->Release();
     }
@@ -4411,7 +4418,7 @@ namespace {
     hr = trigger->QueryInterface(IID_ILogonTrigger, (void **) &logon_trigger);
     trigger->Release();
     if (SUCCEEDED(hr)) {
-      logon_trigger->put_Id(_bstr_t(L"SunshineDisplayHelperLogonTrigger"));
+      logon_trigger->put_Id(_bstr_t(L"LuminalShineDisplayHelperLogonTrigger"));
       logon_trigger->put_Enabled(VARIANT_TRUE);
       if (has_username) {
         logon_trigger->put_UserId(_bstr_t(username.c_str()));
@@ -5104,7 +5111,7 @@ int main(int argc, char *argv[]) {
 
   const auto logdir = compute_log_dir();
   const auto snapshot_dir = compute_snapshot_dir();
-  const auto logfile = (logdir / L"sunshine_display_helper.log");
+  const auto logfile = (logdir / L"luminalshine_display_helper.log");
   const auto active_snapshots = make_snapshot_paths(snapshot_dir);
   const auto search_roots = snapshot_search_roots();
   auto _log_guard = logging::init(2 /*info*/, logfile);
@@ -5249,10 +5256,10 @@ int main(int argc, char *argv[]) {
 
   // Outer service loop: keep accepting new client sessions while running
   while (running.load(std::memory_order_acquire)) {
-    auto ctrl_pipe = pipe_factory.create_server("sunshine_display_helper");
+    auto ctrl_pipe = pipe_factory.create_server(platf::display_helper_client::display_helper_pipe_name);
     if (!ctrl_pipe) {
       platf::dxgi::FramedPipeFactory fallback_factory(std::make_unique<platf::dxgi::NamedPipeFactory>());
-      ctrl_pipe = fallback_factory.create_server("sunshine_display_helper");
+      ctrl_pipe = fallback_factory.create_server(platf::display_helper_client::display_helper_pipe_name);
       if (!ctrl_pipe) {
         BOOST_LOG(error) << "Failed to create control pipe; retrying in 500ms";
         std::this_thread::sleep_for(500ms);

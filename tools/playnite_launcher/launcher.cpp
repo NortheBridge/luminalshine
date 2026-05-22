@@ -84,7 +84,7 @@ namespace playnite_launcher {
       std::filesystem::path logdir = std::filesystem::path(appdataW) / L"Sunshine";
       std::error_code ec;
       std::filesystem::create_directories(logdir, ec);
-      return logdir / L"sunshine_playnite_launcher.log";
+      return logdir / L"luminalshine_playnite_launcher.log";
     }
 
     void ensure_playnite_open() {

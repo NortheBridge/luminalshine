@@ -750,13 +750,23 @@ namespace confighttp {
       if (root.empty()) {
         return;
       }
-      const auto sunshine_base = root / L"Sunshine";
-      add_session_log_candidates(sunshine_base / L"logs", base_name + "-", candidates);
-      add_log_candidate(sunshine_base / (base_name + ".log"), candidates);
+      // Probe both the new `LuminalShine` per-user dir and the legacy
+      // `Sunshine` one so log lookup keeps working immediately after the
+      // 26.05.1 rename even on hosts where helpers haven't yet been
+      // restarted under their new names.
+      for (const auto *subdir : {L"LuminalShine", L"Sunshine"}) {
+        const auto helper_base = root / subdir;
+        add_session_log_candidates(helper_base / L"logs", base_name + "-", candidates);
+        add_log_candidate(helper_base / (base_name + ".log"), candidates);
+
+        if (include_temp) {
+          const auto temp_base = root / L"Temp";
+          add_session_log_candidates(temp_base / subdir / L"logs", base_name + "-", candidates);
+        }
+      }
 
       if (include_temp) {
         const auto temp_base = root / L"Temp";
-        add_session_log_candidates(temp_base / L"Sunshine" / L"logs", base_name + "-", candidates);
         add_log_candidate(temp_base / (base_name + ".log"), candidates);
       }
     }
@@ -810,20 +820,39 @@ namespace confighttp {
   }
 
   bool read_helper_log(const std::string &source, std::string &out) {
+    // Helper log basenames map to the post-26.05.1 `luminalshine_*` filenames.
+    // `find_latest_helper_log` walks every candidate root (per-user appdata
+    // legacy locations, current `platf::log_dir()`, etc.) and picks the
+    // most recently modified match — so as long as we pass the new name,
+    // the lookup naturally falls back to a legacy `sunshine_*` file in the
+    // same dir if the helper hasn't been upgraded yet on this host. We
+    // still issue an explicit legacy probe below for the case where ONLY
+    // the legacy file exists (helper crashed before rename, etc.).
     std::string base_name;
+    std::string legacy_base_name;
     if (source == "display_helper") {
-      base_name = "sunshine_display_helper";
+      base_name = "luminalshine_display_helper";
+      legacy_base_name = "sunshine_display_helper";
     } else if (source == "playnite") {
-      base_name = "sunshine_playnite";
+      base_name = "luminalshine_playnite";
+      legacy_base_name = "sunshine_playnite";
     } else if (source == "playnite_launcher") {
-      base_name = "sunshine_playnite_launcher";
+      base_name = "luminalshine_playnite_launcher";
+      legacy_base_name = "sunshine_playnite_launcher";
     } else if (source == "wgc") {
-      base_name = "sunshine_wgc_helper";
+      base_name = "luminalshine_wgc_helper";
+      legacy_base_name = "sunshine_wgc_helper";
     } else {
       return false;
     }
 
     auto latest = find_latest_helper_log(base_name);
+    if (!latest) {
+      // Fall back to the legacy filename so log export still produces
+      // something useful on hosts that had a prior install crash before
+      // any luminalshine_*.log got created.
+      latest = find_latest_helper_log(legacy_base_name);
+    }
     if (!latest) {
       return false;
     }
@@ -866,18 +895,31 @@ namespace confighttp {
       }
     } catch (...) {}
 
-    // Playnite plugin log (Roaming\Sunshine\sunshine_playnite.log)
+    // Playnite plugin log — written by the Playnite extension into the user's
+    // Roaming AppData. The extension lays the file down before any host-side
+    // helper has run, so the directory name on disk still tracks whatever
+    // brand the extension was packaged under: post-rename installs use
+    // `LuminalShine`, anything older uses `Sunshine`. Probe both.
     try {
       platf::dxgi::safe_token user_token;
       user_token.reset(platf::dxgi::retrieve_users_token(false));
       PWSTR roamingW = nullptr;
       if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, user_token.get(), &roamingW)) && roamingW) {
-        std::filesystem::path p = std::filesystem::path(roamingW) / L"Sunshine" / L"sunshine_playnite.log";
+        const std::filesystem::path roaming_root(roamingW);
         CoTaskMemFree(roamingW);
-        std::string data;
-        std::optional<std::filesystem::file_time_type> mtime;
-        if (read_file_if_exists(p, data, &mtime)) {
-          entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
+        static constexpr std::array<std::pair<const wchar_t *, const wchar_t *>, 4> kPaths = {{
+          {L"LuminalShine", L"luminalshine_playnite.log"},
+          {L"LuminalShine", L"sunshine_playnite.log"},
+          {L"Sunshine", L"luminalshine_playnite.log"},
+          {L"Sunshine", L"sunshine_playnite.log"},
+        }};
+        for (const auto &[subdir, name] : kPaths) {
+          std::filesystem::path p = roaming_root / subdir / name;
+          std::string data;
+          std::optional<std::filesystem::file_time_type> mtime;
+          if (read_file_if_exists(p, data, &mtime)) {
+            entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
+          }
         }
       }
     } catch (...) {}
@@ -998,41 +1040,24 @@ namespace confighttp {
     };
 
     auto add_user_helper_logs = [&](const std::filesystem::path &base) {
-      // Legacy single-file helper logs (kept for backwards compatibility).
-      {
-        std::filesystem::path p = base / L"sunshine_playnite.log";
-        std::string data;
-        std::optional<std::filesystem::file_time_type> mtime;
-        if (read_file_if_exists(p, data, &mtime)) {
-          entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
-        }
-      }
-      {
-        std::filesystem::path p = base / L"sunshine_playnite_launcher.log";
-        std::string data;
-        std::optional<std::filesystem::file_time_type> mtime;
-        if (read_file_if_exists(p, data, &mtime)) {
-          entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
-        }
-      }
-      {
-        std::filesystem::path p = base / L"sunshine_launcher.log";
-        std::string data;
-        std::optional<std::filesystem::file_time_type> mtime;
-        if (read_file_if_exists(p, data, &mtime)) {
-          entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
-        }
-      }
-      {
-        std::filesystem::path p = base / L"sunshine_display_helper.log";
-        std::string data;
-        std::optional<std::filesystem::file_time_type> mtime;
-        if (read_file_if_exists(p, data, &mtime)) {
-          entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
-        }
-      }
-      {
-        std::filesystem::path p = base / L"sunshine_wgc_helper.log";
+      // Single-file helper logs. Both the post-26.05.1 `luminalshine_*`
+      // names AND the legacy `sunshine_*` names are probed so a log
+      // export on a host that hasn't fully transitioned still picks up
+      // whichever file the helpers have actually written.
+      static constexpr std::array<const wchar_t *, 10> kHelperLogNames = {{
+        L"luminalshine_playnite.log",
+        L"luminalshine_playnite_launcher.log",
+        L"luminalshine_launcher.log",
+        L"luminalshine_display_helper.log",
+        L"luminalshine_wgc_helper.log",
+        L"sunshine_playnite.log",
+        L"sunshine_playnite_launcher.log",
+        L"sunshine_launcher.log",
+        L"sunshine_display_helper.log",
+        L"sunshine_wgc_helper.log",
+      }};
+      for (const auto *name : kHelperLogNames) {
+        std::filesystem::path p = base / name;
         std::string data;
         std::optional<std::filesystem::file_time_type> mtime;
         if (read_file_if_exists(p, data, &mtime)) {
@@ -1040,8 +1065,16 @@ namespace confighttp {
         }
       }
 
-      // Session-mode helper logs live under Roaming/LocalAppData\\Sunshine\\logs.
+      // Session-mode helper logs live under Roaming/LocalAppData\\<dir>\\logs
+      // for each shipping/legacy product name. Collect both prefix families so
+      // log export still works on a host that has helpers from before and
+      // after the 26.05.1 rename.
       const auto log_dir = base / L"logs";
+      add_session_logs_with_prefix(log_dir, "luminalshine_playnite-");
+      add_session_logs_with_prefix(log_dir, "luminalshine_playnite_launcher-");
+      add_session_logs_with_prefix(log_dir, "luminalshine_launcher-");
+      add_session_logs_with_prefix(log_dir, "luminalshine_display_helper-");
+      add_session_logs_with_prefix(log_dir, "luminalshine_wgc_helper-");
       add_session_logs_with_prefix(log_dir, "sunshine_playnite-");
       add_session_logs_with_prefix(log_dir, "sunshine_playnite_launcher-");
       add_session_logs_with_prefix(log_dir, "sunshine_launcher-");
@@ -1050,14 +1083,18 @@ namespace confighttp {
     };
 
     try {
+      // Walk both the new `LuminalShine` per-user dir and the legacy
+      // `Sunshine` one so logs from either era are picked up in a single
+      // export bundle.
       auto add_user_sunshine_logs = [&](REFKNOWNFOLDERID id) {
         platf::dxgi::safe_token user_token;
         user_token.reset(platf::dxgi::retrieve_users_token(false));
         PWSTR baseW = nullptr;
         if (SUCCEEDED(SHGetKnownFolderPath(id, 0, user_token.get(), &baseW)) && baseW) {
-          std::filesystem::path base = std::filesystem::path(baseW) / L"Sunshine";
+          const std::filesystem::path root(baseW);
           CoTaskMemFree(baseW);
-          add_user_helper_logs(base);
+          add_user_helper_logs(root / L"LuminalShine");
+          add_user_helper_logs(root / L"Sunshine");
         }
       };
       add_user_sunshine_logs(FOLDERID_RoamingAppData);
@@ -1154,7 +1191,19 @@ namespace confighttp {
     std::wstring prefix;
   };
 
-  static const std::array<CrashDumpTarget, 4> kCrashDumpTargets = {{
+  // Crash-dump filename prefixes WER uses for our shipped binaries. Both
+  // the post-26.05.1 `luminalshine_*` names AND the legacy `sunshine_*`
+  // names are listed so a bundle generated immediately after upgrade
+  // still collects pre-rename dumps if Windows hasn't yet rolled the WER
+  // archive. The collection logic dedupes by file path so a host that
+  // never had the legacy install just sees the legacy entries match zero
+  // files.
+  static const std::array<CrashDumpTarget, 8> kCrashDumpTargets = {{
+    {"luminalshine.exe", L"luminalshine.exe."},
+    {"luminalshine_display_helper.exe", L"luminalshine_display_helper.exe."},
+    {"luminalshine_wgc_capture.exe", L"luminalshine_wgc_capture.exe."},
+    {"luminalshine-playnite-launcher.exe", L"luminalshine-playnite-launcher.exe."},
+    // Legacy names retained for backward-compat crash bundling.
     {"sunshine.exe", L"sunshine.exe."},
     {"sunshine_display_helper.exe", L"sunshine_display_helper.exe."},
     {"sunshine_wgc_capture.exe", L"sunshine_wgc_capture.exe."},
@@ -1372,7 +1421,10 @@ namespace confighttp {
   }
 
   static bool is_sunshine_process(const std::string &process_lower) {
-    return process_lower == "sunshine.exe";
+    // Match both the new and legacy main-host executable names so a crash
+    // dump generated against the pre-26.05.1 binary is still recognized
+    // as the primary process when the bundle is assembled after upgrade.
+    return process_lower == "luminalshine.exe" || process_lower == "sunshine.exe";
   }
 
   static bool read_text_file_best_effort(const std::filesystem::path &p, std::string &out_utf8) {

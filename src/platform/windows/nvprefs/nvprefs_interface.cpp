@@ -105,12 +105,26 @@ namespace nvprefs {
       return false;
     }
 
-    // Modify and save sunshine.exe application profile settings, if needed
+    // Modify and save luminalshine.exe application profile settings, if needed
     bool modified = false;
     if (!pimpl->driver_settings.check_and_modify_application_profile(modified)) {
       error_message("Failed to modify application profile settings");
       return false;
-    } else if (modified) {
+    }
+
+    // One-time migration: if the legacy `SunshineStream` NVAPI profile is
+    // still hanging around from a pre-26.05.1 install, drop it. We only
+    // attempt this once per call. Failure here is best-effort — the new
+    // profile is already in place above, so a lingering legacy entry is at
+    // worst a cosmetic NVIDIA Control Panel line item.
+    bool legacy_removed = false;
+    if (pimpl->driver_settings.cleanup_legacy_application_profile(legacy_removed) && legacy_removed) {
+      // The deletion only takes effect after a save, so force-write below
+      // even if the new profile wasn't itself modified this run.
+      modified = true;
+    }
+
+    if (modified) {
       if (pimpl->driver_settings.save_settings()) {
         info_message("Modified application profile settings");
       } else {

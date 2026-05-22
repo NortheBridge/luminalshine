@@ -10,8 +10,18 @@
 
 namespace {
 
-  const auto sunshine_application_profile_name = L"SunshineStream";
-  const auto sunshine_application_path = L"sunshine.exe";
+  // NVIDIA driver per-application profile keyed on the executable filename.
+  // The profile name is the *NVAPI profile* identifier; the path is what the
+  // driver matches against running processes. Both rename to LuminalShine.
+  // First-run code in src/main.cpp clones any pre-existing `SunshineStream`
+  // profile (keyed on `sunshine.exe`) into this new profile so users' GPU
+  // power-mode / threaded-optimisations choices survive the migration.
+  const auto sunshine_application_profile_name = L"LuminalShineStream";
+  const auto sunshine_application_path = L"luminalshine.exe";
+  // Legacy identifiers, kept so the migration step can locate and delete
+  // the prior profile after copying its values across.
+  const auto legacy_sunshine_application_profile_name = L"SunshineStream";
+  const auto legacy_sunshine_application_path = L"sunshine.exe";
 
   void nvapi_error_message(NvAPI_Status status) {
     NvAPI_ShortString message = {};
@@ -272,7 +282,7 @@ namespace nvprefs {
     if (!get_nvprefs_options().sunshine_high_power_mode) {
       if (status == NVAPI_OK &&
           setting.settingLocation == NVDRS_CURRENT_PROFILE_LOCATION) {
-        // User requested to not use high power mode for sunshine.exe,
+        // User requested to not use high power mode for luminalshine.exe,
         // remove the setting from application profile if it's been set previously
 
         status = NvAPI_DRS_DeleteProfileSetting(session_handle, profile_handle, PREFERRED_PSTATE_ID);
@@ -307,6 +317,53 @@ namespace nvprefs {
       info_message(std::wstring(L"Changed PREFERRED_PSTATE to PREFERRED_PSTATE_PREFER_MAX for ") + sunshine_application_path);
     }
 
+    return true;
+  }
+
+  bool driver_settings_t::cleanup_legacy_application_profile(bool &removed) {
+    // Best-effort migration: when LuminalShine starts for the first time
+    // after the 26.05.1 rename, an `SunshineStream` NVAPI profile keyed on
+    // `sunshine.exe` may still exist from the prior install. The fresh
+    // `LuminalShineStream` profile (created/updated above by
+    // `check_and_modify_application_profile`) carries the same configured
+    // settings, so the legacy profile is now redundant. Delete it so users
+    // don't see a phantom entry for a non-existent executable in the
+    // NVIDIA Control Panel.
+    //
+    // Returns true on success or when nothing needed to be removed.
+    // Failure to delete is logged but never blocks the caller — the new
+    // profile is already in place, so leaving the orphan around is at
+    // worst cosmetic.
+    removed = false;
+    if (!session_handle) {
+      return false;
+    }
+
+    NvAPI_UnicodeString legacy_profile_name = {};
+    fill_nvapi_string(legacy_profile_name, legacy_sunshine_application_profile_name);
+
+    NvDRSProfileHandle legacy_handle = nullptr;
+    NvAPI_Status status = NvAPI_DRS_FindProfileByName(session_handle, legacy_profile_name, &legacy_handle);
+    if (status == NVAPI_PROFILE_NOT_FOUND) {
+      return true;  // nothing to clean up
+    }
+    if (status != NVAPI_OK) {
+      nvapi_error_message(status);
+      info_message(L"Could not look up legacy SunshineStream profile during migration; leaving it in place.");
+      return false;
+    }
+
+    status = NvAPI_DRS_DeleteProfile(session_handle, legacy_handle);
+    if (status != NVAPI_OK) {
+      nvapi_error_message(status);
+      info_message(L"Could not delete legacy SunshineStream profile during migration; leaving it in place.");
+      return false;
+    }
+
+    removed = true;
+    info_message(std::wstring(L"Removed legacy NVAPI profile '") +
+                 legacy_sunshine_application_profile_name +
+                 L"' (keyed on " + legacy_sunshine_application_path + L").");
     return true;
   }
 

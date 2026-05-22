@@ -1,6 +1,6 @@
 /**
  * @file tools/sunshinesvc.cpp
- * @brief Handles launching Sunshine.exe into user sessions as SYSTEM
+ * @brief Handles launching luminalshine.exe into user sessions as SYSTEM
  */
 #define WIN32_LEAN_AND_MEAN
 #include <format>
@@ -20,7 +20,43 @@ SERVICE_STATUS service_status;
 HANDLE stop_event;
 HANDLE session_change_event;
 
-#define SERVICE_NAME "SunshineService"
+// Windows service short name. Renamed for 26.05.1; the WiX uninstall
+// flow in packaging/windows/wix/custom_actions.wxs explicitly stops and
+// removes both the legacy `sunshinesvc` / `SunshineService` and this
+// `LuminalShineService` so upgrades clean up after themselves.
+#define SERVICE_NAME "LuminalShineService"
+
+namespace {
+  // Resolve the absolute path to luminalshine.exe in the parent directory
+  // of the running sunshinesvc.exe (we ship the service binary under
+  // `<install_root>\tools\` and the main host at `<install_root>\`).
+  // Replaces a prior `L"Sunshine.exe"` bare-name spawn that relied on
+  // current-working-directory inheritance — which the SCM does NOT do
+  // the way a console session would, leading to occasional silent
+  // launch failures on hosts where the service's effective CWD wasn't
+  // the install root.
+  std::wstring resolve_main_exe_path() {
+    wchar_t module_path[MAX_PATH] = {};
+    DWORD n = GetModuleFileNameW(nullptr, module_path, _countof(module_path));
+    if (n == 0 || n >= _countof(module_path)) {
+      return L"";
+    }
+    // <install_root>\tools\luminalshinesvc.exe  ->  <install_root>\luminalshine.exe
+    std::wstring path(module_path, n);
+    auto last_sep = path.find_last_of(L"\\/");
+    if (last_sep == std::wstring::npos) {
+      return L"";
+    }
+    path.resize(last_sep);  // strip "\\luminalshinesvc.exe"
+    auto parent_sep = path.find_last_of(L"\\/");
+    if (parent_sep == std::wstring::npos) {
+      return L"";
+    }
+    path.resize(parent_sep);  // strip "\\tools"
+    path += L"\\luminalshine.exe";
+    return path;
+  }
+}  // namespace
 
 DWORD WINAPI HandlerEx(DWORD dwControl, DWORD dwEventType, LPVOID lpEventData, LPVOID lpContext) {
   switch (dwControl) {
@@ -264,11 +300,18 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
       continue;
     }
 
-    // Start Sunshine.exe inside our job object
+    // Start luminalshine.exe inside our job object
     UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job_handle, sizeof(job_handle), nullptr, nullptr);
 
+    std::wstring main_exe_path = resolve_main_exe_path();
+    if (main_exe_path.empty()) {
+      CloseHandle(console_token);
+      CloseHandle(job_handle);
+      continue;
+    }
+
     PROCESS_INFORMATION process_info;
-    if (!CreateProcessAsUserW(console_token, L"Sunshine.exe", nullptr, nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, (LPSTARTUPINFOW) &startup_info, &process_info)) {
+    if (!CreateProcessAsUserW(console_token, main_exe_path.c_str(), nullptr, nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, (LPSTARTUPINFOW) &startup_info, &process_info)) {
       CloseHandle(console_token);
       CloseHandle(job_handle);
       continue;

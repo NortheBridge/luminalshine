@@ -29,7 +29,14 @@ target_link_libraries(sunshine ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
 target_compile_definitions(sunshine PUBLIC ${SUNSHINE_DEFINITIONS})
 
 # Logging integration flags are provided via SUNSHINE_DEFINITIONS to avoid duplicates
+# OUTPUT_NAME shifts the on-disk filename from `sunshine.exe` to `luminalshine.exe`
+# (and the Linux/macOS analogues) without renaming the CMake target. Keeping
+# the target named `sunshine` is intentional: every `target_link_libraries`,
+# `target_compile_definitions`, `add_dependencies`, etc. call across cmake/
+# refers to it, and the rename only needs to surface in the build output and
+# the install names — not in the build graph.
 set_target_properties(sunshine PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR})
 

@@ -10,6 +10,26 @@
   #include <string>
 
 namespace platf::display_helper_client {
+  // Shared IPC pipe name for the display-settings helper. Both ends of the
+  // pipe — the server in tools/display_settings_helper.cpp and the client
+  // in src/platform/windows/ipc/display_settings_client.cpp — read this
+  // constant rather than embedding a literal so the name can never drift
+  // between processes (a real bug we used to have when both sides spelled
+  // the literal independently).
+  //
+  // The bare name is appended to the kernel `\.\pipe\` namespace by the
+  // pipe factory; the full pipe path becomes:
+  //   \\.\pipe\luminalshine_display_helper
+  //
+  // A legacy `sunshine_display_helper` pipe lives on hosts that haven't
+  // yet had a luminalshine-renamed helper start; the MSI's KillProcs
+  // custom action terminates the old helper during upgrade so the legacy
+  // pipe goes away before any new client tries to connect. We
+  // deliberately do NOT probe the legacy name from new clients: the only
+  // peer that should answer on it is a stale helper from a half-finished
+  // upgrade, and talking to that is worse than failing fast.
+  inline constexpr const char *display_helper_pipe_name = "luminalshine_display_helper";
+
   // Send APPLY with JSON payload (SingleDisplayConfiguration)
   bool send_apply_json(const std::string &json);
 

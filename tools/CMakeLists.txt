@@ -12,7 +12,13 @@ set(TOOL_SOURCES
 )
 
 add_executable(dxgi-info dxgi.cpp ${TOOL_SOURCES})
-set_target_properties(dxgi-info PROPERTIES CXX_STANDARD 23)
+# Use OUTPUT_NAME rather than renaming the CMake target so existing
+# install(TARGETS dxgi-info ...) / target_link_libraries() / etc. references
+# elsewhere in the build graph keep working. The on-disk binary becomes
+# `luminalshine-dxgi-info.exe`, which namespaces a generic-sounding tool
+# name away from anything else a user might have in their PATH.
+set_target_properties(dxgi-info PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine-dxgi-info)
 target_link_libraries(dxgi-info
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
@@ -22,7 +28,8 @@ target_link_libraries(dxgi-info
 target_compile_options(dxgi-info PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
 add_executable(audio-info audio.cpp ${TOOL_SOURCES})
-set_target_properties(audio-info PROPERTIES CXX_STANDARD 23)
+set_target_properties(audio-info PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine-audio-info)
 target_link_libraries(audio-info
         ${Boost_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
@@ -32,16 +39,21 @@ target_link_libraries(audio-info
 target_compile_options(audio-info PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
 add_executable(sunshinesvc sunshinesvc.cpp)
-set_target_properties(sunshinesvc PROPERTIES CXX_STANDARD 23)
+set_target_properties(sunshinesvc PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshinesvc)
 target_link_libraries(sunshinesvc
         ${CMAKE_THREAD_LIBS_INIT}
         wtsapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshinesvc PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
+# WiX consumes the staged copy via `!(bindpath.PayloadRoot)tools\luminalshinesvc.exe`
+# (see packaging/windows/wix/custom_actions.wxs). $<TARGET_FILE:...> resolves
+# to the OUTPUT_NAME-renamed path, so this single step keeps WiX and CMake
+# in lockstep.
 add_custom_command(TARGET sunshinesvc POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:sunshinesvc>" "${CMAKE_BINARY_DIR}/wix_payload/tools/sunshinesvc.exe"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:sunshinesvc>" "${CMAKE_BINARY_DIR}/wix_payload/tools/luminalshinesvc.exe"
 )
 
 # Playnite launcher: per-launch helper that hosts a private IPC server
@@ -53,7 +65,8 @@ add_executable(playnite-launcher
         playnite_launcher/focus_utils.cpp
         playnite_launcher/lossless_scaling.cpp
         playnite_launcher/playnite_process.cpp)
-set_target_properties(playnite-launcher PROPERTIES CXX_STANDARD 23)
+set_target_properties(playnite-launcher PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine-playnite-launcher)
 set_target_properties(playnite-launcher PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(playnite-launcher PRIVATE ${CMAKE_SOURCE_DIR}/tools/playnite_launcher)
 target_sources(playnite-launcher PRIVATE
@@ -83,7 +96,8 @@ add_executable(sunshine_wgc_capture
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
         ${CMAKE_SOURCE_DIR}/src/logging.cpp)
-set_target_properties(sunshine_wgc_capture PROPERTIES CXX_STANDARD 23)
+set_target_properties(sunshine_wgc_capture PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine_wgc_capture)
 
 # Define helper build flag to conditionally compile logging
 target_compile_definitions(sunshine_wgc_capture PRIVATE
@@ -111,7 +125,8 @@ add_executable(sunshine_display_helper
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/misc_utils.cpp
         ${CMAKE_SOURCE_DIR}/src/logging.cpp)
-set_target_properties(sunshine_display_helper PROPERTIES CXX_STANDARD 23)
+set_target_properties(sunshine_display_helper PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine_display_helper)
 target_compile_definitions(sunshine_display_helper PRIVATE SETUP_LIBDISPLAYDEVICE_LOGGING)
 target_include_directories(sunshine_display_helper PRIVATE ${CMAKE_SOURCE_DIR}/third-party)
 target_link_libraries(sunshine_display_helper

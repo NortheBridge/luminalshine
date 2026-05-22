@@ -523,7 +523,14 @@ namespace {
 
     if (Process32FirstW(snapshot, &entry)) {
       do {
-        if (_wcsicmp(entry.szExeFile, L"sunshine_display_helper.exe") == 0 &&
+        // Match both the new luminalshine_display_helper.exe and the legacy
+        // sunshine_display_helper.exe so cleanup still works on hosts where
+        // an old helper from a pre-26.05.1 install survived the upgrade
+        // (e.g. service was offline when the MSI ran). The MSI's KillProcs
+        // custom action also enumerates both names — this is the runtime
+        // counterpart of that list.
+        if ((_wcsicmp(entry.szExeFile, L"luminalshine_display_helper.exe") == 0 ||
+             _wcsicmp(entry.szExeFile, L"sunshine_display_helper.exe") == 0) &&
             entry.th32ProcessID != GetCurrentProcessId()) {
           targets.push_back(entry.th32ProcessID);
         }
@@ -803,19 +810,19 @@ namespace {
 
     kill_all_helper_processes();
 
-    // Compute path to sunshine_display_helper.exe inside the tools subdirectory next to Sunshine.exe
+    // Compute path to luminalshine_display_helper.exe inside the tools subdirectory next to luminalshine.exe
     wchar_t module_path[MAX_PATH] = {};
     if (!GetModuleFileNameW(nullptr, module_path, _countof(module_path))) {
-      BOOST_LOG(error) << "Failed to resolve Sunshine module path; cannot launch display helper.";
+      BOOST_LOG(error) << "Failed to resolve LuminalShine module path; cannot launch display helper.";
       return false;
     }
     std::filesystem::path exe_path(module_path);
     std::filesystem::path dir = exe_path.parent_path();
-    std::filesystem::path helper = dir / L"tools" / L"sunshine_display_helper.exe";
+    std::filesystem::path helper = dir / L"tools" / L"luminalshine_display_helper.exe";
 
     if (!std::filesystem::exists(helper)) {
       BOOST_LOG(warning) << "Display helper not found at: " << platf::to_utf8(helper.wstring())
-                         << ". Ensure the tools subdirectory is present and contains sunshine_display_helper.exe.";
+                         << ". Ensure the tools subdirectory is present and contains luminalshine_display_helper.exe.";
       return false;
     }
 
