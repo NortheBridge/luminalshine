@@ -135,7 +135,9 @@
       "Bash(bundle config *)",
       "Bash(python3 -)",
       "Bash(echo \"exit: $?\")",
-      "Bash(gh auth *)"
+      "Bash(gh auth *)",
+      "WebFetch(domain:nvd.nist.gov)",
+      "WebFetch(domain:www.cve.org)"
     ],
     "deny": [],
     "ask": [],
