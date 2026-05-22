@@ -215,7 +215,7 @@ permalink: /compare.html
                 </tr>
                 <tr>
                   <td>Local-admin single-file credential hijack <a href="#cred-hijack-note" style="color:var(--aurora-1);text-decoration:none;font-size:0.8rem;">&dagger;</a></td>
-                  <td class="compare-col-self"><span class="compare-status compare-yes">Not affected</span><span class="compare-note">Credentials in Windows Credential Manager under SYSTEM scope (DPAPI / TPM 2.0&ndash;bound master key). No on-disk file to delete.</span></td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Not affected</span><span class="compare-note">TPM 2.0&ndash;backed credential storage; no path-on-disk file an Administrator can delete to trigger reset. Implementation specifics intentionally not documented here.</span></td>
                   <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Plaintext-path JSON credentials file; first-run bootstrap route accepts unauthenticated POST when no username is set.</span></td>
                   <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Sunshine credentials path.</span></td>
                   <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Sunshine credentials path.</span></td>
@@ -259,14 +259,43 @@ permalink: /compare.html
 
           <div class="card card-block" id="cred-hijack-note" style="margin-top:1.5rem;">
             <h3 style="margin:0 0 0.5rem;"><span style="color:var(--aurora-1);">&dagger;</span> About the credential-hijack row</h3>
+
+            <h4 style="margin:1rem 0 0.4rem;">Vulnerability</h4>
             <p class="card-desc">
-              Upstream Sunshine persists the admin username, password hash, and salt to a JSON file at the path given by <code style="font-size:0.85em;">config::sunshine.credentials_file</code>. The first-run bootstrap route (<code style="font-size:0.85em;">/api/password</code> in <a href="https://github.com/LizardByte/Sunshine/blob/master/src/confighttp.cpp" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);">confighttp.cpp</a>) skips authentication when no username is configured &mdash; the conditional reads <code style="font-size:0.85em;">if (!config::sunshine.username.empty() &amp;&amp; !authenticate(...)) return;</code>. The intended use is initial account setup; the side effect is that a local Administrator who deletes the credentials file resets the host to first-run state, after which any network caller can POST new credentials and take ownership of the streaming service (paired clients, capture, input injection).
+              The credentials file (typically <code style="font-size:0.85em;">sunshine_state.json</code> or the configured <code style="font-size:0.85em;">credentials_file</code> path) holds the admin username, password hash, and salt in a path readable and writable by anyone running with local Administrator privileges. The first-run bootstrap path (<code style="font-size:0.85em;">/api/password</code> in <a href="https://github.com/LizardByte/Sunshine/blob/master/src/confighttp.cpp" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);">confighttp.cpp</a>) skips authentication when no username is configured &mdash; the conditional reads <code style="font-size:0.85em;">if (!config::sunshine.username.empty() &amp;&amp; !authenticate(...)) return;</code>. These two behaviours are individually intentional &mdash; credentials must live somewhere, and first-run setup must accept the initial credential without prior auth &mdash; but in combination they form an exploit chain:
             </p>
+            <ol class="card-desc" style="padding-left:1.4rem; margin:0.6rem 0 1rem;">
+              <li style="margin-bottom:0.45rem;">Attacker obtains local Administrator on the host (any vector: resident malware, social engineering, supply chain, etc.).</li>
+              <li style="margin-bottom:0.45rem;">Attacker deletes the credentials file.</li>
+              <li style="margin-bottom:0.45rem;">On the next config reload / service restart, the in-memory credential state is empty.</li>
+              <li style="margin-bottom:0.45rem;">Any network caller &mdash; including the attacker from a different machine on the same LAN, or back through a proxied connection &mdash; POSTs new credentials to <code style="font-size:0.85em;">/api/password</code> and is granted admin access to the host without further authentication.</li>
+            </ol>
             <p class="card-desc">
-              Apollo, Vibeshine, and Vibepollo all inherit this code path from Sunshine. LuminalShine moved credential storage out of a plaintext-path file and into the Windows Credential Manager vault under SYSTEM scope, encrypted with DPAPI under a master key that is TPM 2.0&ndash;bound on supported hardware (see <a href="https://github.com/NortheBridge/luminalshine/tree/main/src/cred_store" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);"><code style="font-size:0.85em;">src/cred_store/</code></a>). Closing the file-deletion bootstrap path requires SYSTEM-level access rather than Administrator, and the credential blob cannot be exfiltrated and decrypted on different hardware.
+              This converts a transient local-admin compromise into persistent remote ownership of the streaming service. Beyond credential takeover, the streaming service controls desktop capture and virtual input injection, so the attacker who completes step 4 controls the interactive session of any user who logs in to the host.
             </p>
-            <p class="card-desc text-muted" style="font-size:0.86rem;">
-              <strong>Threat-model note:</strong> this is a local-admin issue, not a remote unauthenticated exploit. An attacker without Administrator on the host cannot trigger it. It is documented here as a security-model difference that motivated LuminalShine&rsquo;s credential-store rework, not as an active vulnerability disclosure &mdash; the underlying code is publicly visible in each upstream repository.
+
+            <h4 style="margin:1.5rem 0 0.4rem;">Affected versions</h4>
+            <p class="card-desc">
+              All current versions of <strong>Sunshine</strong>, <strong>Apollo</strong>, <strong>Vibeshine</strong>, and <strong>Vibepollo</strong>. Apollo and Vibeshine inherit the code path directly from Sunshine; Vibepollo inherits it through Apollo.
+            </p>
+
+            <h4 style="margin:1.5rem 0 0.4rem;">Severity</h4>
+            <p class="card-desc">
+              Approximate <strong>CVSS 3.1 base score: ~7.3 (High)</strong>. Vector: local attack vector, low complexity, high privileges required (local Administrator), no user interaction, scope change (local admin to full service ownership including remote streaming and input injection), high impact on confidentiality, integrity, and availability. This is an estimate; canonical scoring is a function of the assigning CNA. Note that the chain converts a local-admin precondition into <em>persistent remote</em> service ownership, which is the property driving the score above &ldquo;just&rdquo; a local-admin-required issue.
+            </p>
+
+            <h4 style="margin:1.5rem 0 0.4rem;">Disclosure status</h4>
+            <p class="card-desc">
+              This issue has been raised with the upstream maintainers. The maintainers have made a deliberate decision to retain the current credential-storage and first-run bootstrap behaviour. The underlying code is publicly visible in each upstream repository.
+            </p>
+
+            <h4 style="margin:1.5rem 0 0.4rem;">Why LuminalShine is not affected</h4>
+            <p class="card-desc">
+              LuminalShine does not persist the admin credential blob to a path-on-disk file an Administrator can delete. Step&nbsp;2 of the exploit chain has nothing to act on, and the bootstrap-mode reset that depends on it cannot be triggered. The specific implementation is intentionally not documented here.
+            </p>
+
+            <p class="card-desc text-muted" style="font-size:0.86rem; margin-top:1.25rem;">
+              <strong>Threat-model note:</strong> this is a local-admin precondition issue, not a remote unauthenticated exploit. An attacker without Administrator on the host cannot trigger it on its own. It is documented here as a security-model difference that motivated LuminalShine&rsquo;s credential-store rework. The underlying upstream code is publicly visible in each upstream repository and the maintainers have chosen to retain it.
             </p>
           </div>
         </section>
