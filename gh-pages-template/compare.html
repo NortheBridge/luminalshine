@@ -215,7 +215,7 @@ permalink: /compare.html
                 </tr>
                 <tr>
                   <td>Local-admin single-file credential hijack <a href="#cred-hijack-note" style="color:var(--aurora-1);text-decoration:none;font-size:0.8rem;">&dagger;</a></td>
-                  <td class="compare-col-self"><span class="compare-status compare-yes">Not affected</span><span class="compare-note">TPM 2.0&ndash;backed credential storage; no path-on-disk file an Administrator can delete to trigger reset. Implementation specifics intentionally not documented here.</span></td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Not affected</span><span class="compare-note">Credentials in Windows Credential Manager under SYSTEM scope (DPAPI / TPM 2.0&ndash;bound master key). No on-disk file to delete.</span></td>
                   <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Plaintext-path JSON credentials file; first-run bootstrap route accepts unauthenticated POST when no username is set.</span></td>
                   <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Sunshine credentials path.</span></td>
                   <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Sunshine credentials path.</span></td>
