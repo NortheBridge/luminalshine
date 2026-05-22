@@ -11,6 +11,52 @@ on:
       release_version:
         required: true
         type: string
+    # Secrets are forwarded from ci.yml via `secrets: inherit`. They are
+    # declared optional here so the build still runs while SIGN_ARTIFACTS
+    # is disabled (no values present) and only enforced inside the signing
+    # steps once the gate is flipped.
+    secrets:
+      SSLCOM_USERNAME:
+        required: false
+      SSLCOM_PASSWORD:
+        required: false
+      SSLCOM_CREDENTIAL_ID:
+        required: false
+      SSLCOM_TOTP_SECRET:
+        required: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Codesigning gate — SSL.com eSigner Cloud Signing (CodeSignTool CLI)
+# ──────────────────────────────────────────────────────────────────────────────
+# While SIGN_ARTIFACTS is 'false' the setup/sign/verify steps below all skip
+# via their `if:` conditions, and the workflow ships unsigned artifacts —
+# this is the safe default until the SSL.com OV cert is provisioned.
+#
+# To enable once the cert is in hand:
+#   1. Add these four repository secrets (Settings → Secrets and variables →
+#      Actions). They are forwarded into this reusable workflow via the
+#      `secrets: inherit` line on the build-windows job in ci.yml.
+#        SSLCOM_USERNAME       SSL.com account username
+#        SSLCOM_PASSWORD       SSL.com account password
+#        SSLCOM_CREDENTIAL_ID  Code-signing credential ID from the SSL.com
+#                                dashboard (the value under "Credential ID"
+#                                on the certificate's detail page).
+#        SSLCOM_TOTP_SECRET    Base32 TOTP seed (NOT a rotating 6-digit code)
+#                                generated when enabling OATH-based 2FA on
+#                                the credential — see SSL.com's automation
+#                                guide. Required because CodeSignTool's
+#                                non-interactive flow re-derives a one-time
+#                                code from this seed on every sign call.
+#   2. Flip SIGN_ARTIFACTS to 'true' below.
+#   3. (Optional) Bump CODESIGN_TOOL_VERSION when SSL.com publishes a new
+#      CodeSignTool release at https://github.com/SSLcom/CodeSignTool/releases
+#      — the Windows zip bundles its own JRE so no Java setup is needed.
+#
+# Reference: https://www.ssl.com/guide/esigner-codesigntool-command-guide/
+# Product:   https://www.ssl.com/products/software-integrity/signing-service/
+env:
+  SIGN_ARTIFACTS: 'false'
+  CODESIGN_TOOL_VERSION: '1.3.2'
 
 jobs:
   build_windows:
@@ -303,7 +349,76 @@ jobs:
 
       # WiX already installed before configure so env:WIX is available
 
-      - name: Package Windows
+      # ── Codesigning (SSL.com eSigner) ─────────────────────────────────────
+      # All four steps below are gated on `env.SIGN_ARTIFACTS == 'true'` and
+      # skip entirely while the gate is off. Order matters: built EXEs are
+      # signed first so their signatures are preserved when CPack stages
+      # them into the MSI and the portable ZIP; the MSI is signed after
+      # CPack emits it but before the bootstrapper embeds it as a payload
+      # resource; the bootstrapper EXE is signed last so the outermost file
+      # users execute carries a valid signature wrapping a signed payload.
+      - name: Setup eSigner CodeSignTool
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:CODESIGN_TOOL_VERSION
+          $stagingDir = Join-Path $env:RUNNER_TEMP 'codesigntool'
+          $zipPath = Join-Path $env:RUNNER_TEMP "CodeSignTool-windows.zip"
+          $url = "https://github.com/SSLcom/CodeSignTool/releases/download/v$version/CodeSignTool-v$version-windows.zip"
+          Write-Host "Downloading CodeSignTool v$version from $url"
+          Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+          New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+          Expand-Archive -Path $zipPath -DestinationPath $stagingDir -Force
+          $bat = Get-ChildItem -Path $stagingDir -Filter 'CodeSignTool.bat' -Recurse -File |
+                   Select-Object -First 1
+          if (-not $bat) { throw 'CodeSignTool.bat not found after extracting the eSigner archive.' }
+          # Export the resolved path so subsequent sign steps can call it
+          # without re-discovering the extracted layout.
+          "CODESIGN_TOOL_BAT=$($bat.FullName)" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          Write-Host "CodeSignTool ready at $($bat.FullName)"
+
+      - name: Sign built executables
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        env:
+          SSLCOM_USERNAME: ${{ secrets.SSLCOM_USERNAME }}
+          SSLCOM_PASSWORD: ${{ secrets.SSLCOM_PASSWORD }}
+          SSLCOM_CREDENTIAL_ID: ${{ secrets.SSLCOM_CREDENTIAL_ID }}
+          SSLCOM_TOTP_SECRET: ${{ secrets.SSLCOM_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bat = $env:CODESIGN_TOOL_BAT
+          if (-not $bat -or -not (Test-Path $bat)) {
+            throw 'CodeSignTool not installed — Setup eSigner CodeSignTool step did not run.'
+          }
+          foreach ($name in 'SSLCOM_USERNAME','SSLCOM_PASSWORD','SSLCOM_CREDENTIAL_ID','SSLCOM_TOTP_SECRET') {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "env:$name").Value)) {
+              throw "Required signing secret '$name' is empty. Add it under Settings → Secrets and variables → Actions, and confirm ci.yml's build-windows job carries 'secrets: inherit'."
+            }
+          }
+          # Sign every native EXE produced by the build. Test binaries are
+          # excluded because they are advisory-only and never shipped.
+          # CPack's _CPack_Packages staging directory doesn't exist yet at
+          # this point in the pipeline, so we don't need to filter for it.
+          $targets = Get-ChildItem -Path 'build' -Filter '*.exe' -Recurse -File |
+                       Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike 'test_*' }
+          if (-not $targets) { throw 'No executables found under build/ to sign.' }
+          foreach ($t in $targets) {
+            Write-Host "Signing $($t.FullName)"
+            & $bat sign `
+                -username="$env:SSLCOM_USERNAME" `
+                -password="$env:SSLCOM_PASSWORD" `
+                -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
+                -totp_secret="$env:SSLCOM_TOTP_SECRET" `
+                -input_file_path="$($t.FullName)" `
+                -override
+            if ($LASTEXITCODE -ne 0) {
+              throw "CodeSignTool failed for $($t.FullName) (exit $LASTEXITCODE)"
+            }
+          }
+
+      - name: Package Windows (MSI and portable ZIP)
         shell: msys2 {0}
         run: |
           mkdir -p artifacts
@@ -314,8 +429,65 @@ jobs:
           cpack -G WIX
           cpack -G ZIP
 
-          # build custom installer executable that wraps the MSI payload
+      - name: Sign MSI
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        env:
+          SSLCOM_USERNAME: ${{ secrets.SSLCOM_USERNAME }}
+          SSLCOM_PASSWORD: ${{ secrets.SSLCOM_PASSWORD }}
+          SSLCOM_CREDENTIAL_ID: ${{ secrets.SSLCOM_CREDENTIAL_ID }}
+          SSLCOM_TOTP_SECRET: ${{ secrets.SSLCOM_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bat = $env:CODESIGN_TOOL_BAT
+          $msi = Get-ChildItem -Path 'build/cpack_artifacts' -Filter '*.msi' -File |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 1
+          if (-not $msi) { throw 'No MSI to sign under build/cpack_artifacts/.' }
+          Write-Host "Signing $($msi.FullName)"
+          & $bat sign `
+              -username="$env:SSLCOM_USERNAME" `
+              -password="$env:SSLCOM_PASSWORD" `
+              -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
+              -totp_secret="$env:SSLCOM_TOTP_SECRET" `
+              -input_file_path="$($msi.FullName)" `
+              -override
+          if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for MSI (exit $LASTEXITCODE)" }
+
+      - name: Build bootstrapper EXE
+        shell: msys2 {0}
+        run: |
+          cd build
+          # build custom installer executable that wraps the (now signed) MSI payload
           powershell -NoProfile -ExecutionPolicy Bypass -File ../packaging/windows/bootstrapper/build_bootstrapper.ps1 -BuildDir "$(cygpath -w "$(pwd)")"
+
+      - name: Sign bootstrapper EXE
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        env:
+          SSLCOM_USERNAME: ${{ secrets.SSLCOM_USERNAME }}
+          SSLCOM_PASSWORD: ${{ secrets.SSLCOM_PASSWORD }}
+          SSLCOM_CREDENTIAL_ID: ${{ secrets.SSLCOM_CREDENTIAL_ID }}
+          SSLCOM_TOTP_SECRET: ${{ secrets.SSLCOM_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bat = $env:CODESIGN_TOOL_BAT
+          $exe = Join-Path $PWD 'build/cpack_artifacts/LuminalShineSetup.exe'
+          if (-not (Test-Path $exe)) { throw "Bootstrapper EXE not found at $exe" }
+          Write-Host "Signing $exe"
+          & $bat sign `
+              -username="$env:SSLCOM_USERNAME" `
+              -password="$env:SSLCOM_PASSWORD" `
+              -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
+              -totp_secret="$env:SSLCOM_TOTP_SECRET" `
+              -input_file_path="$exe" `
+              -override
+          if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for bootstrapper (exit $LASTEXITCODE)" }
+
+      - name: Stage Windows artifacts
+        shell: msys2 {0}
+        run: |
+          cd build
 
           # Locate emitted artifacts. nullglob makes unmatched globs expand to
           # nothing instead of the literal pattern, so `ls` doesn't error out
@@ -364,6 +536,23 @@ jobs:
           mv "${msi_file}" ../artifacts/LuminalShine_x64-installer.msi
           mv "${installer_exe}" ../artifacts/LuminalShine_x64-installer.exe
           mv "${portable_zip}" ../artifacts/LuminalShine_x64-portable.zip
+
+      - name: Verify signatures
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'artifacts/LuminalShine_x64-installer.exe',
+            'artifacts/LuminalShine_x64-installer.msi'
+          )
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature -FilePath $f
+            Write-Host "$($f): $($sig.Status) — $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') {
+              throw "Signature invalid on ${f}: $($sig.Status) — $($sig.StatusMessage)"
+            }
+          }
 
       # Diagnostic dumps for packaging failures. CPack's "Fatal WiX
       # Generator Error" / "Problem running WiX" messages by themselves

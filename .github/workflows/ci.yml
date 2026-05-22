@@ -79,6 +79,13 @@ jobs:
     with:
       release_commit: ${{ needs.release-setup.outputs.release_commit }}
       release_version: ${{ needs.release-setup.outputs.release_version }}
+    # Forward repository secrets to the reusable workflow. While the
+    # SIGN_ARTIFACTS gate in ci-windows.yml is 'false' no secrets are
+    # read; once flipped to 'true' the SSLCOM_* secrets configured on
+    # this repository are picked up by the SSL.com eSigner signing
+    # steps. `inherit` covers any future secrets without re-listing
+    # them here.
+    secrets: inherit
 
   release:
     name: Release
