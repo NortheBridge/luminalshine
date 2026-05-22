@@ -255,12 +255,124 @@ namespace platf {
   }
 
   std::filesystem::path log_dir() {
-    // Currently colocated with config under `appdata()`. Kept as a separate
-    // accessor so a future migration can point logs at a dedicated
-    // `%ProgramData%\LuminalShine\logs\` subtree without touching every
-    // caller that constructs a log path. See `platf::log_dir()` in
-    // src/platform/common.h for the contract.
-    return appdata();
+    // Resolved exactly once per process, same pattern as `appdata()` above.
+    // Logs live at `%ProgramData%\LuminalShine\logs\` — a sibling of the
+    // `config\` directory that `appdata()` returns. Splitting the two lets
+    // `KEEPLOGS=0` / `KEEPADMINCREDENTIALS=0` uninstalls target them
+    // independently, and gives users an obvious place to look without
+    // wading through configuration files.
+    //
+    // Migration warnings are emitted via `BOOST_LOG`; the default sink
+    // silently drops them when logging::init hasn't yet run (which is
+    // the case here, since this accessor is invoked from `config::sunshine`
+    // defaults during config parse — strictly before `logging::init` in
+    // main.cpp). That's no worse than not logging at all and far better
+    // than swallowing real Access Denied / sharing-violation failures.
+    static const std::filesystem::path resolved = [] {
+      std::filesystem::path target;
+      PWSTR program_data_w = nullptr;
+      if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_CREATE, nullptr, &program_data_w)) && program_data_w) {
+        target = std::filesystem::path {program_data_w} / L"LuminalShine" / L"logs"sv;
+        CoTaskMemFree(program_data_w);
+      }
+
+      // Fallback: if `FOLDERID_ProgramData` lookup failed for any reason,
+      // co-locate with config rather than returning an empty path. This
+      // degrades to the pre-PR-3 layout — strictly worse organization, but
+      // every log write still lands on disk somewhere reachable.
+      if (target.empty()) {
+        return appdata();
+      }
+
+      std::error_code ec;
+      std::filesystem::create_directories(target, ec);
+      if (ec) {
+        BOOST_LOG(warning) << "log_dir: failed to create "sv << target.string()
+                           << ": "sv << ec.message();
+        return target;
+      }
+
+      // One-time migration: move any existing `*.log` / `*.log.N` files
+      // from the legacy colocated location at `appdata()` into the
+      // dedicated `logs\` subtree. Idempotent across re-runs because
+      // `rename` is a no-op once the source dir no longer contains log
+      // files, and `skip_existing` on the cross-volume copy fallback
+      // means a transient lock that survives one boot is harmless.
+      //
+      // The active log file is NOT held open at this point: `log_dir()`
+      // is called from `config.cpp`'s defaults during config parse,
+      // which precedes `logging::init`. No contention with the rotating
+      // sink.
+      const auto legacy = appdata();
+      if (legacy == target || !std::filesystem::exists(legacy, ec)) {
+        return target;
+      }
+
+      for (auto it = std::filesystem::directory_iterator(legacy, ec);
+           !ec && it != std::filesystem::directory_iterator();
+           it.increment(ec)) {
+        const auto &src_path = it->path();
+        const auto src_name = src_path.filename().wstring();
+
+        // Match anything containing `.log` anywhere in the filename —
+        // covers `sunshine.log`, `sunshine.log.1` (numeric rollover),
+        // `sunshine_display_helper.log`, and the post-PR-4 `luminalshine_*`
+        // variants. False positives are acceptable: a user-authored file
+        // they happen to put in the service config dir with `.log` in
+        // its name is moving to a sibling directory, not vanishing.
+        if (src_name.find(L".log"sv) == std::wstring::npos) {
+          continue;
+        }
+
+        std::error_code stat_ec;
+        if (!std::filesystem::is_regular_file(src_path, stat_ec)) {
+          continue;
+        }
+
+        const auto dst_path = target / src_path.filename();
+
+        // Prefer `rename` (atomic within a volume); fall back to
+        // copy+remove on cross-volume errors or transient locks.
+        std::error_code rename_ec;
+        std::filesystem::rename(src_path, dst_path, rename_ec);
+        if (!rename_ec) {
+          continue;
+        }
+
+        std::error_code copy_ec;
+        std::filesystem::copy_file(
+          src_path,
+          dst_path,
+          std::filesystem::copy_options::skip_existing,
+          copy_ec
+        );
+        if (copy_ec) {
+          BOOST_LOG(warning) << "log_dir: failed to migrate "sv << src_path.string()
+                             << " -> "sv << dst_path.string()
+                             << ": rename="sv << rename_ec.message()
+                             << ", copy="sv << copy_ec.message();
+          continue;
+        }
+
+        std::error_code remove_ec;
+        std::filesystem::remove(src_path, remove_ec);
+        // If `remove` fails (lingering antivirus handle, e.g.), the next
+        // process start re-attempts migration. `skip_existing` on
+        // copy_file above keeps that a safe no-op on the destination.
+        if (remove_ec) {
+          BOOST_LOG(warning) << "log_dir: copied "sv << src_path.string()
+                             << " but could not delete source: "sv
+                             << remove_ec.message();
+        }
+      }
+      if (ec) {
+        BOOST_LOG(warning) << "log_dir: directory iteration of "sv << legacy.string()
+                           << " ended with: "sv << ec.message();
+      }
+
+      return target;
+    }();
+    return resolved;
   }
 
   std::string from_sockaddr(const sockaddr *const socket_address) {
