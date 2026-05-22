@@ -145,7 +145,12 @@
       "Bash(python3 -c \"import json,sys; c=json.load\\(sys.stdin\\)[0]; print\\('html_url:', c['html_url']\\); print\\('id:', c['id']\\)\")",
       "WebFetch(domain:docs.lizardbyte.dev)",
       "Bash(python3 -c \"import yaml,sys; [yaml.safe_load\\(open\\(p\\)\\) for p in ['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/ci.yml']]; print\\('YAML OK'\\)\")",
-      "Bash(ruby -ryaml -e \"['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/ci.yml'].each { |f| YAML.load_file\\(f\\); puts \\\\\"#{f}: OK\\\\\" }\")"
+      "Bash(ruby -ryaml -e \"['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/ci.yml'].each { |f| YAML.load_file\\(f\\); puts \\\\\"#{f}: OK\\\\\" }\")",
+      "Bash(gh pr *)",
+      "Bash(gh run *)",
+      "Bash(git submodule *)",
+      "Bash(git checkout *)",
+      "Bash(git fetch *)"
     ],
     "deny": [],
     "ask": [],
