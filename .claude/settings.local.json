@@ -142,7 +142,8 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('TITLE:', d.get\\('title'\\)\\); print\\('STATE:', d.get\\('state'\\)\\); print\\('STATE_REASON:', d.get\\('state_reason'\\)\\); print\\('LABELS:', [l['name'] for l in d.get\\('labels',[]\\)]\\); print\\('CLOSED_AT:', d.get\\('closed_at'\\)\\); print\\(\\); print\\('BODY:'\\); print\\(d.get\\('body',''\\)\\)\")",
       "Bash(curl -sS \"https://api.github.com/repos/Nonary/vibeshine/issues/189/comments\")",
       "Bash(python3 -c ' *)",
-      "Bash(python3 -c \"import json,sys; c=json.load\\(sys.stdin\\)[0]; print\\('html_url:', c['html_url']\\); print\\('id:', c['id']\\)\")"
+      "Bash(python3 -c \"import json,sys; c=json.load\\(sys.stdin\\)[0]; print\\('html_url:', c['html_url']\\); print\\('id:', c['id']\\)\")",
+      "WebFetch(domain:docs.lizardbyte.dev)"
     ],
     "deny": [],
     "ask": [],
