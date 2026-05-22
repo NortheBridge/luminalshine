@@ -214,6 +214,14 @@ permalink: /compare.html
                   <td><span class="compare-status compare-no">No</span></td>
                 </tr>
                 <tr>
+                  <td>Local-admin single-file credential hijack <a href="#cred-hijack-note" style="color:var(--aurora-1);text-decoration:none;font-size:0.8rem;">&dagger;</a></td>
+                  <td class="compare-col-self"><span class="compare-status compare-yes">Not affected</span><span class="compare-note">Credentials in Windows Credential Manager under SYSTEM scope (DPAPI / TPM 2.0&ndash;bound master key). No on-disk file to delete.</span></td>
+                  <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Plaintext-path JSON credentials file; first-run bootstrap route accepts unauthenticated POST when no username is set.</span></td>
+                  <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Sunshine credentials path.</span></td>
+                  <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Sunshine credentials path.</span></td>
+                  <td><span class="compare-status compare-no">Affected</span><span class="compare-note">Inherits Apollo / Sunshine credentials path.</span></td>
+                </tr>
+                <tr>
                   <td>Scoped API tokens</td>
                   <td class="compare-col-self"><span class="compare-status compare-yes">Method-level</span></td>
                   <td><span class="compare-status compare-partial">API exists</span></td>
@@ -231,7 +239,7 @@ permalink: /compare.html
                 </tr>
                 <tr>
                   <td>Self-described AI-generated code</td>
-                  <td class="compare-col-self"><span class="compare-status compare-na">Not claimed</span></td>
+                  <td class="compare-col-self"><span class="compare-status compare-partial">AI-Enhanced</span><span class="compare-note">AI used as a development aid alongside human review; code is not generated wholesale.</span></td>
                   <td><span class="compare-status compare-na">Not claimed</span></td>
                   <td><span class="compare-status compare-na">Not claimed</span></td>
                   <td>&ldquo;~99% AI-generated&rdquo;<span class="compare-note">Maintainer&rsquo;s own README.</span></td>
@@ -247,6 +255,19 @@ permalink: /compare.html
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <div class="card card-block" id="cred-hijack-note" style="margin-top:1.5rem;">
+            <h3 style="margin:0 0 0.5rem;"><span style="color:var(--aurora-1);">&dagger;</span> About the credential-hijack row</h3>
+            <p class="card-desc">
+              Upstream Sunshine persists the admin username, password hash, and salt to a JSON file at the path given by <code style="font-size:0.85em;">config::sunshine.credentials_file</code>. The first-run bootstrap route (<code style="font-size:0.85em;">/api/password</code> in <a href="https://github.com/LizardByte/Sunshine/blob/master/src/confighttp.cpp" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);">confighttp.cpp</a>) skips authentication when no username is configured &mdash; the conditional reads <code style="font-size:0.85em;">if (!config::sunshine.username.empty() &amp;&amp; !authenticate(...)) return;</code>. The intended use is initial account setup; the side effect is that a local Administrator who deletes the credentials file resets the host to first-run state, after which any network caller can POST new credentials and take ownership of the streaming service (paired clients, capture, input injection).
+            </p>
+            <p class="card-desc">
+              Apollo, Vibeshine, and Vibepollo all inherit this code path from Sunshine. LuminalShine moved credential storage out of a plaintext-path file and into the Windows Credential Manager vault under SYSTEM scope, encrypted with DPAPI under a master key that is TPM 2.0&ndash;bound on supported hardware (see <a href="https://github.com/NortheBridge/luminalshine/tree/main/src/cred_store" target="_blank" rel="noopener" style="color:var(--aurora-1);text-decoration:none;border-bottom:1px solid rgba(30,200,255,0.3);"><code style="font-size:0.85em;">src/cred_store/</code></a>). Closing the file-deletion bootstrap path requires SYSTEM-level access rather than Administrator, and the credential blob cannot be exfiltrated and decrypted on different hardware.
+            </p>
+            <p class="card-desc text-muted" style="font-size:0.86rem;">
+              <strong>Threat-model note:</strong> this is a local-admin issue, not a remote unauthenticated exploit. An attacker without Administrator on the host cannot trigger it. It is documented here as a security-model difference that motivated LuminalShine&rsquo;s credential-store rework, not as an active vulnerability disclosure &mdash; the underlying code is publicly visible in each upstream repository.
+            </p>
           </div>
         </section>
 
