@@ -254,6 +254,15 @@ namespace platf {
     return resolved;
   }
 
+  std::filesystem::path log_dir() {
+    // Currently colocated with config under `appdata()`. Kept as a separate
+    // accessor so a future migration can point logs at a dedicated
+    // `%ProgramData%\LuminalShine\logs\` subtree without touching every
+    // caller that constructs a log path. See `platf::log_dir()` in
+    // src/platform/common.h for the contract.
+    return appdata();
+  }
+
   std::string from_sockaddr(const sockaddr *const socket_address) {
     char data[INET6_ADDRSTRLEN] = {};
 

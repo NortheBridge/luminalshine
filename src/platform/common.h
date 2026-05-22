@@ -574,6 +574,22 @@ namespace platf {
 
   std::filesystem::path appdata();
 
+  /**
+   * @brief Root directory for log files.
+   *
+   * Today this returns the same path as `appdata()` — log files have always
+   * been colocated with config inside the appdata directory, so existing
+   * deployments and the log viewer / log-export endpoints keep working
+   * unchanged. The dedicated accessor exists so a future migration can
+   * relocate logs (e.g. to `%ProgramData%\LuminalShine\logs\` on Windows)
+   * by flipping a single platform implementation, instead of editing every
+   * call site that builds a log path.
+   *
+   * Callers that need the "where do logs live" answer should prefer this
+   * over `appdata()` so the future split lands without churn.
+   */
+  std::filesystem::path log_dir();
+
   std::string get_mac_address(const std::string_view &address);
 
   std::string from_sockaddr(const sockaddr *const);

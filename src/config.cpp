@@ -933,7 +933,11 @@ namespace config {
     .config_file = platf::appdata().string() + "/sunshine.conf",
     .port = 47989,
     .address_family = "ipv4",
-    .log_file = platf::appdata().string() + "/sunshine.log",
+    // Route through `platf::log_dir()` instead of `platf::appdata()` so the
+    // future move of log files into a dedicated logs/ subtree is a one-line
+    // platform-implementation flip rather than touching this default.
+    // Today both accessors return the same path.
+    .log_file = platf::log_dir().string() + "/sunshine.log",
     .notify_pre_releases = true,  // default-on so Insider Preview hosts get prerelease fixes; falls back to GA when none newer exists
     .system_tray = true,
     .session_token_ttl = std::chrono::hours {2},
