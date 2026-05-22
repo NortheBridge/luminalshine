@@ -854,6 +854,18 @@ table.compare-table {
   background: rgba(30, 200, 255, 0.04);
 }
 
+/* Override .spec-table tbody td:first-child { white-space: nowrap; }
+   which is inherited because compare-table also carries spec-table.
+   Without this, the label column refuses to wrap and long row headers
+   ("Local-admin single-file credential hijack", "Win 11 Insider
+   Preview (Canary/Dev)", "Approx. GitHub stars (at time of writing)")
+   render on one line and overflow into the LuminalShine column. */
+.compare-table tbody td:first-child {
+  white-space: normal;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}
+
 /* Pill labels are usually short; allow them to wrap onto a second line
    inside narrow cells rather than overflow the column. */
 .compare-table .compare-status {
