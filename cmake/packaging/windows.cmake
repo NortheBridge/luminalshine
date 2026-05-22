@@ -243,9 +243,21 @@ endif()
 
 set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}\\\\sunshine.ico")
 
-# The name of the directory that will be created in C:/Program files/
-# Keep install directory as Sunshine regardless of displayed product name
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "Sunshine")
+# The directory hierarchy created in C:\Program Files\.
+# Nested form "NortheBridge\LuminalShine" yields:
+#   C:\Program Files\NortheBridge\LuminalShine\
+# CPack generates the intermediate `NortheBridge` Directory entry alongside
+# the leaf `INSTALL_ROOT` in the WiX template, so MSI tracks both and the
+# standard RemoveFolders action removes the empty `NortheBridge\` parent
+# during uninstall provided no other NortheBridge product still owns it.
+#
+# Prior to 26.05.1 the install directory was "Sunshine"; users upgrading
+# from those builds have their pinned/desktop shortcut targets rewritten
+# to the new path by `Repoint-LegacyShortcuts` in
+# src_assets/windows/misc/migration/installer-migrations.ps1. MSI's own
+# MajorUpgrade machinery handles the file move (RemoveExistingProducts
+# uninstalls from the old path, the new install lays down at the new one).
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "NortheBridge\\LuminalShine")
 
 # Setting components groups and dependencies
 set(CPACK_COMPONENT_GROUP_CORE_EXPANDED true)
