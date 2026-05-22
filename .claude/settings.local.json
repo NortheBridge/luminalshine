@@ -143,7 +143,9 @@
       "Bash(curl -sS \"https://api.github.com/repos/Nonary/vibeshine/issues/189/comments\")",
       "Bash(python3 -c ' *)",
       "Bash(python3 -c \"import json,sys; c=json.load\\(sys.stdin\\)[0]; print\\('html_url:', c['html_url']\\); print\\('id:', c['id']\\)\")",
-      "WebFetch(domain:docs.lizardbyte.dev)"
+      "WebFetch(domain:docs.lizardbyte.dev)",
+      "Bash(python3 -c \"import yaml,sys; [yaml.safe_load\\(open\\(p\\)\\) for p in ['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/ci.yml']]; print\\('YAML OK'\\)\")",
+      "Bash(ruby -ryaml -e \"['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/ci.yml'].each { |f| YAML.load_file\\(f\\); puts \\\\\"#{f}: OK\\\\\" }\")"
     ],
     "deny": [],
     "ask": [],
