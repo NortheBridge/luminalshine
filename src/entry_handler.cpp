@@ -178,7 +178,17 @@ namespace service_ctrl {
         return;
       }
 
-      service_handle = OpenServiceA(scm_handle, "SunshineService", service_desired_access);
+      // Try the post-26.05.1 service name first, then fall back to the
+      // legacy `SunshineService` so this binary can still query/manage
+      // the prior service on hosts where the MSI rename hasn't finished
+      // (mid-upgrade, manual install, etc.). Both names point at the
+      // same logical Windows service — there is never both at once
+      // because the MSI install/uninstall pair around `ServiceInstall`
+      // tears the old name down before the new one comes up.
+      service_handle = OpenServiceA(scm_handle, "LuminalShineService", service_desired_access);
+      if (!service_handle) {
+        service_handle = OpenServiceA(scm_handle, "SunshineService", service_desired_access);
+      }
       if (!service_handle) {
         auto winerr = GetLastError();
         BOOST_LOG(error) << "OpenService() failed: "sv << winerr;

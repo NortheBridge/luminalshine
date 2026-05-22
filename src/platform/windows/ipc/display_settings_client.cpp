@@ -163,7 +163,8 @@ namespace platf::display_helper_client {
     if (pipe && pipe->is_connected()) {
       return true;
     }
-    BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe 'sunshine_display_helper'";
+    BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe '"
+                     << platf::display_helper_client::display_helper_pipe_name << "'";
     const int connect_timeout_ms = connect_timeout_override_ms.value_or(effective_connect_timeout());
     const auto connect_start = std::chrono::steady_clock::now();
     auto remaining_ms = [&]() -> int {
@@ -188,7 +189,7 @@ namespace platf::display_helper_client {
     if (remaining_ms() > 0) {
       auto creator_anon = []() -> std::unique_ptr<platf::dxgi::INamedPipe> {
         platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-        return ff.create_client("sunshine_display_helper");
+        return ff.create_client(platf::display_helper_client::display_helper_pipe_name);
       };
       pipe = std::make_unique<platf::dxgi::SelfHealingPipe>(creator_anon);
       if (pipe) {
@@ -202,7 +203,7 @@ namespace platf::display_helper_client {
       BOOST_LOG(debug) << "Display helper IPC: anonymous connect failed; trying named fallback";
       auto creator_named = []() -> std::unique_ptr<platf::dxgi::INamedPipe> {
         platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::NamedPipeFactory>());
-        return ff.create_client("sunshine_display_helper");
+        return ff.create_client(platf::display_helper_client::display_helper_pipe_name);
       };
       pipe = std::make_unique<platf::dxgi::SelfHealingPipe>(creator_named);
       if (pipe) {

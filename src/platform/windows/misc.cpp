@@ -308,6 +308,39 @@ namespace platf {
         return target;
       }
 
+      // Filename rename table applied during migration. The 26.05.1 rename
+      // changed `sunshine.log` to `luminalshine.log` and the per-helper
+      // siblings; doing the move and rename in one pass keeps the user
+      // from seeing two separate migration events for log files.
+      // Numeric-rollover suffixes (`.1`, `.bak`) are preserved.
+      static constexpr std::array<std::pair<const wchar_t *, const wchar_t *>, 5> kLogRenames = {{
+        {L"sunshine.log", L"luminalshine.log"},
+        {L"sunshine_display_helper.log", L"luminalshine_display_helper.log"},
+        {L"sunshine_playnite_launcher.log", L"luminalshine_playnite_launcher.log"},
+        {L"sunshine_wgc_helper.log", L"luminalshine_wgc_helper.log"},
+        {L"sunshine_playnite.log", L"luminalshine_playnite.log"},
+      }};
+
+      auto rename_legacy_log = [&](std::wstring name) -> std::wstring {
+        for (const auto &[from, to] : kLogRenames) {
+          const std::wstring from_w(from);
+          // Match `<from>` exactly, OR `<from>.<suffix>` (numeric rollover
+          // or `.bak`). Case-insensitive to handle any historical
+          // mixed-case writers.
+          if (name.size() == from_w.size() &&
+              std::equal(name.begin(), name.end(), from_w.begin(),
+                         [](wchar_t a, wchar_t b) { return std::towlower(a) == std::towlower(b); })) {
+            return to;
+          }
+          if (name.size() > from_w.size() + 1 && name[from_w.size()] == L'.' &&
+              std::equal(from_w.begin(), from_w.end(), name.begin(),
+                         [](wchar_t a, wchar_t b) { return std::towlower(a) == std::towlower(b); })) {
+            return std::wstring(to) + name.substr(from_w.size());
+          }
+        }
+        return name;
+      };
+
       for (auto it = std::filesystem::directory_iterator(legacy, ec);
            !ec && it != std::filesystem::directory_iterator();
            it.increment(ec)) {
@@ -329,7 +362,7 @@ namespace platf {
           continue;
         }
 
-        const auto dst_path = target / src_path.filename();
+        const auto dst_path = target / rename_legacy_log(src_name);
 
         // Prefer `rename` (atomic within a volume); fall back to
         // copy+remove on cross-volume errors or transient locks.
