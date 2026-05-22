@@ -814,20 +814,27 @@ table.compare-table {
   width: 100%;
   table-layout: fixed;
   font-size: 0.82rem;
+  /* Force wrapping on EVERY descendant so no long label / hyphenated
+     phrase can punch out of its column under table-layout: fixed. */
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
-/* First column (feature label) is slightly wider than the five project
-   columns, which share the remaining width evenly. With table-layout:
-   fixed the thead widths cascade down to every row. */
-.compare-table thead th:first-child { width: 17%; }
-.compare-table thead th:not(:first-child) { width: 16.6%; }
+/* Column widths come from the <colgroup>. Under table-layout: fixed
+   the browser strictly honours <col> widths, which is more reliable
+   than width declarations on thead th alone. Label column gets ~22%
+   so multi-word row headers ("Local-admin single-file credential
+   hijack") have actual room; the five project columns share the
+   remaining 78% (15.6% each). */
+.compare-table col.compare-col-label   { width: 22%; }
+.compare-table col.compare-col-project { width: 15.6%; }
 
 .compare-table thead th {
   text-align: left;
   vertical-align: bottom;
-  padding: 0.95rem 0.6rem;
+  padding: 0.95rem 0.55rem;
   font-size: 0.7rem;
-  word-wrap: break-word;
+  word-break: normal;
   overflow-wrap: anywhere;
 }
 
@@ -836,10 +843,10 @@ table.compare-table {
 }
 
 .compare-table tbody td {
-  padding: 0.75rem 0.6rem;
+  padding: 0.75rem 0.55rem;
   vertical-align: top;
   font-size: 0.82rem;
-  word-wrap: break-word;
+  word-break: normal;
   overflow-wrap: anywhere;
 }
 
