@@ -116,7 +116,7 @@
             <Shortcut Id="LuminalShineStartMenuShortcut"
                       Name="LuminalShine"
                       Description="Launch LuminalShine Web UI"
-                      Target="[INSTALL_ROOT]sunshine.exe"
+                      Target="[INSTALL_ROOT]luminalshine.exe"
                       Icon="ProductIcon.ico"
                       Arguments="--shortcut"
                       WorkingDirectory="INSTALL_ROOT">
@@ -176,18 +176,27 @@
   <Fragment>
     <DirectoryRef Id="DIR_Tools">
       <Component Id="SunshineSvc" Guid="*">
-        <!-- The service executable bound in at link-time via PayloadRoot binder path -->
-        <File Id="SunshineSvcExe" Source="!(bindpath.PayloadRoot)tools\sunshinesvc.exe" KeyPath="yes" />
+        <!-- The service executable bound in at link-time via PayloadRoot
+             binder path. The CMake post-build for the `sunshinesvc` target
+             (see tools/CMakeLists.txt) copies $<TARGET_FILE:sunshinesvc>
+             into wix_payload\tools\luminalshinesvc.exe, so this Source
+             always picks up the renamed binary regardless of platform. -->
+        <File Id="SunshineSvcExe" Source="!(bindpath.PayloadRoot)tools\luminalshinesvc.exe" KeyPath="yes" />
+        <!-- ServiceInstall short name renamed for 26.05.1 alongside the
+             executable. The legacy `SunshineService` name is removed by the
+             CtlStopSunshine ServiceControl earlier in this file plus the
+             KillProcsQuiet script below, so the upgrade is single-instance
+             at every step. -->
         <ServiceInstall
             Id="SunshineServiceInstall"
-            Name="SunshineService"
+            Name="LuminalShineService"
             DisplayName="LuminalShine Service"
             Type="ownProcess"
             Start="auto"
             ErrorControl="normal"
             Arguments="--service" />
         <ServiceControl Id="StartSunshineService"
-            Name="SunshineService"
+            Name="LuminalShineService"
             Start="install"
             Stop="both"
             Remove="uninstall"
@@ -258,26 +267,29 @@
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot;"/>
 
 
-    <!-- Guard NV prefs restore on uninstall: only run if sunshine.exe still
-         exists. Even when present, sunshine.exe can fail to load with
-         0xc0000135 (STATUS_DLL_NOT_FOUND) on rollback after a partial
-         install — its msys2 runtime DLLs may have been removed already. The
-         trailing `& exit /b 0` swallows whatever exit code sunshine.exe
-         produces so the rollback path doesn't surface a confusing 1603 in
-         the log; nv-prefs cleanup is best-effort, not load-bearing. -->
+    <!-- Guard NV prefs restore on uninstall: probe both the post-26.05.1
+         `luminalshine.exe` and the legacy `sunshine.exe` so a manual
+         uninstall of a half-migrated install still cleans up. Even when
+         present, the host binary can fail to load with 0xc0000135
+         (STATUS_DLL_NOT_FOUND) on rollback after a partial install — its
+         msys2 runtime DLLs may have been removed already. The trailing
+         `& exit /b 0` swallows whatever exit code the host produces so
+         the rollback path doesn't surface a confusing 1603 in the log;
+         nv-prefs cleanup is best-effort, not load-bearing. -->
     <CustomAction Id="SetRestoreNvPrefsUndo"
                  Property="RestoreNvPrefsUndo"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo)) &amp; exit /b 0"/>
+                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; --restore-nvprefs-undo) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --restore-nvprefs-undo)) &amp; exit /b 0"/>
 
-    <!-- Mirror of the NV prefs guard: only invoke sunshine.exe if it
+    <!-- Mirror of the NV prefs guard: only invoke the host exe if it
          still exists, and swallow its exit code so a rollback path
          after partial install doesn't trip the installer transaction.
          The CLI command itself is offline (it grabs the state mutex
          and calls cred_store::erase + tpm_seal::clear) so it doesn't
-         need the service to be running. -->
+         need the service to be running. Probes both the new and legacy
+         exe names for the same reason as the NV prefs guard above. -->
     <CustomAction Id="SetResetAdminCredentials"
                  Property="ResetAdminCredentials"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; reset-admin-credentials)) &amp; exit /b 0"/>
+                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; reset-admin-credentials) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; reset-admin-credentials)) &amp; exit /b 0"/>
 
 
     <CustomAction Id="SetUninstallMttVdd"
@@ -326,10 +338,10 @@
          sunshine_*.dll open on Insider Preview builds. -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
@@ -354,7 +366,7 @@
           <RegistryValue Name="DisplayVersion" Type="string" Value="[ProductVersion]" />
           <RegistryValue Name="Publisher" Type="string" Value="NortheBridge Foundation" />
           <RegistryValue Name="InstallLocation" Type="string" Value="[INSTALL_ROOT]" />
-          <RegistryValue Name="DisplayIcon" Type="string" Value="[INSTALL_ROOT]sunshine.exe" />
+          <RegistryValue Name="DisplayIcon" Type="string" Value="[INSTALL_ROOT]luminalshine.exe" />
           <RegistryValue Name="UninstallString" Type="string" Value="&quot;[INSTALL_ROOT]uninstall.exe&quot;" />
           <RegistryValue Name="QuietUninstallString" Type="string" Value="&quot;[INSTALL_ROOT]uninstall.exe&quot; /quiet" />
           <RegistryValue Name="NoModify" Type="integer" Value="1" />
@@ -377,13 +389,13 @@
         <Firewall:FirewallException xmlns:Firewall="http://schemas.microsoft.com/wix/FirewallExtension"
                                     Id="FE_SunshineExe"
                                     Name="LuminalShine"
-                                    Program="[INSTALL_ROOT]sunshine.exe"
+                                    Program="[INSTALL_ROOT]luminalshine.exe"
                                     Profile="all"
                                     Scope="any" />
         <Firewall:FirewallException xmlns:Firewall="http://schemas.microsoft.com/wix/FirewallExtension"
                                     Id="FE_SunshineSvcExe"
                                     Name="LuminalShine Service"
-                                    Program="[INSTALL_ROOT]tools\sunshinesvc.exe"
+                                    Program="[INSTALL_ROOT]tools\luminalshinesvc.exe"
                                     Profile="all"
                                     Scope="any" />
       </Component>

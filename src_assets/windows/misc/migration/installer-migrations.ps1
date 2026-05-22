@@ -181,6 +181,21 @@ function Repoint-LegacyShortcuts {
         return
     }
 
+    # 26.05.1 also renames the executables themselves. A pinned `.lnk` that
+    # used to point at `C:\Program Files\Sunshine\sunshine.exe` should now
+    # resolve to `C:\Program Files\NortheBridge\LuminalShine\luminalshine.exe`
+    # in one pass — so this map handles the *filename* component while the
+    # prefix replacement above handles the *directory* component.
+    $exeRenames = @{
+        'sunshine.exe' = 'luminalshine.exe'
+        'sunshinesvc.exe' = 'luminalshinesvc.exe'
+        'sunshine_display_helper.exe' = 'luminalshine_display_helper.exe'
+        'sunshine_wgc_capture.exe' = 'luminalshine_wgc_capture.exe'
+        'dxgi-info.exe' = 'luminalshine-dxgi-info.exe'
+        'audio-info.exe' = 'luminalshine-audio-info.exe'
+        'playnite-launcher.exe' = 'luminalshine-playnite-launcher.exe'
+    }
+
     $rewritten = 0
     try {
         foreach ($dir in $shortcutHosts) {
@@ -201,6 +216,18 @@ function Repoint-LegacyShortcuts {
                     }
                     $relative = $target.Substring($oldPrefix.Length)
                     $newTarget = Join-Path $newPrefix $relative
+
+                    # Rewrite the filename leaf in the new target. The leaf
+                    # match is case-insensitive so `Sunshine.exe`,
+                    # `sunshine.EXE`, etc. are all handled.
+                    $leaf = Split-Path -Path $newTarget -Leaf
+                    foreach ($oldLeaf in $exeRenames.Keys) {
+                        if ($leaf.Equals($oldLeaf, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $parent = Split-Path -Path $newTarget -Parent
+                            $newTarget = Join-Path $parent $exeRenames[$oldLeaf]
+                            break
+                        }
+                    }
 
                     $workdir = [string]$sc.WorkingDirectory
                     $newWorkdir = $workdir

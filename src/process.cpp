@@ -1515,12 +1515,12 @@ namespace proc {
 
       BOOST_LOG(info) << "Launching Playnite game via helper, id=" << _app.playnite_id;
       bool launched = false;
-      // Resolve launcher alongside sunshine.exe: tools\\playnite-launcher.exe
+      // Resolve launcher alongside luminalshine.exe: tools\\luminalshine-playnite-launcher.exe
       try {
         WCHAR exePathW[MAX_PATH] = {};
         GetModuleFileNameW(nullptr, exePathW, ARRAYSIZE(exePathW));
         std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
-        std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
+        std::filesystem::path launcher = exeDir / L"tools" / L"luminalshine-playnite-launcher.exe";
         std::string lpath = launcher.string();
         std::string cmd = std::string("\"") + lpath + "\" --game-id " + _app.playnite_id;
         // Pass graceful-exit timeout to launcher for cleanup behavior
@@ -1593,7 +1593,7 @@ namespace proc {
         WCHAR exePathW[MAX_PATH] = {};
         GetModuleFileNameW(nullptr, exePathW, ARRAYSIZE(exePathW));
         std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
-        std::filesystem::path launcher = exeDir / L"tools" / L"playnite-launcher.exe";
+        std::filesystem::path launcher = exeDir / L"tools" / L"luminalshine-playnite-launcher.exe";
         std::string lpath = launcher.string();
         std::string cmd = std::string("\"") + lpath + "\" --fullscreen";
         try {

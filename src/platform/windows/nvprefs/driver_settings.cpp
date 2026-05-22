@@ -10,8 +10,19 @@
 
 namespace {
 
-  const auto sunshine_application_profile_name = L"SunshineStream";
-  const auto sunshine_application_path = L"sunshine.exe";
+  // NVIDIA driver per-application profile keyed on the executable filename.
+  // The profile name is the *NVAPI profile* identifier; the path is what the
+  // driver matches against running processes. Both rename to LuminalShine
+  // for 26.05.1. A pre-existing `SunshineStream` profile from a previous
+  // install becomes an orphaned cosmetic entry in the NVIDIA Control Panel
+  // (no `sunshine.exe` ever runs again to match it) — we deliberately do
+  // not delete the legacy profile because the open-source NVAPI SDK
+  // bundled under third-party/nvapi-open-source-sdk does not expose
+  // `NvAPI_DRS_DeleteProfile`. Users can remove it manually via the
+  // Control Panel if they care; the new profile below carries all the
+  // settings the driver actually applies to the renamed luminalshine.exe.
+  const auto sunshine_application_profile_name = L"LuminalShineStream";
+  const auto sunshine_application_path = L"luminalshine.exe";
 
   void nvapi_error_message(NvAPI_Status status) {
     NvAPI_ShortString message = {};
@@ -272,7 +283,7 @@ namespace nvprefs {
     if (!get_nvprefs_options().sunshine_high_power_mode) {
       if (status == NVAPI_OK &&
           setting.settingLocation == NVDRS_CURRENT_PROFILE_LOCATION) {
-        // User requested to not use high power mode for sunshine.exe,
+        // User requested to not use high power mode for luminalshine.exe,
         // remove the setting from application profile if it's been set previously
 
         status = NvAPI_DRS_DeleteProfileSetting(session_handle, profile_handle, PREFERRED_PSTATE_ID);

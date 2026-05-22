@@ -105,12 +105,18 @@ namespace nvprefs {
       return false;
     }
 
-    // Modify and save sunshine.exe application profile settings, if needed
+    // Modify and save luminalshine.exe application profile settings, if needed.
+    // A pre-existing `SunshineStream` profile from a prior install becomes a
+    // cosmetic orphan in the NVIDIA Control Panel after this rename — see
+    // the comment on `sunshine_application_profile_name` in driver_settings.cpp
+    // for why we don't programmatically remove it.
     bool modified = false;
     if (!pimpl->driver_settings.check_and_modify_application_profile(modified)) {
       error_message("Failed to modify application profile settings");
       return false;
-    } else if (modified) {
+    }
+
+    if (modified) {
       if (pimpl->driver_settings.save_settings()) {
         info_message("Modified application profile settings");
       } else {
