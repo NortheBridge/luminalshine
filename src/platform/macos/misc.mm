@@ -98,6 +98,12 @@ namespace platf {
     return fs::path {homedir} / ".config/sunshine"sv;
   }
 
+  fs::path log_dir() {
+    // macOS keeps logs colocated with config under the resolved appdata path.
+    // The accessor exists so cross-platform callers can use a single API.
+    return appdata();
+  }
+
   using ifaddr_t = util::safe_ptr<ifaddrs, freeifaddrs>;
 
   ifaddr_t get_ifaddrs() {

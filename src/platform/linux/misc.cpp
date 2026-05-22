@@ -204,6 +204,12 @@ namespace platf {
     return config_path;
   }
 
+  fs::path log_dir() {
+    // Linux keeps logs colocated with config under the resolved appdata path.
+    // The accessor exists so cross-platform callers can use a single API.
+    return appdata();
+  }
+
   std::string from_sockaddr(const sockaddr *const ip_addr) {
     char data[INET6_ADDRSTRLEN] = {};
 
