@@ -151,7 +151,8 @@
       "Bash(git submodule *)",
       "Bash(git checkout *)",
       "Bash(git fetch *)",
-      "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-web.yml','utf8'\\)\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-windows.yml','utf8'\\)\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-web.yml','utf8'\\)\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-windows.yml','utf8'\\)\\); console.log\\('OK'\\)\")",
+      "Bash(echo \"exit_status=$?\")"
     ],
     "deny": [],
     "ask": [],
