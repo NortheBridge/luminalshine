@@ -95,6 +95,144 @@ function Test-JsonFileParseable {
     }
 }
 
+function Repoint-LegacyShortcuts {
+    <#
+    .SYNOPSIS
+        Rewrite .lnk files whose target points at the pre-26.05.1 install root.
+
+    .DESCRIPTION
+        The MSI's MajorUpgrade machinery uninstalls files from the old install
+        directory (C:\Program Files\Sunshine\) and re-lays them down at the new
+        location (C:\Program Files\NortheBridge\LuminalShine\). MSI-authored
+        shortcuts (Start Menu, etc.) are re-created automatically as part of
+        the install, but USER-pinned shortcuts (taskbar, Desktop, manual Start
+        Menu entries) embed an absolute target path and would break silently.
+
+        This function walks every user profile on the machine and rewrites any
+        .lnk whose TargetPath (and WorkingDirectory) begins with the old root.
+        It runs from the RunInstallerMigrations custom action which is flagged
+        Return="ignore" in WiX, so any failure here is non-fatal to the
+        install transaction. Per-file failures are logged and we continue.
+
+        The custom action runs as SYSTEM (Impersonate="no"), which is why we
+        enumerate `C:\Users\<profile>\...` directly instead of using
+        [Environment]::GetFolderPath — that would resolve relative to the
+        SYSTEM profile, not the user.
+
+    .PARAMETER OldInstallRoot
+        Absolute path of the pre-migration install directory.
+
+    .PARAMETER NewInstallRoot
+        Absolute path of the post-migration install directory.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OldInstallRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$NewInstallRoot
+    )
+
+    # Append a trailing backslash so a path like "C:\Program Files\Sunshine"
+    # matches the prefix of "C:\Program Files\Sunshine\sunshine.exe" but
+    # NOT of "C:\Program Files\Sunshine2\..." (any sibling that happens to
+    # share a name prefix).
+    $oldPrefix = ($OldInstallRoot.TrimEnd('\', '/')) + '\'
+    $newPrefix = ($NewInstallRoot.TrimEnd('\', '/')) + '\'
+
+    $shortcutHosts = New-Object System.Collections.Generic.List[string]
+    try {
+        $usersRoot = Join-Path $env:SystemDrive 'Users'
+        if (Test-Path -LiteralPath $usersRoot) {
+            foreach ($profile in Get-ChildItem -LiteralPath $usersRoot -Directory -ErrorAction SilentlyContinue) {
+                $candidates = @(
+                    (Join-Path $profile.FullName 'Desktop'),
+                    (Join-Path $profile.FullName 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'),
+                    (Join-Path $profile.FullName 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs')
+                )
+                foreach ($c in $candidates) {
+                    if (Test-Path -LiteralPath $c) { $shortcutHosts.Add($c) }
+                }
+            }
+        }
+        # Public Desktop: shortcuts visible to every user, owned by no one user.
+        $publicDesktop = Join-Path $env:SystemDrive 'Users\Public\Desktop'
+        if (Test-Path -LiteralPath $publicDesktop) { $shortcutHosts.Add($publicDesktop) }
+        # Machine-wide Start Menu — MSI re-creates its own entries here on
+        # upgrade, but third-party install managers and group-policy
+        # deployments sometimes place .lnks here too.
+        $machineStartMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+        if (Test-Path -LiteralPath $machineStartMenu) { $shortcutHosts.Add($machineStartMenu) }
+    } catch {
+        Write-Output ("Repoint-LegacyShortcuts: host enumeration failed: {0}" -f $_.Exception.Message)
+        return
+    }
+
+    $shortcutHosts = $shortcutHosts | Select-Object -Unique
+    if (-not $shortcutHosts) {
+        Write-Output 'Repoint-LegacyShortcuts: no shortcut directories found to scan.'
+        return
+    }
+
+    $shell = $null
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+    } catch {
+        Write-Output ("Repoint-LegacyShortcuts: WScript.Shell unavailable ({0}); skipping." -f $_.Exception.Message)
+        return
+    }
+
+    $rewritten = 0
+    try {
+        foreach ($dir in $shortcutHosts) {
+            $links = $null
+            try {
+                $links = Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -File -Recurse -ErrorAction SilentlyContinue
+            } catch {
+                Write-Output ("Repoint-LegacyShortcuts: could not enumerate {0}: {1}" -f $dir, $_.Exception.Message)
+                continue
+            }
+            foreach ($link in $links) {
+                try {
+                    $sc = $shell.CreateShortcut($link.FullName)
+                    $target = [string]$sc.TargetPath
+                    if ([string]::IsNullOrEmpty($target)) { continue }
+                    if (-not $target.StartsWith($oldPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        continue
+                    }
+                    $relative = $target.Substring($oldPrefix.Length)
+                    $newTarget = Join-Path $newPrefix $relative
+
+                    $workdir = [string]$sc.WorkingDirectory
+                    $newWorkdir = $workdir
+                    if (-not [string]::IsNullOrEmpty($workdir) -and
+                        $workdir.StartsWith($oldPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $newWorkdir = Join-Path $newPrefix $workdir.Substring($oldPrefix.Length)
+                    }
+
+                    $sc.TargetPath = $newTarget
+                    $sc.WorkingDirectory = $newWorkdir
+                    $sc.Save()
+                    $rewritten++
+                    Write-Output ("Repoint-LegacyShortcuts: repointed {0}: {1} -> {2}" -f $link.FullName, $target, $newTarget)
+                } catch {
+                    Write-Output ("Repoint-LegacyShortcuts: failed to repoint {0}: {1}" -f $link.FullName, $_.Exception.Message)
+                    continue
+                }
+            }
+        }
+    } finally {
+        if ($shell) {
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null } catch {}
+        }
+    }
+
+    if ($rewritten -gt 0) {
+        Write-Output ("Repoint-LegacyShortcuts: rewrote {0} legacy-install-path shortcut(s)." -f $rewritten)
+    } else {
+        Write-Output 'Repoint-LegacyShortcuts: no shortcuts referenced the legacy install path.'
+    }
+}
+
 function Update-SplitFrameEncodingInConfig {
     param(
         [Parameter(Mandatory = $true)]
@@ -316,6 +454,20 @@ foreach ($jsonPath in $candidateJsonFiles) {
 
 if (-not $changedAny) {
     Write-Output 'No installer config migrations were needed.'
+}
+
+# Repoint pinned/desktop/start-menu shortcuts left over from the
+# pre-26.05.1 install layout at C:\Program Files\Sunshine\. This
+# only rewrites .lnk files; MSI re-creates its own shortcuts on
+# upgrade automatically, and the C++ runtime carries the same logic
+# on first launch for anything we miss here (e.g. user logged out
+# during the install).
+try {
+    Repoint-LegacyShortcuts `
+        -OldInstallRoot 'C:\Program Files\Sunshine' `
+        -NewInstallRoot 'C:\Program Files\NortheBridge\LuminalShine'
+} catch {
+    Write-Output ("Repoint-LegacyShortcuts top-level failure: {0}" -f $_.Exception.Message)
 }
 
 if ($transcriptPath) {
