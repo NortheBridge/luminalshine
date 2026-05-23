@@ -29,6 +29,7 @@
       <ComponentRef Id="Fw_Exceptions"/>
       <ComponentRef Id="StartMenuShortcut"/>
       <ComponentRef Id="ReconfigureStartMenuShortcut"/>
+      <ComponentRef Id="ResetAdminStartMenuShortcut"/>
       <ComponentRef Id="SudoVdaRegistryDefaults"/>
       <ComponentRef Id="ArpCustomUninstallEntry"/>
     </Feature>

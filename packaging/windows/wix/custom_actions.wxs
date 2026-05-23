@@ -200,6 +200,30 @@
             </Shortcut>
             <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="ReconfigureStartMenu" Type="integer" Value="1" KeyPath="yes" />
           </Component>
+          <!-- Reset Admin Password shortcut: launches uninstall.exe with
+               the `reset-admin` flag (double-dash prefix), which after a
+               confirmation prompt drops a sentinel file at
+               %ProgramData%\LuminalShine\config\.reset_admin_credentials_pending
+               and bounces LuminalShineService. The service-side handler in
+               src/main.cpp picks up the marker on its next startup and
+               runs the same in-process erase the CLI subcommand uses.
+               Lives in its own component for the same reason as the
+               Reconfigure shortcut above (MSI re-asserts independently
+               of the other shortcuts). XML-comment-syntax note: avoid
+               literal double-dash sequences inside this comment because
+               REXML and other strict XML parsers reject them. -->
+          <Component Id="ResetAdminStartMenuShortcut" Guid="{C9F1E2B0-3A8D-4F1C-95E2-7B6A0D5F4C8E}">
+            <Shortcut Id="LuminalShineResetAdminShortcut"
+                      Name="Reset LuminalShine Admin Password"
+                      Description="Clear the saved Web UI admin login so you can create a new one"
+                      Target="[INSTALL_ROOT]uninstall.exe"
+                      Icon="ProductIcon.ico"
+                      Arguments="--reset-admin"
+                      WorkingDirectory="INSTALL_ROOT">
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
+            </Shortcut>
+            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="ResetAdminStartMenu" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
         </Directory>
       </Directory>
     </DirectoryRef>
@@ -376,9 +400,24 @@
          and calls cred_store::erase + tpm_seal::clear) so it doesn't
          need the service to be running. Probes both the new and legacy
          exe names for the same reason as the NV prefs guard above. -->
+    <!-- The luminalshine.exe argv dispatcher in src/config.cpp around
+         line 1891 only recognizes subcommands prefixed with a double-dash.
+         Without it, the binary silently falls through to a full service
+         start instead of running the reset, which means this entire
+         ResetAdminCredentials custom action was a no-op in shipped releases
+         through 26.05.0-rc3 — tracked down during 26.05.0-rc3.hfx3
+         dogfooding when neither this action nor a bare invocation of
+         `luminalshine.exe reset-admin-credentials` (also missing the
+         double-dash) actually cleared a stuck admin credential. Both
+         invocations in the Value attribute below now correctly route to
+         src/main.cpp:81's dispatcher, which calls into
+         entry_handler::reset_admin_credentials, which in turn calls
+         cred_store::erase + tpm_seal::clear. XML-comment-syntax note:
+         this comment intentionally avoids literal double-dash sequences
+         because REXML and other strict XML parsers reject them. -->
     <CustomAction Id="SetResetAdminCredentials"
                  Property="ResetAdminCredentials"
-                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; reset-admin-credentials) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; reset-admin-credentials)) &amp; exit /b 0"/>
+                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; --reset-admin-credentials) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --reset-admin-credentials)) &amp; exit /b 0"/>
 
 
     <CustomAction Id="SetUninstallMttVdd"
