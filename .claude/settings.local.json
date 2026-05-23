@@ -154,14 +154,16 @@
       "Bash(node -e \"const y=require\\('/Users/Avalon/Git/luminalshine/src_assets/common/assets/web/node_modules/js-yaml'\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-web.yml','utf8'\\)\\); y.load\\(require\\('fs'\\).readFileSync\\('.github/workflows/coverage-windows.yml','utf8'\\)\\); console.log\\('OK'\\)\")",
       "Bash(echo \"exit_status=$?\")",
       "Bash(grep -n \"platform/windows/input\\\\|platform/windows/misc\\\\|add_library.*sunshine\\\\|target_sources\" /Users/Glazo/Git/luminalshine/cmake/targets/common.cmake | head -30)",
-      "Read(//Users/Glazo/Git/luminalshine/cmake/targets/**)"
+      "Read(//Users/Glazo/Git/luminalshine/cmake/targets/**)",
+      "Bash(awk '$1==\"160000\"{print $4}')"
     ],
     "deny": [],
     "ask": [],
     "additionalDirectories": [
       "/tmp",
       "/private/tmp",
-      "/Users/Avalon/Git/luminalshine/.git/modules/third-party"
+      "/Users/Avalon/Git/luminalshine/.git/modules/third-party",
+      "/Users/Avalon/Git/luminalshine/.git/modules/packaging/linux/flatpak/deps"
     ]
   }
 }
