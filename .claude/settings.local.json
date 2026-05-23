@@ -160,7 +160,8 @@
     "ask": [],
     "additionalDirectories": [
       "/tmp",
-      "/private/tmp"
+      "/private/tmp",
+      "/Users/Avalon/Git/luminalshine/.git/modules/third-party"
     ]
   }
 }
