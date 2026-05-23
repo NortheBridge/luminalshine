@@ -5156,8 +5156,14 @@ namespace LuminalShineInstaller {
         // Both pickers failed. Tell the user something instead of
         // making the Browse button silently no-op. Aggregate both
         // exceptions so a maintainer reading the dialog can diagnose
-        // either layer.
-        var detail = "Modern picker: " + modernFailure?.Message
+        // either layer. Explicit null check rather than C# 6's `?.`
+        // operator — the .NET Framework 4.x csc.exe that
+        // build_bootstrapper.ps1 uses rejects null-conditional
+        // syntax with CS1525 ("Invalid expression term '.'") /
+        // CS1003 ("Syntax error, ':' expected"). Same compat lane
+        // as the WpfOwnerShim read-only auto-property fix in #15.
+        var modernMessage = modernFailure == null ? "(none)" : modernFailure.Message;
+        var detail = "Modern picker: " + modernMessage
                    + "\nLegacy picker: " + legacyEx.Message;
         try {
           System.Windows.MessageBox.Show(
