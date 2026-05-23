@@ -254,6 +254,22 @@ namespace cred_store {
     // done (PR 6 lands that discipline on the verification paths).
     CredFree(cred);
     if (raw.empty()) {
+      // Self-heal: CredRead returned success with a zero-byte blob, which
+      // is broken state — the entry registered but holds nothing usable.
+      // Without cleaning up, the next start sees the same broken entry,
+      // the web UI shows a login form (because the entry "exists") that
+      // can never authenticate, and the user is locked out. Erase it so
+      // the next start observes "no entry" → first-time setup → recovery.
+      // The same self-heal pattern handles the matching reload_user_creds
+      // case in src/httpcommon.cpp where the blob loads non-empty but
+      // fails to parse.
+      BOOST_LOG(warning) << "cred_store(wcm): credential entry has empty blob; "
+                         << "erasing so first-time setup can recover.";
+      if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
+        BOOST_LOG(warning) << "cred_store(wcm): CredDelete during self-heal failed "
+                           << "(err=" << GetLastError() << "); manual reset may be "
+                           << "needed via the Reset Admin Password shortcut.";
+      }
       return false;
     }
 
@@ -264,10 +280,19 @@ namespace cred_store {
     // subsequent save will rewrite them as plain.
     if (tpm_seal::looks_sealed(raw)) {
       if (!tpm_seal::unseal(raw, out)) {
+        // Do NOT auto-delete on unseal failure. The TPM can be in a
+        // transient unavailable state (driver hiccup, suspended state,
+        // policy change) where the key is still good but the unwrap
+        // failed *this time*. Auto-deleting would permanently destroy
+        // recoverable credentials in those windows. Instead, leave the
+        // entry alone, log loudly, and rely on the user-driven Reset
+        // Admin Password shortcut for the truly-unrecoverable case.
         BOOST_LOG(error) << "cred_store(wcm): credential entry is TPM-sealed but "
                          << "unseal failed; the credential cannot be read on this "
-                         << "host. Use Troubleshooting -> Reset Admin Credentials "
-                         << "to recover.";
+                         << "host. Use the Reset LuminalShine Admin Password "
+                         << "shortcut in the Start Menu to recover (preserves "
+                         << "paired clients and apps; only the admin login is "
+                         << "reset).";
         return false;
       }
       return !out.empty();

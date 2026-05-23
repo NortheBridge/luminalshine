@@ -588,15 +588,50 @@ namespace http {
       crypto::secure_wipe(blob);
     });
     pt::ptree inputTree;
+    bool parse_ok = false;
     try {
       std::istringstream in {blob};
       pt::read_json(in, inputTree);
+      parse_ok = true;
     } catch (const std::exception &) {
+      parse_ok = false;
+    }
+    // Self-heal: if cred_store::load returned a non-empty blob but we
+    // can't parse it as JSON (or the parsed object is missing the
+    // username/password/salt triplet required to verify a login),
+    // the stored credential is unusable for auth. Treat the entry as
+    // "doesn't exist" *and* erase it from the underlying store so the
+    // next user_creds_exist call observes a truly clean state and the
+    // web UI lands on first-time setup instead of presenting an
+    // un-authenticable login form.
+    //
+    // Common causes that put a credential into this state:
+    //   - Stored under an older serialization the current build no
+    //     longer understands (e.g. format drift on a major migration).
+    //   - On-disk corruption / partial write of the underlying
+    //     credentials file before the WCM import.
+    //   - WCM blob was written by a third-party tool with a different
+    //     structure.
+    //
+    // Erasure is best-effort; we still return false either way so the
+    // caller branches into setup-needed regardless of erase outcome.
+    const bool fields_present = parse_ok &&
+      inputTree.find("username") != inputTree.not_found() &&
+      inputTree.find("password") != inputTree.not_found() &&
+      inputTree.find("salt") != inputTree.not_found();
+    if (!fields_present) {
+      BOOST_LOG(warning) << "user_creds_exist: stored credential at "
+                         << file << " is unparseable or missing required fields; "
+                         << "erasing so first-time setup can recover.";
+      if (!cred_store::erase(file)) {
+        BOOST_LOG(warning) << "user_creds_exist: cred_store::erase failed during "
+                           << "self-heal; the next login attempt will fail again "
+                           << "until the Reset LuminalShine Admin Password "
+                           << "shortcut is used.";
+      }
       return false;
     }
-    return inputTree.find("username") != inputTree.not_found() &&
-           inputTree.find("password") != inputTree.not_found() &&
-           inputTree.find("salt") != inputTree.not_found();
+    return true;
   }
 
   // Caller must hold statefile::state_mutex() so the file we read isn't

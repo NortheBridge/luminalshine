@@ -68,6 +68,17 @@ namespace LuminalShineInstaller {
         var exitCode = InstallerRunner.RelaunchSelfElevated(args);
         return exitCode;
       }
+      if (parsed.ResetAdminRequested
+          && !parsed.InternalElevatedInstall
+          && !parsed.InternalElevatedUninstall) {
+        // Reset-admin needs to drop a marker file under %ProgramData% and
+        // call sc.exe stop/start on LuminalShineService; both require admin.
+        // Same elevate-then-restart pattern as Reconfigure above.
+        if (!InstallerRunner.IsProcessElevated()) {
+          return InstallerRunner.RelaunchSelfElevated(args);
+        }
+        return InstallerRunner.RunAdminCredentialReset();
+      }
       if (parsed.UninstallUiRequested && !parsed.ShowUi && !parsed.InternalElevatedUninstall) {
         var uninstallResult = InstallerRunner.RunInteractiveUninstall(parsed, false, false);
         if (!string.IsNullOrWhiteSpace(uninstallResult.Message)) {
@@ -2421,6 +2432,14 @@ namespace LuminalShineInstaller {
     /// existing install is present, so this token mainly exists to
     /// document intent and avoid the arg leaking through to msiexec.
     private static readonly string[] ReconfigureTokens = { "--reconfigure" };
+    /// `--reset-admin` is the entry point used by the Start Menu
+    /// "Reset LuminalShine Admin Password" shortcut. The bootstrapper
+    /// elevates, confirms with the user, drops a marker file in the
+    /// service config dir, and bounces LuminalShineService. The
+    /// service-side handler in src/main.cpp picks up the marker on
+    /// the next startup and runs the same in-process erase the
+    /// `--reset-admin-credentials` CLI uses, then deletes the marker.
+    private static readonly string[] ResetAdminTokens = { "--reset-admin" };
     private static readonly string[] QuietTokens = { "/quiet", "/qn", "/qb", "/passive" };
     private const string InternalElevatedInstallToken = "--internal-elevated-install";
     private const string InternalElevatedUninstallToken = "--internal-elevated-uninstall";
@@ -2449,6 +2468,10 @@ namespace LuminalShineInstaller {
     /// install scripts directly instead of going through msiexec (which
     /// uninstall.exe couldn't do anyway because it has no embedded MSI).
     public bool ReconfigureRequested { get; set; }
+    /// True when `--reset-admin` was supplied on the command line. Triggers
+    /// the marker-file based admin credential reset; see ResetAdminTokens
+    /// above for the full handshake with the service-side handler.
+    public bool ResetAdminRequested { get; set; }
     public bool InternalElevatedInstall { get; set; }
     public bool InternalElevatedUninstall { get; set; }
     public string InternalInstallPath { get; set; }
@@ -2501,6 +2524,14 @@ namespace LuminalShineInstaller {
           // a quiet msiexec passthrough.
           showUiFlag = true;
           parsed.ReconfigureRequested = true;
+          continue;
+        }
+        if (ResetAdminTokens.Contains(arg, StringComparer.OrdinalIgnoreCase)) {
+          // Same rationale as ReconfigureRequested: the Start Menu shortcut
+          // launches us, we want UI for the confirmation dialog, never fall
+          // through to a silent msiexec pass.
+          showUiFlag = true;
+          parsed.ResetAdminRequested = true;
           continue;
         }
         if (string.Equals(arg, InternalElevatedInstallToken, StringComparison.OrdinalIgnoreCase)) {
@@ -4904,6 +4935,150 @@ namespace LuminalShineInstaller {
     /// the UAC prompt was declined.
     internal static int RelaunchSelfElevated(IReadOnlyList<string> arguments) {
       return RunElevatedBootstrapper(arguments ?? new string[0]);
+    }
+
+    /// User-facing admin credential reset flow, invoked by the Start Menu
+    /// "Reset LuminalShine Admin Password" shortcut (via `--reset-admin`).
+    ///
+    /// The actual credential erase happens in the LuminalShineService process
+    /// (which runs as LocalSystem, the only identity that can `CredDeleteW`
+    /// the SYSTEM-vault entry where the credential lives). The bootstrapper
+    /// is elevated-Administrator at this point but NOT SYSTEM, so it can't
+    /// touch the vault directly — instead it hands off via a marker file:
+    ///
+    ///   1. Confirm intent with the user via a MessageBox.
+    ///   2. Drop an empty sentinel at
+    ///        %ProgramData%\LuminalShine\config\.reset_admin_credentials_pending
+    ///      (the same path src/main.cpp checks on startup).
+    ///   3. Stop LuminalShineService, then start it again. The service-side
+    ///      handler in main.cpp sees the marker, calls the in-process
+    ///      args::reset_admin_credentials() helper (which is the same path
+    ///      `--reset-admin-credentials` uses), deletes the marker, and
+    ///      continues normal startup.
+    ///   4. Show a success/failure MessageBox with next steps.
+    ///
+    /// Returns 0 on success or user-cancel, non-zero on failure.
+    internal static int RunAdminCredentialReset() {
+      const string title = "Reset LuminalShine Admin Password";
+      var confirm = System.Windows.Forms.MessageBox.Show(
+        "This will clear the saved LuminalShine admin login. The next visit to" +
+        " https://localhost:47990 will prompt you to create a new admin" +
+        " username and password.\n\n" +
+        "Paired Moonlight clients, your apps list, and all other settings" +
+        " are NOT affected — only the Web UI admin login is reset.\n\n" +
+        "Continue?",
+        title,
+        System.Windows.Forms.MessageBoxButtons.YesNo,
+        System.Windows.Forms.MessageBoxIcon.Question,
+        System.Windows.Forms.MessageBoxDefaultButton.Button2);
+      if (confirm != System.Windows.Forms.DialogResult.Yes) {
+        return 0;
+      }
+
+      // Build the marker path. We do NOT shell out to the service for the
+      // appdata resolution — we hard-code the canonical layout because the
+      // bootstrapper can't easily ask the service binary "where is your
+      // appdata?" without spawning it, and the path has been stable since
+      // platf::appdata() was introduced. Keep this in sync with
+      // src/platform/windows/misc.cpp::appdata().
+      string markerPath;
+      try {
+        var commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var configDir = Path.Combine(commonAppData, "LuminalShine", "config");
+        Directory.CreateDirectory(configDir);
+        markerPath = Path.Combine(configDir, ".reset_admin_credentials_pending");
+        File.WriteAllText(markerPath, "marker written by uninstall.exe --reset-admin at "
+          + DateTime.UtcNow.ToString("o") + "\n");
+      } catch (Exception ex) {
+        System.Windows.Forms.MessageBox.Show(
+          "Could not write the reset marker file:\n\n" + ex.Message + "\n\n" +
+          "The admin password has NOT been reset. Try running this shortcut as" +
+          " Administrator if you weren't prompted to elevate.",
+          title,
+          System.Windows.Forms.MessageBoxButtons.OK,
+          System.Windows.Forms.MessageBoxIcon.Error);
+        return 1;
+      }
+
+      // Bounce the service. sc.exe stop is best-effort — the service may
+      // already be stopped, in which case sc.exe returns 1062 ("service has
+      // not been started") which we treat as success. Same for sc.exe start
+      // if the service is already running (1056).
+      string stopOutput, startOutput;
+      int stopExit = RunSc("stop", out stopOutput);
+      // Wait briefly for the service to actually settle into a stopped state;
+      // sc.exe stop returns immediately but the SCM may take a moment to
+      // process the stop request.
+      System.Threading.Thread.Sleep(2000);
+      int startExit = RunSc("start", out startOutput);
+
+      // 1062 = "service has not been started" (already stopped) — fine for stop
+      // 1056 = "an instance of the service is already running" — fine for start
+      bool stopOk = stopExit == 0 || stopExit == 1062;
+      bool startOk = startExit == 0 || startExit == 1056;
+
+      if (!stopOk || !startOk) {
+        // Try to clean up the marker so a future service restart doesn't
+        // un-expectedly reset credentials in the background — though the
+        // marker itself is harmless if it lingers (the next legit restart
+        // would process it). Best-effort.
+        try { File.Delete(markerPath); } catch { }
+
+        var detail = "";
+        if (!stopOk) detail += "sc.exe stop: exit " + stopExit + " — " + stopOutput.Trim() + "\n";
+        if (!startOk) detail += "sc.exe start: exit " + startExit + " — " + startOutput.Trim() + "\n";
+        System.Windows.Forms.MessageBox.Show(
+          "Could not bounce LuminalShineService cleanly. The reset has NOT" +
+          " completed.\n\n" + detail +
+          "\nTry restarting the LuminalShineService manually (Services.msc) " +
+          "or rebooting; the marker file will be processed on the next start.",
+          title,
+          System.Windows.Forms.MessageBoxButtons.OK,
+          System.Windows.Forms.MessageBoxIcon.Warning);
+        return startOk ? 0 : 1;
+      }
+
+      System.Windows.Forms.MessageBox.Show(
+        "Admin login reset.\n\n" +
+        "Open https://localhost:47990 in your browser to create a new admin" +
+        " username and password.",
+        title,
+        System.Windows.Forms.MessageBoxButtons.OK,
+        System.Windows.Forms.MessageBoxIcon.Information);
+      return 0;
+    }
+
+    /// Run sc.exe with a single verb against LuminalShineService and capture
+    /// stdout for diagnostic purposes. Returns the process exit code.
+    private static int RunSc(string verb, out string output) {
+      output = "";
+      try {
+        var psi = new System.Diagnostics.ProcessStartInfo {
+          FileName = Path.Combine(Environment.SystemDirectory, "sc.exe"),
+          Arguments = verb + " LuminalShineService",
+          UseShellExecute = false,
+          RedirectStandardOutput = true,
+          RedirectStandardError = true,
+          CreateNoWindow = true
+        };
+        using (var proc = System.Diagnostics.Process.Start(psi)) {
+          if (proc == null) {
+            return -1;
+          }
+          var stdout = proc.StandardOutput.ReadToEnd();
+          var stderr = proc.StandardError.ReadToEnd();
+          if (!proc.WaitForExit(30000)) {
+            try { proc.Kill(); } catch { }
+            output = "timeout";
+            return -1;
+          }
+          output = (stdout + stderr).Trim();
+          return proc.ExitCode;
+        }
+      } catch (Exception ex) {
+        output = ex.Message;
+        return -1;
+      }
     }
 
     private static string BuildResultMessage(string operationName, int exitCode, string logPath) {
