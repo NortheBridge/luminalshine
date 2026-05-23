@@ -31,6 +31,7 @@
   #include <shobjidl.h>
 
   #include "src/display_helper_integration.h"
+  #include "src/platform/common.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/playnite_integration.h"
@@ -249,6 +250,59 @@ int main(int argc, char *argv[]) {
 
     return fn->second(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
   }
+
+#ifdef _WIN32
+  // Marker-file driven admin-credential reset.
+  //
+  // The "Reset LuminalShine Admin Password" Start Menu shortcut (added in
+  // packaging/windows/wix/custom_actions.wxs) routes through the lightweight
+  // uninstall.exe bootstrapper, which — after an "are you sure" prompt — drops
+  // an empty sentinel file at <appdata>/.reset_admin_credentials_pending and
+  // restarts LuminalShineService. The service comes back into this block on
+  // the next startup, sees the marker, runs the same in-process reset that
+  // the `--reset-admin-credentials` CLI subcommand uses, then deletes the
+  // marker so the reset doesn't repeat on subsequent restarts.
+  //
+  // The detour exists because the bootstrapper runs as the calling
+  // (elevated) user, while the credential store lives in the LocalSystem
+  // vault — only the service, running as SYSTEM, can `CredDeleteW` the
+  // entry. The marker hand-off is the cleanest way to bridge those two
+  // identities without resorting to PsExec / temporary services / scheduled
+  // tasks. Same mechanism is reused on every Windows host that ships this
+  // service+bootstrapper pair.
+  //
+  // We deliberately run this BEFORE any code path that loads credentials
+  // (web server start, etc.) so the reset is observed by the first auth
+  // check after restart and the user lands on first-time setup.
+  try {
+    const auto marker = platf::appdata() / ".reset_admin_credentials_pending";
+    std::error_code marker_ec;
+    if (std::filesystem::exists(marker, marker_ec)) {
+      BOOST_LOG(warning) << "Admin reset marker found at " << marker.string()
+                         << "; clearing the stored admin credential. The web UI "
+                         << "will show first-time setup on next login.";
+      const int rc = args::reset_admin_credentials();
+      if (rc != 0) {
+        BOOST_LOG(error) << "Marker-driven admin reset returned non-zero ("
+                         << rc << "); proceeding with normal startup anyway. "
+                         << "The marker will be removed regardless so this does "
+                         << "not loop on every restart.";
+      }
+      std::error_code remove_ec;
+      std::filesystem::remove(marker, remove_ec);
+      if (remove_ec) {
+        BOOST_LOG(warning) << "Could not delete admin reset marker at "
+                           << marker.string() << ": " << remove_ec.message()
+                           << ". Remove it manually to prevent reset loops.";
+      }
+    }
+  } catch (const std::exception &ex) {
+    // Don't let a marker-handling glitch block service startup. Log and
+    // continue; the user can retry the Reset shortcut.
+    BOOST_LOG(warning) << "Admin reset marker check failed: " << ex.what()
+                       << ". Continuing service startup.";
+  }
+#endif
 
   // Display configuration is managed by the external Windows helper; no in-process init.
 
