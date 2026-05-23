@@ -155,7 +155,16 @@
       "Bash(echo \"exit_status=$?\")",
       "Bash(grep -n \"platform/windows/input\\\\|platform/windows/misc\\\\|add_library.*sunshine\\\\|target_sources\" /Users/Glazo/Git/luminalshine/cmake/targets/common.cmake | head -30)",
       "Read(//Users/Glazo/Git/luminalshine/cmake/targets/**)",
-      "Bash(awk '$1==\"160000\"{print $4}')"
+      "Bash(awk '$1==\"160000\"{print $4}')",
+      "Bash(awk '/Windows-AMD64.*Checkout/{seen=1} seen')",
+      "Bash(awk '/Windows-AMD64.*Setting up auth/{flag=1} flag{print; n++; if\\(n>40\\)exit}')",
+      "Bash(awk '/Windows-AMD64.*Setting up auth/{flag=1} flag{print; n++; if\\(n>30\\)exit}')",
+      "Bash(awk '/Windows-AMD64.*Setting up auth for fetching submodules/{flag=1} flag{print; n++; if\\(n>5\\)exit}')",
+      "Bash(awk '/Windows-AMD64.*Fetching submodules/{flag=1} flag{print; n++; if\\(n>20\\)exit}')",
+      "Bash(curl -sS https://www.githubstatus.com/api/v2/incidents.json)",
+      "Bash(git pull *)",
+      "Bash(ruby -ryaml -e \"['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/coverage-windows.yml'].each { |f| YAML.load_file\\(f\\); puts \\\\\"#{f}: OK\\\\\" }\")",
+      "Bash(bash -n)"
     ],
     "deny": [],
     "ask": [],
