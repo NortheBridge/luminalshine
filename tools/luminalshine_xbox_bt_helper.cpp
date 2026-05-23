@@ -22,6 +22,15 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+// INITGUID must be defined BEFORE any header that pulls in guiddef.h
+// (Windows.h does). Without it, DEFINE_GUID() below expands to an
+// `extern const GUID` declaration and emits no storage — the
+// `.refptr.GUID_DEVINTERFACE_HID_LOCAL` reference at the device-arrival
+// filter registration site then fails to link with "undefined symbol"
+// on the MSYS2 UCRT64 / clang + lld toolchain used by ci-windows.yml.
+// With INITGUID, the same macro lays down the actual `const GUID` =
+// {...} initializer in this TU and the link resolves cleanly.
+#define INITGUID
 #include <Windows.h>
 #include <Dbt.h>
 #include <ShlObj.h>
