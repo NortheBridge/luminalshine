@@ -91,6 +91,63 @@
                  Sequence="execute"
                  After="SetPowerShell5AsPath">PWSH7_FOUND_PATH</SetProperty>
 
+    <!-- ─────────────────────────────────────────────────────────────────
+         Brand-migration: force INSTALL_ROOT to the new
+         C:\Program Files\NortheBridge\LuminalShine\ tree when upgrading
+         from a pre-26.05.1 install whose ARPINSTALLLOCATION still points
+         at a `…\Sunshine\` directory.
+
+         Why this exists:
+         WIX.template.in declares `<Property Id="WIXUI_INSTALLDIR"
+         Value="INSTALL_ROOT"/>`, which tells Windows Installer to persist
+         INSTALL_ROOT across upgrades — AppSearch reads the prior install's
+         ARPINSTALLLOCATION out of the Add/Remove Programs registry entry
+         and seeds INSTALL_ROOT with it. That's the standard MSI semantic
+         and the right behavior most of the time: it preserves a user's
+         explicit non-default install path through subsequent upgrades.
+         But it bites us on a brand-relocation upgrade — the new MSI's
+         Directory table default (NortheBridge\LuminalShine) gets silently
+         overridden by the legacy `Sunshine` path, the BrowseDlg shows the
+         OLD location as the suggested target, and a quiet
+         `msiexec /quiet` upgrade lays the new binaries down at
+         `C:\Program Files\Sunshine\luminalshine.exe` — the worst of
+         both worlds (new brand, legacy location).
+
+         How this works:
+         SetProperty (Type-51 custom action) fires immediately after
+         AppSearch, before the UI sequence reads INSTALL_ROOT and before
+         CostFinalize stages files. The condition is a case-insensitive
+         substring match for `\Sunshine\` in the resolved path, so:
+
+           - Fresh install            INSTALL_ROOT seeded from the
+                                      Directory table default; condition
+                                      false; SetProperty no-ops.
+           - Upgrade from legacy      INSTALL_ROOT = …\Sunshine\…;
+                                      condition true; relocated to the
+                                      new canonical NortheBridge tree.
+           - Upgrade post-26.05.1     INSTALL_ROOT = …\NortheBridge\…;
+                                      condition false; no-op (this
+                                      relocator quietly retires once all
+                                      installs are on the new path).
+
+         A user who explicitly installed to a non-default location whose
+         path *also* contains `\Sunshine\` (e.g. `D:\Games\Sunshine\`)
+         will be relocated to the standard Program Files location. We
+         accept this trade-off — a brand migration is the right time to
+         consolidate paths, and the relocate is one-shot. Users with
+         non-default paths that DON'T contain `\Sunshine\` keep their
+         explicit choice unchanged.
+
+         Sequence="both" puts this in BOTH InstallUISequence (so the
+         BrowseDlg in interactive installs displays the new path) AND
+         InstallExecuteSequence (so silent / unattended installs see the
+         override too). -->
+    <SetProperty Id="INSTALL_ROOT"
+                 Action="RelocateLegacyInstallRoot"
+                 Value="[ProgramFiles64Folder]NortheBridge\LuminalShine\"
+                 Sequence="both"
+                 After="AppSearch"><![CDATA[INSTALL_ROOT ~>< "\Sunshine\"]]></SetProperty>
+
   </Fragment>
 
   <!-- Define a stable tools directory under INSTALL_ROOT for WiX-authored payloads -->
