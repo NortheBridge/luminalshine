@@ -24,6 +24,7 @@
     <Feature Id="LuminalShineExtras" Title="LuminalShine Components" Level="1" Absent="disallow">
       <ComponentRef Id="CtlStopSunshine"/>
       <ComponentRef Id="SunshineSvc"/>
+      <ComponentRef Id="LuminalShineXboxBtHelperSvc"/>
       <ComponentRef Id="Env_Path"/>
       <ComponentRef Id="Fw_Exceptions"/>
       <ComponentRef Id="StartMenuShortcut"/>

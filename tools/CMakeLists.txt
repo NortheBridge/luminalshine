@@ -141,3 +141,39 @@ target_link_libraries(sunshine_display_helper
         taskschd
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_display_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# Xbox Bluetooth reconnect helper: independent Windows service that nudges
+# Steam's XInput hotplug path when a Bluetooth Xbox controller re-arrives.
+# Registered with SCM separately from LuminalShineService (see
+# packaging/windows/wix/custom_actions.wxs) so a regression in this helper
+# cannot affect streaming. Disabled by default; opt-in via
+# %ProgramData%\LuminalShine\config\luminalshine_xboxcontroller_state.json.
+#
+# Pulls in ViGEmClient.cpp directly (the same source the main sunshine
+# binary compiles) -- the third-party suppressions for that file are
+# declared at root scope in cmake/targets/common.cmake and the tools
+# subdirectory is included in that DIRECTORY list so the flags propagate.
+add_executable(luminalshine_xbox_bt_helper
+        luminalshine_xbox_bt_helper.cpp
+        ${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp)
+set_target_properties(luminalshine_xbox_bt_helper PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine_xbox_bt_helper)
+target_include_directories(luminalshine_xbox_bt_helper PRIVATE
+        ${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include)
+target_link_libraries(luminalshine_xbox_bt_helper
+        ${CMAKE_THREAD_LIBS_INIT}
+        nlohmann_json::nlohmann_json
+        advapi32
+        setupapi
+        shell32
+        ole32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(luminalshine_xbox_bt_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# WiX consumes the staged copy via `!(bindpath.PayloadRoot)tools\luminalshine_xbox_bt_helper.exe`
+# (see packaging/windows/wix/custom_actions.wxs), so mirror the post-build
+# step that sunshinesvc uses to keep WiX and CMake in lockstep.
+add_custom_command(TARGET luminalshine_xbox_bt_helper POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:luminalshine_xbox_bt_helper>" "${CMAKE_BINARY_DIR}/wix_payload/tools/luminalshine_xbox_bt_helper.exe"
+)

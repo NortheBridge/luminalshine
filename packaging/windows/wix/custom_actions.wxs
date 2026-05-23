@@ -205,6 +205,38 @@
     </DirectoryRef>
   </Fragment>
 
+  <!-- Xbox Bluetooth reconnect helper: an independent Windows service that
+       watches HID device-interface arrivals and briefly plugs a ViGEmBus
+       virtual pad to force Steam's XInput hotplug path to re-enumerate when
+       a Bluetooth Xbox controller comes back. Crash-isolated from
+       LuminalShineService, no IPC between them. The helper itself is
+       disabled until the user sets `enabled: true` in
+       %ProgramData%\LuminalShine\config\luminalshine_xboxcontroller_state.json,
+       so installing it has no behavioral effect by default. -->
+  <Fragment>
+    <DirectoryRef Id="DIR_Tools">
+      <Component Id="LuminalShineXboxBtHelperSvc" Guid="*">
+        <File Id="LuminalShineXboxBtHelperExe"
+              Source="!(bindpath.PayloadRoot)tools\luminalshine_xbox_bt_helper.exe"
+              KeyPath="yes" />
+        <ServiceInstall
+            Id="LuminalShineXboxBtHelperServiceInstall"
+            Name="LuminalShineXboxBtHelper"
+            DisplayName="LuminalShine Xbox Bluetooth Helper"
+            Description="Nudges Steam's XInput hotplug path so reconnected Bluetooth Xbox controllers are picked up without delay. Disabled by default; opt in via luminalshine_xboxcontroller_state.json."
+            Type="ownProcess"
+            Start="auto"
+            ErrorControl="normal" />
+        <ServiceControl Id="StartLuminalShineXboxBtHelper"
+            Name="LuminalShineXboxBtHelper"
+            Start="install"
+            Stop="both"
+            Remove="uninstall"
+            Wait="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
   <Fragment>
     <CustomAction Id="ResetAcls" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="MigrateConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
@@ -317,10 +349,10 @@
          laying files down while the old binary is still mapped. -->
     <CustomAction Id="SetStopSvcQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
     <!-- Immediate setter to prune everything except the config directory -->
     <CustomAction Id="SetPruneButConfig"
                  Property="PruneButConfig"
@@ -329,7 +361,7 @@
     <!-- Immediate setter for quiet start service -->
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on
          manual uninstall (and now also on every upgrade/repair, so file
          replacement isn't racing helper processes that still have the old
@@ -338,13 +370,13 @@
          sunshine_*.dll open on Insider Preview builds. -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine_xbox_bt_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine_xbox_bt_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete LuminalShineXboxBtHelper | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
 
     <!-- Legacy Sunshine handling actions -->
     <CustomAction Id="AskUninstallLegacySunshine" BinaryKey="AskUninstallLegacySunshineVbs" VBScriptCall="AskUninstallLegacySunshine" Execute="immediate" Return="check" />

@@ -43,6 +43,16 @@ if (TARGET sunshine_display_helper)
         COMMENT "Copying sunshine_display_helper next to Sunshine binary")
 endif()
 
+# The Xbox Bluetooth helper is an SCM-managed service, not a process spawned
+# by the main host -- Windows starts it directly from its registered path
+# under `<install>\tools\`. So no "copy next to sunshine.exe" step is needed;
+# the wix_payload copy in tools/CMakeLists.txt is sufficient. We only need
+# to make sure the binary exists by the time package_msi runs, which we get
+# by chaining the dependency through the sunshine target.
+if (TARGET luminalshine_xbox_bt_helper)
+    add_dependencies(sunshine luminalshine_xbox_bt_helper)
+endif()
+
 # Enable libdisplaydevice logging in the main Sunshine binary only
 target_compile_definitions(sunshine PRIVATE SUNSHINE_USE_DISPLAYDEVICE_LOGGING)
 
