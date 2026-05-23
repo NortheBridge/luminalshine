@@ -257,7 +257,14 @@ set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}\\\\sunshine.ico")
 # src_assets/windows/misc/migration/installer-migrations.ps1. MSI's own
 # MajorUpgrade machinery handles the file move (RemoveExistingProducts
 # uninstalls from the old path, the new install lays down at the new one).
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "NortheBridge\\LuminalShine")
+# Double-escape (\\\\ → \\ in memory → \ on the CPackConfig.cmake
+# re-parse pass). Two backslashes here would give CPack a value with
+# one literal backslash, which CPack writes into CPackConfig.cmake as
+# `"NortheBridge\LuminalShine"` — then on the second parse pass CMake
+# trips on `\L` as an invalid escape sequence and the WIX/NSIS
+# generator never starts. Matches the same double-escape pattern used
+# for CPACK_PACKAGE_ICON above.
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "NortheBridge\\\\LuminalShine")
 
 # Setting components groups and dependencies
 set(CPACK_COMPONENT_GROUP_CORE_EXPANDED true)
