@@ -120,19 +120,99 @@ function Get-MsiProductVersion([string]$MsiPath) {
 }
 
 function Resolve-CscPath {
-    $candidates = @(
-        (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
-        (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe"),
-        "D:/Software/Visual Studio/MSBuild/Current/Bin/Roslyn/csc.exe"
-    )
+    <#
+        Locate a Roslyn-class csc.exe — i.e. one that supports C# 6 and
+        newer language features. We deliberately do NOT fall back to the
+        .NET Framework 4.x csc at
+            $env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+        because that compiler caps at C# 5 and silently rejects modern
+        syntax (read-only auto-properties, null-conditional `?.`, string
+        interpolation, nameof, expression-bodied members, etc.) that
+        LuminalShineInstaller.cs is allowed to use under the
+        `-langversion:7.3` flag passed to csc later in this script.
 
-    foreach ($candidate in $candidates) {
+        Resolution order:
+          1. $env:LUMINALSHINE_CSC_PATH — explicit override, escape
+             hatch for an unusual environment.
+          2. `vswhere.exe` — the Visual Studio installer's locator tool,
+             always present alongside the VS installer. Asks for the
+             latest VS instance with MSBuild and derives the Roslyn
+             csc.exe path relative to its installation root. Works for
+             VS Community / Professional / Enterprise / Build Tools at
+             any install path.
+          3. A short hardcoded list — GitHub Actions windows-2022
+             runners (VS 2022 Enterprise at the default path) and the
+             historical custom dev install at `D:\Software\Visual Studio\`
+             that an earlier maintainer used. Pure defence-in-depth in
+             case vswhere returns something unexpected.
+
+        If none of those produce a working compiler, throw with a clear
+        message rather than silently downgrading to the .NET 4 csc and
+        producing CS0840 / CS1525 errors at compile time.
+    #>
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LUMINALSHINE_CSC_PATH) -and
+        (Test-Path -LiteralPath $env:LUMINALSHINE_CSC_PATH)) {
+        return (Resolve-PathStrict $env:LUMINALSHINE_CSC_PATH)
+    }
+
+    # vswhere.exe is shipped by the VS installer at a stable location
+    # under Program Files (x86) on every Windows host that has any
+    # edition of VS 2017+ installed.
+    $vswhereCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"),
+        (Join-Path $env:ProgramFiles            "Microsoft Visual Studio\Installer\vswhere.exe")
+    )
+    foreach ($vswhereCandidate in $vswhereCandidates) {
+        if (-not (Test-Path -LiteralPath $vswhereCandidate)) {
+            continue
+        }
+        try {
+            $installRoot = (& $vswhereCandidate `
+                -latest `
+                -products * `
+                -requires Microsoft.Component.MSBuild `
+                -property installationPath 2>$null) | Select-Object -First 1
+        } catch {
+            $installRoot = $null
+        }
+        if (-not [string]::IsNullOrWhiteSpace($installRoot)) {
+            $candidate = Join-Path $installRoot "MSBuild\Current\Bin\Roslyn\csc.exe"
+            if (Test-Path -LiteralPath $candidate) {
+                return (Resolve-PathStrict $candidate)
+            }
+        }
+    }
+
+    $hardcodedCandidates = @(
+        # GitHub Actions windows-2022 runner default path
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\Roslyn\csc.exe",
+        # VS Build Tools 2022 (when Enterprise isn't installed)
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe",
+        # Historical custom dev install on D:
+        "D:\Software\Visual Studio\MSBuild\Current\Bin\Roslyn\csc.exe"
+    )
+    foreach ($candidate in $hardcodedCandidates) {
         if (Test-Path -LiteralPath $candidate) {
             return (Resolve-PathStrict $candidate)
         }
     }
 
-    throw "Could not locate a C# compiler (csc.exe)."
+    throw @"
+Could not locate a Roslyn-class csc.exe (C# 6+ compiler).
+
+The legacy .NET Framework 4.x csc at
+    $env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+is intentionally NOT used as a fallback because it caps at C# 5
+and rejects modern C# syntax we depend on
+(read-only auto-properties, null-conditional `?.`, etc.).
+
+To fix, do one of:
+  - Install Visual Studio 2022 Build Tools or Community (free), which
+    bundles Roslyn at <VS install root>\MSBuild\Current\Bin\Roslyn\csc.exe.
+  - Set the LUMINALSHINE_CSC_PATH environment variable to the absolute
+    path of a Roslyn csc.exe you already have.
+"@
 }
 
 $scriptDir = Split-Path -Parent $PSCommandPath
@@ -236,6 +316,15 @@ $args = @(
     "/target:winexe",
     "/optimize+",
     "/utf8output",
+    # Explicit language level so LuminalShineInstaller.cs can use C# 6 / 7 features
+    # (read-only auto-properties, null-conditional `?.`, string interpolation,
+    # nameof, expression-bodied members, etc.). Resolve-CscPath above guarantees
+    # the csc.exe we picked is Roslyn-class and supports this level. We pin to 7.3
+    # rather than `latest` for reproducibility — `latest` would silently drift as
+    # the runner's VS install gets newer compilers, and we don't need anything
+    # beyond C# 7.3 in this file. Bump deliberately if a later language feature
+    # becomes useful.
+    "/langversion:7.3",
     "/out:$outputPath",
     "/win32manifest:$manifestFile",
     "/win32icon:$iconPath",

@@ -5156,14 +5156,8 @@ namespace LuminalShineInstaller {
         // Both pickers failed. Tell the user something instead of
         // making the Browse button silently no-op. Aggregate both
         // exceptions so a maintainer reading the dialog can diagnose
-        // either layer. Explicit null check rather than C# 6's `?.`
-        // operator — the .NET Framework 4.x csc.exe that
-        // build_bootstrapper.ps1 uses rejects null-conditional
-        // syntax with CS1525 ("Invalid expression term '.'") /
-        // CS1003 ("Syntax error, ':' expected"). Same compat lane
-        // as the WpfOwnerShim read-only auto-property fix in #15.
-        var modernMessage = modernFailure == null ? "(none)" : modernFailure.Message;
-        var detail = "Modern picker: " + modernMessage
+        // either layer.
+        var detail = "Modern picker: " + (modernFailure?.Message ?? "(none)")
                    + "\nLegacy picker: " + legacyEx.Message;
         try {
           System.Windows.MessageBox.Show(
@@ -5287,20 +5281,10 @@ namespace LuminalShineInstaller {
     }
 
     private sealed class WpfOwnerShim : System.Windows.Forms.IWin32Window {
-      // Explicit backing field + get-only accessor rather than C# 6's
-      // read-only auto-property syntax. The .NET Framework 4.x csc.exe
-      // that build_bootstrapper.ps1 invokes rejects
-      // `public IntPtr Handle { get; }` with CS0840 ("Automatically
-      // implemented properties must define both get and set accessors").
-      // The older form below compiles on every C# version we might
-      // pick up across .NET 4 host configurations.
-      private readonly IntPtr _handle;
       public WpfOwnerShim(IntPtr handle) {
-        _handle = handle;
+        Handle = handle;
       }
-      public IntPtr Handle {
-        get { return _handle; }
-      }
+      public IntPtr Handle { get; }
     }
 
     private static string NormalizeExistingFolder(string path) {
