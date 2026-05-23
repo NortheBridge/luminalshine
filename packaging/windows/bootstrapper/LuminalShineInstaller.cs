@@ -1690,11 +1690,45 @@ namespace LuminalShineInstaller {
 
       foreach (var candidate in candidates) {
         if (!string.IsNullOrWhiteSpace(candidate)) {
+          // Normalize legacy `…\Sunshine\…` paths to the new canonical
+          // NortheBridge\LuminalShine location. Without this, an upgrade
+          // from a pre-26.05.1 install whose ARP entry still records the
+          // legacy `C:\Program Files\Sunshine\` path would render that
+          // (now-misleading) string in the bootstrapper UI even though
+          // the MSI SetProperty in custom_actions.wxs is about to
+          // relocate INSTALL_ROOT to the new path. Surfacing the actual
+          // destination here keeps the UI and the install behavior
+          // consistent — what you see in BrowseDlg is what ends up on
+          // disk.
+          if (IsLegacySunshinePath(candidate)) {
+            return InstallerRunner.DefaultInstallDirectory;
+          }
           return candidate;
         }
       }
 
       return InstallerRunner.DefaultInstallDirectory;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="path"/> looks like the pre-26.05.1
+    /// `…\Sunshine\` install layout (case-insensitive). Matches the same
+    /// substring/equality predicate the MSI SetProperty action in
+    /// packaging/windows/wix/custom_actions.wxs uses (`INSTALL_ROOT ~&gt;&lt;
+    /// "\Sunshine\"`), so the bootstrapper UI and the MSI agree on which
+    /// candidates get relocated to the new canonical location.
+    /// </summary>
+    private static bool IsLegacySunshinePath(string path) {
+      if (string.IsNullOrWhiteSpace(path)) {
+        return false;
+      }
+      var trimmed = path.TrimEnd('\\', '/');
+      if (trimmed.EndsWith("\\Sunshine", StringComparison.OrdinalIgnoreCase) ||
+          trimmed.EndsWith("/Sunshine", StringComparison.OrdinalIgnoreCase)) {
+        return true;
+      }
+      return trimmed.IndexOf("\\Sunshine\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+             trimmed.IndexOf("/Sunshine/", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private async Task ShowLicenseDialogAsync() {
@@ -2204,18 +2238,27 @@ namespace LuminalShineInstaller {
       TryAddRecentLogs(collected, seen, tempPath, "luminalshine_preinstall_remove_*.log", 8);
       TryAddRecentLogs(collected, seen, tempPath, "luminalshine_uninstall_*.log", 4);
 
-      var programFilesLogs = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-        "Sunshine",
-        "config",
-        "logs");
-      TryAddRecentLogs(collected, seen, programFilesLogs, "*.log", 8);
+      // Probe both the post-26.05.1 install layout and the legacy
+      // `C:\Program Files\Sunshine\` location so a diagnostics bundle
+      // collected immediately after upgrade still pulls in pre-rename
+      // logs that the user may want to attach to a bug report.
+      var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+      var luminalShineLogs = Path.Combine(programFiles, "NortheBridge", "LuminalShine", "config", "logs");
+      TryAddRecentLogs(collected, seen, luminalShineLogs, "*.log", 8);
+      var legacySunshineLogs = Path.Combine(programFiles, "Sunshine", "config", "logs");
+      TryAddRecentLogs(collected, seen, legacySunshineLogs, "*.log", 8);
 
-      var roamingLogs = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Sunshine",
+      // %ProgramData%\LuminalShine\logs is the post-PR-3 service log
+      // location; the active log lives here on current installs.
+      var programDataLogs = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "LuminalShine",
         "logs");
-      TryAddRecentLogs(collected, seen, roamingLogs, "*.log", 8);
+      TryAddRecentLogs(collected, seen, programDataLogs, "*.log", 8);
+
+      var roamingDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+      TryAddRecentLogs(collected, seen, Path.Combine(roamingDir, "LuminalShine", "logs"), "*.log", 8);
+      TryAddRecentLogs(collected, seen, Path.Combine(roamingDir, "Sunshine", "logs"), "*.log", 8);
 
       return collected;
     }
@@ -2562,7 +2605,7 @@ namespace LuminalShineInstaller {
       Console.WriteLine("  /?, /h, --help  Show this help message");
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
-      Console.WriteLine("  INSTALL_ROOT=<path>     Install to a custom directory (default: %ProgramFiles%\\Sunshine)");
+      Console.WriteLine("  INSTALL_ROOT=<path>     Install to a custom directory (default: %ProgramFiles%\\NortheBridge\\LuminalShine)");
       Console.WriteLine("  INSTALL_SUDOVDA=1|0     Install SudoVDA (default 1). Current default backend until the");
       Console.WriteLine("                          planned first-party LuminalShine VDD ships.");
       Console.WriteLine("  INSTALL_MTTVDD=1|0      Install MTT Virtual Display Driver (alternative; default 0).");
@@ -2646,9 +2689,18 @@ namespace LuminalShineInstaller {
 
     public static string DefaultInstallDirectory {
       get {
+        // Matches CPACK_PACKAGE_INSTALL_DIRECTORY = "NortheBridge\\LuminalShine"
+        // in cmake/packaging/windows.cmake. Must stay in sync with that
+        // value so the bootstrapper UI default and the MSI Directory-table
+        // default agree. The MSI's SetProperty in packaging/windows/wix/
+        // custom_actions.wxs additionally relocates any persisted
+        // pre-26.05.1 `…\Sunshine\` INSTALL_ROOT to this same path at
+        // upgrade time, so the two layers converge on the new canonical
+        // location regardless of how the user got here.
         return Path.Combine(
           Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-          "Sunshine");
+          "NortheBridge",
+          "LuminalShine");
       }
     }
 
@@ -5074,11 +5126,59 @@ namespace LuminalShineInstaller {
     private static extern int SHCreateItemFromParsingName([MarshalAs(UnmanagedType.LPWStr)] string pszPath, IntPtr pbc, [In] ref Guid riid, [Out] out IShellItem ppv);
 
     public static string TryPickFolder(Window owner, string title, string initialPath) {
+      // Try the modern IFileOpenDialog (Vista+) path first because it
+      // matches the rest of the Windows shell UI. If anything in that
+      // path fails — COM registration missing, the dialog can't be
+      // shown (sometimes happens over certain RDP configurations),
+      // STA-thread state confused, etc. — we fall through to the
+      // classic FolderBrowserDialog from System.Windows.Forms, which
+      // works in essentially every environment that supports running
+      // a WPF app at all. Surfacing the failure cause to the caller
+      // is more useful than silently returning null and making the
+      // Browse button look broken.
+      Exception modernFailure = null;
+      try {
+        var picked = TryPickFolderModern(owner, title, initialPath);
+        if (picked != null) {
+          return picked;
+        }
+        // picked == null means the user cancelled — don't fall through
+        // to the legacy picker in that case. Tracked via a sentinel
+        // (we set modernFailure on actual exception below).
+        return null;
+      } catch (Exception ex) {
+        modernFailure = ex;
+      }
+
+      try {
+        return TryPickFolderLegacy(owner, title, initialPath);
+      } catch (Exception legacyEx) {
+        // Both pickers failed. Tell the user something instead of
+        // making the Browse button silently no-op. Aggregate both
+        // exceptions so a maintainer reading the dialog can diagnose
+        // either layer.
+        var detail = "Modern picker: " + modernFailure?.Message
+                   + "\nLegacy picker: " + legacyEx.Message;
+        try {
+          System.Windows.MessageBox.Show(
+            owner,
+            "Could not open the folder picker.\n\n" + detail,
+            "LuminalShine installer",
+            System.Windows.MessageBoxButton.OK,
+            System.Windows.MessageBoxImage.Warning);
+        } catch {
+        }
+        return null;
+      }
+    }
+
+    private static string TryPickFolderModern(Window owner, string title, string initialPath) {
       object dialogComObject = null;
       try {
         var dialogType = Type.GetTypeFromCLSID(new Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7"));
         if (dialogType == null) {
-          return null;
+          // CLSID not registered — fall back to legacy picker via exception.
+          throw new InvalidOperationException("IFileOpenDialog CLSID is not registered on this host.");
         }
 
         dialogComObject = Activator.CreateInstance(dialogType);
@@ -5106,7 +5206,16 @@ namespace LuminalShineInstaller {
         var ownerHandle = owner == null ? IntPtr.Zero : new WindowInteropHelper(owner).Handle;
         var hr = dialog.Show(ownerHandle);
         if (hr != 0) {
-          return null;
+          // hr == 0x800704C7 (HRESULT_FROM_WIN32(ERROR_CANCELLED)) is the
+          // user cancelling — return null without raising. Any other
+          // non-success HRESULT is a real failure; propagate so the
+          // outer TryPickFolder can fall back to the legacy picker.
+          const int HRESULT_USER_CANCELLED = unchecked((int)0x800704C7);
+          if (hr == HRESULT_USER_CANCELLED) {
+            return null;
+          }
+          throw new System.Runtime.InteropServices.COMException(
+            "IFileOpenDialog.Show returned HRESULT 0x" + hr.ToString("X8"), hr);
         }
 
         IShellItem result;
@@ -5126,8 +5235,6 @@ namespace LuminalShineInstaller {
         } finally {
           Marshal.FreeCoTaskMem(pathPtr);
         }
-      } catch {
-        return null;
       } finally {
         if (dialogComObject != null) {
           try {
@@ -5136,6 +5243,48 @@ namespace LuminalShineInstaller {
           }
         }
       }
+    }
+
+    private static string TryPickFolderLegacy(Window owner, string title, string initialPath) {
+      // Classic Windows Forms FolderBrowserDialog. Ugly compared to the
+      // modern shell picker but works essentially everywhere — used as
+      // the fallback when the modern path fails for environment reasons
+      // (CLSID not registered, certain RDP configurations, etc.).
+      using (var dlg = new System.Windows.Forms.FolderBrowserDialog()) {
+        if (!string.IsNullOrWhiteSpace(title)) {
+          dlg.Description = title;
+        }
+        dlg.ShowNewFolderButton = true;
+        var normalizedInitial = NormalizeExistingFolder(initialPath);
+        if (!string.IsNullOrWhiteSpace(normalizedInitial)) {
+          dlg.SelectedPath = normalizedInitial;
+        }
+
+        // Bridge WPF owner window to WinForms IWin32Window. Some
+        // environments deadlock when a WinForms modal is shown without
+        // an owner — passing the WPF HWND keeps focus and modality
+        // attached to the bootstrapper window.
+        System.Windows.Forms.IWin32Window ownerShim = null;
+        if (owner != null) {
+          var hwnd = new WindowInteropHelper(owner).Handle;
+          if (hwnd != IntPtr.Zero) {
+            ownerShim = new WpfOwnerShim(hwnd);
+          }
+        }
+
+        var dialogResult = ownerShim == null ? dlg.ShowDialog() : dlg.ShowDialog(ownerShim);
+        if (dialogResult != System.Windows.Forms.DialogResult.OK) {
+          return null;
+        }
+        return string.IsNullOrWhiteSpace(dlg.SelectedPath) ? null : dlg.SelectedPath;
+      }
+    }
+
+    private sealed class WpfOwnerShim : System.Windows.Forms.IWin32Window {
+      public WpfOwnerShim(IntPtr handle) {
+        Handle = handle;
+      }
+      public IntPtr Handle { get; }
     }
 
     private static string NormalizeExistingFolder(string path) {

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <codecvt>
 #include <csignal>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -138,6 +139,37 @@ int main(int argc, char *argv[]) {
   SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
 
   setlocale(LC_ALL, "C");
+
+  // Anchor the working directory to the executable's install root before any
+  // relative-path lookups run. Without this, services launched by the SCM
+  // inherit `C:\Windows\System32` as CWD, and the binary's relative asset
+  // references — `assets/web/index.html`, `assets/shaders/directx/*.hlsl`,
+  // `assets/desktop.png`, etc. — resolve against System32 and fail silently.
+  // The web UI degrades to 404s on every asset request and Platform init
+  // bails out with HRESULT 0x80070003 (ERROR_PATH_NOT_FOUND) trying to
+  // compile shaders. Was a regression introduced during the 26.05.1 brand
+  // rename: the previous launch path resolved the main exe relative to the
+  // service binary's directory, which incidentally made the spawned
+  // process's CWD coincide with the install root; the new explicit
+  // absolute-path launch in tools/sunshinesvc.cpp resolve_main_exe_path()
+  // no longer has that side effect.
+  {
+    wchar_t exe_path_w[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(nullptr, exe_path_w, _countof(exe_path_w));
+    if (len > 0 && len < _countof(exe_path_w)) {
+      std::filesystem::path exe_dir = std::filesystem::path(exe_path_w).parent_path();
+      if (!exe_dir.empty()) {
+        std::error_code ec;
+        std::filesystem::current_path(exe_dir, ec);
+        // Failure here is non-fatal: relative asset lookups will still
+        // break, but absolute-path code paths (logging::init, appdata())
+        // are unaffected. Logging hasn't been initialised yet at this
+        // point so we can't emit a BOOST_LOG warning — but the missing
+        // assets will surface clearly enough downstream that the cause
+        // is identifiable from the resulting "Missing file:" log lines.
+      }
+    }
+  }
 #endif
 
 #pragma GCC diagnostic push
