@@ -165,7 +165,12 @@
       "Bash(git pull *)",
       "Bash(ruby -ryaml -e \"['/Users/Avalon/Git/luminalshine/.github/workflows/ci-windows.yml','/Users/Avalon/Git/luminalshine/.github/workflows/coverage-windows.yml'].each { |f| YAML.load_file\\(f\\); puts \\\\\"#{f}: OK\\\\\" }\")",
       "Bash(bash -n)",
-      "Bash(awk 'BEGIN{depth=0} {for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\); if\\(c==\"{\"\\)depth++; else if\\(c==\"}\"\\)depth--}} END{print \"Final brace depth:\", depth}' /Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/LuminalShineInstaller.cs)"
+      "Bash(awk 'BEGIN{depth=0} {for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\); if\\(c==\"{\"\\)depth++; else if\\(c==\"}\"\\)depth--}} END{print \"Final brace depth:\", depth}' /Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/LuminalShineInstaller.cs)",
+      "Bash(grep -nE '\\\\?\\\\.|\\\\$\"|nameof\\\\\\(|^\\\\s*=>|catch when' /Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/LuminalShineInstaller.cs)",
+      "Bash(grep -nE '\\\\?\\\\.|\\\\$\"|nameof\\\\\\(|catch when' /Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/LuminalShineInstaller.cs)",
+      "Bash(awk 'BEGIN{depth=0} {for\\(i=1;i<=length\\($0\\);i++\\){c=substr\\($0,i,1\\); if\\(c==\"{\"\\)depth++; else if\\(c==\"}\"\\)depth--}} END{print \"brace depth:\", depth}' /Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/LuminalShineInstaller.cs)",
+      "Bash(grep -n '\\\\$args = \\\\|\"/nologo\"\\\\|\"/target' /Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/build_bootstrapper.ps1)",
+      "Bash(pwsh -NoProfile -Command '$errs = $null; $tokens = $null; $ast = [System.Management.Automation.Language.Parser]::ParseFile\\('\\\\''/Users/Avalon/Git/luminalshine/packaging/windows/bootstrapper/build_bootstrapper.ps1'\\\\'', [ref]$tokens, [ref]$errs\\); if \\($errs\\) { $errs | ForEach-Object { Write-Host $_.ToString\\(\\) }; exit 1 } else { Write-Host '\\\\''PowerShell parse OK'\\\\'' }')"
     ],
     "deny": [],
     "ask": [],
