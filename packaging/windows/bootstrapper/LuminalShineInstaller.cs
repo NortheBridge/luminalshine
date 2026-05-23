@@ -5281,10 +5281,20 @@ namespace LuminalShineInstaller {
     }
 
     private sealed class WpfOwnerShim : System.Windows.Forms.IWin32Window {
+      // Explicit backing field + get-only accessor rather than C# 6's
+      // read-only auto-property syntax. The .NET Framework 4.x csc.exe
+      // that build_bootstrapper.ps1 invokes rejects
+      // `public IntPtr Handle { get; }` with CS0840 ("Automatically
+      // implemented properties must define both get and set accessors").
+      // The older form below compiles on every C# version we might
+      // pick up across .NET 4 host configurations.
+      private readonly IntPtr _handle;
       public WpfOwnerShim(IntPtr handle) {
-        Handle = handle;
+        _handle = handle;
       }
-      public IntPtr Handle { get; }
+      public IntPtr Handle {
+        get { return _handle; }
+      }
     }
 
     private static string NormalizeExistingFolder(string path) {
