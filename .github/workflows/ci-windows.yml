@@ -78,16 +78,19 @@ jobs:
             toolchain: ucrt-x86_64
     steps:
       - name: Checkout
-        # Single-level submodule init (not `recursive`) so the checkout
-        # doesn't walk into nested submodules of upstream third-party
-        # repos. Specifically, third-party/doxyconfig pins
-        # doxygen-awesome-css to a commit that has been force-pushed
-        # off the public remote — recursive cloning would try to fetch
-        # that orphan SHA and fail the whole checkout. The Windows
-        # build doesn't depend on any nested submodule's contents.
+        # Recursive submodule init is required because the Moonlight
+        # protocol layer's networking depends on enet, which sits at
+        # third-party/moonlight-common-c/enet as a NESTED submodule.
+        # Without recursion CMake fails at the
+        # `add_subdirectory(.../moonlight-common-c/enet)` step in
+        # cmake/dependencies/common.cmake:10 with "does not contain a
+        # CMakeLists.txt file". The previously-broken nested submodule
+        # (doxyconfig/doxygen-awesome-css) is no longer walked because
+        # the top-level doxyconfig entry was commented out in
+        # .gitmodules.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: true
+          submodules: recursive
 
       - name: Setup Dependencies Windows
         # if a dependency needs to be pinned, see https://github.com/LizardByte/build-deps/pull/186
