@@ -1,27 +1,50 @@
-[submodule "packaging/linux/flatpak/deps/flatpak-builder-tools"]
-	path = packaging/linux/flatpak/deps/flatpak-builder-tools
-	url = https://github.com/flatpak/flatpak-builder-tools.git
-	branch = master
-[submodule "packaging/linux/flatpak/deps/shared-modules"]
-	path = packaging/linux/flatpak/deps/shared-modules
-	url = https://github.com/flathub/shared-modules.git
-	branch = master
+# Linux Flatpak packaging deps. LuminalShine is Windows-only by design;
+# the ci-linux.yml / ci-archlinux.yml / ci-flatpak.yml workflows that
+# would have needed these are unreferenced (no caller). Commented out
+# (not removed) so a future Linux-revival can flip them back on by
+# uncommenting the block and re-running `git submodule add` against
+# the same URL.
+#[submodule "packaging/linux/flatpak/deps/flatpak-builder-tools"]
+#	path = packaging/linux/flatpak/deps/flatpak-builder-tools
+#	url = https://github.com/flatpak/flatpak-builder-tools.git
+#	branch = master
+#[submodule "packaging/linux/flatpak/deps/shared-modules"]
+#	path = packaging/linux/flatpak/deps/shared-modules
+#	url = https://github.com/flathub/shared-modules.git
+#	branch = master
 [submodule "third-party/build-deps"]
 	path = third-party/build-deps
 	url = https://github.com/LizardByte/build-deps.git
 	branch = master
-[submodule "third-party/doxyconfig"]
-	path = third-party/doxyconfig
-	url = https://github.com/LizardByte/doxyconfig.git
-	branch = master
+# doxyconfig is not OS-specific, but the pinned commit
+# `89c8ec928a11e04a75f06a00ddaa3848fc5edf27` no longer exists on the
+# public LizardByte/doxyconfig remote (force-pushed or the repo was
+# made private), so `git submodule update` fails the entire checkout
+# with "Direct fetching of that commit failed" + an interactive
+# Username prompt git can't satisfy on the CI runner. Windows CI sets
+# -DBUILD_DOCS=OFF in both ci-windows.yml and coverage-windows.yml so
+# the `add_subdirectory(third-party/doxyconfig)` block in
+# cmake/targets/common.cmake is skipped — the submodule's contents
+# are not consumed by the Windows binary build. Uncomment and update
+# the pin via the upstream LizardByte org's docs-publishing workflow
+# when docs generation needs to come back.
+#[submodule "third-party/doxyconfig"]
+#	path = third-party/doxyconfig
+#	url = https://github.com/LizardByte/doxyconfig.git
+#	branch = master
 [submodule "third-party/googletest"]
 	path = third-party/googletest
 	url = https://github.com/google/googletest.git
 	branch = main
-[submodule "third-party/inputtino"]
-	path = third-party/inputtino
-	url = https://github.com/games-on-whales/inputtino.git
-	branch = stable
+# Linux input emulation library. Used only by
+# src/platform/linux/input/inputtino_*.cpp, which the
+# cmake/compile_definitions/linux.cmake conditional only compiles on
+# Linux. Commented out for the Windows-only scope; flip back on if
+# Linux support returns.
+#[submodule "third-party/inputtino"]
+#	path = third-party/inputtino
+#	url = https://github.com/games-on-whales/inputtino.git
+#	branch = stable
 [submodule "third-party/libdisplaydevice"]
 	path = third-party/libdisplaydevice
 	url = https://github.com/Nonary/libdisplaydevice.git
