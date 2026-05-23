@@ -34,6 +34,14 @@
 #include <Windows.h>
 #include <Dbt.h>
 #include <ShlObj.h>
+// Explicit <KnownFolders.h> because mingw-w64's ShlObj.h doesn't pull
+// it in transitively (the Microsoft SDK does, but the MSYS2 UCRT64
+// headers we build under don't), and toggling INITGUID flipped a
+// guard in the header chain that previously was masking the
+// dependency. FOLDERID_ProgramData (used at SHGetKnownFolderPath
+// below) is declared by DEFINE_KNOWN_FOLDER in this header; without
+// it the compile fails with "use of undeclared identifier".
+#include <KnownFolders.h>
 
 #include <atomic>
 #include <chrono>
