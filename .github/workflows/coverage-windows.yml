@@ -35,9 +35,15 @@ jobs:
       TOOLCHAIN: ucrt-x86_64
     steps:
       - name: Checkout
+        # Single-level submodule init (not `recursive`) so the checkout
+        # doesn't walk into nested submodules whose pinned commits have
+        # been force-pushed off their public remotes (e.g.
+        # third-party/doxyconfig/doxygen-awesome-css). The Windows
+        # coverage build doesn't depend on any nested submodule's
+        # contents.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: recursive
+          submodules: true
           # Codecov resolves PR context from commit history; depth 0 keeps it
           # reliable for PRs from forks and re-runs.
           fetch-depth: 0
