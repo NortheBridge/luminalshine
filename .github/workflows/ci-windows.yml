@@ -78,19 +78,66 @@ jobs:
             toolchain: ucrt-x86_64
     steps:
       - name: Checkout
-        # Recursive submodule init is required because the Moonlight
-        # protocol layer's networking depends on enet, which sits at
-        # third-party/moonlight-common-c/enet as a NESTED submodule.
-        # Without recursion CMake fails at the
-        # `add_subdirectory(.../moonlight-common-c/enet)` step in
-        # cmake/dependencies/common.cmake:10 with "does not contain a
-        # CMakeLists.txt file". The previously-broken nested submodule
-        # (doxyconfig/doxygen-awesome-css) is no longer walked because
-        # the top-level doxyconfig entry was commented out in
-        # .gitmodules.
+        # Main repo only. Submodule init is deferred to the next step so we
+        # can wrap it in retry/backoff — see "Initialize submodules" below
+        # for the rationale.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Initialize submodules
+        # Replaces actions/checkout's built-in `submodules: recursive`
+        # mechanism with a retry loop, because git submodule clones over
+        # https://github.com/ are sensitive to transient GHA-side
+        # authentication flakes that the bundled checkout action has no
+        # retry semantics for. A single 401 on any submodule's clone
+        # exit-codes 128 and kills the whole checkout, even though other
+        # submodules in the same call succeeded. We hit this twice in a
+        # row on 2026-05-23 (run 26332388835) — once on the main-repo
+        # fetch, once partway through submodule init where some public
+        # repos cloned and others got "could not read Username".
+        #
+        # The actual `git submodule update --init --force --depth=1
+        # --recursive` invocation is identical to what `actions/checkout
+        # submodules: recursive` would run internally — including the
+        # recursive descent that pulls in nested submodules (notably
+        # `third-party/moonlight-common-c/enet`, which the Moonlight
+        # protocol's networking depends on; without it CMake fails at
+        # `add_subdirectory(.../moonlight-common-c/enet)` in
+        # cmake/dependencies/common.cmake:10). The historically-broken
+        # nested `doxyconfig/doxygen-awesome-css` is no longer walked
+        # because the top-level `doxyconfig` entry is commented out in
+        # .gitmodules.
+        #
+        # `actions/checkout` already wired up the AUTHORIZATION header
+        # via `git config --global include.path …` in the previous
+        # step, so this manual `git submodule update` inherits the same
+        # token-backed credentials — no extra plumbing needed.
+        #
+        # `git submodule deinit --all --force` between attempts strips
+        # any partial state from the failed clone so each retry starts
+        # from a clean slate. Without it, a half-cloned submodule
+        # directory can survive into the next attempt and trigger
+        # "destination path already exists" failures that have nothing
+        # to do with the original flake.
+        shell: bash
+        run: |
+          set +e
+          for attempt in 1 2 3 4 5; do
+            git submodule update --init --force --depth=1 --recursive
+            rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "Submodules initialised on attempt ${attempt}."
+              exit 0
+            fi
+            echo "::warning::Submodule init failed on attempt ${attempt} (exit ${rc}); cleaning partial state and retrying."
+            git submodule deinit --all --force >/dev/null 2>&1 || true
+            sleep_secs=$((attempt * 10))
+            echo "Sleeping ${sleep_secs}s before next attempt..."
+            sleep "${sleep_secs}"
+          done
+          echo "::error::Submodule init failed after 5 attempts."
+          exit 1
 
       - name: Setup Dependencies Windows
         # if a dependency needs to be pinned, see https://github.com/LizardByte/build-deps/pull/186
