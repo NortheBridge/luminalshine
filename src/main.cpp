@@ -20,6 +20,7 @@
 #include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
+#include "session_monitor_client.h"
 #include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
 #include "system_tray.h"
@@ -519,6 +520,19 @@ int main(int argc, char *argv[]) {
   auto nonsteam_shortcuts_sync_guard =
     steam::sync_shortcuts::start_worker(config::stream.file_apps);
   steam::sync_shortcuts::run_once(config::stream.file_apps);
+
+  // Session monitor producer client. Initialises the named-pipe
+  // sender thread + host-perf-counter sampler thread. From here on,
+  // every call to `session_mon::session_started` from the stream
+  // layer pushes a frame to the LuminalShineSessionMonitor service.
+  // If that service isn't running, the client buffers briefly and
+  // drops; streaming is unaffected. Shutdown happens via the atexit
+  // guard below so any in-flight session_ended frame gets a chance
+  // to flush on a clean exit.
+  session_mon::init();
+  auto session_mon_guard = util::fail_guard([]() {
+    session_mon::shutdown();
+  });
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.

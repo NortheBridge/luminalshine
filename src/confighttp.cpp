@@ -63,6 +63,7 @@
   #include "platform/windows/sudovda_recovery.h"
 #endif
 #include "cred_store/cred_store.h"
+#include "session_monitor_proxy.h"
 #include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
 
@@ -2036,6 +2037,114 @@ namespace confighttp {
       BOOST_LOG(warning) << "DisconnectClient: "sv << e.what();
       bad_request(response, request, e.what());
     }
+  }
+
+  /// Shared proxy helper that forwards a request to the
+  /// LuminalShineSessionMonitor service running in a separate
+  /// process. Returns HTTP 503 if the monitor is unreachable so the
+  /// Web UI can render an "offline" state rather than a hard error.
+  void forward_session_mon_response(
+    resp_https_t response,
+    const std::optional<session_mon::proxy::Response> &r
+  ) {
+    if (!r.has_value()) {
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/json");
+      response->write(
+        SimpleWeb::StatusCode::server_error_service_unavailable,
+        "{\"error\":\"session monitor service is not reachable\"}",
+        headers
+      );
+      return;
+    }
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", r->content_type);
+    if (!r->extra_headers.empty()) {
+      // The monitor only ever sets Content-Disposition for the
+      // export.json route; pass it through verbatim.
+      const auto colon = r->extra_headers.find(':');
+      if (colon != std::string::npos) {
+        auto name = r->extra_headers.substr(0, colon);
+        auto value = r->extra_headers.substr(colon + 1);
+        while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+          value.erase(value.begin());
+        }
+        while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
+          value.pop_back();
+        }
+        headers.emplace(std::move(name), std::move(value));
+      }
+    }
+    // Map upstream status codes to SimpleWeb equivalents. Anything
+    // we don't have an explicit mapping for falls through as 502
+    // (bad gateway) since by definition it's an unexpected response
+    // from a service we control.
+    SimpleWeb::StatusCode status;
+    switch (r->status) {
+      case 200: status = SimpleWeb::StatusCode::success_ok; break;
+      case 400: status = SimpleWeb::StatusCode::client_error_bad_request; break;
+      case 404: status = SimpleWeb::StatusCode::client_error_not_found; break;
+      default:  status = SimpleWeb::StatusCode::server_error_bad_gateway; break;
+    }
+    response->write(status, r->body, headers);
+  }
+
+  /// GET /api/sessions — list every recorded session.
+  void getSessions(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    forward_session_mon_response(response, session_mon::proxy::get("/api/sessions"));
+  }
+
+  /// GET /api/sessions/<id> — full session JSON (metadata + series).
+  void getSessionDetails(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    if (request->path_match.size() < 2) {
+      bad_request(response, request, "missing session id");
+      return;
+    }
+    const std::string id = request->path_match[1];
+    forward_session_mon_response(response, session_mon::proxy::get("/api/sessions/" + id));
+  }
+
+  /// GET /api/sessions/<id>/export.json — same content as
+  /// getSessionDetails but marked as an attachment download by the
+  /// monitor's Content-Disposition response header.
+  void exportSession(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    if (request->path_match.size() < 2) {
+      bad_request(response, request, "missing session id");
+      return;
+    }
+    const std::string id = request->path_match[1];
+    forward_session_mon_response(
+      response, session_mon::proxy::get("/api/sessions/" + id + "/export.json")
+    );
+  }
+
+  /// DELETE /api/sessions/<id> — remove the recorded session.
+  /// Refused by the monitor for currently-active sessions; the Web
+  /// UI's "Disconnect Session" gesture is the correct way to
+  /// terminate first.
+  void deleteSession(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    if (request->path_match.size() < 2) {
+      bad_request(response, request, "missing session id");
+      return;
+    }
+    const std::string id = request->path_match[1];
+    forward_session_mon_response(response, session_mon::proxy::del("/api/sessions/" + id));
   }
 
   /**
@@ -4144,6 +4253,14 @@ namespace confighttp {
     register_api_route("^/api/clients/update$", "POST", updateClient);
     register_api_route("^/api/clients/unpair$", "POST", unpair);
     register_api_route("^/api/clients/disconnect$", "POST", disconnectClient);
+    // Session telemetry — forwarded to the LuminalShineSessionMonitor
+    // service. The proxy returns 503 if the monitor isn't reachable
+    // so the Web UI's session panel can degrade gracefully when the
+    // sidecar service is stopped.
+    register_api_route("^/api/sessions$", "GET", getSessions);
+    register_api_route("^/api/sessions/([A-Za-z0-9_-]+)$", "GET", getSessionDetails);
+    register_api_route("^/api/sessions/([A-Za-z0-9_-]+)$", "DELETE", deleteSession);
+    register_api_route("^/api/sessions/([A-Za-z0-9_-]+)/export\\.json$", "GET", exportSession);
     register_api_route("^/api/apps/close$", "POST", closeApp);
     register_api_route("^/api/session/status$", "GET", getSessionStatus);
     register_api_route("^/api/webrtc/sessions$", "GET", listWebRTCSessions);

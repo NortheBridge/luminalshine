@@ -37,6 +37,7 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "session_monitor_client.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -2223,6 +2224,12 @@ namespace stream {
       // 2026-04-28 21:21 bundle showed exactly this race.
       active_sessions.fetch_sub(1, std::memory_order_acq_rel);
 
+      // Mark the session as ended in the monitor service so the Web
+      // UI's "Active" badge clears and the session JSON is finalised
+      // on disk. Independent of the actual thread-join below; the
+      // monitor never blocks on streaming-host state.
+      session_mon::session_ended(session_mon::make_id(session.launch_session_id));
+
       session.shutdown_event->raise(true);
     }
 
@@ -2609,6 +2616,35 @@ namespace stream {
       session->state.store(state_e::STOPPED, std::memory_order_relaxed);
 
       session->mail = std::move(mail);
+
+      // Tell the session monitor service this stream exists so it
+      // can create its ring-buffer entry and the Web UI's Session
+      // Details panel has something to render. Fire-and-forget — if
+      // the monitor isn't running, the producer client buffers
+      // briefly and drops; streaming proceeds either way.
+      {
+        session_mon::SessionMetadata md;
+        md.client_name = launch_session.client_name;
+        md.device      = launch_session.client_name;   // best available — RTSP doesn't carry a separate "device" string
+        md.protocol    = "RTSP";
+        const int video_format = config.monitor.videoFormat;
+        md.codec       = (video_format == 0) ? "H264" : (video_format == 1) ? "HEVC" : (video_format == 2) ? "AV1" : "?";
+        md.width                = config.monitor.width;
+        md.height               = config.monitor.height;
+        md.fps                  = config.monitor.framerate;
+        md.bitrate_mbps_target  = static_cast<double>(config.monitor.bitrate) / 1000.0;  // kbps → Mbps
+        md.hdr                  = (config.monitor.dynamicRange != 0);
+        md.yuv444               = (config.monitor.chromaSamplingType == 1);
+        md.audio_channels       = config.audio.channels;
+        md.luminalshine_version = PROJECT_VERSION;
+        // application / cpu_model / gpu_model can come in later as
+        // metadata_update frames once the proc layer / platform
+        // helpers have resolved them.
+        session_mon::session_started(
+          session_mon::make_id(launch_session.id),
+          md
+        );
+      }
 
       return session;
     }
