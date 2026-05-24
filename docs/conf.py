@@ -23,18 +23,12 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
     "sphinx_design",
-    "breathe",
 ]
 
-# -- Breathe (Doxygen XML → Sphinx) -----------------------------------------
-# Doxygen XML is emitted by docs/Doxyfile-xml during the RTD pre_build
-# step (and by `doxygen Doxyfile-xml` locally). If the XML directory
-# doesn't exist yet, breathe directives render an empty block with a
-# warning instead of failing the build.
-breathe_projects = {"luminalshine": "_doxygen/xml"}
-breathe_default_project = "luminalshine"
-breathe_default_members = ("members", "undoc-members")
-breathe_show_include = True
+# Note on the C++ API: we publish the standalone Doxygen HTML browser
+# under /api/ alongside this site (see .readthedocs.yaml). Breathe was
+# tried but its sphinxrenderer asserts on certain LuminalShine
+# namespace shapes under Sphinx's parallel build.
 
 source_suffix = {
     ".rst": "restructuredtext",

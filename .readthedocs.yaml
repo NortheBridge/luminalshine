@@ -8,9 +8,12 @@
 # (#04060f / #070b1f) with cyan + royal-blue accents (#1ec8ff, #4a7dff)
 # matching https://gitdocs.northebridge.com/luminalshine.
 #
-# Doxygen is invoked in pre_build to emit XML, which breathe renders
-# inside the Sphinx output (see docs/api/cpp.md) — this preserves the
-# C++ API reference that the previous doxygen-only build produced.
+# Backwards-compat with the previous Doxygen-only build is preserved by
+# running Doxygen in pre_build (producing the standalone HTML API
+# browser) and then copying that browser into the Sphinx output at the
+# /api/ subpath via post_build. The Sphinx side links to it from
+# docs/api/cpp.md. We do not use breathe — it asserts on this
+# project's namespace shapes under Sphinx's parallel build (-j auto).
 #
 # Theme colors and fonts are configured in docs/conf.py and
 # docs/_static/luminalshine.css; this file only wires up the build.
@@ -26,12 +29,15 @@ build:
     - graphviz
   jobs:
     pre_build:
-      # Produce Doxygen XML for breathe. We use a thin override
-      # (docs/Doxyfile-xml) that @INCLUDEs the existing Doxyfile and
-      # flips on XML output. Soft-fail so a doxygen hiccup doesn't
-      # kill the whole HTML build — breathe directives will warn
-      # individually if the XML they reference is missing.
-      - cd docs && doxygen Doxyfile-xml || echo "::warning::doxygen XML build failed; C++ API pages will be empty"
+      # Generate the standalone Doxygen HTML site. Output lands in
+      # docs/html/ (Doxyfile defaults). Soft-fail so a doxygen hiccup
+      # doesn't kill the whole HTML build — the Sphinx prose docs
+      # will still ship.
+      - cd docs && doxygen Doxyfile || echo "doxygen HTML build failed; /api/ will be missing"
+    post_build:
+      # Mount the Doxygen browser under /api/ in the published site.
+      # Runs after sphinx-build, so it doesn't get clobbered.
+      - if [ -d docs/html ]; then mkdir -p "${READTHEDOCS_OUTPUT}/html/api" && cp -R docs/html/. "${READTHEDOCS_OUTPUT}/html/api/"; fi
 
 sphinx:
   configuration: docs/conf.py
