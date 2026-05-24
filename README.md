@@ -3,6 +3,7 @@
 <p align="center">
   <a href="https://github.com/NortheBridge/luminalshine/releases/latest"><img src="https://img.shields.io/github/v/release/NortheBridge/luminalshine?include_prereleases&label=Release&color=blue" alt="Latest Release"/></a>
   <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/n/NortheBridge/LuminalShine"><img src="https://img.shields.io/winget/v/NortheBridge.LuminalShine?label=WinGet&color=blue" alt="WinGet Version"/></a>
+  <a href="https://github.com/NortheBridge/luminalshine/commits/main"><img src="https://img.shields.io/github/commits-since/NortheBridge/luminalshine/latest?include_prereleases&label=Commits%20since%20release&color=blue" alt="Commits since latest release"/></a>
   <a href="https://github.com/NortheBridge/luminalshine/actions/workflows/ci.yml"><img src="https://github.com/NortheBridge/luminalshine/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://codecov.io/gh/NortheBridge/luminalshine"><img src="https://codecov.io/gh/NortheBridge/luminalshine/graph/badge.svg?token=BCG83VQ1LZ" alt="codecov"/></a>
   <a href="https://github.com/NortheBridge/luminalshine/actions/workflows/update-pages.yml"><img src="https://github.com/NortheBridge/luminalshine/actions/workflows/update-pages.yml/badge.svg" alt="Build GH-Pages"/></a>
