@@ -124,8 +124,13 @@ def _demote_headings(body: str, levels: int = 1) -> str:
         if not in_fence:
             match = _HEADING_RE.match(line)
             if match:
-                new_level = min(len(match.group(1)) + levels, 6)
-                line = "#" * new_level + match.group(2)
+                old_hashes = match.group(1)
+                new_level = min(len(old_hashes) + levels, 6)
+                # Replace only the leading hashes; preserve the rest of
+                # the line verbatim (the prior version reconstructed
+                # `line` from the match groups, which dropped every
+                # character of the title past the first).
+                line = "#" * new_level + line[len(old_hashes):]
         out.append(line)
     return "\n".join(out)
 
