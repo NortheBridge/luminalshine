@@ -11,6 +11,15 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "types": ["vite/client", "node"],
+    // TypeScript 6.0 deprecates baseUrl (warns in 6.0, removed in
+    // 7.0). LuminalShine still needs it for the `paths` map below
+    // to resolve under vue-tsc + the IDE language service.
+    // Suppressed here so the typecheck CI step doesn't red-flag
+    // every PR; the 7.0 migration is to drop baseUrl entirely and
+    // rewrite the paths keys to be relative to the tsconfig
+    // location. Vite's resolve.alias handles runtime resolution
+    // independently of this TS-side path mapping.
+    "ignoreDeprecations": "6.0",
     "baseUrl": "./",
     "paths": {
       "@/*": ["./*"],
