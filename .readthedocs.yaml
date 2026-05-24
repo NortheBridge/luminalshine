@@ -1,29 +1,50 @@
 ---
 # .readthedocs.yaml
 # Read the Docs configuration file
-# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+# https://docs.readthedocs.io/en/stable/config-file/v2.html
+#
+# Builds the LuminalShine Sphinx documentation with the Furo theme,
+# tuned to the NortheBridge "aurora" palette — a near-black background
+# (#04060f / #070b1f) with cyan + royal-blue accents (#1ec8ff, #4a7dff)
+# matching https://gitdocs.northebridge.com/luminalshine.
+#
+# Doxygen is invoked in pre_build to emit XML, which breathe renders
+# inside the Sphinx output (see docs/api/cpp.md) — this preserves the
+# C++ API reference that the previous doxygen-only build produced.
+#
+# Theme colors and fonts are configured in docs/conf.py and
+# docs/_static/luminalshine.css; this file only wires up the build.
 
 version: 2
 
 build:
   os: ubuntu-24.04
   tools:
-    python: "miniconda-latest"
-  commands:
-    - |
-      if [ -f readthedocs_build.sh ]; then
-        doxyconfig_dir="."
-      else
-        doxyconfig_dir="./third-party/doxyconfig"
-      fi
-      chmod +x "${doxyconfig_dir}/readthedocs_build.sh"
-      export DOXYCONFIG_DIR="${doxyconfig_dir}"
-      "${doxyconfig_dir}/readthedocs_build.sh"
+    python: "3.12"
+  apt_packages:
+    - doxygen
+    - graphviz
+  jobs:
+    pre_build:
+      # Produce Doxygen XML for breathe. We use a thin override
+      # (docs/Doxyfile-xml) that @INCLUDEs the existing Doxyfile and
+      # flips on XML output. Soft-fail so a doxygen hiccup doesn't
+      # kill the whole HTML build — breathe directives will warn
+      # individually if the XML they reference is missing.
+      - cd docs && doxygen Doxyfile-xml || echo "::warning::doxygen XML build failed; C++ API pages will be empty"
 
-# using conda, we can get newer doxygen and graphviz than ubuntu provide
-# https://github.com/readthedocs/readthedocs.org/issues/8151#issuecomment-890359661
-conda:
-  environment: third-party/doxyconfig/environment.yml
+sphinx:
+  configuration: docs/conf.py
+  fail_on_warning: false
+
+formats:
+  - htmlzip
+  - pdf
+  - epub
+
+python:
+  install:
+    - requirements: docs/requirements.txt
 
 submodules:
   include: all

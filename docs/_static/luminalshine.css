@@ -1,0 +1,160 @@
+/*
+ * LuminalShine Sphinx (Furo) overrides — NortheBridge aurora palette.
+ * Matches https://gitdocs.northebridge.com/luminalshine.
+ *
+ * Most colors are wired through Furo's CSS variables in conf.py; this
+ * file adds the radial aurora backdrop, Inter webfont, and a few
+ * accent-on-black niceties that Furo doesn't expose as variables.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root,
+body,
+body[data-theme="light"],
+body[data-theme="dark"] {
+  --ls-bg-base: #04060f;
+  --ls-bg-deep: #070b1f;
+  --ls-blue-1: #1ec8ff;
+  --ls-blue-2: #4a7dff;
+  --ls-violet: #8a5cff;
+  --ls-teal:   #00e0c6;
+  --ls-text:   #f3f6ff;
+  --ls-border: rgba(255, 255, 255, 0.12);
+}
+
+/* Aurora gradient backdrop — same recipe as the gh-pages site */
+body {
+  background-color: var(--ls-bg-base);
+  position: relative;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 50% at 15% 20%, rgba(30, 200, 255, 0.28), transparent 60%),
+    radial-gradient(ellipse 50% 45% at 85% 15%, rgba(138, 92, 255, 0.22), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 50% 95%, rgba(0, 224, 198, 0.16), transparent 65%),
+    radial-gradient(ellipse 45% 40% at 90% 80%, rgba(74, 125, 255, 0.22), transparent 60%),
+    linear-gradient(180deg, var(--ls-bg-deep) 0%, var(--ls-bg-base) 100%);
+  filter: blur(40px) saturate(125%);
+}
+
+/* Keep content surfaces readable on top of the aurora */
+.sidebar-drawer,
+.content,
+.toc-drawer {
+  background-color: rgba(7, 11, 31, 0.72);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+
+/* Brand mark / site title */
+.sidebar-brand-text {
+  background: linear-gradient(135deg, var(--ls-blue-1), var(--ls-violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Headings get a subtle cyan tint, links the brand blue */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--ls-text);
+  letter-spacing: -0.015em;
+}
+
+h1 {
+  background: linear-gradient(135deg, var(--ls-text) 0%, var(--ls-blue-1) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+a, .toctree-l1 > a:hover {
+  text-decoration-color: rgba(30, 200, 255, 0.4);
+}
+
+/* Inline + block code blocks */
+code.literal {
+  background: rgba(30, 200, 255, 0.10);
+  border: 1px solid rgba(30, 200, 255, 0.22);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  color: var(--ls-blue-1);
+}
+
+.highlight, pre {
+  background: rgba(7, 11, 31, 0.85) !important;
+  border: 1px solid var(--ls-border);
+  border-radius: 8px;
+}
+
+/* Buttons / admonitions / search */
+.sidebar-search,
+.sidebar-search:focus,
+.sidebar-search-container input[type="search"] {
+  background-color: rgba(7, 11, 31, 0.6);
+  border: 1px solid var(--ls-border);
+  color: var(--ls-text);
+}
+
+.admonition {
+  border-left: 3px solid var(--ls-blue-1);
+  background-color: rgba(7, 11, 31, 0.7);
+  border-radius: 6px;
+}
+
+.admonition.note,
+.admonition.tip,
+.admonition.hint {
+  border-left-color: var(--ls-blue-1);
+}
+
+.admonition.warning,
+.admonition.caution {
+  border-left-color: #ffb454;
+}
+
+.admonition.danger,
+.admonition.error {
+  border-left-color: #ff6b6b;
+}
+
+/* Tables */
+table.docutils {
+  border: 1px solid var(--ls-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+table.docutils thead {
+  background: rgba(30, 200, 255, 0.08);
+}
+
+table.docutils th {
+  color: var(--ls-blue-1);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Selection */
+::selection {
+  background: rgba(30, 200, 255, 0.35);
+  color: var(--ls-text);
+}
+
+/* Scrollbar polish */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--ls-bg-base); }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--ls-blue-2), var(--ls-violet));
+  border-radius: 5px;
+}
