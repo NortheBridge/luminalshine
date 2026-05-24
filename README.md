@@ -8,6 +8,9 @@
   <a href="https://github.com/NortheBridge/luminalshine/actions/workflows/ci.yml"><img src="https://github.com/NortheBridge/luminalshine/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://codecov.io/gh/NortheBridge/luminalshine"><img src="https://codecov.io/gh/NortheBridge/luminalshine/graph/badge.svg?token=BCG83VQ1LZ" alt="codecov"/></a>
   <a href="https://github.com/NortheBridge/luminalshine/actions/workflows/update-pages.yml"><img src="https://github.com/NortheBridge/luminalshine/actions/workflows/update-pages.yml/badge.svg" alt="Build GH-Pages"/></a>
+  <a href="https://github.com/NortheBridge/luminalshine"><img src="https://img.shields.io/github/languages/code-size/NortheBridge/luminalshine?label=Code%20size&color=blue" alt="Code size in bytes"/></a>
+  <a href="https://github.com/NortheBridge/luminalshine/stargazers"><img src="https://img.shields.io/github/stars/NortheBridge/luminalshine?label=Stars&color=blue" alt="GitHub stars"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/NortheBridge/luminalshine?label=License&color=blue" alt="License"/></a>
 </p>
 
 <p align="center">
