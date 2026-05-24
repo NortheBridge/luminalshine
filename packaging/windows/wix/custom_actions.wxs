@@ -318,6 +318,39 @@
     </DirectoryRef>
   </Fragment>
 
+  <!-- Session Monitor: independent Windows service that records
+       per-stream-session telemetry (encode latency, throughput, FPS,
+       host CPU/GPU/RAM/VRAM, connection-quality events) for the
+       Session Details panel in the Web UI. Crash-isolated from
+       LuminalShineService so a regression in metrics collection can't
+       affect the streaming hot path. Storage lives in
+       %ProgramData%\LuminalShine\sessions\<uuid>.json; localhost-only
+       HTTP query port written to %ProgramData%\LuminalShine\
+       session_mon.port. -->
+  <Fragment>
+    <DirectoryRef Id="DIR_Tools">
+      <Component Id="LuminalShineSessionMonSvc" Guid="*">
+        <File Id="LuminalShineSessionMonExe"
+              Source="!(bindpath.PayloadRoot)tools\luminalshine_sessionmon.exe"
+              KeyPath="yes" />
+        <ServiceInstall
+            Id="LuminalShineSessionMonServiceInstall"
+            Name="LuminalShineSessionMonitor"
+            DisplayName="LuminalShine Session Monitor"
+            Description="Records per-stream telemetry (encode latency, throughput, FPS, host CPU/GPU/RAM/VRAM, connection-quality events) so the LuminalShine Web UI's Session Details panel can render historical session graphs. Crash-isolated from the main streaming service."
+            Type="ownProcess"
+            Start="auto"
+            ErrorControl="normal" />
+        <ServiceControl Id="StartLuminalShineSessionMon"
+            Name="LuminalShineSessionMonitor"
+            Start="install"
+            Stop="both"
+            Remove="uninstall"
+            Wait="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
   <Fragment>
     <CustomAction Id="ResetAcls" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
     <CustomAction Id="MigrateConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="check" Impersonate="no" />
@@ -466,13 +499,13 @@
          sunshine_*.dll open on Insider Preview builds. -->
     <CustomAction Id="SetKillProcsQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine_xbox_bt_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine_xbox_bt_helper','luminalshine_sessionmon','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetKillProcsQuiet"
                  Property="KillProcsQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine_xbox_bt_helper','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoProfile -ExecutionPolicy Bypass -Command &quot;$n='luminalshine','luminalshinesvc','luminalshine_wgc_capture','luminalshine_display_helper','luminalshine_xbox_bt_helper','luminalshine_sessionmon','luminalshine-playnite-launcher','sunshine','sunshinesvc','sunshine_wgc_capture','sunshine_display_helper','display_helper','playnite_launcher','playnite-launcher'; foreach($p in $n){ Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }&quot;"/>
     <CustomAction Id="SetRemoveServiceQuiet"
                  Property="RemoveServiceQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete LuminalShineXboxBtHelper | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoP -EP Bypass -C &quot;sc.exe delete SunshineService | Out-Null; sc.exe delete LuminalShineService | Out-Null; sc.exe delete LuminalShineXboxBtHelper | Out-Null; sc.exe delete LuminalShineSessionMonitor | Out-Null; sc.exe delete sunshinesvc | Out-Null&quot;"/>
 
     <!-- Legacy Sunshine handling actions -->
     <CustomAction Id="AskUninstallLegacySunshine" BinaryKey="AskUninstallLegacySunshineVbs" VBScriptCall="AskUninstallLegacySunshine" Execute="immediate" Return="check" />

@@ -25,6 +25,7 @@
       <ComponentRef Id="CtlStopSunshine"/>
       <ComponentRef Id="SunshineSvc"/>
       <ComponentRef Id="LuminalShineXboxBtHelperSvc"/>
+      <ComponentRef Id="LuminalShineSessionMonSvc"/>
       <ComponentRef Id="Env_Path"/>
       <ComponentRef Id="Fw_Exceptions"/>
       <ComponentRef Id="StartMenuShortcut"/>

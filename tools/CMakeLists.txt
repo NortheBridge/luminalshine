@@ -177,3 +177,41 @@ add_custom_command(TARGET luminalshine_xbox_bt_helper POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
         COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:luminalshine_xbox_bt_helper>" "${CMAKE_BINARY_DIR}/wix_payload/tools/luminalshine_xbox_bt_helper.exe"
 )
+
+# Session monitor service: independent Windows service that records
+# per-stream-session telemetry (encode latency, throughput, FPS,
+# host CPU/GPU/RAM/VRAM, connection-quality events). Crash-isolated
+# from LuminalShineService — a regression in the monitor cannot stall
+# the streaming hot path, and a streaming-host crash finalises the
+# active session via an ended_at marker so the Web UI's Session
+# Details panel still has the history. Ingest via named pipe
+# `\\.\pipe\LuminalShineSessionMonIngest`; query via localhost HTTP
+# on a randomised port written to %ProgramData%\LuminalShine\
+# session_mon.port.
+#
+# Standalone TU with no Boost / Simple-Web-Server dependency so the
+# monitor's failure modes are decoupled from the main service's
+# dependency closure. Pulls in nlohmann::json for frame parsing and
+# response serialisation.
+add_executable(luminalshine_sessionmon
+        luminalshine_sessionmon.cpp)
+set_target_properties(luminalshine_sessionmon PROPERTIES CXX_STANDARD 23
+        OUTPUT_NAME luminalshine_sessionmon)
+target_link_libraries(luminalshine_sessionmon
+        ${CMAKE_THREAD_LIBS_INIT}
+        nlohmann_json::nlohmann_json
+        advapi32
+        shell32
+        ole32
+        ws2_32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(luminalshine_sessionmon PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# Mirror the xbox-bt helper's WiX staging step so the binary lands in
+# the same wix_payload/tools/ directory that the MSI bindpath points
+# at. The matching <Component Id="LuminalShineSessionMonSvc" ...>
+# lives in packaging/windows/wix/custom_actions.wxs.
+add_custom_command(TARGET luminalshine_sessionmon POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:luminalshine_sessionmon>" "${CMAKE_BINARY_DIR}/wix_payload/tools/luminalshine_sessionmon.exe"
+)
