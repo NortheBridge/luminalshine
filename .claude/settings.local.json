@@ -199,7 +199,13 @@
       "Bash(git -C /Users/Avalon/Git/luminalshine diff)",
       "Bash(git -C /Users/Avalon/Git/luminalshine log -5 --oneline)",
       "Bash(git -C /Users/Avalon/Git/luminalshine add README.md)",
-      "Bash(git -C /Users/Avalon/Git/luminalshine commit -m ' *)"
+      "Bash(git -C /Users/Avalon/Git/luminalshine commit -m ' *)",
+      "Bash(grep -n \"session::alloc\\\\|stream::session::alloc\" /Users/Anthropic/Git/luminalshine/src/*.cpp 2>/dev/null || grep -rn \"session::alloc\" /Users/Avalon/Git/luminalshine/src --include=\"*.cpp\" | head -5)",
+      "Read(//Users/Anthropic/Git/luminalshine/**)",
+      "Bash(grep -n \"^    }$\\\\|return session;\" /Users/Avalon/Git/luminalshine/src/stream.cpp)",
+      "Bash(grep -n \"^    }$\" /Users/Avalon/Git/luminalshine/src/stream.cpp)",
+      "Bash(awk -F: '$2>2500 && $2<2700 {print}')",
+      "Bash(npm install *)"
     ],
     "deny": [],
     "ask": [],
