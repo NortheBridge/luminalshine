@@ -188,7 +188,11 @@
       "Bash(doxygen Doxyfile)",
       "Bash(/tmp/luminalshine-docs-venv/bin/python -m sphinx -T -j auto -b html -d docs/_build/doctrees -D language=en docs docs/_build/html)",
       "Bash(gh repo *)",
-      "Bash(mkdir -p /Users/Avalon/Git/northebridge-appdocs/docs/_static && ls -d /Users/Avalon/Git/northebridge-appdocs/docs/_static)"
+      "Bash(mkdir -p /Users/Avalon/Git/northebridge-appdocs/docs/_static && ls -d /Users/Avalon/Git/northebridge-appdocs/docs/_static)",
+      "Bash(grep -n \"TPM\\\\|tpm\\\\|three-layer\\\\|xbox.*bluetooth\\\\|Xbox\" /Users/Flavon/Git/luminalshine/src/cred_store/*.cpp | head -15)",
+      "Read(//Users/Flavon/Git/luminalshine/src/**)",
+      "Bash(grep -v \".o$\")",
+      "Bash(/tmp/luminalshine-docs-venv/bin/python docs/_scripts/build_changelog.py)"
     ],
     "deny": [],
     "ask": [],
