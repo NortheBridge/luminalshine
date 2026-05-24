@@ -1,0 +1,79 @@
+---
+# Trigger a Read the Docs rebuild of luminalshine/latest whenever a
+# GitHub release is published or edited. The Sphinx changelog page
+# is auto-generated from the Releases API on each build (see
+# docs/_scripts/build_changelog.py and docs/conf.py), so a rebuild
+# is the only thing needed to surface a new release.
+#
+# Requires repo secret READTHEDOCS_TOKEN with write scope on the
+# luminalshine project. Generate at
+# https://app.readthedocs.org/accounts/tokens/ and set with:
+#   gh secret set READTHEDOCS_TOKEN --repo NortheBridge/luminalshine
+#
+# The companion docs-only push workflow already covers the
+# "source markdown changed" path via the RTD webhook on `main`;
+# this workflow covers the "release content changed but no commit
+# landed" path.
+
+name: Refresh Read the Docs on release
+permissions: {}
+
+on:
+  release:
+    types:
+      - published
+      - edited
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "RTD version slug to rebuild"
+        required: false
+        default: "latest"
+
+concurrency:
+  group: "refresh-readthedocs-${{ github.event.inputs.version || 'latest' }}"
+  # Don't cancel: an edit-after-publish should still trigger a refresh
+  # even if a publish-triggered run is mid-flight.
+  cancel-in-progress: false
+
+jobs:
+  trigger-rebuild:
+    name: Trigger RTD build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: POST /api/v3/projects/luminalshine/versions/{version}/builds/
+        env:
+          RTD_TOKEN: ${{ secrets.READTHEDOCS_TOKEN }}
+          RTD_VERSION: ${{ github.event.inputs.version || 'latest' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RTD_TOKEN:-}" ]; then
+            echo "::error::Secret READTHEDOCS_TOKEN is not set on this repository."
+            echo "::error::Set it with: gh secret set READTHEDOCS_TOKEN --repo \${{ github.repository }}"
+            exit 1
+          fi
+
+          url="https://readthedocs.org/api/v3/projects/luminalshine/versions/${RTD_VERSION}/builds/"
+          echo "POST $url"
+
+          tmp_body=$(mktemp)
+          http_code=$(curl -sS -X POST \
+            -H "Authorization: Token ${RTD_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -o "${tmp_body}" \
+            -w '%{http_code}' \
+            "${url}")
+
+          echo "HTTP ${http_code}"
+          python3 -m json.tool < "${tmp_body}" || cat "${tmp_body}"
+
+          if [ "${http_code}" != "202" ] && [ "${http_code}" != "201" ]; then
+            echo "::error::Read the Docs API returned ${http_code}; rebuild not queued."
+            exit 1
+          fi
+
+          build_id=$(python3 -c "import json,sys; print(json.load(open('${tmp_body}'))['build']['id'])")
+          echo "::notice::Triggered RTD build ${build_id}: https://app.readthedocs.org/projects/luminalshine/builds/${build_id}/"
