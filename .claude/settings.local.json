@@ -194,7 +194,12 @@
       "Bash(grep -v \".o$\")",
       "Bash(/tmp/luminalshine-docs-venv/bin/python docs/_scripts/build_changelog.py)",
       "Bash(grep -E '^#{3,}\\\\s+' docs/_generated/changelog_releases.md)",
-      "Bash(curl -sS -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \"https://appdocs.northebridge.com/projects/luminalshine/en/latest/changelog.html?$\\(date +%s\\)\" -o /tmp/cl2.html -w 'HTTP %{http_code} bytes=%{size_download}\\\\n')"
+      "Bash(curl -sS -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \"https://appdocs.northebridge.com/projects/luminalshine/en/latest/changelog.html?$\\(date +%s\\)\" -o /tmp/cl2.html -w 'HTTP %{http_code} bytes=%{size_download}\\\\n')",
+      "Bash(git -C /Users/Avalon/Git/luminalshine status)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine diff)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine log -5 --oneline)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine add README.md)",
+      "Bash(git -C /Users/Avalon/Git/luminalshine commit -m ' *)"
     ],
     "deny": [],
     "ask": [],
