@@ -23,6 +23,7 @@
     "marked-highlight": "^2.1.4",
     "naive-ui": "^2.39.0",
     "pinia": "^2.1.8",
+    "uplot": "1.6.32",
     "vue": "3.5.18",
     "vue-i18n": "11.1.11",
     "vue-router": "4.4.5"

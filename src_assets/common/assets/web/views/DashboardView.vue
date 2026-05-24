@@ -473,6 +473,15 @@
       <!-- High Performance Streaming -->
       <HighPerformanceCard />
 
+      <!-- Session History — list of recent streams, click a row to
+           open the Session Details slide-out panel (charts +
+           disconnect/export/delete). Fed by the
+           LuminalShineSessionMonitor sidecar service via the
+           main service's /api/sessions proxy. -->
+      <div class="min-w-0">
+        <SessionHistoryCard />
+      </div>
+
       <!-- Resources -->
       <div class="min-w-0">
         <n-card>
@@ -497,6 +506,7 @@ import { NCard, NAlert, useMessage, useDialog } from 'naive-ui';
 import ResourceCard from '@/ResourceCard.vue';
 import HighPerformanceCard from '@/components/HighPerformanceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
+import SessionHistoryCard from '@/components/SessionHistoryCard.vue';
 import LuminalShineVersion, { GitHubRelease } from '@/sunshine_version';
 import { renderReleaseMarkdown } from '@/utils/markdown';
 import { useConfigStore } from '@/stores/config';
