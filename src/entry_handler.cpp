@@ -23,6 +23,9 @@
 
 #ifdef _WIN32
   #include "cred_store/tpm_seal_windows.h"
+  #include <filesystem>
+  #include <ShlObj.h>
+  #include <KnownFolders.h>
 #endif
 
 extern "C" {
@@ -106,6 +109,57 @@ namespace args {
     BOOST_LOG(info) << "reset_admin_credentials: cleared credential record"
                     << (erase_ok ? "" : " (with errors; see log)") << ".";
     return erase_ok ? 0 : 1;
+  }
+
+  int reset_session_history() {
+    // %ProgramData%\LuminalShine\sessions\<uuid>.json + the sibling
+    // session_mon.port discovery file. We do NOT touch the running
+    // sidecar's in-memory state — the next service restart will see
+    // an empty sessions/ directory and start fresh. If KEEPADMINCRE-
+    // DENTIALS-style deletion-during-active-stream becomes a
+    // concern later, the right move is to stop the sidecar service
+    // around this call.
+#ifdef _WIN32
+    namespace fs = std::filesystem;
+    PWSTR pd = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &pd)) || !pd) {
+      BOOST_LOG(warning) << "reset_session_history: could not resolve %ProgramData%";
+      return 1;
+    }
+    fs::path root = fs::path(pd) / L"LuminalShine";
+    CoTaskMemFree(pd);
+
+    bool ok = true;
+    std::error_code ec;
+    std::size_t removed = 0;
+    fs::path sessions = root / L"sessions";
+    if (fs::exists(sessions, ec)) {
+      for (const auto &entry : fs::directory_iterator(sessions, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().extension() != ".json") continue;
+        std::error_code rm_ec;
+        fs::remove(entry.path(), rm_ec);
+        if (rm_ec) {
+          BOOST_LOG(warning) << "reset_session_history: failed to remove "
+                             << entry.path().string() << ": " << rm_ec.message();
+          ok = false;
+        } else {
+          ++removed;
+        }
+      }
+    }
+
+    fs::path port_file = root / L"session_mon.port";
+    std::error_code port_ec;
+    fs::remove(port_file, port_ec);
+
+    BOOST_LOG(info) << "reset_session_history: removed " << removed
+                    << " session file(s)" << (ok ? "" : " (with errors; see log)") << ".";
+    return ok ? 0 : 1;
+#else
+    return 0;
+#endif
   }
 }  // namespace args
 

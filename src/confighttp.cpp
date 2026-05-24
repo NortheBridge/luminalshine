@@ -63,6 +63,7 @@
   #include "platform/windows/sudovda_recovery.h"
 #endif
 #include "cred_store/cred_store.h"
+#include "entry_handler.h"
 #include "session_monitor_proxy.h"
 #include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
@@ -2128,6 +2129,32 @@ namespace confighttp {
     forward_session_mon_response(
       response, session_mon::proxy::get("/api/sessions/" + id + "/export.json")
     );
+  }
+
+  /// POST /api/state/reset-session-history — wipe the on-disk
+  /// session archive at %ProgramData%\LuminalShine\sessions\. The
+  /// running sidecar's in-memory ring buffer is NOT touched; the
+  /// Web UI's session list refreshes within 5 s and shows only the
+  /// sessions still held in memory. Wired to the Troubleshooting
+  /// "Clear Session History" card.
+  void resetSessionHistory(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+    nlohmann::json out;
+    const int rc = args::reset_session_history();
+    if (rc == 0) {
+      out["status"] = true;
+      out["message"] = "Session history cleared.";
+    } else {
+      out["status"] = false;
+      out["message"] = "Session history clear completed with errors. See service log.";
+    }
+    send_response(response, out);
   }
 
   /// DELETE /api/sessions/<id> — remove the recorded session.
@@ -4261,6 +4288,7 @@ namespace confighttp {
     register_api_route("^/api/sessions/([A-Za-z0-9_-]+)$", "GET", getSessionDetails);
     register_api_route("^/api/sessions/([A-Za-z0-9_-]+)$", "DELETE", deleteSession);
     register_api_route("^/api/sessions/([A-Za-z0-9_-]+)/export\\.json$", "GET", exportSession);
+    register_api_route("^/api/state/reset-session-history$", "POST", resetSessionHistory);
     register_api_route("^/api/apps/close$", "POST", closeApp);
     register_api_route("^/api/session/status$", "GET", getSessionStatus);
     register_api_route("^/api/webrtc/sessions$", "GET", listWebRTCSessions);

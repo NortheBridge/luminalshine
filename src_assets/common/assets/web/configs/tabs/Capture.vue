@@ -357,6 +357,7 @@ const shouldShowSoftware = computed(() => showAll() || props.currentTab === 'sw'
       <ConfigFieldRenderer setting-key="capture" v-model="config.capture" />
       <ConfigFieldRenderer setting-key="encoder" v-model="config.encoder" />
       <ConfigFieldRenderer setting-key="prefer_10bit_sdr" v-model="config.prefer_10bit_sdr" />
+      <ConfigFieldRenderer setting-key="session_monitor" v-model="config.session_monitor" />
       <fieldset
         v-if="platform === 'windows'"
         class="space-y-4 rounded-xl border border-dark/35 p-4 dark:border-light/25"

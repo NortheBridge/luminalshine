@@ -428,6 +428,49 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.clear_session_history', 'Clear Session History') }}
+            </h2>
+            <p class="text-xs opacity-70 leading-snug">
+              {{
+                translate(
+                  'troubleshooting.clear_session_history_desc',
+                  "Deletes every recorded session JSON in %ProgramData%\\LuminalShine\\sessions\\ . The Session History card on the Dashboard empties on the next 5-second refresh tick. The running LuminalShineSessionMonitor service keeps its in-memory ring buffer until it restarts; this card targets the on-disk archive specifically. Disable 'Record session telemetry' in Settings → Capture to stop future streams from populating new entries.",
+                )
+              }}
+            </p>
+          </div>
+          <n-button
+            type="error"
+            strong
+            :loading="clearSessionHistoryPending"
+            :disabled="clearSessionHistoryPending"
+            @click="confirmClearSessionHistory"
+          >
+            {{
+              clearSessionHistoryPending
+                ? translate('troubleshooting.clear_session_history_pending', 'Clearing...')
+                : translate('troubleshooting.clear_session_history', 'Clear Session History')
+            }}
+          </n-button>
+        </div>
+        <n-alert v-if="clearSessionHistoryStatus === 'success'" type="success" class="mt-3">
+          {{
+            clearSessionHistoryMessage ||
+            translate(
+              'troubleshooting.clear_session_history_success',
+              'Session history cleared.',
+            )
+          }}
+        </n-alert>
+        <n-alert v-else-if="clearSessionHistoryStatus === 'error'" type="error" class="mt-3">
+          {{ clearSessionHistoryMessage }}
+        </n-alert>
+      </section>
+
+      <section class="troubleshoot-card">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 class="text-base font-semibold text-dark dark:text-light">
               {{ translate('troubleshooting.reset_state', 'Reset Stored Pairings') }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
@@ -712,6 +755,9 @@ const clearSteamLibraryMessage = ref('');
 const clearNonsteamShortcutsPending = ref(false);
 const clearNonsteamShortcutsStatus = ref<null | 'success' | 'error'>(null);
 const clearNonsteamShortcutsMessage = ref('');
+const clearSessionHistoryPending = ref(false);
+const clearSessionHistoryStatus = ref<null | 'success' | 'error'>(null);
+const clearSessionHistoryMessage = ref('');
 const dialog = useDialog();
 
 type TdrLast = {
@@ -1103,6 +1149,60 @@ function confirmClearNonsteamShortcuts() {
     negativeText: translate('troubleshooting.cancel', 'Cancel'),
     onPositiveClick: async () => {
       await doClearNonsteamShortcuts();
+    },
+  });
+}
+
+async function doClearSessionHistory() {
+  clearSessionHistoryPending.value = true;
+  clearSessionHistoryStatus.value = null;
+  clearSessionHistoryMessage.value = '';
+  try {
+    const r = await http.post(
+      './api/state/reset-session-history',
+      {},
+      { validateStatus: () => true },
+    );
+    const body = (r.data || {}) as { status?: boolean; message?: string };
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      clearSessionHistoryStatus.value = 'success';
+      clearSessionHistoryMessage.value =
+        (typeof body.message === 'string' && body.message) ||
+        translate(
+          'troubleshooting.clear_session_history_success',
+          'Session history cleared.',
+        );
+    } else {
+      clearSessionHistoryStatus.value = 'error';
+      clearSessionHistoryMessage.value =
+        (typeof body.message === 'string' && body.message) || `HTTP ${r.status}`;
+    }
+  } catch (e: unknown) {
+    clearSessionHistoryStatus.value = 'error';
+    clearSessionHistoryMessage.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    clearSessionHistoryPending.value = false;
+  }
+}
+
+function confirmClearSessionHistory() {
+  if (clearSessionHistoryPending.value) return;
+  dialog.warning({
+    title: translate(
+      'troubleshooting.clear_session_history_confirm_title',
+      'Clear Session History?',
+    ),
+    content: translate(
+      'troubleshooting.clear_session_history_confirm_body',
+      'Every recorded session JSON in %ProgramData%\\LuminalShine\\sessions\\ will be deleted and the Session History card on the Dashboard will empty within ~5 seconds. The running LuminalShineSessionMonitor service keeps its in-memory ring buffer until it restarts, so a currently-active stream still shows up live. Continue?',
+    ),
+    positiveText: translate(
+      'troubleshooting.clear_session_history_confirm_yes',
+      'Clear history',
+    ),
+    negativeText: translate('troubleshooting.cancel', 'Cancel'),
+    onPositiveClick: async () => {
+      await doClearSessionHistory();
     },
   });
 }

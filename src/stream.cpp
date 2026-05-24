@@ -2227,8 +2227,13 @@ namespace stream {
       // Mark the session as ended in the monitor service so the Web
       // UI's "Active" badge clears and the session JSON is finalised
       // on disk. Independent of the actual thread-join below; the
-      // monitor never blocks on streaming-host state.
-      session_mon::session_ended(session_mon::make_id(session.launch_session_id));
+      // monitor never blocks on streaming-host state. Mirror the
+      // alloc() gate — if telemetry was disabled when the session
+      // started, the monitor never saw session_started either, and
+      // sending an end frame would create an empty ghost record.
+      if (config::stream.session_monitor) {
+        session_mon::session_ended(session_mon::make_id(session.launch_session_id));
+      }
 
       session.shutdown_event->raise(true);
     }
@@ -2622,7 +2627,11 @@ namespace stream {
       // Details panel has something to render. Fire-and-forget — if
       // the monitor isn't running, the producer client buffers
       // briefly and drops; streaming proceeds either way.
-      {
+      //
+      // Gated by `config::stream.session_monitor` so users who don't
+      // want the telemetry can opt out in Settings → Capture without
+      // having to stop the sidecar service.
+      if (config::stream.session_monitor) {
         session_mon::SessionMetadata md;
         md.client_name = launch_session.client_name;
         md.device      = launch_session.client_name;   // best available — RTSP doesn't carry a separate "device" string

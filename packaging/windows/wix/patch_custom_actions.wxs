@@ -94,6 +94,13 @@
       <Custom Action="SetResetAdminCredentials" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS &lt;&gt; "1"</Custom>
       <Custom Action="ResetAdminCredentials" After="SetResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS &lt;&gt; "1"</Custom>
 
+      <!-- Wipe %ProgramData%\LuminalShine\sessions\ on a real
+           uninstall so the historical telemetry doesn't linger.
+           Gated on KEEPSESSIONDATA != "1" so an advanced operator
+           can opt out when migrating to a new install. -->
+      <Custom Action="SetResetSessionHistory" After="ResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA &lt;&gt; "1"</Custom>
+      <Custom Action="ResetSessionHistory" After="SetResetSessionHistory">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA &lt;&gt; "1"</Custom>
+
       <!-- Remove Virtual Display Drivers only when explicitly requested by uninstall properties.
            Both backends are uninstalled when REMOVEVIRTUALDISPLAYDRIVER=1; if only one was
            installed the corresponding script is a no-op. -->

@@ -81,6 +81,23 @@ namespace args {
    * @examples_end
    */
   int reset_admin_credentials();
+
+  /**
+   * @brief Clear the recorded session history.
+   * Removes every `<uuid>.json` file from
+   * `%ProgramData%\LuminalShine\sessions\` and the
+   * `session_mon.port` discovery file. Used by:
+   *   - the Troubleshooting page's "Clear Session History" card,
+   *   - the MSI uninstall custom action when
+   *     KEEPSESSIONDATA != "1", so an uninstall doesn't leave
+   *     historical telemetry on disk.
+   * The running LuminalShineSessionMonitor service still holds
+   * its in-memory ring buffer; deleting the files clears the
+   * on-disk archive but the live state stays intact until the
+   * sidecar restarts. Returns 0 on success / nothing-to-clear,
+   * non-zero on hard I/O failure (logged).
+   */
+  int reset_session_history();
 }  // namespace args
 
 /**

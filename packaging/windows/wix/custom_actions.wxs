@@ -390,6 +390,14 @@
          install) must not surface as 1603 — cleanup is not load-bearing
          for the uninstall transaction. -->
     <CustomAction Id="ResetAdminCredentials" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <!-- Wipe %ProgramData%\LuminalShine\sessions\ on a real uninstall
+         so historical session telemetry doesn't linger. Gated on
+         KEEPSESSIONDATA != "1" so an advanced operator can opt out
+         when migrating to a new install. Best-effort: the same
+         missing-exe guard the credential reset uses, plus
+         Return="ignore" so an empty / locked sessions dir cannot
+         red-X the uninstall transaction. -->
+    <CustomAction Id="ResetSessionHistory" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="DeleteInstallDir" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <!-- Remove everything but config on manual uninstalls when user chooses to keep data -->
     <CustomAction Id="PruneButConfig" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
@@ -451,6 +459,14 @@
     <CustomAction Id="SetResetAdminCredentials"
                  Property="ResetAdminCredentials"
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; --reset-admin-credentials) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --reset-admin-credentials)) &amp; exit /b 0"/>
+
+    <!-- Same guarded-exe + swallow-exit-code pattern as
+         SetResetAdminCredentials. The luminalshine.exe / sunshine.exe
+         offline CLI does the actual filesystem wipe (see
+         args::reset_session_history in src/entry_handler.cpp). -->
+    <CustomAction Id="SetResetSessionHistory"
+                 Property="ResetSessionHistory"
+                 Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; --reset-session-history) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --reset-session-history)) &amp; exit /b 0"/>
 
 
     <CustomAction Id="SetUninstallMttVdd"

@@ -557,6 +557,8 @@
     "sw_tune_grain": "grain -- preserves the grain structure in old, grainy film material",
     "sw_tune_stillimage": "stillimage -- good for slideshow-like content",
     "sw_tune_zerolatency": "zerolatency -- good for fast encoding and low-latency streaming (default)",
+    "session_monitor": "Record session telemetry",
+    "session_monitor_desc": "Push per-stream telemetry (encode latency, throughput, FPS, host CPU/RAM, connection-quality events) to the LuminalShineSessionMonitor sidecar service. Powers the Session Details slide-out on the Dashboard with live and historical charts. When disabled the streaming host emits no session frames and the Dashboard's Session History card stays empty for future streams. Existing recorded sessions are unaffected.",
     "nonsteam_shortcuts_auto_sync": "Auto-sync non-Steam shortcuts",
     "nonsteam_shortcuts_auto_sync_desc": "Also scan every Steam user's 'Add a Non-Steam Game' shortcuts (kept in each user's shortcuts.vdf) and surface them in Moonlight after the Steam Games section. Each shortcut launches via its stored Exe path with the StartDir as the working directory and any LaunchOptions appended — the same way Steam itself launches them. Generated entries live in a separate nonsg_apps.json file. Independent of the main Steam auto-sync toggle: you can enable shortcuts without enabling the full Steam library, or vice versa.",
     "steam_auto_sync": "Auto-sync Steam library",

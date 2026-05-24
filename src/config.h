@@ -223,6 +223,17 @@ namespace config {
     // Video encryption settings for LAN and WAN streams
     int lan_encryption_mode;
     int wan_encryption_mode;
+
+    /// Push per-session telemetry (encode latency, throughput, FPS,
+    /// host CPU/RAM, connection-quality events) to the
+    /// LuminalShineSessionMonitor sidecar so the Web UI's Session
+    /// Details panel populates. When false the streaming host emits
+    /// neither session_started nor sample frames; the monitor's
+    /// ring buffer is therefore not populated and the
+    /// SessionHistoryCard stays empty. Default true; users who want
+    /// to avoid the (trivial) IPC overhead or simply don't use the
+    /// dashboard panel can flip it off in Settings → Capture.
+    bool session_monitor {true};
   };
 
   struct nvhttp_t {

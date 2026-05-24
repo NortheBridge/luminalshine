@@ -250,6 +250,10 @@ const defaultGroups = [
       prefer_10bit_sdr: false,
       capture: '',
       encoder: '',
+      // Per-session telemetry to the LuminalShineSessionMonitor
+      // sidecar (powers the Session Details panel). Default ON to
+      // match the C++ struct's `bool session_monitor {true}`.
+      session_monitor: true,
     },
   },
   {
