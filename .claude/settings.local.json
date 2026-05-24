@@ -192,7 +192,9 @@
       "Bash(grep -n \"TPM\\\\|tpm\\\\|three-layer\\\\|xbox.*bluetooth\\\\|Xbox\" /Users/Flavon/Git/luminalshine/src/cred_store/*.cpp | head -15)",
       "Read(//Users/Flavon/Git/luminalshine/src/**)",
       "Bash(grep -v \".o$\")",
-      "Bash(/tmp/luminalshine-docs-venv/bin/python docs/_scripts/build_changelog.py)"
+      "Bash(/tmp/luminalshine-docs-venv/bin/python docs/_scripts/build_changelog.py)",
+      "Bash(grep -E '^#{3,}\\\\s+' docs/_generated/changelog_releases.md)",
+      "Bash(curl -sS -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \"https://appdocs.northebridge.com/projects/luminalshine/en/latest/changelog.html?$\\(date +%s\\)\" -o /tmp/cl2.html -w 'HTTP %{http_code} bytes=%{size_download}\\\\n')"
     ],
     "deny": [],
     "ask": [],
