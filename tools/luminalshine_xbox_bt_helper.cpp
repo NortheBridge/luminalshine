@@ -96,8 +96,8 @@ namespace {
   SERVICE_STATUS_HANDLE g_service_status_handle = nullptr;
   SERVICE_STATUS        g_service_status        = {};
   HANDLE                g_stop_event            = nullptr;
+  HANDLE                g_watcher_exit_event    = nullptr;
   HDEVNOTIFY            g_device_notify         = nullptr;
-  HANDLE                g_config_watch_handle   = INVALID_HANDLE_VALUE;
   FILE                 *g_log_file              = nullptr;
   std::mutex            g_log_mtx;
   std::mutex            g_config_mtx;
@@ -433,48 +433,123 @@ namespace {
   // ----------------------------------------------------- config watcher
 
   // Watches the config directory for file changes and reloads g_config on
-  // each one. ReadDirectoryChangesW is cheaper and lower-latency than
-  // polling; the wakeup at service stop happens via closing the directory
-  // handle, which causes ReadDirectoryChangesW to return FALSE immediately.
+  // each one. Uses overlapped (async) ReadDirectoryChangesW and waits on
+  // BOTH the I/O completion event and g_stop_event in a single
+  // WaitForMultipleObjects -- so shutdown wakes the watcher directly via
+  // the same event ServiceMain already uses. The previous approach (close
+  // the directory handle from ServiceMain to cancel the synchronous I/O)
+  // was the best-effort path documented as "may not be instantaneous",
+  // and a slow cancel left watcher.join() hung long enough for SCM to
+  // log Event 7043 (preshutdown timeout) on real hosts.
+  //
+  // On exit, signals g_watcher_exit_event so ServiceMain can bound-wait
+  // on the thread without risking a hung join.
   void config_watcher_thread() {
+    auto signal_exit = [] {
+      if (g_watcher_exit_event) {
+        SetEvent(g_watcher_exit_event);
+      }
+    };
+
     auto dir = config_dir_path();
     if (dir.empty()) {
+      signal_exit();
       return;
     }
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
 
-    g_config_watch_handle = CreateFileW(
+    HANDLE dir_handle = CreateFileW(
       dir.wstring().c_str(),
       FILE_LIST_DIRECTORY,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
       nullptr,
       OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
       nullptr);
-    if (g_config_watch_handle == INVALID_HANDLE_VALUE) {
+    if (dir_handle == INVALID_HANDLE_VALUE) {
       log_warn("config watcher: failed to open " + narrow(dir.wstring())
                + " (last error " + std::to_string(GetLastError()) + ")");
+      signal_exit();
+      return;
+    }
+
+    // Manual-reset completion event. ReadDirectoryChangesW signals it when
+    // the queued change report is ready; we reset before each new issue.
+    HANDLE completion_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!completion_event) {
+      log_warn("config watcher: failed to create completion event (last error "
+               + std::to_string(GetLastError()) + ")");
+      CloseHandle(dir_handle);
+      signal_exit();
       return;
     }
 
     std::vector<unsigned char> buf(4096);
 
+    auto cleanup = [&] {
+      CloseHandle(dir_handle);
+      CloseHandle(completion_event);
+      signal_exit();
+    };
+
     for (;;) {
       DWORD bytes = 0;
+      ResetEvent(completion_event);
+      OVERLAPPED ov = {};
+      ov.hEvent = completion_event;
+
       BOOL ok = ReadDirectoryChangesW(
-        g_config_watch_handle,
+        dir_handle,
         buf.data(),
         static_cast<DWORD>(buf.size()),
         FALSE,
         FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME
           | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_CREATION,
         &bytes,
-        nullptr,
+        &ov,
         nullptr);
-      if (!ok) {
-        break;  // handle closed during shutdown, or unrecoverable error
+      if (!ok && GetLastError() != ERROR_IO_PENDING) {
+        log_warn("config watcher: ReadDirectoryChangesW failed (last error "
+                 + std::to_string(GetLastError()) + "); exiting watcher");
+        cleanup();
+        return;
       }
+
+      HANDLE waits[2] = {g_stop_event, completion_event};
+      DWORD which = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+      if (which == WAIT_OBJECT_0) {
+        // Shutdown. Cancel the pending change-notification I/O and drain
+        // before closing the handles so the kernel doesn't see a free of a
+        // handle with live I/O.
+        CancelIoEx(dir_handle, &ov);
+        DWORD drained = 0;
+        GetOverlappedResult(dir_handle, &ov, &drained, TRUE);
+        cleanup();
+        return;
+      }
+      if (which != WAIT_OBJECT_0 + 1) {
+        log_warn("config watcher: WaitForMultipleObjects returned "
+                 + std::to_string(which) + " (last error "
+                 + std::to_string(GetLastError()) + "); exiting watcher");
+        cleanup();
+        return;
+      }
+
+      // Completion. Pull the byte count; FALSE = don't block since we
+      // already waited on the event.
+      if (!GetOverlappedResult(dir_handle, &ov, &bytes, FALSE)) {
+        DWORD err = GetLastError();
+        if (err == ERROR_OPERATION_ABORTED) {
+          cleanup();
+          return;
+        }
+        log_warn("config watcher: GetOverlappedResult failed (last error "
+                 + std::to_string(err) + "); exiting watcher");
+        cleanup();
+        return;
+      }
+
       config_t fresh;
       if (load_config(fresh)) {
         bool enabled_now;
@@ -625,6 +700,9 @@ namespace {
 
     register_device_notifications();
 
+    // Manual-reset event the watcher signals on exit, so ServiceMain can
+    // bound-wait on the thread instead of an unconditional join.
+    g_watcher_exit_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     std::thread watcher(config_watcher_thread);
 
     g_service_status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_PRESHUTDOWN;
@@ -636,15 +714,28 @@ namespace {
     log_info("LuminalShine Xbox Bluetooth Helper stopping");
     unregister_device_notifications();
 
-    // Closing the directory handle unblocks the watcher thread's
-    // ReadDirectoryChangesW call so it can exit promptly.
-    if (g_config_watch_handle != INVALID_HANDLE_VALUE) {
-      HANDLE h               = g_config_watch_handle;
-      g_config_watch_handle  = INVALID_HANDLE_VALUE;
-      CloseHandle(h);
-    }
+    // The watcher waits on g_stop_event inside its WaitForMultipleObjects,
+    // so it's already been signaled to exit by the time we get here (the
+    // SCM control handler set the stop event). Bound the join to 3 seconds:
+    // if the watcher hangs for any reason (driver wedge, kernel I/O delay)
+    // we still set SERVICE_STOPPED and return cleanly so SCM gets a prompt
+    // status transition and avoids logging Event 7043. The watcher thread
+    // is reaped when main() returns a few hundred ms later.
     if (watcher.joinable()) {
-      watcher.join();
+      DWORD wait = g_watcher_exit_event
+                     ? WaitForSingleObject(g_watcher_exit_event, 3000)
+                     : WAIT_FAILED;
+      if (wait == WAIT_OBJECT_0) {
+        watcher.join();
+      } else {
+        log_warn("config watcher did not exit within 3s (wait=" + std::to_string(wait)
+                 + "); detaching to allow service stop");
+        watcher.detach();
+      }
+    }
+    if (g_watcher_exit_event) {
+      CloseHandle(g_watcher_exit_event);
+      g_watcher_exit_event = nullptr;
     }
 
     CloseHandle(g_stop_event);
