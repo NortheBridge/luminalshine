@@ -1,22 +1,14 @@
 # Changelog
 
-@htmlonly
-<script type="module" src="https://md-block.verou.me/md-block.js"></script>
-<md-block
-  hmin="2"
-  src="https://raw.githubusercontent.com/LizardByte/Sunshine/changelog/CHANGELOG.md">
-</md-block>
-@endhtmlonly
+LuminalShine release notes are mirrored from
+[github.com/NortheBridge/luminalshine/releases](https://github.com/NortheBridge/luminalshine/releases)
+and regenerated on every documentation build. For installer
+downloads, asset checksums, and the source diff for any release,
+follow the tag link in that release's entry below.
 
-<div class="section_buttons">
+Releases are listed newest first. Both **GA** and **pre-release**
+versions appear — pre-releases are tagged accordingly in each
+entry's metadata line.
 
-| Previous                              |                          Next |
-|:--------------------------------------|------------------------------:|
-| [Getting Started](getting_started.md) | [Docker](../DOCKER_README.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+```{include} _generated/changelog_releases.md
+```

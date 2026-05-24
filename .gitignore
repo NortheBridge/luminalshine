@@ -47,6 +47,7 @@ cmake-*/
 docs/doxyconfig*
 docs/_build/
 docs/_doxygen/
+docs/_generated/
 docs/html/
 docs/latex/
 

@@ -7,6 +7,25 @@ background with cyan (#1ec8ff) and royal-blue (#4a7dff) accents on Inter.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
+# -- Regenerate the changelog from GitHub Releases --------------------------
+# Runs on every Sphinx build (local + Read the Docs). Soft-fails so a
+# transient network issue doesn't break the docs build — see the script
+# for the placeholder behavior.
+_CHANGELOG_SCRIPT = Path(__file__).parent / "_scripts" / "build_changelog.py"
+if _CHANGELOG_SCRIPT.is_file():
+    try:
+        subprocess.run(
+            [sys.executable, str(_CHANGELOG_SCRIPT)],
+            check=False,
+            timeout=60,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"conf.py: changelog regeneration skipped ({exc})", file=sys.stderr)
+
 # -- Project ----------------------------------------------------------------
 
 project = "LuminalShine"
@@ -46,6 +65,19 @@ myst_enable_extensions = [
     "tasklist",
 ]
 myst_heading_anchors = 4
+
+# The auto-generated changelog (docs/_generated/changelog_releases.md)
+# embeds release-note Markdown authored on GitHub. Two warning classes
+# are systematic false positives there and would otherwise drown out
+# real warnings: heading hierarchy ("Document headings start at H2";
+# the file is included into changelog.md which owns H1), and literal
+# example text like "[link](url)" that myst treats as a broken xref.
+# Neither blocks the build (fail_on_warning: false) but suppressing
+# them keeps build logs scannable.
+suppress_warnings = [
+    "myst.header",
+    "myst.xref_missing",
+]
 
 # -- HTML / Furo theme ------------------------------------------------------
 
