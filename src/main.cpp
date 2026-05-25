@@ -4,11 +4,13 @@
  */
 // standard includes
 #include <algorithm>
+#include <chrono>
 #include <codecvt>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <thread>
 
 // local includes
 #include "confighttp.h"
@@ -559,10 +561,44 @@ int main(int argc, char *argv[]) {
   }
 
 #ifdef _WIN32
-  // Check if virtual display should be auto-enabled due to no physical monitors
+  // Check if virtual display should be auto-enabled due to no physical monitors.
+  //
+  // At cold boot, post-resume, or shortly after a TDR the Windows display API
+  // can transiently fail to enumerate the physical display — display_helper
+  // logs ERROR_GEN_FAILURE from QueryDisplayConfig and our enumerate_devices
+  // returns either empty or nullopt for several seconds before the GPU /
+  // monitor topology settles. If we commit to the SudoVDA fallback during
+  // that window we end up capturing the iGPU instead of the discrete GPU,
+  // which on AMD-iGPU + NVIDIA-dGPU hybrid hosts has historically tripped
+  // hard crashes inside the AMF HEVC encoder probe. Give the display stack
+  // a bounded window to come up before falling back.
   if (VDISPLAY::should_auto_enable_virtual_display()) {
-    BOOST_LOG(info) << "No physical monitors detected at initialization. Initializing virtual display driver.";
-    proc::initVDisplayDriver();
+    constexpr auto kPhysicalDisplayWaitTotal = std::chrono::milliseconds {3000};
+    constexpr auto kPhysicalDisplayPollStep = std::chrono::milliseconds {250};
+    BOOST_LOG(info) << "No physical monitors detected at initialization; waiting up to "
+                    << kPhysicalDisplayWaitTotal.count()
+                    << "ms for the display stack to settle before falling back to the virtual display driver.";
+    const auto deadline = std::chrono::steady_clock::now() + kPhysicalDisplayWaitTotal;
+    int attempts = 1;
+    bool physical_display_recovered = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (shutdown_event->peek()) {
+        return lifetime::desired_exit_code;
+      }
+      std::this_thread::sleep_for(kPhysicalDisplayPollStep);
+      ++attempts;
+      if (VDISPLAY::has_active_physical_display()) {
+        physical_display_recovered = true;
+        BOOST_LOG(info) << "Physical display became available after " << attempts
+                        << " enumeration attempts; skipping virtual display driver initialization.";
+        break;
+      }
+    }
+    if (!physical_display_recovered) {
+      BOOST_LOG(info) << "No physical monitors detected after " << attempts
+                      << " enumeration attempts. Initializing virtual display driver.";
+      proc::initVDisplayDriver();
+    }
   }
 
   if (shutdown_event->peek()) {

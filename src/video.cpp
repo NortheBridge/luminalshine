@@ -44,6 +44,8 @@ extern "C" {
 #endif
 
 #ifdef _WIN32
+  #include <excpt.h>  // __try/__except for the encoder-probe SEH wrapper.
+
   #include "src/platform/windows/display_helper_integration.h"
   #include "src/platform/windows/display_vram.h"
   #include "src/platform/windows/misc.h"
@@ -3369,6 +3371,100 @@ namespace video {
     return true;
   }
 
+#ifdef _WIN32
+  namespace {
+    // Args struct for the SEH-wrapped validate_encoder call below.
+    // Constructed on the caller's stack *outside* the __try scope so the
+    // encoder_t reference and bool members do not introduce C++ unwind
+    // targets inside __try — matching the convention documented in
+    // display_base.cpp's SEH wrappers ("body deliberately holds no C++
+    // objects with destructors").
+    struct seh_validate_encoder_args_t {
+      encoder_t *encoder;
+      bool expect_failure;
+      bool result;
+    };
+
+    // Plain C++ trampoline: lives in its own stack frame so any C++ unwind
+    // targets stay outside the __try body.
+    void invoke_validate_encoder_(seh_validate_encoder_args_t *args) {
+      args->result = validate_encoder(*args->encoder, args->expect_failure);
+    }
+
+  #if defined(_MSC_VER) || defined(__clang__)
+    // SEH wrapper around validate_encoder. AMD AMF (amfrt64.dll) and the
+    // NVIDIA / NVENC driver stack can hit access violations and other
+    // hardware-driver SEH faults inside encoder Create() / encode probe
+    // paths — historically observed on the AMD Radeon 780M iGPU when
+    // SudoVDA forces the capture adapter onto the iGPU at boot and the
+    // hevc_amf probe runs against an unstable AMF context. Without this
+    // catch the SEH propagates out of the probe loop and terminates the
+    // whole LuminalShine process, putting the Windows service into a
+    // restart loop until the topology stabilises. With the catch we log
+    // the SEH code, return false for the failing encoder, and the outer
+    // probe loop simply moves on to the next candidate.
+    unsigned long seh_invoke_validate_encoder_(seh_validate_encoder_args_t *args) noexcept {
+      __try {
+        invoke_validate_encoder_(args);
+        return 0;
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+      }
+    }
+  #else
+    unsigned long seh_invoke_validate_encoder_(seh_validate_encoder_args_t *args) noexcept {
+      invoke_validate_encoder_(args);
+      return 0;
+    }
+  #endif
+  }  // namespace
+#endif  // _WIN32
+
+  // SEH+C++-exception-safe wrapper around validate_encoder. Returns false
+  // on any internal failure so the outer probe loop erases the encoder
+  // and continues with the next candidate instead of crashing the
+  // process. See seh_invoke_validate_encoder_ above for the SEH rationale.
+  bool validate_encoder_safe(encoder_t &encoder, bool expect_failure) {
+    auto reset_state = [&]() {
+      encoder.h264.capabilities.reset();
+      encoder.hevc.capabilities.reset();
+      encoder.av1.capabilities.reset();
+      // Drop the probe-display cache so the next encoder candidate gets a
+      // fresh display handle rather than reusing one whose D3D / driver
+      // context may have been left in an inconsistent state by the fault.
+      cached_probe_display.reset();
+      cached_display_type = platf::mem_type_e::system;
+    };
+
+    try {
+#ifdef _WIN32
+      seh_validate_encoder_args_t args {&encoder, expect_failure, false};
+      const auto seh = seh_invoke_validate_encoder_(&args);
+      if (seh != 0) {
+        BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
+                           << "] terminated by SEH 0x" << std::hex << seh << std::dec
+                           << " (likely a graphics-driver fault during encoder init); skipping this encoder.";
+        reset_state();
+        return false;
+      }
+      return args.result;
+#else
+      return validate_encoder(encoder, expect_failure);
+#endif
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
+                         << "] threw std::exception: " << e.what()
+                         << "; skipping this encoder.";
+      reset_state();
+      return false;
+    } catch (...) {
+      BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
+                         << "] threw an unknown exception; skipping this encoder.";
+      reset_state();
+      return false;
+    }
+  }
+
   int probe_encoders() {
     std::lock_guard<std::mutex> lock(encoder_probe_mutex);
     const auto cache_key = build_probe_cache_key();
@@ -3448,7 +3544,7 @@ namespace video {
 
         if (encoder->name == config::video.encoder) {
           // Remove the encoder from the list entirely if it fails validation
-          if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+          if (!validate_encoder_safe(*encoder, previous_encoder && previous_encoder != encoder)) {
             pos = encoder_list.erase(pos);
             break;
           }
@@ -3476,7 +3572,7 @@ namespace video {
         auto encoder = *pos;
 
         // Remove the encoder from the list entirely if it fails validation
-        if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+        if (!validate_encoder_safe(*encoder, previous_encoder && previous_encoder != encoder)) {
           pos = encoder_list.erase(pos);
           continue;
         }
@@ -3513,7 +3609,7 @@ namespace video {
         // If we've used a previous encoder and it's not this one, we expect this encoder to
         // fail to validate. It will use a slightly different order of checks to more quickly
         // eliminate failing encoders.
-        if (!validate_encoder(*encoder, previous_encoder && previous_encoder != encoder)) {
+        if (!validate_encoder_safe(*encoder, previous_encoder && previous_encoder != encoder)) {
           pos = encoder_list.erase(pos);
           continue;
         }
