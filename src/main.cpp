@@ -23,6 +23,7 @@
 #include "process.h"
 #include "rtsp.h"
 #include "session_monitor_client.h"
+#include "startup_display_wait.h"
 #include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
 #include "system_tray.h"
@@ -573,29 +574,33 @@ int main(int argc, char *argv[]) {
   // hard crashes inside the AMF HEVC encoder probe. Give the display stack
   // a bounded window to come up before falling back.
   if (VDISPLAY::should_auto_enable_virtual_display()) {
-    constexpr auto kPhysicalDisplayWaitTotal = std::chrono::milliseconds {3000};
+    constexpr int kPhysicalDisplayMaxPolls = 12;
     constexpr auto kPhysicalDisplayPollStep = std::chrono::milliseconds {250};
     BOOST_LOG(info) << "No physical monitors detected at initialization; waiting up to "
-                    << kPhysicalDisplayWaitTotal.count()
+                    << (kPhysicalDisplayMaxPolls * kPhysicalDisplayPollStep.count())
                     << "ms for the display stack to settle before falling back to the virtual display driver.";
-    const auto deadline = std::chrono::steady_clock::now() + kPhysicalDisplayWaitTotal;
-    int attempts = 1;
-    bool physical_display_recovered = false;
-    while (std::chrono::steady_clock::now() < deadline) {
-      if (shutdown_event->peek()) {
-        return lifetime::desired_exit_code;
-      }
-      std::this_thread::sleep_for(kPhysicalDisplayPollStep);
-      ++attempts;
-      if (VDISPLAY::has_active_physical_display()) {
-        physical_display_recovered = true;
-        BOOST_LOG(info) << "Physical display became available after " << attempts
-                        << " enumeration attempts; skipping virtual display driver initialization.";
-        break;
-      }
+    const startup::display_wait_callbacks wait_cb {
+      [] {
+        return VDISPLAY::has_active_physical_display();
+      },
+      [&] {
+        return shutdown_event->peek();
+      },
+      {}  // default sleep_for (std::this_thread::sleep_for)
+    };
+    const auto wait_result = startup::wait_for_physical_display(
+      kPhysicalDisplayMaxPolls,
+      kPhysicalDisplayPollStep,
+      wait_cb
+    );
+    if (wait_result.aborted) {
+      return lifetime::desired_exit_code;
     }
-    if (!physical_display_recovered) {
-      BOOST_LOG(info) << "No physical monitors detected after " << attempts
+    if (wait_result.display_ready) {
+      BOOST_LOG(info) << "Physical display became available after " << wait_result.attempts
+                      << " enumeration attempts; skipping virtual display driver initialization.";
+    } else {
+      BOOST_LOG(info) << "No physical monitors detected after " << wait_result.attempts
                       << " enumeration attempts. Initializing virtual display driver.";
       proc::initVDisplayDriver();
     }

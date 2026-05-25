@@ -29,6 +29,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "encoder_probe_shield.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -3424,6 +3425,9 @@ namespace video {
   // on any internal failure so the outer probe loop erases the encoder
   // and continues with the next candidate instead of crashing the
   // process. See seh_invoke_validate_encoder_ above for the SEH rationale.
+  // The C++-exception half of the shield is delegated to
+  // video::probe_shield::run_cpp_exception_shield so the same policy can
+  // be unit-tested against stub probes without real encoder hardware.
   bool validate_encoder_safe(encoder_t &encoder, bool expect_failure) {
     auto reset_state = [&]() {
       encoder.h264.capabilities.reset();
@@ -3436,33 +3440,39 @@ namespace video {
       cached_display_type = platf::mem_type_e::system;
     };
 
-    try {
 #ifdef _WIN32
-      seh_validate_encoder_args_t args {&encoder, expect_failure, false};
-      const auto seh = seh_invoke_validate_encoder_(&args);
-      if (seh != 0) {
-        BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
-                           << "] terminated by SEH 0x" << std::hex << seh << std::dec
-                           << " (likely a graphics-driver fault during encoder init); skipping this encoder.";
-        reset_state();
-        return false;
-      }
-      return args.result;
-#else
-      return validate_encoder(encoder, expect_failure);
-#endif
-    } catch (const std::exception &e) {
+    // SEH first: graphics-driver faults arrive as Windows SEH access
+    // violations, not C++ exceptions, and must be caught by __except in
+    // a frame with no C++ unwind targets.
+    seh_validate_encoder_args_t args {&encoder, expect_failure, false};
+    const auto seh = seh_invoke_validate_encoder_(&args);
+    if (seh != 0) {
       BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
-                         << "] threw std::exception: " << e.what()
-                         << "; skipping this encoder.";
-      reset_state();
-      return false;
-    } catch (...) {
-      BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
-                         << "] threw an unknown exception; skipping this encoder.";
+                         << "] terminated by SEH 0x" << std::hex << seh << std::dec
+                         << " (likely a graphics-driver fault during encoder init); skipping this encoder.";
       reset_state();
       return false;
     }
+    return args.result;
+#else
+    // Non-Windows: the C++ exception shield is sufficient.
+    const auto shield = probe_shield::run_cpp_exception_shield([&] {
+      return validate_encoder(encoder, expect_failure);
+    });
+    if (shield.outcome == probe_shield::outcome_e::ok) {
+      return shield.probe_returned;
+    }
+    if (shield.outcome == probe_shield::outcome_e::std_exception) {
+      BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
+                         << "] threw std::exception: " << shield.std_what
+                         << "; skipping this encoder.";
+    } else {
+      BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
+                         << "] threw an unknown exception; skipping this encoder.";
+    }
+    reset_state();
+    return false;
+#endif
   }
 
   int probe_encoders() {
