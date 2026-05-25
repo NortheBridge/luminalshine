@@ -16,6 +16,16 @@ coverage:
         target: auto
         threshold: 10%
         flags: [web]
+    # Patch coverage threshold. The project's overall C++ coverage is in the
+    # single digits because most of the codebase is Windows graphics-driver
+    # integration that cannot be unit-tested without real GPU / display
+    # hardware. Set the patch floor to 25% — roughly 3x the project baseline
+    # — so changes are expected to be meaningfully more testable than the
+    # repo average without demanding coverage levels that are structurally
+    # unreachable for hardware-bound code paths.
+    patch:
+      default:
+        target: 25%
 
 flag_management:
   individual_flags:
