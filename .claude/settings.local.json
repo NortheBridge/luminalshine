@@ -205,7 +205,15 @@
       "Bash(grep -n \"^    }$\\\\|return session;\" /Users/Avalon/Git/luminalshine/src/stream.cpp)",
       "Bash(grep -n \"^    }$\" /Users/Avalon/Git/luminalshine/src/stream.cpp)",
       "Bash(awk -F: '$2>2500 && $2<2700 {print}')",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vue-tsc *)",
+      "WebFetch(domain:devblogs.microsoft.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(curl -sf \"https://registry.npmjs.org/vue-tsc/latest\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -sf \"https://registry.npmjs.org/vue-tsc\")",
+      "Bash(python3 -c \"import sys, json; d = json.load\\(sys.stdin\\); times = d.get\\('time', {}\\); recent = sorted\\([\\(v, t\\) for v, t in times.items\\(\\) if v not in \\('created','modified'\\) and \\('-' not in v.split\\('.'\\)[-1]\\)], key=lambda x: x[1], reverse=True\\)[:15]; [print\\(f'{v:12s}  {t}'\\) for v, t in recent]\")"
     ],
     "deny": [],
     "ask": [],
