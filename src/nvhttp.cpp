@@ -2559,6 +2559,15 @@ namespace nvhttp {
         return verified;
       }
 
+      // Even if the chain verifier accepted this peer, require the leaf
+      // signature to match a paired client. A future regression in
+      // openssl_verify_cb cannot grant access to an unpaired peer.
+      if (get_client_uuid_from_peer_cert(x509_verify).empty()) {
+        BOOST_LOG(warning) << "SSL Verification error :: peer certificate not in paired client store"sv;
+
+        return verified;
+      }
+
       verified = 1;
 
       return verified;
