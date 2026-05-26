@@ -245,7 +245,9 @@
       "Bash(git -C /Users/Avalon/Git/luminalshine branch -D fix/encoder-probe-seh-and-display-enum-retry)",
       "Bash(git -C /Users/Avalon/Git/luminalshine branch)",
       "Bash(git -C /Users/Avalon/Git/luminalshine status -s)",
-      "Bash(git -C /Users/Avalon/Git/luminalshine stash drop stash@{0})"
+      "Bash(git -C /Users/Avalon/Git/luminalshine stash drop stash@{0})",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('mergeStateStatus:', d['mergeStateStatus']\\); print\\('checks:'\\); [print\\(' ', c.get\\('name', c.get\\('context'\\)\\), '->', c.get\\('conclusion'\\) or c.get\\('state'\\) or c.get\\('status'\\)\\)  for c in d['statusCheckRollup']]\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('mergeStateStatus:', d['mergeStateStatus']\\); [print\\(' ', c.get\\('name', c.get\\('context'\\)\\), '->', c.get\\('conclusion'\\) or c.get\\('state'\\) or c.get\\('status'\\)\\)  for c in d['statusCheckRollup']]\")"
     ],
     "deny": [],
     "ask": [],
