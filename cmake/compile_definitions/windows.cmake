@@ -81,6 +81,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_coordinator.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_request_helpers.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_request_helpers.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/dir_acl.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/dir_acl.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_integration.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_integration.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_session_deferral.h"

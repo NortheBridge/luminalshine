@@ -103,6 +103,58 @@ namespace cred_store {
       return buf;
     }
 
+    /// One-shot filename migration for the sunshine_credentials.json ->
+    /// luminalshine_credentials.json rename. Only fires when the configured
+    /// path is the new default; user-overridden paths are left alone. Copies
+    /// the legacy file to the new path before maybe_import_file_once probes
+    /// the disk, then archives the legacy file as `.deprecated-<UTC>` so an
+    /// operator can recover by hand. Failure modes log and leave both files
+    /// in place — the next boot retries idempotently.
+    void maybe_migrate_legacy_filename(std::string_view key) {
+      if (key.empty()) {
+        return;
+      }
+      namespace fs = std::filesystem;
+      fs::path new_path(std::string {key});
+      if (new_path.filename() != "luminalshine_credentials.json") {
+        return;
+      }
+      fs::path old_path = new_path.parent_path() / "sunshine_credentials.json";
+      std::error_code ec;
+      if (fs::exists(new_path, ec)) {
+        return;
+      }
+      if (!fs::exists(old_path, ec)) {
+        return;
+      }
+
+      std::error_code copy_ec;
+      fs::copy_file(old_path, new_path, copy_ec);
+      if (copy_ec) {
+        BOOST_LOG(warning) << "cred_store(wcm): could not migrate "
+                           << old_path.string() << " -> "
+                           << new_path.string() << ": "
+                           << copy_ec.message();
+        return;
+      }
+
+      fs::path archive = old_path;
+      archive += ".deprecated-" + utf8_timestamp_now();
+      std::error_code rename_ec;
+      fs::rename(old_path, archive, rename_ec);
+      if (rename_ec) {
+        BOOST_LOG(warning) << "cred_store(wcm): copied legacy credentials to new "
+                           << "path but could not archive original ("
+                           << old_path.string() << " -> " << archive.string()
+                           << "): " << rename_ec.message();
+      } else {
+        BOOST_LOG(info) << "cred_store(wcm): renamed legacy "
+                        << old_path.filename().string() << " to "
+                        << new_path.filename().string() << " (original archived as "
+                        << archive.filename().string() << ").";
+      }
+    }
+
     /// One-shot import: if `key` looks like a filesystem path AND the
     /// file exists AND no WCM entry is present, load the file, store
     /// it in WCM, and rename the file with a `.migrated-<UTC>` suffix
@@ -114,6 +166,10 @@ namespace cred_store {
         return;
       }
       import_attempted_flag() = true;
+
+      // Run the legacy-filename rename first so the probe below finds the
+      // file at the configured (new) path.
+      maybe_migrate_legacy_filename(key);
 
       // Skip if WCM already has the entry — nothing to import over.
       PCREDENTIALW existing = nullptr;

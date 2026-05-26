@@ -39,6 +39,7 @@
 // local includes
 #include "config.h"
 #include "crypto.h"
+#include "integrity.h"
 #ifdef _WIN32
   #include "display_helper_integration.h"
 #endif
@@ -2231,6 +2232,18 @@ namespace proc {
     std::string file_content;
 
     try {
+      // Reject tampered apps.json before any consumer reads its contents.
+      // Quarantine moves the suspect file out of the way so the next
+      // refresh_client_apps_cache call can seed defaults via the Web UI.
+      const auto verify_result = integrity::verify(std::filesystem::path(file_name));
+      if (verify_result == integrity::verify_status::mismatch) {
+        const auto archive = integrity::quarantine(std::filesystem::path(file_name));
+        BOOST_LOG(error) << "proc::parse: integrity check failed for "sv << file_name
+                         << "; quarantined to "sv << archive.string()
+                         << "; refusing to load."sv;
+        return std::nullopt;
+      }
+
       {
         std::ifstream in(file_name, std::ios::binary);
         if (!in) {

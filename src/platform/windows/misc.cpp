@@ -46,6 +46,7 @@
 #include <Shlwapi.h>
 
 // local includes
+#include "dir_acl.h"
 #include "misc.h"
 #include "nvprefs/nvprefs_interface.h"
 #include "src/boost_process_shim.h"
@@ -248,6 +249,12 @@ namespace platf {
         BOOST_LOG(warning) << "appdata: directory iteration of "sv << legacy.string()
                            << " ended with: "sv << ec.message();
       }
+
+      // Best-effort: apply a protected DACL + System mandatory integrity
+      // label so a non-admin local writer cannot tamper with apps.json,
+      // sunshine.conf, etc. and pivot to SYSTEM via stream-start exec.
+      // Self-repairing on every process start.
+      harden_config_directory(target);
 
       return target;
     }();

@@ -1640,7 +1640,7 @@ namespace config {
     // its already-resolved parent directory.
     {
       fs::path state_path(config::nvhttp.file_state);
-      fs::path creds_default = state_path.parent_path() / "sunshine_credentials.json";
+      fs::path creds_default = state_path.parent_path() / "luminalshine_credentials.json";
       config::sunshine.credentials_file = creds_default.string();
     }
     path_f(vars, "credentials_file", config::sunshine.credentials_file);
