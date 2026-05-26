@@ -17,6 +17,8 @@
 #include "src/logging.h"
 #include "src/utility.h"
 
+using namespace std::literals;
+
 namespace platf {
 
   namespace {
