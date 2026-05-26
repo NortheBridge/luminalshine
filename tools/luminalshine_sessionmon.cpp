@@ -889,7 +889,7 @@ namespace {
 
 }  // namespace
 
-int wmain(int argc, wchar_t * /*argv*/[]) {
+int main(int argc, char * /*argv*/[]) {
   if (argc > 1) {
     // Manual diagnostic mode — useful when iterating the service
     // locally (run the binary directly from a SYSTEM-elevated
