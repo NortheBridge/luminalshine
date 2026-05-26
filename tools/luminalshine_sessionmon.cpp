@@ -47,7 +47,14 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+// clang-format off
+// winsock2.h must precede Windows.h so the WSADATA/SOCKET/sockaddr_in
+// surface is defined before any later transitive include of windows.h
+// drags in the legacy winsock.h declarations.
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <Windows.h>
+// clang-format on
 #include <ShlObj.h>
 #include <KnownFolders.h>
 #include <AclAPI.h>
