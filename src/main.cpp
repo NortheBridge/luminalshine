@@ -14,6 +14,7 @@
 
 // local includes
 #include "confighttp.h"
+#include "cred_store/integrity_key.h"
 #include "entry_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -547,6 +548,10 @@ int main(int argc, char *argv[]) {
   if (!platf_deinit_guard) {
     BOOST_LOG(error) << "Platform failed to initialize"sv;
   }
+
+  // Surface the integrity backend at startup so support can identify
+  // tpm vs dpapi-lm vs unavailable from logs without round-tripping.
+  cred_store::integrity_key::prime();
 
   if (shutdown_event->peek()) {
     return lifetime::desired_exit_code;

@@ -45,6 +45,7 @@
 #include "globals.h"
 #include "http_auth.h"
 #include "httpcommon.h"
+#include "integrity.h"
 #include "platform/common.h"
 #ifdef _WIN32
   #include "src/platform/windows/image_convert.h"
@@ -144,7 +145,11 @@ namespace confighttp {
   bool refresh_client_apps_cache(nlohmann::json &file_tree) {
     try {
       sort_apps_by_name(file_tree);
-      file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+      if (!integrity::write_signed(std::filesystem::path(config::stream.file_apps), file_tree.dump(4))) {
+        BOOST_LOG(warning) << "refresh_client_apps_cache: integrity-signed write failed for "
+                           << config::stream.file_apps;
+        return false;
+      }
       proc::refresh(config::stream.file_apps);
       return true;
     } catch (const std::exception &e) {
