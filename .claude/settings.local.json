@@ -251,7 +251,11 @@
       "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['body']\\)\")",
       "Bash(python3 -c \"import json,sys; [print\\(r['databaseId'], r['name'], r['status'], r['conclusion'], r['headSha'][:8]\\) for r in json.load\\(sys.stdin\\)]\")",
       "Bash(python3 scripts/lint_wix_conditions.py)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(awk 'NR>=203 && NR<=226 { print NR\": \"$0 }' /Users/Avalon/Git/luminalshine/packaging/windows/wix/custom_actions.wxs)",
+      "Bash(python3)",
+      "Bash(grep -nB1 -A60 \"void harden_config_directory\\\\|harden_config_directory\\(\" /Users/Avalon/Git/luminalshine/src/platform/windows/misc.cpp)",
+      "Bash(python3 -c \"import uuid; print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\); print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\); print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\)\")"
     ],
     "deny": [],
     "ask": [],
