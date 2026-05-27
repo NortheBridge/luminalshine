@@ -182,6 +182,18 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/lint_wix_conditions.py"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     )
+
+    # MSI table differ self-test. Validates the diff logic of the WiX
+    # migration compatibility oracle (scripts/diff_msi_tables.py) against
+    # synthetic fixtures — no MSI required, so it runs on every platform.
+    # The full dump-and-diff-against-golden check needs a built MSI and the
+    # WindowsInstaller COM object, so it runs as a Windows CI step rather
+    # than here.
+    add_test(
+        NAME msi_table_diff_selftest
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/diff_msi_tables.py" --selftest
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
 endif()
 
 if (WIN32)
