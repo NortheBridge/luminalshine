@@ -249,7 +249,9 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('mergeStateStatus:', d['mergeStateStatus']\\); print\\('checks:'\\); [print\\(' ', c.get\\('name', c.get\\('context'\\)\\), '->', c.get\\('conclusion'\\) or c.get\\('state'\\) or c.get\\('status'\\)\\)  for c in d['statusCheckRollup']]\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('mergeStateStatus:', d['mergeStateStatus']\\); [print\\(' ', c.get\\('name', c.get\\('context'\\)\\), '->', c.get\\('conclusion'\\) or c.get\\('state'\\) or c.get\\('status'\\)\\)  for c in d['statusCheckRollup']]\")",
       "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['body']\\)\")",
-      "Bash(python3 -c \"import json,sys; [print\\(r['databaseId'], r['name'], r['status'], r['conclusion'], r['headSha'][:8]\\) for r in json.load\\(sys.stdin\\)]\")"
+      "Bash(python3 -c \"import json,sys; [print\\(r['databaseId'], r['name'], r['status'], r['conclusion'], r['headSha'][:8]\\) for r in json.load\\(sys.stdin\\)]\")",
+      "Bash(python3 scripts/lint_wix_conditions.py)",
+      "Bash(echo \"exit=$?\")"
     ],
     "deny": [],
     "ask": [],
