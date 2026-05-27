@@ -16,7 +16,21 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+        <!-- requireAdministrator: every code path in this binary needs admin
+             (sc.exe stop, msiexec /i against an HKLM-scoped MSI, pnputil for
+             SudoVDA / MTT VDD, %ProgramData% writes, the LuminalShineService
+             rebound dance). Previously asInvoker with a Process.Start runas
+             re-spawn after the user clicked Install — but that left a window
+             where the bootstrapper was unelevated and msiexec's helper
+             processes (display_helper, wgc_capture, the sessionmon and Xbox
+             BT helper services) could keep the old binaries mapped, causing
+             upgrades to fail with file-in-use. Demanding admin at launch
+             matches user expectations for an installer and lets the C# code
+             treat IsProcessElevated as always-true on the install/uninstall
+             paths. The Reconfigure / Reset-Admin Start Menu shortcuts target
+             the same exe, so they pick up the requireAdministrator manifest
+             too. -->
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
       </requestedPrivileges>
     </security>
   </trustInfo>

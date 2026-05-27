@@ -494,10 +494,10 @@
          laying files down while the old binary is still mapped. -->
     <CustomAction Id="SetStopSvcQuietImmediate"
                  Property="QtExecCmdLine"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper','LuminalShineSessionMonitor')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
     <CustomAction Id="SetStopSvcQuiet"
                  Property="StopSvcQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper','LuminalShineSessionMonitor')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne 'Stopped') { for ($i = 0; $i -lt 5; $i++) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue; try { $svc.WaitForStatus('Stopped','00:00:10'); break } catch { Start-Sleep -Seconds 1 } } } } }&quot;"/>
     <!-- Immediate setter to prune everything except the config directory -->
     <CustomAction Id="SetPruneButConfig"
                  Property="PruneButConfig"
@@ -506,7 +506,7 @@
     <!-- Immediate setter for quiet start service -->
     <CustomAction Id="SetStartSvcQuiet"
                  Property="StartSvcQuiet"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
+                 Value="&quot;[POWERSHELL_PATH]&quot; -ExecutionPolicy Bypass -NoProfile -Command &quot;&amp; { foreach ($name in @('SunshineService','LuminalShineService','LuminalShineXboxBtHelper','LuminalShineSessionMonitor')) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { if ($svc.Status -ne 'Running') { Start-Service -Name $name -ErrorAction SilentlyContinue; $svc.WaitForStatus('Running','00:00:20') } } } }&quot;"/>
     <!-- Immediate setters for quiet process kill and service removal on
          manual uninstall (and now also on every upgrade/repair, so file
          replacement isn't racing helper processes that still have the old

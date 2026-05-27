@@ -1430,7 +1430,7 @@ namespace LuminalShineInstaller {
 
     private async Task RunOperationAsync(Func<Task<InstallerResult>> actionFactory, string actionLabel, string inProgressText, string successText) {
       SetBusyState(true);
-      SetStatus(inProgressText, "This can take a minute. Admin approval is requested only after the operation starts.", _statusBusyBrush);
+      SetStatus(inProgressText, "This can take a minute.", _statusBusyBrush);
       string exceptionFailureDetail = null;
       try {
         var result = await actionFactory();

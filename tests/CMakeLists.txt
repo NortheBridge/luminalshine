@@ -167,6 +167,23 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC ${SUNSHINE_DEFINITIONS} ${TEST
 target_compile_options(${PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${SUNSHINE_COMPILE_OPTIONS}>;$<$<COMPILE_LANGUAGE:CUDA>:${SUNSHINE_COMPILE_OPTIONS_CUDA};-std=c++17>)  # cmake-lint: disable=C0301
 target_link_options(${PROJECT_NAME} PRIVATE)
 
+# Python-driven WiX condition lint. Independent of the C++ test
+# executable: parses packaging/windows/wix/*.wxs and asserts the
+# StopServices / KillProcs custom actions are scheduled to fire on the
+# install pass of a major upgrade. Catches the 26.05.0-rc4 class of
+# regression where a new service was added but the upgrade-stop logic
+# wasn't updated, leaving files mapped and InstallFiles failing.
+# Registered only when a Python 3 interpreter is available so the
+# Windows-clang build doesn't gain a hard Python dependency.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME wix_condition_lint
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/lint_wix_conditions.py"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+endif()
+
 if (WIN32)
     # prefer static libraries since we're linking statically
     # this fixes libcurl linking errors when using non MSYS2 version of CMake

@@ -45,16 +45,31 @@
            detect file-in-use — that path is unreliable on Windows 11 Insider
            Preview when Defender holds a scan handle on sunshine.exe and can
            surface as "Access Denied" during InstallFiles, rolling the MSI
-           transaction back into an unusable state. -->
-      <Custom Action="SetKillProcsQuietImmediate" Before="InstallValidate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="KillProcsQuietImmediate" After="SetKillProcsQuietImmediate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="SetStopSvcQuietImmediate" After="KillProcsQuietImmediate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+           transaction back into an unusable state.
+
+           WIX_UPGRADE_DETECTED is the property populated by the default
+           MajorUpgrade element when a previous version is found on the
+           target machine. Including it covers the install pass of a major
+           upgrade — where `Installed` is FALSE (the new ProductCode isn't
+           installed yet) and `REMOVE` is unset, so neither of the original
+           two clauses fires. Without this clause, helper processes and
+           companion services (display_helper, wgc_capture,
+           LuminalShineXboxBtHelper, LuminalShineSessionMonitor) keep the
+           old binaries mapped, and InstallFiles fails with file-in-use on
+           the upgrade. The nested uninstall of the old MSI invoked by
+           RemoveExistingProducts runs with UPGRADINGPRODUCTCODE set, so
+           the second clause still excludes that pass — we don't need to
+           kill processes there because the new MSI's main transaction
+           already did it before InstallValidate. -->
+      <Custom Action="SetKillProcsQuietImmediate" Before="InstallValidate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="KillProcsQuietImmediate" After="SetKillProcsQuietImmediate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="SetStopSvcQuietImmediate" After="KillProcsQuietImmediate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
       <!-- Deferred stop: same broadened condition. Idempotent against an
            already-stopped service. -->
-      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">(Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
       <!-- Start quietly on repair with basic/silent UI -->
       <Custom Action="SetStartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>
