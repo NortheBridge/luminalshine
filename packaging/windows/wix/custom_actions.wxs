@@ -169,36 +169,17 @@
     <DirectoryRef Id="TARGETDIR">
       <Directory Id="ProgramMenuFolder">
         <Directory Id="LUMINALSHINE_PROGRAM_MENU_FOLDER" Name="LuminalShine">
-          <!-- All three shortcut Components below use the Shortcut element
-               itself as the KeyPath. This is the WiX 3 recommended pattern
-               for non-advertised shortcuts in per-machine (ALLUSERS=1)
-               installs. The HKCU registry values are kept as non-keypath
-               siblings for backward observability (existing tooling can
-               still detect "did MSI place this shortcut?" via the registry
-               value), but Windows Installer tracks the component identity
-               by the .lnk file on disk — not by an HKCU value that under
-               ALLUSERS=1 lands in the elevated-installing-user's hive and
-               becomes unreliable across upgrades. The previous HKCU-keypath
-               authoring shipped through 26.05.0-rc4 left
-               `Reset LuminalShine Admin Password.lnk` missing from
-               %ProgramData%\Microsoft\Windows\Start Menu\Programs\LuminalShine
-               on installs that upgraded into a version that introduced it.
-               Component GUIDs are rotated alongside the keypath change —
-               MSI Component Rules require a new GUID whenever the KeyPath
-               identity moves, so upgrades cleanly replace the old
-               registry-keypath authoring with the new file-keypath one. -->
-          <Component Id="StartMenuShortcut" Guid="{6229CF91-41B2-4BE5-9A4A-83DE9760E8B8}">
+          <Component Id="StartMenuShortcut" Guid="{A3B4C5D6-E7F8-4A5B-9C2D-3E4F5A6B7C8D}">
             <Shortcut Id="LuminalShineStartMenuShortcut"
                       Name="LuminalShine"
                       Description="Launch LuminalShine Web UI"
                       Target="[INSTALL_ROOT]luminalshine.exe"
                       Icon="ProductIcon.ico"
                       Arguments="--shortcut"
-                      WorkingDirectory="INSTALL_ROOT"
-                      KeyPath="yes">
+                      WorkingDirectory="INSTALL_ROOT">
               <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
             </Shortcut>
-            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="StartMenu" Type="integer" Value="1" />
+            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
             <RemoveFolder Id="RemoveLuminalShineMenuFolder" Directory="LUMINALSHINE_PROGRAM_MENU_FOLDER" On="uninstall" />
           </Component>
           <!-- Reconfigure shortcut: opens the bootstrapper installer, which
@@ -207,18 +188,17 @@
                re-downloading. Lives in its own component so MSI always
                recreates it, even when the parent product is being upgraded
                from a build that didn't ship this shortcut. -->
-          <Component Id="ReconfigureStartMenuShortcut" Guid="{212C7B7A-0537-4865-A7A9-B19E52FD5AFD}">
+          <Component Id="ReconfigureStartMenuShortcut" Guid="{F8E9D7C6-B5A4-4938-8271-6C5D4E3F2A1B}">
             <Shortcut Id="LuminalShineReconfigureShortcut"
                       Name="Reconfigure LuminalShine"
                       Description="Switch the virtual display driver or reinstall LuminalShine"
                       Target="[INSTALL_ROOT]uninstall.exe"
                       Icon="ProductIcon.ico"
                       Arguments="--reconfigure"
-                      WorkingDirectory="INSTALL_ROOT"
-                      KeyPath="yes">
+                      WorkingDirectory="INSTALL_ROOT">
               <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
             </Shortcut>
-            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="ReconfigureStartMenu" Type="integer" Value="1" />
+            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="ReconfigureStartMenu" Type="integer" Value="1" KeyPath="yes" />
           </Component>
           <!-- Reset Admin Password shortcut: launches uninstall.exe with
                the `reset-admin` flag (double-dash prefix), which after a
@@ -227,29 +207,22 @@
                and bounces LuminalShineService. The service-side handler in
                src/main.cpp picks up the marker on its next startup and
                runs the same in-process erase the CLI subcommand uses.
-               Authorization gate is uninstall.exe's requireAdministrator
-               manifest plus the System-integrity / Administrators-only DACL
-               that platf::harden_config_directory reapplies on every service
-               start — a non-admin local user cannot launch the bootstrapper
-               and cannot write the marker file, so the trigger is
-               admin-only end to end.
                Lives in its own component for the same reason as the
                Reconfigure shortcut above (MSI re-asserts independently
                of the other shortcuts). XML-comment-syntax note: avoid
                literal double-dash sequences inside this comment because
                REXML and other strict XML parsers reject them. -->
-          <Component Id="ResetAdminStartMenuShortcut" Guid="{C21698E1-50ED-4C98-885A-0F95D2396207}">
+          <Component Id="ResetAdminStartMenuShortcut" Guid="{C9F1E2B0-3A8D-4F1C-95E2-7B6A0D5F4C8E}">
             <Shortcut Id="LuminalShineResetAdminShortcut"
                       Name="Reset LuminalShine Admin Password"
                       Description="Clear the saved Web UI admin login so you can create a new one"
                       Target="[INSTALL_ROOT]uninstall.exe"
                       Icon="ProductIcon.ico"
                       Arguments="--reset-admin"
-                      WorkingDirectory="INSTALL_ROOT"
-                      KeyPath="yes">
+                      WorkingDirectory="INSTALL_ROOT">
               <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.LuminalShineAppId)" />
             </Shortcut>
-            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="ResetAdminStartMenu" Type="integer" Value="1" />
+            <RegistryValue Root="HKCU" Key="Software\LuminalShine\Shortcuts" Name="ResetAdminStartMenu" Type="integer" Value="1" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
