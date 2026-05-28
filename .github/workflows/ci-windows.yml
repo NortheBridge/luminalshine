@@ -486,6 +486,41 @@ jobs:
           cpack -G WIX
           cpack -G ZIP
 
+      - name: MSI upgrade-compatibility check
+        # WiX 3 -> WiX 7 migration oracle. Dumps the freshly built MSI's
+        # upgrade-critical tables and diffs them against the committed
+        # golden baseline (tests/fixtures/msi_golden/wix3_baseline.txt).
+        # While the baseline is absent (before it has been captured on a
+        # Windows build and committed), this step CAPTURES the dump as an
+        # artifact and warns instead of failing — so it never blocks a
+        # build that predates baseline capture. PR5 promotes this to a hard
+        # gate once the baseline is committed.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Get-ChildItem -Path 'build/cpack_artifacts' -Filter '*.msi' -File |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 1
+          if (-not $msi) { throw 'No MSI under build/cpack_artifacts/ to check.' }
+          New-Item -ItemType Directory -Force -Path 'msi_compat' | Out-Null
+          $candidate = 'msi_compat/candidate.txt'
+          pwsh scripts/dump_msi_tables.ps1 -MsiPath $msi.FullName -OutFile $candidate
+          $golden = 'tests/fixtures/msi_golden/wix3_baseline.txt'
+          if (Test-Path $golden) {
+            python scripts/diff_msi_tables.py $golden $candidate
+            if ($LASTEXITCODE -ne 0) { throw "MSI upgrade-compatibility diff failed (see above)." }
+          } else {
+            Write-Warning "Golden baseline $golden not committed yet; captured candidate dump as artifact. See tests/fixtures/msi_golden/README.md to promote it."
+            Copy-Item $candidate 'msi_compat/wix3_baseline.candidate.txt'
+          }
+
+      - name: Upload MSI compatibility dump
+        uses: actions/upload-artifact@v4
+        with:
+          name: msi-compat-dump
+          path: msi_compat/
+          if-no-files-found: ignore
+
       - name: Sign MSI
         if: env.SIGN_ARTIFACTS == 'true'
         shell: pwsh
