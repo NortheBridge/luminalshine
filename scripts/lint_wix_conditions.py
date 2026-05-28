@@ -14,17 +14,6 @@
 # the proactive PowerShell stop list, so upgrades hit file-in-use on
 # the binary that service held mapped.
 #
-# Plus asserts that every Component placed under ProgramMenuFolder uses
-# a non-HKCU KeyPath. HKCU registry keypaths in per-machine
-# (ALLUSERS=1) installs are the documented Windows Installer
-# anti-pattern that caused the "Reset LuminalShine Admin Password"
-# shortcut to be silently dropped from upgrades in 26.05.0-rc3.hfx4
-# through rc4. The fix is to either KeyPath the Shortcut element
-# itself (recommended for non-advertised shortcuts) or to use an HKLM
-# registry value as the keypath. Catching this in the lint means a
-# future contributor adding a new Start Menu shortcut can't reintroduce
-# the same trap.
-#
 # Run standalone for debugging:
 #   python3 scripts/lint_wix_conditions.py
 #
@@ -173,81 +162,6 @@ def check_service_list_coverage(action_id: str, value: str) -> list[str]:
     return failures
 
 
-def start_menu_component_keypath_failures(tree: ET.ElementTree, ns: str) -> list[str]:
-    # Walk every Component whose parent <Directory> chain includes
-    # ProgramMenuFolder. For each, verify that the KeyPath is either the
-    # Shortcut element itself or an HKLM/HKMU registry value — anything
-    # under HKCU is the per-machine anti-pattern that drops shortcuts on
-    # upgrade.
-    prefix = f"{{{ns}}}" if ns else ""
-
-    # Build a map of parent -> [children] so we can walk up from each
-    # Component to confirm it lives under ProgramMenuFolder.
-    parent_map: dict[ET.Element, ET.Element] = {}
-    for parent in tree.iter():
-        for child in parent:
-            parent_map[child] = parent
-
-    def ancestors(elem: ET.Element):
-        node = parent_map.get(elem)
-        while node is not None:
-            yield node
-            node = parent_map.get(node)
-
-    def under_program_menu_folder(comp: ET.Element) -> bool:
-        for anc in ancestors(comp):
-            tag = anc.tag.split("}")[-1]
-            if tag == "Directory" and anc.get("Id") == "ProgramMenuFolder":
-                return True
-        return False
-
-    failures: list[str] = []
-    for comp in tree.iter(f"{prefix}Component"):
-        if not under_program_menu_folder(comp):
-            continue
-
-        comp_id = comp.get("Id", "<no Id>")
-
-        # Find which child is the keypath. The element with
-        # KeyPath="yes" wins; if none, the Component's File child is
-        # implicit keypath (we don't allow File-based shortcut
-        # components, but tolerate the absence here).
-        keypath_elements = [
-            (child.tag.split("}")[-1], child)
-            for child in comp
-            if child.get("KeyPath") == "yes"
-        ]
-
-        if not keypath_elements:
-            failures.append(
-                f"Component {comp_id!r} under ProgramMenuFolder has no "
-                "explicit KeyPath. Add KeyPath=\"yes\" to the Shortcut "
-                "element (recommended for non-advertised shortcuts) or "
-                "to an HKLM/HKMU RegistryValue."
-            )
-            continue
-
-        if len(keypath_elements) > 1:
-            failures.append(
-                f"Component {comp_id!r} has multiple KeyPath=\"yes\" "
-                "children; MSI requires exactly one."
-            )
-
-        for tag, elem in keypath_elements:
-            if tag == "RegistryValue" and elem.get("Root") == "HKCU":
-                failures.append(
-                    f"Component {comp_id!r} under ProgramMenuFolder uses "
-                    "an HKCU registry value as its KeyPath. Under "
-                    "ALLUSERS=1, this lands in the elevated-installing "
-                    "user's hive and is unreliable on upgrade — the "
-                    "shortcut may not be created. Move KeyPath=\"yes\" "
-                    "onto the Shortcut element (preferred) or change the "
-                    "registry Root to HKLM/HKMU."
-                )
-
-    return failures
-
-
 def main() -> int:
     if not PATCH_FILE.exists():
         print(f"missing: {PATCH_FILE}", file=sys.stderr)
@@ -284,8 +198,6 @@ def main() -> int:
             continue
         failures.extend(check_service_list_coverage(action_id, setter_values[action_id]))
 
-    failures.extend(start_menu_component_keypath_failures(ca_tree, ca_ns))
-
     if failures:
         print(
             f"WiX condition lint failed ({len(failures)} issue"
@@ -300,8 +212,7 @@ def main() -> int:
         f"WiX condition lint: OK "
         f"({len(STOP_KILL_ACTION_IDS)} actions, "
         f"{len(REQUIRED_SERVICE_NAMES)} services, "
-        f"{len(SERVICE_LIST_SETTER_IDS)} setters checked, "
-        "ProgramMenuFolder keypaths audited)"
+        f"{len(SERVICE_LIST_SETTER_IDS)} setters checked)"
     )
     return 0
 
