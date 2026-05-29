@@ -121,6 +121,31 @@
     <UIRef Id="WixUI_FeatureTree" />
     <UIRef Id="WixUI_ErrorProgressText" />
 
+    <!-- ARPINSTALLLOCATION = the install path that Add/Remove Programs
+         shows for the product. CPack-WIX auto-emitted this Type-51
+         SetProperty CustomAction + sequence entries; doing the same
+         here matches the golden's CustomAction row
+         (Source=ARPINSTALLLOCATION, Target=[INSTALL_ROOT]) and the
+         InstallExecuteSequence/InstallUISequence positions (10 / 16
+         respectively, both After="InstallValidate"). WiX 3's
+         <SetProperty> with Sequence="both" expands to both. -->
+    <SetProperty Id="ARPINSTALLLOCATION"
+                 Action="SetARPINSTALLLOCATION"
+                 Value="[INSTALL_ROOT]"
+                 After="InstallValidate"
+                 Sequence="both" />
+
+    <!-- Mark INSTALL_ROOT as a Secure property so msiexec accepts it
+         as a command-line override on a per-machine install. WiX
+         compiles all <Property Id="X" Secure="yes"/> declarations into
+         the MSI's SecureCustomProperties summary entry. INSTALL_ROOT
+         is both a Directory id and (at runtime) a public property
+         whose value is the resolved install path; WiX 3 accepts a
+         <Property> with the same Id to mark the property side. The
+         golden's SecureCustomProperties value confirms CPack-WIX did
+         the equivalent. -->
+    <Property Id="INSTALL_ROOT" Secure="yes" />
+
     <!--
       ===========================================================
       Properties folded from patch_custom_actions.wxs
