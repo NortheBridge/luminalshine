@@ -290,7 +290,7 @@
       <Custom Action="SetARPINSTALLLOCATION" After="CostFinalize" />
 
       <!-- Remove conflicting products before installation starts. -->
-      <Custom Action="RemoveConflictingProducts" After="InstallInitialize">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
+      <Custom Action="RemoveConflictingProducts" After="InstallInitialize">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS&lt;&gt;"1"</Custom>
 
       <!-- Pre-validate stop/kill: fire across ALL UI levels (including the
            interactive full-UI install path). WIX_UPGRADE_DETECTED covers
