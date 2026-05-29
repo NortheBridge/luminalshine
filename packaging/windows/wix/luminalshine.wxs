@@ -66,9 +66,16 @@
            Manufacturer="$(var.Manufacturer)"
            UpgradeCode="$(var.UpgradeCode)">
 
-    <Package InstallerVersion="301"
-             Compressed="yes"
-             InstallScope="perMachine" />
+    <!-- NOTE: no InstallScope= attribute. The combination of
+         InstallScope="perMachine" + the explicit <Property Id="ALLUSERS"
+         Value="1"/> below makes light fail with LGHT0091 ("Duplicate
+         symbol Property:ALLUSERS"). InstallScope is a WiX 3 shortcut
+         that auto-emits ALLUSERS=1; the explicit Property gives us more
+         control and matches the CPack-WIX template's behavior (which
+         set CPACK_WIX_INSTALL_SCOPE to "NONE" to disable the shortcut).
+         Per-machine semantics are preserved end-to-end via ALLUSERS=1
+         + the Privileged launch condition farther down. -->
+    <Package InstallerVersion="301" Compressed="yes" />
 
     <Media Id="1" Cabinet="media1.cab" EmbedCab="yes" />
 
