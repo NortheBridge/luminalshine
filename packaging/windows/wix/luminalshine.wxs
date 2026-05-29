@@ -281,9 +281,13 @@
       ===========================================================
     -->
     <InstallExecuteSequence>
-      <!-- ARPINSTALLLOCATION setter, scheduled at the InstallValidate
-           anchor (matches the golden's position 10 in this sequence). -->
-      <Custom Action="SetARPINSTALLLOCATION" After="InstallValidate" />
+      <!-- ARPINSTALLLOCATION setter. After="CostFinalize" puts it at
+           Sequence=1001 (CostFinalize is the standard at 1000), which
+           is the slot the golden uses — slot 10 in the normalized
+           rank. After="InstallValidate" (the iter5 draft) put it at
+           Sequence=1401 instead, which pushed it past
+           MigrateFeatureStates (1200) and shifted the rank. -->
+      <Custom Action="SetARPINSTALLLOCATION" After="CostFinalize" />
 
       <!-- Remove conflicting products before installation starts. -->
       <Custom Action="RemoveConflictingProducts" After="InstallInitialize">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
