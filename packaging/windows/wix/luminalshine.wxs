@@ -127,13 +127,23 @@
          here matches the golden's CustomAction row
          (Source=ARPINSTALLLOCATION, Target=[INSTALL_ROOT]) and the
          InstallExecuteSequence/InstallUISequence positions (10 / 16
-         respectively, both After="InstallValidate"). WiX 3's
-         <SetProperty> with Sequence="both" expands to both. -->
-    <SetProperty Id="ARPINSTALLLOCATION"
-                 Action="SetARPINSTALLLOCATION"
-                 Value="[INSTALL_ROOT]"
-                 After="InstallValidate"
-                 Sequence="both" />
+         respectively).
+
+         An earlier draft used <SetProperty Sequence="both"
+         After="InstallValidate"> as a one-liner. That failed at light
+         with LGHT0094 ("Unresolved reference to symbol
+         WixAction:InstallUISequence/InstallValidate") because
+         InstallValidate is a standard action of
+         InstallExecuteSequence only, not InstallUISequence. The
+         schedule anchors are sequence-specific. Splitting into an
+         explicit <CustomAction> + two <Custom> entries with
+         per-sequence anchors gives both sequences a valid reference:
+         After="InstallValidate" for execute, After="CostFinalize"
+         for UI (CostFinalize exists in both, but matching CPack-WIX's
+         observed UISequence position 16 specifically). -->
+    <CustomAction Id="SetARPINSTALLLOCATION"
+                  Property="ARPINSTALLLOCATION"
+                  Value="[INSTALL_ROOT]" />
 
     <!-- Mark INSTALL_ROOT as a Secure property so msiexec accepts it
          as a command-line override on a per-machine install. WiX
@@ -271,6 +281,10 @@
       ===========================================================
     -->
     <InstallExecuteSequence>
+      <!-- ARPINSTALLLOCATION setter, scheduled at the InstallValidate
+           anchor (matches the golden's position 10 in this sequence). -->
+      <Custom Action="SetARPINSTALLLOCATION" After="InstallValidate" />
+
       <!-- Remove conflicting products before installation starts. -->
       <Custom Action="RemoveConflictingProducts" After="InstallInitialize">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS &lt;&gt; "1"</Custom>
 
@@ -351,6 +365,11 @@
          original "UILevel &gt; 2" source; this path doesn't, so match
          the golden by writing them without spaces directly. -->
     <InstallUISequence>
+      <!-- ARPINSTALLLOCATION setter for the UI pass — scheduled at
+           CostFinalize since InstallValidate doesn't exist in
+           InstallUISequence. CostFinalize exists in both sequences. -->
+      <Custom Action="SetARPINSTALLLOCATION" After="CostFinalize" />
+
       <Custom Action="AskUninstallLegacySunshine" After="AppSearch">LEGACY_SUNSHINE_PRESENT AND UILevel&gt;2 AND NOT Installed</Custom>
       <Custom Action="WaitForLegacyUninstall" After="AskUninstallLegacySunshine">UNINSTALL_LEGACY_SUNSHINE = "1" AND NOT USER_CANCELLED_LEGACY_UNINSTALL</Custom>
       <Custom Action="BlockUserCancelledLegacy" Before="LaunchConditions">USER_CANCELLED_LEGACY_UNINSTALL = "1"</Custom>
