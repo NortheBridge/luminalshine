@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import sys
 import re
@@ -80,6 +81,108 @@ class FileEntry:
     basename: str
     # Absolute path of the staged file on disk (used as <File Source=>).
     source_abspath: str
+
+
+# ---------------------------------------------------------------------------
+# Features manifest (packaging/windows/wix/features.json).
+# CPack's CPACK_COMPONENT_<NAME>_<KEY> variables compile to WiX Feature
+# rows; the manifest captures that metadata in a tool-agnostic JSON form
+# so the generator can author the Feature table without depending on
+# CPack. See the manifest itself for field-level notes.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FeatureGroupSpec:
+    name: str      # produces Feature Id "CM_G_<name>"
+    title: str
+    display: int
+
+
+@dataclass
+class FeatureComponentSpec:
+    name: str         # the CMake install COMPONENT name; produces Feature Id "CM_C_<name>"
+    title: str
+    description: str
+    group: str | None  # group name (matches FeatureGroupSpec.name); None pins under ProductFeature
+    display: int
+    required: bool
+
+
+@dataclass
+class ProductFeatureSpec:
+    id: str
+    title: str
+    display: int
+    directory: str    # Directory_ on the Feature row; INSTALL_ROOT for the root feature
+    required: bool
+
+
+@dataclass
+class FeaturesManifest:
+    product_feature: ProductFeatureSpec
+    groups: list[FeatureGroupSpec]
+    components: list[FeatureComponentSpec]
+
+
+def load_features_manifest(path: Path) -> FeaturesManifest:
+    """Load and lightly validate packaging/windows/wix/features.json."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    pf_raw = data["product_feature"]
+    pf = ProductFeatureSpec(
+        id=pf_raw["id"],
+        title=pf_raw["title"],
+        display=int(pf_raw["display"]),
+        directory=pf_raw["directory"],
+        required=bool(pf_raw.get("required", False)),
+    )
+
+    groups = [
+        FeatureGroupSpec(
+            name=g["name"],
+            title=g["title"],
+            display=int(g["display"]),
+        )
+        for g in data.get("groups", [])
+    ]
+    group_names = {g.name for g in groups}
+
+    components: list[FeatureComponentSpec] = []
+    seen_component_names: set[str] = set()
+    for c in data.get("components", []):
+        name = c["name"]
+        if name in seen_component_names:
+            raise ValueError(f"features.json: duplicate component name {name!r}")
+        seen_component_names.add(name)
+        group = c.get("group")
+        if group is not None and group not in group_names:
+            raise ValueError(
+                f"features.json: component {name!r} references unknown group {group!r}; "
+                f"known groups: {sorted(group_names)}"
+            )
+        components.append(FeatureComponentSpec(
+            name=name,
+            title=c.get("title", name),
+            description=c.get("description", ""),
+            group=group,
+            display=int(c["display"]),
+            required=bool(c.get("required", False)),
+        ))
+
+    return FeaturesManifest(product_feature=pf, groups=groups, components=components)
+
+
+def feature_attributes_bits(required: bool) -> int:
+    """Compile the WiX-3 Feature Attributes int from high-level flags.
+    The only flag this generator emits is `required` (matching CPack's
+    CPACK_COMPONENT_*_REQUIRED). When set, WiX 3 lowers
+    Absent="disallow" AllowAdvertise="no" into Attributes=16
+    (msidbFeatureAttributesDisallowAdvertise). The non-required case
+    leaves Attributes=0 (default install behavior). Cross-checked
+    against every row of the golden Feature table.
+    """
+    return 16 if required else 0
 
 
 def _normalize_identifier(raw: str) -> tuple[str, int]:
@@ -357,6 +460,27 @@ def _self_test() -> int:
             failures.append(f"Hash-mode file id mismatch (shape) for {cid}: got {got_file!r} expected {keypath!r}")
         ch_checked += 1
 
+    # Phase 2: Feature manifest + emit_features_wxs validation against
+    # the golden Feature and FeatureComponents tables. The generator
+    # output must reproduce every CM_C_*, CM_G_*, and ProductFeature row
+    # (the LuminalShineExtras feature + its hand-authored ComponentRefs
+    # live in the main wxs, not in the generator's output, so they're
+    # excluded from this comparison).
+    manifest_path = _REPO_ROOT / "packaging" / "windows" / "wix" / "features.json"
+    if manifest_path.exists():
+        feature_failures = _self_test_features(manifest_path, components)
+        if feature_failures:
+            print(f"gen_wix_files self-test FAILED ({len(feature_failures)} feature mismatches):",
+                  file=sys.stderr)
+            for f in feature_failures[:20]:
+                print(f"  - {f}", file=sys.stderr)
+            if len(feature_failures) > 20:
+                print(f"  ... and {len(feature_failures)-20} more", file=sys.stderr)
+            return 1
+        feature_summary = " + features.json validated against Feature/FeatureComponents tables"
+    else:
+        feature_summary = " (features.json absent — feature validation skipped)"
+
     if failures:
         print(f"gen_wix_files self-test FAILED ({len(failures)} mismatches):", file=sys.stderr)
         for f in failures[:20]:
@@ -372,8 +496,141 @@ def _self_test() -> int:
         f"gen_wix_files self-test: OK "
         f"({cp_checked} CM_CP_ + {ch_checked} CM_CH_ components checked, "
         f"{skipped} hand-authored components skipped)"
+        f"{feature_summary}"
     )
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Feature/FeatureComponents validation against the golden. Operates on the
+# raw Component rows already parsed by the main self-test, so the cross-
+# check happens against the same dataset that drives the ID validation.
+# ---------------------------------------------------------------------------
+
+
+def _golden_feature_rows() -> list[dict[str, str]]:
+    return _parse_golden_rows("Feature")
+
+
+def _golden_feature_components() -> list[dict[str, str]]:
+    return _parse_golden_rows("FeatureComponents")
+
+
+def _self_test_features(manifest_path: Path, golden_components: list[dict[str, str]]) -> list[str]:
+    """Validate that emit_features_wxs against a synthetic FileEntry
+    set derived from `golden_components` would produce a Feature
+    hierarchy + FeatureComponents bindings that match the golden's
+    rows (excluding the hand-authored LuminalShineExtras feature)."""
+    failures: list[str] = []
+    manifest = load_features_manifest(manifest_path)
+
+    # ---- Feature table validation ---------------------------------------
+    # The golden Feature table is the source of truth. The manifest must
+    # produce exactly the same set of rows for ProductFeature, every CM_G_*,
+    # and every CM_C_*. LuminalShineExtras is hand-authored in the main
+    # wxs so it's excluded from this comparison.
+    expected_features = {}
+    for row in _golden_feature_rows():
+        fid = row.get("Feature", "")
+        if fid == "LuminalShineExtras":
+            continue
+        expected_features[fid] = row
+
+    # Build expected rows from the manifest.
+    generated_features: dict[str, dict[str, str]] = {}
+    pf = manifest.product_feature
+    generated_features[pf.id] = {
+        "Feature_Parent": "",
+        "Title": pf.title,
+        "Description": "",
+        "Display": str(pf.display),
+        "Level": "1",
+        "Directory_": pf.directory,
+        "Attributes": str(feature_attributes_bits(pf.required)),
+    }
+    for g in manifest.groups:
+        generated_features[f"CM_G_{g.name}"] = {
+            "Feature_Parent": pf.id,
+            "Title": g.title,
+            "Description": "",
+            "Display": str(g.display),
+            "Level": "1",
+            "Directory_": "",
+            "Attributes": "0",
+        }
+    for c in manifest.components:
+        parent = pf.id if c.group is None else f"CM_G_{c.group}"
+        generated_features[f"CM_C_{c.name}"] = {
+            "Feature_Parent": parent,
+            "Title": c.title,
+            "Description": c.description,
+            "Display": str(c.display),
+            "Level": "1",
+            "Directory_": "",
+            "Attributes": str(feature_attributes_bits(c.required)),
+        }
+
+    for fid, expected in expected_features.items():
+        got = generated_features.get(fid)
+        if got is None:
+            failures.append(f"Feature {fid!r} present in golden but not produced by generator")
+            continue
+        for col in ("Feature_Parent", "Title", "Description", "Display", "Level", "Directory_", "Attributes"):
+            if (got.get(col, "") or "") != (expected.get(col, "") or ""):
+                failures.append(
+                    f"Feature {fid!r} column {col} differs: "
+                    f"got {got.get(col, '')!r} expected {expected.get(col, '')!r}"
+                )
+    for fid in generated_features.keys() - expected_features.keys():
+        failures.append(f"Feature {fid!r} produced by generator but absent in golden")
+
+    # ---- FeatureComponents validation -----------------------------------
+    # Build the (feature_id, component_id) pairs the generator would
+    # produce, by reverse-deriving FileEntries from the golden Component
+    # rows (the same dataset the main self-test used). Skip:
+    #   - hand-authored Components (LuminalShineExtras members)
+    #   - Components that are neither CM_CP_ nor CM_CH_
+    HAND_AUTHORED = {
+        "ArpCustomUninstallEntry", "CtlStopSunshine", "Env_Path",
+        "Fw_Exceptions", "LuminalShineSessionMonSvc",
+        "LuminalShineXboxBtHelperSvc", "ReconfigureStartMenuShortcut",
+        "ResetAdminStartMenuShortcut", "StartMenuShortcut",
+        "SudoVdaRegistryDefaults", "SunshineSvc",
+    }
+
+    generated_pairs: set[tuple[str, str]] = set()
+    for row in golden_components:
+        cid = row.get("Component", "")
+        if cid in HAND_AUTHORED:
+            continue
+        if not cid.startswith(("CM_CP_", "CM_CH_")):
+            continue
+        # Recover install_component (first dotted segment of the
+        # identifier for CM_CP_, or the first segment of the
+        # Directory_'s dotted path for CM_CH_).
+        if cid.startswith("CM_CP_"):
+            install_component = cid[len("CM_CP_"):].split(".", 1)[0]
+        else:
+            directory_id = row.get("Directory_", "")
+            if directory_id == "INSTALL_ROOT" or not directory_id.startswith("CM_DP_"):
+                continue  # shouldn't happen for hash-mode but be safe
+            install_component = directory_id[len("CM_DP_"):].split(".", 1)[0]
+        generated_pairs.add((f"CM_C_{install_component}", cid))
+
+    expected_pairs: set[tuple[str, str]] = set()
+    for row in _golden_feature_components():
+        feature = row.get("Feature_", "")
+        component = row.get("Component_", "")
+        if feature == "LuminalShineExtras":
+            continue
+        expected_pairs.add((feature, component))
+
+    for missing in sorted(expected_pairs - generated_pairs):
+        failures.append(f"FeatureComponents row {missing} present in golden but not generated")
+    for extra in sorted(generated_pairs - expected_pairs):
+        failures.append(f"FeatureComponents row {extra} generated but not in golden")
+
+    return failures
 
 
 # ---------------------------------------------------------------------------
@@ -401,13 +658,14 @@ def walk_staging(staging_root: Path) -> list[FileEntry]:
     return entries
 
 
-def emit_wxs(entries: Iterable[FileEntry], fragment_id: str = "GeneratedFiles") -> str:
-    """Emit a self-contained <Wix><Fragment> with the Directory tree,
-    Components, Files, and a ComponentGroup pulling them all in. The
-    consuming Product references the ComponentGroup via <ComponentGroupRef>.
+def emit_files_wxs(entries: Iterable[FileEntry]) -> str:
+    """Emit the <Wix> file authoring: Directory tree + Components + Files.
+
+    The Feature/ComponentRef bindings live in the features fragment
+    (emit_features_wxs) so that file Components are pulled into
+    Features by install-component name. Light links the two fragments
+    via cross-fragment Component-Id references.
     """
-    # Build a directory tree first (so we can nest <Directory> elements
-    # correctly). The tree's leaves carry their component list.
     @dataclass
     class DirNode:
         # Empty string for INSTALL_ROOT, otherwise the segment name.
@@ -446,8 +704,6 @@ def emit_wxs(entries: Iterable[FileEntry], fragment_id: str = "GeneratedFiles") 
     # the main product .wxs. We reference it via DirectoryRef.
     dirref = ET.SubElement(fragment, "DirectoryRef", {"Id": "INSTALL_ROOT"})
 
-    component_ids_in_order: list[str] = []
-
     def emit_node(parent_xml: ET.Element, node: DirNode) -> None:
         # Components for the files at this level.
         for entry in node.files:
@@ -462,7 +718,6 @@ def emit_wxs(entries: Iterable[FileEntry], fragment_id: str = "GeneratedFiles") 
                 "KeyPath": "yes",
                 "Source": entry.source_abspath,
             })
-            component_ids_in_order.append(cid)
         # Children: emit a <Directory> for each, recurse.
         for child_name in sorted(node.children):
             child = node.children[child_name]
@@ -474,25 +729,135 @@ def emit_wxs(entries: Iterable[FileEntry], fragment_id: str = "GeneratedFiles") 
 
     emit_node(dirref, root)
 
-    # ComponentGroup: lets the Product feature pull every generated
-    # component in via one <ComponentGroupRef>.
-    fragment2 = ET.SubElement(wix, "Fragment")
-    group = ET.SubElement(fragment2, "ComponentGroup", {"Id": fragment_id})
-    for cid in component_ids_in_order:
-        ET.SubElement(group, "ComponentRef", {"Id": cid})
-
     # Pretty-print: ElementTree's serializer is dense; indent for
     # readability + diff-ability with the CPack-generated equivalents.
     ET.indent(wix, space="  ", level=0)
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(wix, encoding="unicode")
 
 
+def emit_features_wxs(manifest: FeaturesManifest, entries: Iterable[FileEntry]) -> str:
+    """Emit the <Wix> Feature hierarchy + FeatureComponents bindings.
+
+    The hierarchy mirrors what CPack auto-generates from
+    CPACK_COMPONENT_<NAME>_* variables:
+      <Feature Id="ProductFeature" Display=1 Directory=INSTALL_ROOT ...>
+        <Feature Id="CM_C_Unspecified" .../>      <!-- ungrouped sit under Product -->
+        <Feature Id="CM_G_Core" ...>
+          <Feature Id="CM_C_application" ...>
+            <ComponentRef Id="CM_CP_application.luminalshine.exe"/>
+            ...
+          </Feature>
+          ...
+        </Feature>
+        <Feature Id="CM_G_Drivers" ...>...</Feature>
+        ...
+      </Feature>
+
+    File Components are bound to the CM_C_<install_component> Feature
+    derived from the FileEntry.install_component. Hand-authored
+    Components (services, shortcuts, etc.) live in the main wxs under
+    LuminalShineExtras and are not the generator's concern.
+    """
+    # Bucket file components by install_component for the ComponentRef
+    # emission below. CPack's golden orders ComponentRefs alphabetically
+    # within each feature — match that for byte-stable diff.
+    refs_by_component: dict[str, list[str]] = {}
+    for entry in entries:
+        cid, _fid, _did = make_ids(entry)
+        refs_by_component.setdefault(entry.install_component, []).append(cid)
+    for cid_list in refs_by_component.values():
+        cid_list.sort()
+
+    # Cross-check: every install_component in the staging tree must have
+    # a matching component spec in the manifest, and vice versa. A drift
+    # here means CMakeLists added/removed an install COMPONENT without
+    # updating features.json — surface it loudly.
+    manifest_names = {c.name for c in manifest.components}
+    staging_names = set(refs_by_component.keys())
+    missing_in_manifest = staging_names - manifest_names
+    if missing_in_manifest:
+        raise ValueError(
+            f"staging tree references install components not in features.json: "
+            f"{sorted(missing_in_manifest)}. Update features.json or the install rule."
+        )
+    # Note: the converse (manifest names with no staging files) is OK —
+    # an empty component still gets a Feature, just with no ComponentRefs.
+
+    def feature_attrs(comp_or_pf, required_default: bool = False) -> dict[str, str]:
+        """Build the WiX XML attributes for a Feature so that compiled
+        Attributes integer matches the golden. Currently only `required`
+        is variable; the rest are constants."""
+        is_required = getattr(comp_or_pf, "required", required_default)
+        attrs: dict[str, str] = {}
+        if is_required:
+            attrs["Absent"] = "disallow"
+            attrs["AllowAdvertise"] = "no"
+        return attrs
+
+    wix = ET.Element("Wix", {"xmlns": "http://schemas.microsoft.com/wix/2006/wi"})
+    fragment = ET.SubElement(wix, "Fragment")
+
+    pf = manifest.product_feature
+    pf_xml = ET.SubElement(fragment, "Feature", {
+        "Id": pf.id,
+        "Title": pf.title,
+        "Level": "1",
+        "Display": str(pf.display),
+        "ConfigurableDirectory": pf.directory,
+        **feature_attrs(pf),
+    })
+
+    # Group features and the components nested under them. Components
+    # whose group is None sit as direct children of ProductFeature
+    # (matches the golden for CM_C_Unspecified, which has no group).
+    groups_by_name: dict[str, ET.Element] = {}
+    for g in sorted(manifest.groups, key=lambda x: x.display):
+        g_xml = ET.SubElement(pf_xml, "Feature", {
+            "Id": f"CM_G_{g.name}",
+            "Title": g.title,
+            "Level": "1",
+            "Display": str(g.display),
+            # CM_G_* features in the golden have Attributes=0 — no
+            # required/disallow attributes emitted.
+        })
+        groups_by_name[g.name] = g_xml
+
+    # Emit per-component features. Group ordering: Unspecified-and-other-
+    # ungrouped components first (matching golden's display order — they
+    # have Display=0 and appear at the top), then grouped components
+    # under their CM_G_* parent.
+    components_sorted = sorted(manifest.components, key=lambda c: (c.group is not None, c.display, c.name))
+    for c in components_sorted:
+        parent_xml = pf_xml if c.group is None else groups_by_name[c.group]
+        c_xml = ET.SubElement(parent_xml, "Feature", {
+            "Id": f"CM_C_{c.name}",
+            "Title": c.title,
+            **({"Description": c.description} if c.description else {}),
+            "Level": "1",
+            "Display": str(c.display),
+            **feature_attrs(c),
+        })
+        for cid in refs_by_component.get(c.name, []):
+            ET.SubElement(c_xml, "ComponentRef", {"Id": cid})
+
+    ET.indent(wix, space="  ", level=0)
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(wix, encoding="unicode")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
-    parser.add_argument("--selftest", action="store_true", help="Run the offline self-test against the committed golden.")
-    parser.add_argument("--staging", type=Path, help="Path to <staging>/<component>/<paths>/<file> tree.")
-    parser.add_argument("--out", type=Path, help="Write emitted .wxs here instead of stdout.")
-    parser.add_argument("--fragment-id", default="GeneratedFiles", help="Id for the <ComponentGroup> the Product features will reference.")
+    parser.add_argument("--selftest", action="store_true",
+                        help="Run the offline self-test against the committed golden.")
+    parser.add_argument("--staging", type=Path,
+                        help="Path to <staging>/<component>/<paths>/<file> tree.")
+    parser.add_argument("--files-out", type=Path,
+                        help="Write the file-components fragment (Directories + Components + Files) here.")
+    parser.add_argument("--features-manifest", type=Path,
+                        default=Path("packaging/windows/wix/features.json"),
+                        help="Path to features.json (default: packaging/windows/wix/features.json).")
+    parser.add_argument("--features-out", type=Path,
+                        help="Write the features fragment (Feature hierarchy + ComponentRefs) here. "
+                             "Requires --features-manifest.")
     args = parser.parse_args(argv[1:])
 
     if args.selftest:
@@ -500,15 +865,28 @@ def main(argv: list[str]) -> int:
 
     if not args.staging:
         parser.error("either --selftest or --staging is required")
+    if not args.files_out and not args.features_out:
+        parser.error("at least one of --files-out / --features-out is required when --staging is given")
 
     entries = walk_staging(args.staging)
-    wxs = emit_wxs(entries, args.fragment_id)
-    if args.out:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(wxs, encoding="utf-8")
-        print(f"[gen_wix_files] wrote {args.out} ({len(entries)} files)")
-    else:
-        sys.stdout.write(wxs)
+
+    if args.files_out:
+        wxs = emit_files_wxs(entries)
+        args.files_out.parent.mkdir(parents=True, exist_ok=True)
+        args.files_out.write_text(wxs, encoding="utf-8")
+        print(f"[gen_wix_files] wrote {args.files_out} ({len(entries)} files)")
+
+    if args.features_out:
+        if not args.features_manifest.exists():
+            parser.error(f"features manifest not found: {args.features_manifest}")
+        manifest = load_features_manifest(args.features_manifest)
+        wxs = emit_features_wxs(manifest, entries)
+        args.features_out.parent.mkdir(parents=True, exist_ok=True)
+        args.features_out.write_text(wxs, encoding="utf-8")
+        print(f"[gen_wix_files] wrote {args.features_out} "
+              f"({len(manifest.components)} component features, "
+              f"{len(manifest.groups)} group features)")
+
     return 0
 
 
