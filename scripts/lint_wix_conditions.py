@@ -28,7 +28,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PATCH_FILE = REPO_ROOT / "packaging" / "windows" / "wix" / "patch_custom_actions.wxs"
+# PATCH_FILE used to point at patch_custom_actions.wxs (the CPack-WIX
+# patch fragment) which contained the InstallExecuteSequence
+# customizations. PR2.c.1 folded that file into luminalshine.wxs and
+# PR2.d's final iteration deleted it; the conditions now live in the
+# top-level product wxs.
+PATCH_FILE = REPO_ROOT / "packaging" / "windows" / "wix" / "luminalshine.wxs"
 CUSTOM_ACTIONS_FILE = REPO_ROOT / "packaging" / "windows" / "wix" / "custom_actions.wxs"
 
 # Custom action IDs whose conditions are load-bearing for the "stop
