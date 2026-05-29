@@ -477,13 +477,18 @@ jobs:
 
       - name: Package Windows (MSI and portable ZIP)
         shell: msys2 {0}
+        # The MSI is now produced by the hand-authored luminalshine_msi
+        # target (cmake/packaging/windows_wix.cmake) which drives
+        # candle.exe + light.exe directly — CPack's WIX generator is
+        # no longer invoked. The portable ZIP still goes through CPack
+        # since cpack -G ZIP has no equivalent migration concern.
+        # See packaging/windows/wix/luminalshine.wxs and
+        # scripts/gen_wix_files.py for the source-of-truth authoring
+        # and the CMake target chain (stage -> gen -> candle -> light).
         run: |
           mkdir -p artifacts
+          ninja -C build luminalshine_msi
           cd build
-
-          # package
-          cpack -G WIX
-          cpack -G WIX
           cpack -G ZIP
 
       - name: MSI upgrade-compatibility check

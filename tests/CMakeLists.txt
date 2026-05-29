@@ -194,6 +194,20 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/diff_msi_tables.py" --selftest
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     )
+
+    # WiX file-component generator self-test. Validates that
+    # scripts/gen_wix_files.py reproduces CPack's Component/File/Directory
+    # ID conventions byte-exactly for the 130 path-mode Components in
+    # the committed golden, and shape-exactly (mode + dir + normalized
+    # basename) for the 29 hash-mode ones whose raw on-disk filenames
+    # cannot be recovered from the dump alone. The full byte-exact hash
+    # check happens on Windows CI via the MSI table diff once the
+    # decoupled build pipeline lands.
+    add_test(
+        NAME gen_wix_files_selftest
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/gen_wix_files.py" --selftest
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
 endif()
 
 if (WIN32)
