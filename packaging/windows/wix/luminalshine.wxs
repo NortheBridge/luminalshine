@@ -307,8 +307,8 @@
       <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
 
       <!-- Start quietly on repair with basic/silent UI -->
-      <Custom Action="SetStartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>
-      <Custom Action="StartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel &lt; 5</Custom>
+      <Custom Action="SetStartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel&lt;5</Custom>
+      <Custom Action="StartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel&lt;5</Custom>
 
       <!-- Manual uninstall: process/legacy service cleanup -->
       <Custom Action="SetKillProcsQuiet" After="StopSvcQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
@@ -323,10 +323,10 @@
            with the property switch so we never invoke install.ps1 against
            files that weren't staged, even if the feature condition above
            ever drifts out of sync with the INSTALL_* properties. -->
-      <Custom Action="SetInstallMttVdd" After="ResetAcls">NOT REMOVE AND INSTALL_MTTVDD = "1" AND &amp;CM_C_mttvdd=3</Custom>
-      <Custom Action="InstallMttVdd" After="SetInstallMttVdd">NOT REMOVE AND INSTALL_MTTVDD = "1" AND &amp;CM_C_mttvdd=3</Custom>
-      <Custom Action="SetInstallSudovda" After="InstallMttVdd">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND &amp;CM_C_sudovda=3</Custom>
-      <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND &amp;CM_C_sudovda=3</Custom>
+      <Custom Action="SetInstallMttVdd" After="ResetAcls">NOT REMOVE AND INSTALL_MTTVDD = "1" AND&amp;CM_C_mttvdd=3</Custom>
+      <Custom Action="InstallMttVdd" After="SetInstallMttVdd">NOT REMOVE AND INSTALL_MTTVDD = "1" AND&amp;CM_C_mttvdd=3</Custom>
+      <Custom Action="SetInstallSudovda" After="InstallMttVdd">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND&amp;CM_C_sudovda=3</Custom>
+      <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND&amp;CM_C_sudovda=3</Custom>
       <Custom Action="SetMigrateConfig" After="InstallSudovda">NOT REMOVE</Custom>
       <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT REMOVE</Custom>
       <Custom Action="SetRunInstallerMigrations" After="MigrateConfig">NOT REMOVE</Custom>
@@ -337,12 +337,12 @@
       <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo">REMOVE="ALL"</Custom>
 
       <!-- Clear admin credentials on a real uninstall (skipped during upgrades). -->
-      <Custom Action="SetResetAdminCredentials" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS &lt;&gt; "1"</Custom>
-      <Custom Action="ResetAdminCredentials" After="SetResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS &lt;&gt; "1"</Custom>
+      <Custom Action="SetResetAdminCredentials" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS&lt;&gt;"1"</Custom>
+      <Custom Action="ResetAdminCredentials" After="SetResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS&lt;&gt;"1"</Custom>
 
       <!-- Wipe session telemetry on a real uninstall (skipped during upgrades). -->
-      <Custom Action="SetResetSessionHistory" After="ResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA &lt;&gt; "1"</Custom>
-      <Custom Action="ResetSessionHistory" After="SetResetSessionHistory">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA &lt;&gt; "1"</Custom>
+      <Custom Action="SetResetSessionHistory" After="ResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;"1"</Custom>
+      <Custom Action="ResetSessionHistory" After="SetResetSessionHistory">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;"1"</Custom>
 
       <!-- Remove Virtual Display Drivers only when explicitly requested. -->
       <Custom Action="SetUninstallMttVdd" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
@@ -355,8 +355,8 @@
       <Custom Action="DeleteInstallDir" After="SetDeleteInstallDir">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR = "1"</Custom>
 
       <!-- If not deleting whole dir, prune everything but config -->
-      <Custom Action="SetPruneButConfig" After="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR &lt;&gt; "1"</Custom>
-      <Custom Action="PruneButConfig" After="SetPruneButConfig">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR &lt;&gt; "1"</Custom>
+      <Custom Action="SetPruneButConfig" After="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR&lt;&gt;"1"</Custom>
+      <Custom Action="PruneButConfig" After="SetPruneButConfig">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR&lt;&gt;"1"</Custom>
     </InstallExecuteSequence>
 
     <!--
