@@ -95,13 +95,30 @@
 
     <!-- WixUI binding — keep identical to the CPack-WIX product so the
          interactive installer's banner/dialog/license assets render
-         the same as today. -->
+         the same as today.
+
+         UIRef is WixUI_FeatureTree (NOT WixUI_InstallDir): CPack's
+         CPACK_WIX_UI_REF default is FeatureTree, and the golden
+         carries WixUI_Mode=FeatureTree. Using WixUI_InstallDir
+         instead pulled in WixUIValidatePath as an extra CustomAction,
+         set WixUI_Mode=InstallDir, and surfaced ARPNOMODIFY=1 — three
+         table diffs vs the golden. FeatureTree avoids all of those.
+         WIXUI_INSTALLDIR is kept so any WixUI dialog that does ask
+         for an install location still resolves to INSTALL_ROOT.
+
+         ARP* properties (ARPCOMMENTS, ARPCONTACT, ARPURLINFOABOUT)
+         were set via CPACK_WIX_PROPERTY_ARP* in the prior CPack-WIX
+         config and surface in Add/Remove Programs. They have to be
+         declared explicitly now that we own the .wxs. -->
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT" />
     <Property Id="ARPPRODUCTICON">ProductIcon.ico</Property>
+    <Property Id="ARPCOMMENTS">Modern Self-hosted game stream host for Moonlight</Property>
+    <Property Id="ARPCONTACT">https://github.com/NortheBridge/luminalshine/issues</Property>
+    <Property Id="ARPURLINFOABOUT">https://github.com/NortheBridge/luminalshine</Property>
     <Icon Id="ProductIcon.ico" SourceFile="$(var.ProductIcon)" />
 
-    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_FeatureTree" />
     <UIRef Id="WixUI_ErrorProgressText" />
 
     <!--
@@ -303,12 +320,17 @@
       InstallUISequence — legacy Sunshine pre-uninstall flow +
       repair-complete prompt. Folded verbatim.
     -->
+    <!-- Note on condition whitespace: the golden's UILevel comparisons
+         have NO surrounding spaces (e.g. UILevel>2 not UILevel > 2).
+         Whatever the CPack-WIX path did normalized them out of the
+         original "UILevel &gt; 2" source; this path doesn't, so match
+         the golden by writing them without spaces directly. -->
     <InstallUISequence>
-      <Custom Action="AskUninstallLegacySunshine" After="AppSearch">LEGACY_SUNSHINE_PRESENT AND UILevel &gt; 2 AND NOT Installed</Custom>
+      <Custom Action="AskUninstallLegacySunshine" After="AppSearch">LEGACY_SUNSHINE_PRESENT AND UILevel&gt;2 AND NOT Installed</Custom>
       <Custom Action="WaitForLegacyUninstall" After="AskUninstallLegacySunshine">UNINSTALL_LEGACY_SUNSHINE = "1" AND NOT USER_CANCELLED_LEGACY_UNINSTALL</Custom>
       <Custom Action="BlockUserCancelledLegacy" Before="LaunchConditions">USER_CANCELLED_LEGACY_UNINSTALL = "1"</Custom>
       <Custom Action="BlockLegacySunshineStillPresent" Before="LaunchConditions">LEGACY_SUNSHINE_STILL_PRESENT = "1"</Custom>
-      <Custom Action="RepairCompletePrompt" After="ExecuteAction">REINSTALL AND NOT REMOVE AND NOT UPGRADINGPRODUCTCODE AND UILevel &gt; 2</Custom>
+      <Custom Action="RepairCompletePrompt" After="ExecuteAction">REINSTALL AND NOT REMOVE AND NOT UPGRADINGPRODUCTCODE AND UILevel&gt;2</Custom>
     </InstallUISequence>
 
   </Product>

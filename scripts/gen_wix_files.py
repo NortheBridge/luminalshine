@@ -191,12 +191,18 @@ def load_features_manifest(path: Path) -> FeaturesManifest:
 
 def feature_attributes_bits(required: bool) -> int:
     """Compile the WiX-3 Feature Attributes int from high-level flags.
-    The only flag this generator emits is `required` (matching CPack's
-    CPACK_COMPONENT_*_REQUIRED). When set, WiX 3 lowers
-    Absent="disallow" AllowAdvertise="no" into Attributes=16
-    (msidbFeatureAttributesDisallowAdvertise). The non-required case
-    leaves Attributes=0 (default install behavior). Cross-checked
-    against every row of the golden Feature table.
+
+    `required` (CPACK_COMPONENT_<NAME>_REQUIRED) maps to WiX 3
+    `Absent="disallow"`, which sets msidbFeatureAttributesUIDisallowAbsent
+    = 0x10 = 16. Non-required leaves Attributes=0 (default install
+    behavior).
+
+    Earlier iteration also set AllowAdvertise="no" for required
+    components, which adds msidbFeatureAttributesDisallowAdvertise
+    = 0x8 = 8 → final Attributes=24. The golden has 16 not 24, meaning
+    CPack-WIX emits ONLY Absent="disallow" for required (no
+    AllowAdvertise). Cross-checked against every row of the golden
+    Feature table; see also feature_attrs() below for the XML side.
     """
     return 16 if required else 0
 
@@ -681,6 +687,16 @@ def emit_files_wxs(entries: Iterable[FileEntry]) -> str:
     (emit_features_wxs) so that file Components are pulled into
     Features by install-component name. Light links the two fragments
     via cross-fragment Component-Id references.
+
+    Per-install-component Directory subtrees: CPack auto-emits a
+    separate intermediate Directory row PER install COMPONENT even
+    when the on-disk dest name collides — e.g. with `tools` getting
+    installed under both the `application` and `audio` install
+    components, the golden has CM_DP_application.tools AND
+    CM_DP_audio.tools as siblings of INSTALL_ROOT, both DefaultDir=tools.
+    A naive directory-name-keyed tree would merge them; we therefore
+    keep separate top-level subtrees per install_component and only
+    merge nested children WITHIN a single install_component's tree.
     """
     @dataclass
     class DirNode:
@@ -690,17 +706,33 @@ def emit_files_wxs(entries: Iterable[FileEntry]) -> str:
         files: list[FileEntry] = field(default_factory=list)
         wix_id: str = "INSTALL_ROOT"
 
+    # `root` only ever holds files installed to INSTALL_ROOT directly
+    # (dest_dirs=[]); its children live in component_subtrees below.
     root = DirNode("")
 
+    # install_component -> {first_dest_dir_name -> DirNode}.
+    # Each install_component owns its own top-level subtree, so the
+    # `tools` from "application" and the `tools` from "audio" become
+    # distinct Directory rows (CM_DP_application.tools / CM_DP_audio.tools)
+    # rather than merging into a single intermediate.
+    component_subtrees: dict[str, dict[str, DirNode]] = {}
+
     def ensure_dir(install_component: str, dest_dirs: list[str]) -> DirNode:
-        node = root
-        path_segments: list[str] = []
-        for d in dest_dirs:
+        if not dest_dirs:
+            return root
+        comp_subtree = component_subtrees.setdefault(install_component, {})
+        first = dest_dirs[0]
+        if first not in comp_subtree:
+            child = DirNode(first)
+            dotted, _ = _normalize_identifier(f"{install_component}.{first}")
+            child.wix_id = f"CM_DP_{dotted}"
+            comp_subtree[first] = child
+        node = comp_subtree[first]
+        path_segments = [first]
+        for d in dest_dirs[1:]:
             path_segments.append(d)
             if d not in node.children:
                 child = DirNode(d)
-                # WiX Id for the child mirrors what make_ids() builds:
-                # CM_DP_<install_component>.<dest_dirs joined by '.'>
                 dotted, _ = _normalize_identifier(".".join([install_component, *path_segments]))
                 child.wix_id = f"CM_DP_{dotted}"
                 node.children[d] = child
@@ -743,7 +775,19 @@ def emit_files_wxs(entries: Iterable[FileEntry]) -> str:
             })
             emit_node(child_xml, child)
 
+    # Emit root-level files first.
     emit_node(dirref, root)
+    # Then per-install-component top-level Directory elements as
+    # siblings under INSTALL_ROOT. Sort outer by install_component name
+    # and inner by directory name for determinism.
+    for comp_name in sorted(component_subtrees.keys()):
+        for top_dir_name in sorted(component_subtrees[comp_name].keys()):
+            top_node = component_subtrees[comp_name][top_dir_name]
+            dir_xml = ET.SubElement(dirref, "Directory", {
+                "Id": top_node.wix_id,
+                "Name": top_node.segment_name,
+            })
+            emit_node(dir_xml, top_node)
 
     # Pretty-print: ElementTree's serializer is dense; indent for
     # readability + diff-ability with the CPack-generated equivalents.
@@ -801,13 +845,18 @@ def emit_features_wxs(manifest: FeaturesManifest, entries: Iterable[FileEntry]) 
 
     def feature_attrs(comp_or_pf, required_default: bool = False) -> dict[str, str]:
         """Build the WiX XML attributes for a Feature so that compiled
-        Attributes integer matches the golden. Currently only `required`
-        is variable; the rest are constants."""
+        Attributes integer matches the golden. Only `Absent="disallow"`
+        is emitted for required components — that alone yields
+        Attributes=16 (msidbFeatureAttributesUIDisallowAbsent), matching
+        what CPack-WIX produces. Adding `AllowAdvertise="no"` would
+        compile to Attributes=24 by also setting
+        msidbFeatureAttributesDisallowAdvertise (8); the golden does
+        NOT have that bit set, so leave it off.
+        """
         is_required = getattr(comp_or_pf, "required", required_default)
         attrs: dict[str, str] = {}
         if is_required:
             attrs["Absent"] = "disallow"
-            attrs["AllowAdvertise"] = "no"
         return attrs
 
     wix = ET.Element("Wix", {"xmlns": "http://schemas.microsoft.com/wix/2006/wi"})
