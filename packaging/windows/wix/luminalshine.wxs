@@ -196,22 +196,20 @@
     </Feature>
 
     <!--
-      Feature-level Conditions for the virtual-display drivers.
-      Replaces the patch_custom_actions.wxs CPackWiXFragment
-      Id="CM_C_mttvdd" / Id="CM_C_sudovda" patches. WiX 3 lets you
-      add a Condition to an existing Feature by re-opening it with
-      FeatureRef inside a Fragment; that's what's happening here.
-      INSTALL_MTTVDD / INSTALL_SUDOVDA are set by the bootstrapper
-      (or default to the property values above) and gate file
-      staging — so the VDD-specific custom actions only fire
-      against files that were actually copied.
+      Feature-level Conditions for the virtual-display drivers live in
+      packaging/windows/wix/features.json (each component spec carries
+      an optional `conditions` field). The generator (gen_wix_files.py)
+      writes them as <Condition Level="N">expression</Condition>
+      children of the corresponding <Feature> in features.wxs.
+
+      An earlier draft tried to add them here via
+      <FeatureRef Id="CM_C_mttvdd"><Condition>...</Condition></FeatureRef>
+      to mirror the CPackWiXFragment patch mechanism — WiX 3.14's
+      candle rejects that with CNDL0005 ("The FeatureRef element
+      contains an unexpected child element 'Condition'"). The native
+      WiX 3 placement is inside the Feature itself, hence the move
+      into the generator+manifest.
     -->
-    <FeatureRef Id="CM_C_mttvdd">
-      <Condition Level="0">INSTALL_MTTVDD &lt;&gt; "1"</Condition>
-    </FeatureRef>
-    <FeatureRef Id="CM_C_sudovda">
-      <Condition Level="1">INSTALL_SUDOVDA = "1"</Condition>
-    </FeatureRef>
 
     <!--
       ===========================================================

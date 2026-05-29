@@ -100,6 +100,16 @@ class FeatureGroupSpec:
 
 
 @dataclass
+class FeatureConditionSpec:
+    # Feature-level <Condition Level="N">expression</Condition>. Written
+    # into the MSI Condition table inside the parent Feature element.
+    # When `expression` evaluates true at install time, MSI overrides
+    # the Feature's Level to `level` (0 = uninstalled, 1 = installed).
+    level: int
+    expression: str
+
+
+@dataclass
 class FeatureComponentSpec:
     name: str         # the CMake install COMPONENT name; produces Feature Id "CM_C_<name>"
     title: str
@@ -107,6 +117,7 @@ class FeatureComponentSpec:
     group: str | None  # group name (matches FeatureGroupSpec.name); None pins under ProductFeature
     display: int
     required: bool
+    conditions: list[FeatureConditionSpec] = field(default_factory=list)
 
 
 @dataclass
@@ -161,6 +172,10 @@ def load_features_manifest(path: Path) -> FeaturesManifest:
                 f"features.json: component {name!r} references unknown group {group!r}; "
                 f"known groups: {sorted(group_names)}"
             )
+        conditions = [
+            FeatureConditionSpec(level=int(cond["level"]), expression=cond["expression"])
+            for cond in c.get("conditions", [])
+        ]
         components.append(FeatureComponentSpec(
             name=name,
             title=c.get("title", name),
@@ -168,6 +183,7 @@ def load_features_manifest(path: Path) -> FeaturesManifest:
             group=group,
             display=int(c["display"]),
             required=bool(c.get("required", False)),
+            conditions=conditions,
         ))
 
     return FeaturesManifest(product_feature=pf, groups=groups, components=components)
@@ -837,6 +853,11 @@ def emit_features_wxs(manifest: FeaturesManifest, entries: Iterable[FileEntry]) 
             "Display": str(c.display),
             **feature_attrs(c),
         })
+        # Feature-level Conditions (Condition table rows). Emit BEFORE
+        # ComponentRefs so the XML mirrors the order WiX 3 documents.
+        for cond in c.conditions:
+            cond_xml = ET.SubElement(c_xml, "Condition", {"Level": str(cond.level)})
+            cond_xml.text = cond.expression
         for cid in refs_by_component.get(c.name, []):
             ET.SubElement(c_xml, "ComponentRef", {"Id": cid})
 
