@@ -71,11 +71,14 @@ add_custom_command(
 )
 add_custom_target(build_uninstall_ui ALL DEPENDS "${SUNSHINE_UNINSTALL_UI_EXE}")
 
-# Convenience target to build MSI via CPack (WiX)
+# Convenience target — preserves the historical `package_msi` name
+# that CI and dev workflows already invoke. As of PR2.c of the WiX 7
+# migration this aliases the new hand-authored luminalshine_msi
+# target in cmake/packaging/windows_wix.cmake (which drives candle.exe
+# + light.exe directly, replacing the CPACK_GENERATOR "WIX" path).
 add_custom_target(package_msi
-    COMMAND "${CMAKE_CPACK_COMMAND}" -G WIX -C "$<IF:$<CONFIG:>,${CMAKE_BUILD_TYPE},$<CONFIG>>"
-    DEPENDS sunshine copy_playnite_plugin build_uninstall_ui
-    COMMENT "Building MSI installer via CPack (WiX)"
+    DEPENDS luminalshine_msi
+    COMMENT "Building MSI installer via hand-authored WiX 3 pipeline"
 )
 
 # Build custom elevated installer EXE that wraps the generated MSI
