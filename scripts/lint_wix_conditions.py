@@ -104,11 +104,13 @@ def custom_action_conditions(tree: ET.ElementTree, ns: str) -> dict[str, str]:
         action = elem.get("Action")
         if not action:
             continue
-        # WiX 3 allows the condition either as element text or as an
-        # attribute. Patch fragment uses element text; handle both.
-        condition_text = (elem.text or "").strip()
+        # WiX 4+ encodes the <Custom> condition as a Condition=
+        # attribute. WiX 3 put it in element text; we still fall
+        # through to that form so a regression that accidentally
+        # reverts to the v3 style doesn't go silently unlinted.
+        condition_text = (elem.get("Condition") or "").strip()
         if not condition_text:
-            condition_text = (elem.get("Condition") or "").strip()
+            condition_text = (elem.text or "").strip()
         conditions[action] = condition_text
     return conditions
 

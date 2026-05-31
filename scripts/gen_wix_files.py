@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-# WiX 3 file-component generator. Replaces the auto-generation that the
-# CPack WIX generator does today, producing byte-identical Component IDs,
-# File IDs, and Directory IDs so the resulting MSI diffs clean against
-# the committed compatibility oracle
-# (tests/fixtures/msi_golden/wix3_baseline.txt).
+# WiX 7 file-component generator. Owns the per-file Component / File /
+# Directory / Feature authoring CPack-WIX used to emit, producing
+# Component IDs, File IDs, Directory IDs, and FeatureComponents
+# bindings that match the committed compatibility oracle
+# (tests/fixtures/msi_golden/wix3_baseline.txt) so the WiX-3 -> WiX-7
+# cutover stays upgrade-compatible.
 #
 # Why we need this at all:
 # CMake's CPack WIX generator is hardwired to WiX 3 (no plans for WiX
-# 4+ support). The WiX-7 migration (PRs 3-4) needs a packaging pipeline
-# that isn't bound to CPack. This script is the WiX-3 intermediate: it
-# stays on the v3 toolchain but takes ownership of the file authoring
-# CPack used to do, so the cutover to v7 can change the toolchain without
-# also changing the file-authoring strategy.
+# 4+ support). The WiX-7 migration moved the authoring into this
+# repo-owned generator first (PR2) so the toolchain swap (PR3, this
+# one) could change ONLY the schema dialect without re-litigating the
+# file-authoring strategy.
 #
 # What we faithfully reproduce from CPack's algorithm
 # (Source/CPack/WiX/cmCPackWIXGenerator.cxx in CMake upstream):
@@ -35,15 +35,23 @@
 #       the mode letter (`P`/`H`) then `_` then the identifier.
 #   - Directory @Id is always `CM_DP_<dotted_path>` (always path-mode;
 #       paths short enough to not need hashing).
-#   - Component @Guid = "*" — WiX's light.exe generates the stable
-#       UUIDv5 itself from the Component's KeyPath at link time. This is
-#       why we do NOT need to replicate any GUID-from-string algorithm:
-#       the GUIDs we see in the MSI are produced by light, not CPack.
-#   - Component @Win64="yes" for 64-bit installs.
+#   - Component @Guid = "*" — WiX generates the stable UUIDv5 itself
+#       from the Component's KeyPath at link time. This is why we do
+#       NOT need to replicate any GUID-from-string algorithm: the
+#       GUIDs we see in the MSI are produced by the linker, not CPack.
+#   - Component @Bitness="always64" for 64-bit installs (the WiX 4+
+#       successor to v3's @Win64="yes"; the compiled Component table
+#       row is identical).
 #   - File @KeyPath="yes" on the single File child.
+#   - Feature @AllowAbsent="no" for required components (the WiX 4+
+#       successor to v3's @Absent="disallow"; both compile to
+#       Attributes=16).
+#   - Feature-level <Level Value="N" Condition="expr"/> child for
+#       feature-condition entries (the WiX 4+ successor to v3's
+#       <Condition Level="N">expr</Condition>).
 #
 # What we DON'T try to reproduce: the legacy CMake-generated-GUID mode
-# (per-user installs only — not used here; we're always ALLUSERS=1).
+# (per-user installs only — not used here; we're always per-machine).
 
 from __future__ import annotations
 
@@ -744,8 +752,8 @@ def emit_files_wxs(entries: Iterable[FileEntry]) -> str:
         leaf = ensure_dir(entry.install_component, entry.dest_dirs)
         leaf.files.append(entry)
 
-    # Emit XML.
-    wix = ET.Element("Wix", {"xmlns": "http://schemas.microsoft.com/wix/2006/wi"})
+    # Emit XML. v4 namespace covers WiX 4 through 7.
+    wix = ET.Element("Wix", {"xmlns": "http://wixtoolset.org/schemas/v4/wxs"})
     fragment = ET.SubElement(wix, "Fragment")
 
     # The Directory tree is rooted at INSTALL_ROOT, which is declared by
@@ -759,7 +767,10 @@ def emit_files_wxs(entries: Iterable[FileEntry]) -> str:
             component = ET.SubElement(parent_xml, "Component", {
                 "Id": cid,
                 "Guid": "*",
-                "Win64": "yes",
+                # WiX 4+ encoding of v3's Win64="yes". Compiles to the
+                # same Component table msidbComponentAttributes64bit
+                # bit (0x100), so the on-disk Component row matches.
+                "Bitness": "always64",
             })
             ET.SubElement(component, "File", {
                 "Id": fid,
@@ -844,11 +855,13 @@ def emit_features_wxs(manifest: FeaturesManifest, entries: Iterable[FileEntry]) 
     # an empty component still gets a Feature, just with no ComponentRefs.
 
     def feature_attrs(comp_or_pf, required_default: bool = False) -> dict[str, str]:
-        """Build the WiX XML attributes for a Feature so that compiled
-        Attributes integer matches the golden. Only `Absent="disallow"`
-        is emitted for required components — that alone yields
-        Attributes=16 (msidbFeatureAttributesUIDisallowAbsent), matching
-        what CPack-WIX produces. Adding `AllowAdvertise="no"` would
+        """Build the WiX 4+ XML attributes for a Feature so that the
+        compiled Attributes integer matches the golden. Only
+        `AllowAbsent="no"` is emitted for required components — that
+        alone yields Attributes=16 (msidbFeatureAttributesUIDisallowAbsent),
+        matching what CPack-WIX produced under WiX 3's `Absent="disallow"`
+        attribute (the v3->v4 attribute rename is purely surface; the
+        compiled bit is identical). Adding `AllowAdvertise="no"` would
         compile to Attributes=24 by also setting
         msidbFeatureAttributesDisallowAdvertise (8); the golden does
         NOT have that bit set, so leave it off.
@@ -856,10 +869,11 @@ def emit_features_wxs(manifest: FeaturesManifest, entries: Iterable[FileEntry]) 
         is_required = getattr(comp_or_pf, "required", required_default)
         attrs: dict[str, str] = {}
         if is_required:
-            attrs["Absent"] = "disallow"
+            attrs["AllowAbsent"] = "no"
         return attrs
 
-    wix = ET.Element("Wix", {"xmlns": "http://schemas.microsoft.com/wix/2006/wi"})
+    # v4 namespace covers WiX 4 through 7.
+    wix = ET.Element("Wix", {"xmlns": "http://wixtoolset.org/schemas/v4/wxs"})
     fragment = ET.SubElement(wix, "Fragment")
 
     pf = manifest.product_feature
@@ -902,11 +916,16 @@ def emit_features_wxs(manifest: FeaturesManifest, entries: Iterable[FileEntry]) 
             "Display": str(c.display),
             **feature_attrs(c),
         })
-        # Feature-level Conditions (Condition table rows). Emit BEFORE
-        # ComponentRefs so the XML mirrors the order WiX 3 documents.
+        # Feature-level Conditions (Condition table rows). WiX 3's
+        # `<Condition Level="N">expr</Condition>` became
+        # `<Level Value="N" Condition="expr"/>` in WiX 4+; the compiled
+        # MSI Condition row is identical. Emit BEFORE ComponentRefs so
+        # the XML mirrors the order WiX documents.
         for cond in c.conditions:
-            cond_xml = ET.SubElement(c_xml, "Condition", {"Level": str(cond.level)})
-            cond_xml.text = cond.expression
+            ET.SubElement(c_xml, "Level", {
+                "Value": str(cond.level),
+                "Condition": cond.expression,
+            })
         for cid in refs_by_component.get(c.name, []):
             ET.SubElement(c_xml, "ComponentRef", {"Id": cid})
 
