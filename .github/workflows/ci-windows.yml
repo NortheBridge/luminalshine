@@ -57,12 +57,6 @@ on:
 env:
   SIGN_ARTIFACTS: 'false'
   CODESIGN_TOOL_VERSION: '1.3.2'
-  # WiX 7 introduced an Open Source Maintenance Fee EULA gate; every
-  # `wix` invocation refuses to run with WIX7015 until the EULA is
-  # accepted. The standard non-interactive opt-in is this env var.
-  # Scoped at workflow level so it covers `dotnet wix extension add`,
-  # `dotnet wix build` (called from CMake), and any future wix calls.
-  WIX_ACCEPT_OSMF_EULA: '1'
 
 jobs:
   build_windows:
@@ -311,8 +305,16 @@ jobs:
         # — `wix build -ext WixToolset.X.wixext/VERSION` resolves against
         # this cache. Doing it once here avoids per-iteration network
         # fetches inside the configure/build cycle.
+        #
+        # WiX 7 introduced an Open Source Maintenance Fee (OSMF) EULA
+        # gate; every `wix` invocation refuses to run with WIX7015 until
+        # the EULA is accepted. `wix --accept-eula` writes a marker file
+        # to the user profile that subsequent invocations honor. Run it
+        # immediately after `tool restore` so every later wix call (here
+        # AND in the CMake-driven `dotnet wix build` step) is greenlit.
         run: |
           dotnet tool restore
+          dotnet wix --accept-eula
           dotnet wix extension add --global WixToolset.UI.wixext/7.0.0
           dotnet wix extension add --global WixToolset.Util.wixext/7.0.0
           dotnet wix extension add --global WixToolset.Firewall.wixext/7.0.0
