@@ -261,7 +261,8 @@
       "Bash(python3 scripts/gen_wix_files.py --selftest)",
       "Bash(python3 scripts/diff_msi_tables.py --selftest)",
       "Bash(git restore *)",
-      "Bash(gh workflow *)"
+      "Bash(gh workflow *)",
+      "Bash(git mv *)"
     ],
     "deny": [],
     "ask": [],
