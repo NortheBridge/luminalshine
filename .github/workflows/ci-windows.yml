@@ -295,10 +295,21 @@ jobs:
           echo "python-path=${python_path}"
           echo "python-path=${python_path}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install WiX Toolset
+      - name: Install WiX 7 toolchain
         shell: pwsh
+        # WiX 7 ships as a .NET tool pinned in .config/dotnet-tools.json.
+        # `dotnet tool restore` installs the exact pinned version into
+        # the local tool manifest; the CMake driver then invokes it as
+        # `dotnet wix build ...`. We also pre-install the WiX extensions
+        # we use (UI / Util / Firewall) into the per-user extension cache
+        # — `wix build -ext WixToolset.X.wixext/VERSION` resolves against
+        # this cache. Doing it once here avoids per-iteration network
+        # fetches inside the configure/build cycle.
         run: |
-          choco install wixtoolset -y
+          dotnet tool restore
+          dotnet wix extension add --global WixToolset.UI.wixext/7.0.0
+          dotnet wix extension add --global WixToolset.Util.wixext/7.0.0
+          dotnet wix extension add --global WixToolset.Firewall.wixext/7.0.0
 
       - name: Fetch SudoVDA driver bundle
         shell: pwsh
@@ -404,7 +415,8 @@ jobs:
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/NortheBridge/luminalshine"
           ninja -C build
 
-      # WiX already installed before configure so env:WIX is available
+      # WiX 7 toolchain restored above; the CMake driver invokes
+      # `dotnet wix build` directly, so no env:WIX hint is needed.
 
       # ── Codesigning (SSL.com eSigner) ─────────────────────────────────────
       # All four steps below are gated on `env.SIGN_ARTIFACTS == 'true'` and
@@ -477,14 +489,14 @@ jobs:
 
       - name: Package Windows (MSI and portable ZIP)
         shell: msys2 {0}
-        # The MSI is now produced by the hand-authored luminalshine_msi
-        # target (cmake/packaging/windows_wix.cmake) which drives
-        # candle.exe + light.exe directly — CPack's WIX generator is
-        # no longer invoked. The portable ZIP still goes through CPack
-        # since cpack -G ZIP has no equivalent migration concern.
+        # The MSI is produced by the hand-authored luminalshine_msi
+        # target (cmake/packaging/windows_wix.cmake) which drives the
+        # WiX 7 `wix build` CLI directly via the local dotnet tool
+        # manifest. The portable ZIP still goes through CPack since
+        # cpack -G ZIP has no migration concern.
         # See packaging/windows/wix/luminalshine.wxs and
         # scripts/gen_wix_files.py for the source-of-truth authoring
-        # and the CMake target chain (stage -> gen -> candle -> light).
+        # and the CMake target chain (stage -> gen -> wix build).
         run: |
           mkdir -p artifacts
           ninja -C build luminalshine_msi
@@ -651,48 +663,33 @@ jobs:
             }
           }
 
-      # Diagnostic dumps for packaging failures. CPack's "Fatal WiX
-      # Generator Error" / "Problem running WiX" messages by themselves
-      # are useless — the actionable error lives in wix.log (or, for the
-      # NSIS path, NSISOutput.log). Hosted runners are torn down minutes
-      # after the job ends, so neither file survives the run unless we
-      # cat it into the step log. These steps fire only on failure (green
-      # builds don't need the noise) and use clearly-marked delimiters so
-      # the relevant block is easy to find in a long action log.
-      #
-      # Each step is independently `|| true` because either log can be
-      # absent: NSISOutput.log only exists when the NSIS generator was
-      # invoked, and wix.log is only written after candle.exe starts —
-      # an earlier CPack failure (template-rendering, file-staging) skips
-      # straight to "Fatal Generator Error" without writing it.
-      - name: Dump packaging logs on failure
+      # Diagnostic dumps for packaging failures. `wix build` writes
+      # actionable errors directly to stderr (which is captured by
+      # ninja's per-target output), so this step's job is to surface
+      # the staged inputs — the generated wix_gen/*.wxs and the
+      # wix_staging tree — so a maintainer can correlate the wix
+      # build error against what the generator produced. The step
+      # fires only on failure (green builds don't need the noise).
+      - name: Dump packaging staging on failure
         if: failure()
         shell: msys2 {0}
         run: |
           set +e
-          for log_path in \
-            ./build/cpack_artifacts/_CPack_Packages/win64/NSIS/NSISOutput.log \
-            ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log
-          do
-            log_name=$(basename "$log_path")
-            echo "::group::${log_name}"
-            echo "===== begin ${log_path} ====="
-            if [ -f "$log_path" ]; then
-              cat "$log_path"
-            else
-              echo "(file not present — generator failed before writing it)"
+          echo "::group::wix_gen directory listing"
+          ls -la build/wix_gen 2>&1 || true
+          echo "::endgroup::"
+
+          for wxs in build/wix_gen/files.wxs build/wix_gen/features.wxs; do
+            if [ -f "$wxs" ]; then
+              echo "::group::$(basename "$wxs") (head)"
+              head -200 "$wxs"
+              echo "::endgroup::"
             fi
-            echo "===== end ${log_path} ====="
-            echo "::endgroup::"
           done
 
-          # When wix.log is missing, the .wixobj/.wxs siblings in the same
-          # directory still tell us how far candle.exe got. List them so a
-          # future maintainer can correlate the WiX phase with the failure.
-          wix_dir=./build/cpack_artifacts/_CPack_Packages/win64/WIX
-          if [ -d "$wix_dir" ]; then
-            echo "::group::WIX directory listing"
-            ls -la "$wix_dir" 2>&1 || true
+          if [ -d build/wix_staging ]; then
+            echo "::group::wix_staging tree (top two levels)"
+            find build/wix_staging -maxdepth 2 -type d 2>&1 || true
             echo "::endgroup::"
           fi
 
