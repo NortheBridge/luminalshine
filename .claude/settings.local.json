@@ -265,7 +265,8 @@
       "Bash(git mv *)",
       "WebFetch(domain:wixtoolset.org)",
       "WebFetch(domain:docs.firegiant.com)",
-      "Bash(gh search *)"
+      "Bash(gh search *)",
+      "Bash(git rebase *)"
     ],
     "deny": [],
     "ask": [],
