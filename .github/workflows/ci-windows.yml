@@ -538,6 +538,24 @@ jobs:
           python scripts/diff_msi_tables.py $golden $candidate
           if ($LASTEXITCODE -ne 0) { throw "MSI upgrade-compatibility diff failed (see above)." }
 
+      - name: MSI invariants gate
+        # Hard gate that runs after the diff. Where the diff says "this
+        # MSI matches the committed snapshot," this asserts "this MSI
+        # carries the upgrade-load-bearing values regardless of what the
+        # snapshot says" — UpgradeCode, ServiceInstall names, pinned
+        # Component GUIDs, bootstrapper-contract Property declarations.
+        # The narrower check exists so a future deliberate re-baseline
+        # of the snapshot can't silently drop one of these values.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidate = 'msi_compat/candidate.txt'
+          if (-not (Test-Path $candidate)) {
+            throw "Candidate dump $candidate not produced by the prior step."
+          }
+          python scripts/assert_msi_invariants.py $candidate
+          if ($LASTEXITCODE -ne 0) { throw "MSI invariants gate failed (see above)." }
+
       - name: Upload MSI compatibility dump
         # if: always() so the dump uploads even when the diff step fails
         # — which is exactly when we need the candidate output to debug

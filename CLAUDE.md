@@ -39,6 +39,8 @@ npm run test:coverage   # vitest with @vitest/coverage-v8
 
 CMake's `web-ui` custom target invokes `npm ci` + `npm run build` automatically; only run npm directly when iterating on the frontend.
 
+The Windows MSI is built by the `luminalshine_msi` target (cmake/packaging/windows_wix.cmake), which drives `dotnet wix build` via the WiX 7 CLI pinned in `.config/dotnet-tools.json`. Run `dotnet tool restore` once after cloning so `dotnet wix` resolves; the CMake configure step does this automatically but standalone packaging work outside CMake needs it. WiX 7 also requires accepting the OSMF EULA — `dotnet wix eula accept wix7` (one-time per user). The MSI lands at `build/cpack_artifacts/LuminalShine-<ver>-win64.msi`; CPack is still used for the portable ZIP (`cpack -G ZIP`) but no longer for the MSI.
+
 ## Tests
 
 C++ tests use GoogleTest, built as the `test_sunshine` executable when `BUILD_TESTS=ON` (default). All tests are picked up via `file(GLOB_RECURSE)` from `tests/`. Layout:
