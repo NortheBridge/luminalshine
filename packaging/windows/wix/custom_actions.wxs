@@ -101,11 +101,19 @@
          deferred PS-launching CA runs, so a missing initial value is
          fine. -->
     <Property Id="POWERSHELL_PATH" Secure="yes" />
+    <!-- After="RelocateLegacyInstallRoot" not "AppSearch" — both
+         RelocateLegacyInstallRoot and SetPowerShell5AsPath schedule
+         themselves immediately after AppSearch and WiX 7's linker
+         breaks the tie differently from WiX 3's. Anchoring this CA on
+         the relocator gives a deterministic ordering across toolchains
+         and matches the golden's
+         InstallExecuteSequence rank-2 position (RelocateLegacyInstallRoot
+         first). -->
     <SetProperty Id="POWERSHELL_PATH"
                  Action="SetPowerShell5AsPath"
                  Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
                  Sequence="execute"
-                 After="AppSearch"/>
+                 After="RelocateLegacyInstallRoot"/>
     <SetProperty Id="POWERSHELL_PATH"
                  Action="SetPwsh7AsPowerShellPath"
                  Value="[PWSH7_FOUND_PATH]"
