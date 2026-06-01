@@ -262,7 +262,10 @@
       "Bash(python3 scripts/diff_msi_tables.py --selftest)",
       "Bash(git restore *)",
       "Bash(gh workflow *)",
-      "Bash(git mv *)"
+      "Bash(git mv *)",
+      "WebFetch(domain:wixtoolset.org)",
+      "WebFetch(domain:docs.firegiant.com)",
+      "Bash(gh search *)"
     ],
     "deny": [],
     "ask": [],

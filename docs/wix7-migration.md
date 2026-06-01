@@ -52,7 +52,7 @@ The above invariants are enforced by the **MSI table compatibility oracle**
 ([scripts/dump_msi_tables.ps1](../scripts/dump_msi_tables.ps1) and
 [scripts/diff_msi_tables.py](../scripts/diff_msi_tables.py)) which diffs every
 candidate MSI against the committed golden
-([tests/fixtures/msi_golden/wix3_baseline.txt](../tests/fixtures/msi_golden/wix3_baseline.txt)).
+([tests/fixtures/msi_golden/msi_baseline.txt](../tests/fixtures/msi_golden/msi_baseline.txt)).
 Volatile fields (`ProductCode`, `PackageCode`, `ProductVersion`, absolute
 `Sequence` numbers — relative order still enforced) are normalized away; the
 rest is byte-checked.

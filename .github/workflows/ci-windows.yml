@@ -515,14 +515,12 @@ jobs:
           cpack -G ZIP
 
       - name: MSI upgrade-compatibility check
-        # WiX 3 -> WiX 7 migration oracle. Dumps the freshly built MSI's
+        # MSI table compatibility oracle. Dumps the freshly built MSI's
         # upgrade-critical tables and diffs them against the committed
-        # golden baseline (tests/fixtures/msi_golden/wix3_baseline.txt).
-        # While the baseline is absent (before it has been captured on a
-        # Windows build and committed), this step CAPTURES the dump as an
-        # artifact and warns instead of failing — so it never blocks a
-        # build that predates baseline capture. PR5 promotes this to a hard
-        # gate once the baseline is committed.
+        # baseline (tests/fixtures/msi_golden/msi_baseline.txt). PR 4
+        # of the WiX 7 migration promoted this to a hard gate; any drift
+        # in UpgradeCode / ServiceInstall names / pinned Component GUIDs /
+        # relative sequence ordering fails the build.
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -533,14 +531,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path 'msi_compat' | Out-Null
           $candidate = 'msi_compat/candidate.txt'
           pwsh scripts/dump_msi_tables.ps1 -MsiPath $msi.FullName -OutFile $candidate
-          $golden = 'tests/fixtures/msi_golden/wix3_baseline.txt'
-          if (Test-Path $golden) {
-            python scripts/diff_msi_tables.py $golden $candidate
-            if ($LASTEXITCODE -ne 0) { throw "MSI upgrade-compatibility diff failed (see above)." }
-          } else {
-            Write-Warning "Golden baseline $golden not committed yet; captured candidate dump as artifact. See tests/fixtures/msi_golden/README.md to promote it."
-            Copy-Item $candidate 'msi_compat/wix3_baseline.candidate.txt'
+          $golden = 'tests/fixtures/msi_golden/msi_baseline.txt'
+          if (-not (Test-Path $golden)) {
+            throw "Golden baseline $golden not committed. See tests/fixtures/msi_golden/README.md."
           }
+          python scripts/diff_msi_tables.py $golden $candidate
+          if ($LASTEXITCODE -ne 0) { throw "MSI upgrade-compatibility diff failed (see above)." }
 
       - name: Upload MSI compatibility dump
         # if: always() so the dump uploads even when the diff step fails

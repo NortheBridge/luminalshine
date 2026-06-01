@@ -3,8 +3,8 @@
 # Directory / Feature authoring CPack-WIX used to emit, producing
 # Component IDs, File IDs, Directory IDs, and FeatureComponents
 # bindings that match the committed compatibility oracle
-# (tests/fixtures/msi_golden/wix3_baseline.txt) so the WiX-3 -> WiX-7
-# cutover stays upgrade-compatible.
+# (tests/fixtures/msi_golden/msi_baseline.txt) so the build stays
+# upgrade-compatible across toolchain changes.
 #
 # Why we need this at all:
 # CMake's CPack WIX generator is hardwired to WiX 3 (no plans for WiX
@@ -308,7 +308,7 @@ def make_ids(entry: FileEntry) -> tuple[str, str, str]:
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_GOLDEN = _REPO_ROOT / "tests" / "fixtures" / "msi_golden" / "wix3_baseline.txt"
+_GOLDEN = _REPO_ROOT / "tests" / "fixtures" / "msi_golden" / "msi_baseline.txt"
 
 
 def _parse_golden_rows(table: str) -> list[dict[str, str]]:
