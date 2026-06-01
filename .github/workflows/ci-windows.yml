@@ -308,13 +308,16 @@ jobs:
         #
         # WiX 7 introduced an Open Source Maintenance Fee (OSMF) EULA
         # gate; every `wix` invocation refuses to run with WIX7015 until
-        # the EULA is accepted. `wix --accept-eula` writes a marker file
-        # to the user profile that subsequent invocations honor. Run it
-        # immediately after `tool restore` so every later wix call (here
-        # AND in the CMake-driven `dotnet wix build` step) is greenlit.
+        # the EULA is accepted. The CLI form is a subcommand:
+        # `wix eula accept <eulaId>` where eulaId="wix<major>" — so for
+        # v7 the value is `wix7`. The command writes a marker file at
+        # %USERPROFILE%\.wix\wix7-osmf-eula.txt that every later wix
+        # invocation (extension add, build) honors.
+        # Source: wixtoolset/wix src/wix/WixToolset.Core/CommandLine/
+        # EulaCommand.cs (RequiredEulaId = "wix" + SomeVerInfo.Major).
         run: |
           dotnet tool restore
-          dotnet wix --accept-eula
+          dotnet wix eula accept wix7
           dotnet wix extension add --global WixToolset.UI.wixext/7.0.0
           dotnet wix extension add --global WixToolset.Util.wixext/7.0.0
           dotnet wix extension add --global WixToolset.Firewall.wixext/7.0.0
