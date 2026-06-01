@@ -201,11 +201,25 @@ if(Python3_Interpreter_FOUND)
     # the committed golden, and shape-exactly (mode + dir + normalized
     # basename) for the 29 hash-mode ones whose raw on-disk filenames
     # cannot be recovered from the dump alone. The full byte-exact hash
-    # check happens on Windows CI via the MSI table diff once the
-    # decoupled build pipeline lands.
+    # check happens on Windows CI via the MSI table diff.
     add_test(
         NAME gen_wix_files_selftest
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/gen_wix_files.py" --selftest
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+
+    # MSI invariants gate. scripts/assert_msi_invariants.py checks a
+    # candidate MSI dump against a hard-coded list of upgrade-load-
+    # bearing values (UpgradeCode, ServiceInstall names, pinned
+    # Component GUIDs, bootstrapper-contract Property declarations).
+    # Pairs with diff_msi_tables.py: the diff catches drift vs the
+    # baseline, this catches forbidden mutations to the specific values
+    # that would break upgrade detection or SCM continuity for every
+    # installed user. The full file check runs on Windows CI; this self-
+    # test exercises the parse + invariant logic on synthetic fixtures.
+    add_test(
+        NAME msi_invariants_selftest
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/assert_msi_invariants.py" --selftest
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     )
 endif()
