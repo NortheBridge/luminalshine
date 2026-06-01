@@ -135,8 +135,43 @@ followed for PR 3.
   `dotnet tool restore` + `dotnet wix extension add` for UI / Util / Firewall.
   Diagnostic-dump-on-failure step pivoted from CPack-WIX wix.log to the
   generator's wix_gen output.
-- **PR 3.g** — Windows CI iteration until `diff_msi_tables.py` reports clean
-  against the WiX 3 golden. Expected diffs and resolutions tracked here.
+- **PR 3.g** — Windows CI iteration until `diff_msi_tables.py` reports clean.
+  Seven iterations on the branch:
+  - **iter1** — `choco install wixtoolset` removed (WiX 7 is a dotnet tool, not
+    chocolatey); the first build surfaced WIX7015 — the Open Source
+    Maintenance Fee EULA gate WiX 7 ships with.
+  - **iter2** — first attempt with `WIX_ACCEPT_OSMF_EULA=1` env var (wrong;
+    the WiX CLI ignores it).
+  - **iter3** — switched to `dotnet wix --accept-eula` (also wrong; that flag
+    doesn't exist).
+  - **iter4** — final EULA fix: the WiX CLI's actual form is a subcommand,
+    `dotnet wix eula accept wix7`. Sourced from the WiX 7 upstream's
+    `EulaCommand.cs`. Build went all the way through to the table diff.
+  - **iter5** — first real diff: 86 differences, of which 3 were
+    upgrade-critical (sequence-anchor tie-break at `InstallExecuteSequence`
+    pos 2 and `InstallUISequence` pos 9, plus `Upgrade` row `Language=`
+    column defaulting to en-US instead of locale-agnostic). Fixed by
+    anchoring `SetPowerShell5AsPath` on `RelocateLegacyInstallRoot`,
+    chaining `BlockUserCancelledLegacy` after `BlockLegacySunshineStillPresent`,
+    and `IgnoreLanguage="yes"` on `<MajorUpgrade/>`.
+  - **iter5b** — `Upload MSI compatibility dump` step needed `if: always()`
+    so the dump uploads even when the diff fails; without it the artifact
+    we'd need to re-baseline against doesn't exist.
+  - **iter6** — re-baselined the golden against the WiX 7 candidate. The
+    remaining 82 diffs were all toolchain fingerprints (`WixCA` →
+    `Wix4UtilCA_X64`, `WixFirewallCA` → `Wix5FWCA_X64`, `Wix5*_X64`
+    action-name prefix on firewall CAs, `WixUIPrintEula` gone in v4+ UI,
+    BURNMSIMODIFY/REPAIR/UNINSTALL added to SecureCustomProperties,
+    `WixUI_Mode` gone, registry KeyPath auto-IDs hashed differently,
+    `*`-Guid ComponentIds re-derived from those KeyPaths, 8.3 short
+    names regenerated). Manually audited the new candidate against the
+    pre-rebaseline golden for upgrade invariants (UpgradeCode,
+    ServiceInstall names, hand-authored Component GUIDs, sequence
+    ordering, bootstrapper-contract properties) — all preserved.
+    Renamed `wix3_baseline.txt` → `msi_baseline.txt` since the file is
+    no longer the WiX-3 era snapshot.
+  - **iter7** — CI all green. Oracle diffs clean against the new
+    baseline.
 - **PR 3.final** — Real-Windows install matrix verification (see PR 3 row's
   merge gate above).
 
