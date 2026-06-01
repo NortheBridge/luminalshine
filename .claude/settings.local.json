@@ -255,7 +255,17 @@
       "Bash(awk 'NR>=203 && NR<=226 { print NR\": \"$0 }' /Users/Avalon/Git/luminalshine/packaging/windows/wix/custom_actions.wxs)",
       "Bash(python3)",
       "Bash(grep -nB1 -A60 \"void harden_config_directory\\\\|harden_config_directory\\(\" /Users/Avalon/Git/luminalshine/src/platform/windows/misc.cpp)",
-      "Bash(python3 -c \"import uuid; print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\); print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\); print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\)\")"
+      "Bash(python3 -c \"import uuid; print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\); print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\); print\\('{' + str\\(uuid.uuid4\\(\\)\\).upper\\(\\) + '}'\\)\")",
+      "Bash(python3 -c \"import json,sys; r=json.load\\(sys.stdin\\)[0]; print\\(r['databaseId'], r['status']\\)\")",
+      "Bash(python3 -c \"import xml.etree.ElementTree as ET; ET.parse\\('packaging/windows/wix/luminalshine.wxs'\\); print\\('XML OK'\\)\")",
+      "Bash(python3 scripts/gen_wix_files.py --selftest)",
+      "Bash(python3 scripts/diff_msi_tables.py --selftest)",
+      "Bash(git restore *)",
+      "Bash(gh workflow *)",
+      "Bash(git mv *)",
+      "WebFetch(domain:wixtoolset.org)",
+      "WebFetch(domain:docs.firegiant.com)",
+      "Bash(gh search *)"
     ],
     "deny": [],
     "ask": [],

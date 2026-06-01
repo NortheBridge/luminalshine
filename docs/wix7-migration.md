@@ -52,7 +52,7 @@ The above invariants are enforced by the **MSI table compatibility oracle**
 ([scripts/dump_msi_tables.ps1](../scripts/dump_msi_tables.ps1) and
 [scripts/diff_msi_tables.py](../scripts/diff_msi_tables.py)) which diffs every
 candidate MSI against the committed golden
-([tests/fixtures/msi_golden/wix3_baseline.txt](../tests/fixtures/msi_golden/wix3_baseline.txt)).
+([tests/fixtures/msi_golden/msi_baseline.txt](../tests/fixtures/msi_golden/msi_baseline.txt)).
 Volatile fields (`ProductCode`, `PackageCode`, `ProductVersion`, absolute
 `Sequence` numbers — relative order still enforced) are normalized away; the
 rest is byte-checked.
@@ -68,9 +68,9 @@ CI cost without buying meaningful safety.
 | Step | Status | Branch / PR | Scope |
 |------|--------|-------------|-------|
 | **PR 1** — MSI table compatibility oracle | ✅ merged | [#26](https://github.com/NortheBridge/luminalshine/pull/26) (`8f14a61a`) | Dumper (PowerShell), differ (Python, with selftest), golden baseline captured from a clean WiX 3 build, CI compat-check step (warn-only until golden committed, hard-gate in PR 4) |
-| **PR 2** — Decouple from CPack WiX generator (stay on WiX 3) | 🟡 iterating | [#28](https://github.com/NortheBridge/luminalshine/pull/28) (draft) | Hand-authored `luminalshine.wxs` + `features.json` manifest + `gen_wix_files.py` (file Components + Features + bindings, byte-equivalent to CPack output via `Guid="*"` + replicated ID conventions). CMake drives `candle.exe` + `light.exe` directly. CPack reduced to ZIP-only. WiX 3 schema unchanged — this PR proves the build is right before the schema migrates. |
-| **PR 3** — Cut over to WiX 7 (single step) | ⏸️ pending | — | **Collapsed from old PR 3 + PR 4.** Add WiX 7 toolchain via repo-pinned `.config/dotnet-tools.json` (already present), translate `luminalshine.wxs` + `custom_actions.wxs` + the generator output schema (namespace `http://wixtoolset.org/schemas/v4/wxs`, `<Product>`→`<Package>`, `<Directory ProgramFiles64Folder>`→`<StandardDirectory>`, `Win64="yes"`→`Bitness="always64"`, `<Condition>`→`<Launch Condition>`, `util:` prefix on QuietExec actions). Replace `candle.exe` + `light.exe` invocations in `cmake/packaging/windows_wix.cmake` with a single `wix build` call. Delete WiX 3 toolchain references. Iterate on Windows CI until the oracle diffs clean. Real-Windows install matrix (rcN → next-build upgrade, legacy Sunshine → next-build, fresh install, manual uninstall/reinstall) is the merge gate. |
-| **PR 4** — Permanent CI guardrails + lint v7 port | ⏸️ pending | — | Promote the table-diff oracle to a hard CI gate on `UpgradeCode`, `ServiceInstall` names, and pinned Component GUIDs. Port the existing `wix_condition_lint` + ProgramMenuFolder-keypath lint to the v7 schema/namespace. Final docs pass (this file, [docs/building.md](building.md), [CLAUDE.md](../CLAUDE.md) build notes). |
+| **PR 2** — Decouple from CPack WiX generator (stay on WiX 3) | ✅ merged | [#28](https://github.com/NortheBridge/luminalshine/pull/28) (`b0e5bccf`) | Hand-authored `luminalshine.wxs` + `features.json` manifest + `gen_wix_files.py` (file Components + Features + bindings, byte-equivalent to CPack output via `Guid="*"` + replicated ID conventions). CMake drives `candle.exe` + `light.exe` directly. CPack reduced to ZIP-only. WiX 3 schema unchanged — this PR proved the build was right before the schema migrated. |
+| **PR 3** — Cut over to WiX 7 (single step) | 🟡 iterating | — (`wix7-migration-pr3`) | **Collapsed from old PR 3 + PR 4.** WiX 7 toolchain pinned in `.config/dotnet-tools.json`. `luminalshine.wxs` + `custom_actions.wxs` + the generator-emitted `files.wxs` / `features.wxs` translated to v4 namespace (`http://wixtoolset.org/schemas/v4/wxs`): `<Product>`→`<Package>` merged, `<Directory ProgramFiles64Folder>`→`<StandardDirectory>`, `Win64="yes"`→`Bitness="always64"`, top-level `<Condition>`→`<Launch>`, `<Custom>` condition-text→`Condition=` attribute, `Feature Absent="disallow"`→`AllowAbsent="no"`, feature-level `<Condition Level=>`→`<Level Value= Condition=>`, `BinaryKey="WixCA"`→`BinaryRef="Wix4UtilCA_X64"` (util extension's renamed CA binary; entry-point names unchanged), `<UIRef>`→`<ui:WixUI>`. `windows_wix.cmake` rewritten to drive `dotnet wix build` directly; the WiX 3 candle/light path is gone. CI workflow installs the v7 toolchain via `dotnet tool restore` + `dotnet wix extension add` (UI / Util / Firewall). Iterating on Windows CI until the oracle diffs clean. Real-Windows install matrix (rcN → next-build upgrade, legacy Sunshine → next-build, fresh install, manual uninstall/reinstall) is the merge gate. |
+| **PR 4** — Permanent CI guardrails | ⏸️ pending | — | Promote the table-diff oracle to a hard CI gate on `UpgradeCode`, `ServiceInstall` names, and pinned Component GUIDs (currently warn-only). Add the `Condition` MSI table to `scripts/dump_msi_tables.ps1`'s `$TablesToDump` so feature-level Conditions are diffed. Final docs pass ([docs/building.md](building.md), [CLAUDE.md](../CLAUDE.md) build notes). |
 
 ### Why the collapse is safe
 
@@ -91,36 +91,89 @@ CMake paths to maintain, more workflow infrastructure to author and tear down.
 Collapsing trades that cost for a single (still iteratively verifiable on CI)
 cutover.
 
-## PR 2 internal cadence (notes for future similar PRs)
+## PR 2 cadence (kept for reference)
 
-PR 2 is being landed as sequential commits within the same draft PR so each
-sub-step is locally verifiable before the next is authored. Same cadence is
-recommended for PR 3.
+PR 2 landed as sequential commits within a single draft PR so each sub-step
+was locally verifiable before the next was authored. Same cadence is being
+followed for PR 3.
 
 - **PR 2.a** — `scripts/gen_wix_files.py` file-component generator + offline
-  selftest against the golden's Component IDs. Locally verifiable; landed first
-  as the byte-exact-reproducibility foundation.
+  selftest against the golden's Component IDs.
 - **PR 2.b** — `packaging/windows/wix/features.json` manifest + generator
-  extension to emit Features + FeatureComponents. Selftest validates against
-  the golden's Feature table.
+  extension to emit Features + FeatureComponents.
 - **PR 2.c.1** — Hand-authored `packaging/windows/wix/luminalshine.wxs`,
-  additive only (CMake still using CPack-WIX). Folds the WiX-3-style
-  `WIX.template.in` + `patch_custom_actions.wxs` into one product wxs.
-- **PR 2.c.2** — CMake plumbing cutover. `windows_wix.cmake` rewritten to drive
-  candle/light directly via `cmake --install` staging → generator → candle →
-  light. `package_msi` target preserved by name. CI workflow points at the
-  new target.
-- **PR 2.d** — Windows CI iteration until `diff_msi_tables.py` against the
-  golden reports clean. Each iteration produces a small targeted fix:
-  - iter1: `<Condition>` inside `<FeatureRef>` → moved into generator (CNDL0005).
-  - iter2: `InstallScope="perMachine"` duplicated explicit `<Property ALLUSERS=1>`
-    → dropped `InstallScope`, matching CPack's `CPACK_WIX_INSTALL_SCOPE=NONE`
-    pattern (LGHT0091).
-  - iter3+: TBD.
+  folding the WiX-3-style `WIX.template.in` + `patch_custom_actions.wxs` into
+  one product wxs (additive only, CPack-WIX still in the loop).
+- **PR 2.c.2** — `windows_wix.cmake` rewritten to drive candle/light directly
+  via `cmake --install` staging → generator → candle → light. CPack-WIX
+  removed; CI workflow points at the new target.
+- **PR 2.d** — Windows CI iteration until `diff_msi_tables.py` reported clean
+  (10 iterations: CNDL0005 / LGHT0091 / Directory subtree per install
+  component / Feature Attributes 16 vs 24 / WixUI_FeatureTree vs InstallDir /
+  ARP* properties / LGHT0094 sequence-anchor / sequence position /
+  condition operator whitespace).
+- **PR 2.final** — Dead WiX-3-CPack files (`WIX.template.in`,
+  `patch_custom_actions.wxs`) deleted; `lint_wix_conditions.py` `PATCH_FILE`
+  redirected to `luminalshine.wxs`.
 
-Once PR 2.d's oracle diff is clean, the dead WiX-3-CPack files
-(`WIX.template.in`, `patch_custom_actions.wxs`) get deleted in the final commit
-on the branch.
+## PR 3 internal cadence
+
+- **PR 3.a** — `.config/dotnet-tools.json` populated with WiX 7 pin (file
+  pre-existed at repo root from `60bb2c79` but was empty and in the wrong
+  location for `dotnet tool restore` auto-discovery; moved to `.config/`).
+- **PR 3.b** — `packaging/windows/wix/luminalshine.wxs` translated to v4
+  namespace in place.
+- **PR 3.c** — `packaging/windows/wix/custom_actions.wxs` translated.
+- **PR 3.d** — `scripts/gen_wix_files.py` updated to emit v4-namespace
+  fragments (`Bitness="always64"`, `AllowAbsent="no"`, `<Level Value= Condition=>`).
+  Offline selftest still passes (it validates compiled-table-row values, not
+  XML schema).
+- **PR 3.e** — `cmake/packaging/windows_wix.cmake` rewritten to drive
+  `dotnet wix build` instead of candle/light. `dotnet tool restore` runs at
+  configure time; WiX extensions install on first build.
+- **PR 3.f** — CI workflow: `choco install wixtoolset` replaced with
+  `dotnet tool restore` + `dotnet wix extension add` for UI / Util / Firewall.
+  Diagnostic-dump-on-failure step pivoted from CPack-WIX wix.log to the
+  generator's wix_gen output.
+- **PR 3.g** — Windows CI iteration until `diff_msi_tables.py` reports clean.
+  Seven iterations on the branch:
+  - **iter1** — `choco install wixtoolset` removed (WiX 7 is a dotnet tool, not
+    chocolatey); the first build surfaced WIX7015 — the Open Source
+    Maintenance Fee EULA gate WiX 7 ships with.
+  - **iter2** — first attempt with `WIX_ACCEPT_OSMF_EULA=1` env var (wrong;
+    the WiX CLI ignores it).
+  - **iter3** — switched to `dotnet wix --accept-eula` (also wrong; that flag
+    doesn't exist).
+  - **iter4** — final EULA fix: the WiX CLI's actual form is a subcommand,
+    `dotnet wix eula accept wix7`. Sourced from the WiX 7 upstream's
+    `EulaCommand.cs`. Build went all the way through to the table diff.
+  - **iter5** — first real diff: 86 differences, of which 3 were
+    upgrade-critical (sequence-anchor tie-break at `InstallExecuteSequence`
+    pos 2 and `InstallUISequence` pos 9, plus `Upgrade` row `Language=`
+    column defaulting to en-US instead of locale-agnostic). Fixed by
+    anchoring `SetPowerShell5AsPath` on `RelocateLegacyInstallRoot`,
+    chaining `BlockUserCancelledLegacy` after `BlockLegacySunshineStillPresent`,
+    and `IgnoreLanguage="yes"` on `<MajorUpgrade/>`.
+  - **iter5b** — `Upload MSI compatibility dump` step needed `if: always()`
+    so the dump uploads even when the diff fails; without it the artifact
+    we'd need to re-baseline against doesn't exist.
+  - **iter6** — re-baselined the golden against the WiX 7 candidate. The
+    remaining 82 diffs were all toolchain fingerprints (`WixCA` →
+    `Wix4UtilCA_X64`, `WixFirewallCA` → `Wix5FWCA_X64`, `Wix5*_X64`
+    action-name prefix on firewall CAs, `WixUIPrintEula` gone in v4+ UI,
+    BURNMSIMODIFY/REPAIR/UNINSTALL added to SecureCustomProperties,
+    `WixUI_Mode` gone, registry KeyPath auto-IDs hashed differently,
+    `*`-Guid ComponentIds re-derived from those KeyPaths, 8.3 short
+    names regenerated). Manually audited the new candidate against the
+    pre-rebaseline golden for upgrade invariants (UpgradeCode,
+    ServiceInstall names, hand-authored Component GUIDs, sequence
+    ordering, bootstrapper-contract properties) — all preserved.
+    Renamed `wix3_baseline.txt` → `msi_baseline.txt` since the file is
+    no longer the WiX-3 era snapshot.
+  - **iter7** — CI all green. Oracle diffs clean against the new
+    baseline.
+- **PR 3.final** — Real-Windows install matrix verification (see PR 3 row's
+  merge gate above).
 
 ## What lives outside this migration
 

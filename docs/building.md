@@ -282,11 +282,11 @@ ninja -C build
   }}
   @tab{Windows | @tabs{
     @tab{Installer | ```bash
-      cpack -G WIX --config ./build/CPackConfig.cmake
-      # note: MSI packaging requires WiX Toolset v3 to be installed (e.g. `choco install wixtoolset`)
-      ```}
-    @tab{WiX Installer | ```bash
-      cpack -G WIX --config ./build/CPackConfig.cmake
+      ninja -C build luminalshine_msi
+      # The MSI is hand-authored via the WiX 7 dotnet tool pinned in
+      # .config/dotnet-tools.json. Run `dotnet tool restore` once after
+      # cloning; the build invokes `dotnet wix build` directly. WiX 3's
+      # candle/light and CMake's CPack-WIX generator are no longer used.
       ```}
     @tab{Portable | ```bash
       cpack -G ZIP --config ./build/CPackConfig.cmake

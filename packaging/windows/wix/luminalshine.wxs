@@ -1,34 +1,50 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  luminalshine.wxs — top-level WiX 3 product authoring for the
-  hand-authored (CPack-WIX-decoupled) MSI build introduced in
-  PR2 of the WiX 7 migration.
+  luminalshine.wxs — top-level WiX 7 (schema v4) product authoring for
+  the hand-authored MSI build.
 
-  This file folds together two former inputs:
-    * packaging/windows/wix/WIX.template.in — the CPack-WIX product
-      template (Product, Package, Media, MajorUpgrade, WixVariable,
-      WIXUI_INSTALLDIR, ARP icon, UIRef, FeatureRef ProductFeature).
-    * packaging/windows/wix/patch_custom_actions.wxs — the
-      CPackWiXPatch fragment (Properties, Privileged condition,
-      LuminalShineExtras feature with hand-authored ComponentRefs,
-      InstallExecuteSequence + InstallUISequence customizations,
-      and the CM_C_mttvdd / CM_C_sudovda feature-level Conditions).
+  Schema-level changes vs the prior WiX 3 file (PR3 of the migration):
 
-  The CPack-WIX-specific includes (cpack_variables.wxi,
-  properties.wxi, product_fragment.wxi) and the CPackWiXFragment
-  patch mechanism are gone — every value the includes provided is
-  now passed to candle via -d preprocessor variables from the
-  CMake driver (cmake/packaging/windows_wix.cmake).
+    * Namespace bumped to http://wixtoolset.org/schemas/v4/wxs (the v4
+      schema covers WiX 4 through WiX 7 — no separate "v7" namespace
+      exists).
+    * <Product> is gone; its content moved onto <Package> at the root
+      with merged attributes. The old inner <Package InstallerVersion=
+      Compressed="yes"/> attributes hang off the root <Package> now.
+    * TARGETDIR is implicit; standard directories
+      (ProgramFiles64Folder, ProgramMenuFolder) are wrapped in
+      <StandardDirectory> instead of nested under TARGETDIR.
+    * <Condition Message="...">expr</Condition> (the top-level Privileged
+      launch condition) became <Launch Condition="expr" Message="..."/>.
+    * <Custom Action="X" After="Y">expr</Custom> (condition as element
+      text) became <Custom Action="X" After="Y" Condition="expr"/>
+      (condition as attribute). Operator whitespace is preserved verbatim
+      to match the golden — see the InstallExecuteSequence comments
+      below for the reasoning history.
+    * <Feature Absent="disallow"/> became <Feature AllowAbsent="no"/>
+      (inverse YesNo encoding). Still compiles to Attributes=16.
+    * <Component Win64="yes"/> became <Component Bitness="always64"/>.
+      Same for RegistrySearch.
+    * <UIRef Id="WixUI_FeatureTree"/> became <ui:WixUI Id="..."/> from
+      the ui extension namespace. The WixUI_ErrorProgressText pull-in
+      is implicit in v4's WixUI_FeatureTree and no longer needs its
+      own reference.
 
-  Cross-file references the build relies on:
-    * Files/Directories/Components: emitted into <build>/wix_gen/
-      files.wxs by scripts/gen_wix_files.py at build time.
-    * Feature hierarchy (ProductFeature, CM_G_*, CM_C_*) and
-      FeatureComponents bindings for auto-generated file Components:
-      emitted into <build>/wix_gen/features.wxs by the same script.
-    * Hand-authored Components for services, shortcuts, env, firewall,
-      ARP, etc.: defined in packaging/windows/wix/custom_actions.wxs
-      and pulled into the LuminalShineExtras feature below by Id.
+  Cross-fragment references that DID NOT change:
+
+    * INSTALL_ROOT, INSTALL_PREFIX_1, LUMINALSHINE_PROGRAM_MENU_FOLDER
+      directory IDs.
+    * ProductFeature / CM_G_* / CM_C_* feature hierarchy (still emitted
+      by scripts/gen_wix_files.py into wix_gen/features.wxs).
+    * LuminalShineExtras feature membership: ComponentRefs of the
+      hand-authored Components defined in custom_actions.wxs.
+    * The custom-action IDs in the InstallExecuteSequence /
+      InstallUISequence blocks. Conditions preserved verbatim (the
+      scripts/lint_wix_conditions.py lint enforces them in CI).
+    * All -d preprocessor variable bindings — the CMake driver passes
+      ProductCode, ProductName, ProductVersion, Manufacturer,
+      UpgradeCode, LuminalShineAppId, LicenseRtf, ProductIcon through
+      to `wix build` via -d flags exactly as it did to candle.
 
   Bootstrapper invariant (unchanged across the entire migration):
   LuminalShineSetup.exe / uninstall.exe (the C# / Roslyn binaries
@@ -38,13 +54,14 @@
   KEEPADMINCREDENTIALS, KEEPSESSIONDATA, REMOVEVIRTUALDISPLAYDRIVER,
   DELETEINSTALLDIR, SKIP_REMOVE_CONFLICTING_PRODUCTS).
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:Firewall="http://schemas.microsoft.com/wix/FirewallExtension"
-     RequiredVersion="3.6.3303.0">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:firewall="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!--
-    The product identity. Preprocessor variables are bound via candle -d
-    in the CMake driver:
+    The product identity. Preprocessor variables are bound via
+    `wix build -d Name=Value` in the CMake driver:
       ProductCode      — fresh UUID per build (matches CPack's per-build
                          ProductCode generation; the table differ
                          normalizes ProductCode away so the value need
@@ -57,31 +74,31 @@
                          will side-by-side instead of replacing).
       LuminalShineAppId, LicenseRtf, ProductIcon, PayloadRoot, MyScripts
                        — paths threaded through for icon / license /
-                         binary resolution by candle and light.
+                         binary resolution by `wix build`.
   -->
-  <Product Id="$(var.ProductCode)"
+  <Package ProductCode="$(var.ProductCode)"
            Name="$(var.ProductName)"
            Language="1033"
            Version="$(var.ProductVersion)"
            Manufacturer="$(var.Manufacturer)"
-           UpgradeCode="$(var.UpgradeCode)">
+           UpgradeCode="$(var.UpgradeCode)"
+           InstallerVersion="301"
+           Compressed="yes"
+           Scope="perMachine">
 
-    <!-- NOTE: no InstallScope= attribute. The combination of
-         InstallScope="perMachine" + the explicit <Property Id="ALLUSERS"
-         Value="1"/> below makes light fail with LGHT0091 ("Duplicate
-         symbol Property:ALLUSERS"). InstallScope is a WiX 3 shortcut
-         that auto-emits ALLUSERS=1; the explicit Property gives us more
-         control and matches the CPack-WIX template's behavior (which
-         set CPACK_WIX_INSTALL_SCOPE to "NONE" to disable the shortcut).
-         Per-machine semantics are preserved end-to-end via ALLUSERS=1
-         + the Privileged launch condition farther down. -->
-    <Package InstallerVersion="301" Compressed="yes" />
+    <!-- Scope="perMachine" replaces the WiX 3 idiom of explicit
+         <Property Id="ALLUSERS" Value="1"/>. In WiX 4+ that property is
+         emitted automatically when Scope="perMachine" so we do NOT
+         re-declare it below — the v3 file did, but v4 errors with
+         duplicate-symbol if both are present. Per-machine semantics
+         are unchanged; the Privileged launch condition still enforces
+         that an administrator is running msiexec. -->
 
     <Media Id="1" Cabinet="media1.cab" EmbedCab="yes" />
 
     <!--
-      Major upgrade scheduling — preserved verbatim from
-      WIX.template.in. Schedule="afterInstallValidate" lets the
+      Major upgrade scheduling — preserved verbatim from the WiX 3
+      authoring. Schedule="afterInstallValidate" lets the
       KillProcsQuietImmediate / StopSvcQuietImmediate custom actions
       run on the new MSI's main transaction BEFORE
       RemoveExistingProducts hands off to the old MSI's nested
@@ -89,37 +106,37 @@
       InstallExecuteSequence below for the upgrade-pass coverage
       that depends on this ordering.
     -->
+    <!-- IgnoreLanguage="yes" emits Language= (empty) in the Upgrade
+         table rows, matching the WiX 3 golden. WiX 4+ defaults to
+         filling Language with the Package's Language (1033) which
+         narrows upgrade detection to that locale only — a regression
+         for non-en-US installs of older builds. -->
     <MajorUpgrade Schedule="afterInstallValidate"
                   AllowSameVersionUpgrades="yes"
+                  IgnoreLanguage="yes"
                   DowngradeErrorMessage="A later version of [ProductName] is already installed. Setup will now exit." />
 
-    <!-- WixUI binding — keep identical to the CPack-WIX product so the
-         interactive installer's banner/dialog/license assets render
-         the same as today.
-
-         UIRef is WixUI_FeatureTree (NOT WixUI_InstallDir): CPack's
-         CPACK_WIX_UI_REF default is FeatureTree, and the golden
-         carries WixUI_Mode=FeatureTree. Using WixUI_InstallDir
-         instead pulled in WixUIValidatePath as an extra CustomAction,
-         set WixUI_Mode=InstallDir, and surfaced ARPNOMODIFY=1 — three
-         table diffs vs the golden. FeatureTree avoids all of those.
-         WIXUI_INSTALLDIR is kept so any WixUI dialog that does ask
-         for an install location still resolves to INSTALL_ROOT.
+    <!-- WixUI binding — keep WixUI_FeatureTree from the WiX 3 file.
+         WiX 4+ accesses it via the ui extension's <ui:WixUI/> element;
+         the prior <UIRef Id="WixUI_FeatureTree"/> + <UIRef
+         Id="WixUI_ErrorProgressText"/> pair collapses to a single
+         <ui:WixUI Id="WixUI_FeatureTree"/> because the error/progress
+         dialog is bundled with FeatureTree in v4. WIXUI_INSTALLDIR is
+         kept so any WixUI dialog that does ask for an install location
+         still resolves to INSTALL_ROOT.
 
          ARP* properties (ARPCOMMENTS, ARPCONTACT, ARPURLINFOABOUT)
-         were set via CPACK_WIX_PROPERTY_ARP* in the prior CPack-WIX
-         config and surface in Add/Remove Programs. They have to be
-         declared explicitly now that we own the .wxs. -->
+         set Add/Remove Programs metadata, matching the prior
+         CPACK_WIX_PROPERTY_ARP* defaults. -->
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT" />
-    <Property Id="ARPPRODUCTICON">ProductIcon.ico</Property>
-    <Property Id="ARPCOMMENTS">Modern Self-hosted game stream host for Moonlight</Property>
-    <Property Id="ARPCONTACT">https://github.com/NortheBridge/luminalshine/issues</Property>
-    <Property Id="ARPURLINFOABOUT">https://github.com/NortheBridge/luminalshine</Property>
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon.ico" />
+    <Property Id="ARPCOMMENTS" Value="Modern Self-hosted game stream host for Moonlight" />
+    <Property Id="ARPCONTACT" Value="https://github.com/NortheBridge/luminalshine/issues" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/NortheBridge/luminalshine" />
     <Icon Id="ProductIcon.ico" SourceFile="$(var.ProductIcon)" />
 
-    <UIRef Id="WixUI_FeatureTree" />
-    <UIRef Id="WixUI_ErrorProgressText" />
+    <ui:WixUI Id="WixUI_FeatureTree" />
 
     <!-- ARPINSTALLLOCATION = the install path that Add/Remove Programs
          shows for the product. CPack-WIX auto-emitted this Type-51
@@ -150,7 +167,7 @@
          compiles all <Property Id="X" Secure="yes"/> declarations into
          the MSI's SecureCustomProperties summary entry. INSTALL_ROOT
          is both a Directory id and (at runtime) a public property
-         whose value is the resolved install path; WiX 3 accepts a
+         whose value is the resolved install path; WiX 4+ accepts a
          <Property> with the same Id to mark the property side. The
          golden's SecureCustomProperties value confirms CPack-WIX did
          the equivalent. -->
@@ -160,22 +177,23 @@
       ===========================================================
       Properties folded from patch_custom_actions.wxs
       ===========================================================
-      ALLUSERS=1 + Privileged condition keep this firmly a
+      Scope="perMachine" on <Package> implicitly sets ALLUSERS=1
+      so the legacy explicit Property is omitted. The Privileged
+      launch condition (below, as <Launch/>) keeps this firmly a
       per-machine install — matched by the requireAdministrator
       manifest on the bootstrapper. Any drift here breaks the
       Reset Admin shortcut's HKCU keypath ICE38/43 compliance
       that's already been hard-won (commits 92c30771 / fe6c73a4).
     -->
-    <Property Id="ALLUSERS" Value="1" />
     <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
 
     <Property Id="LEGACY_SUNSHINE_PRESENT" Secure="yes">
-      <RegistrySearch Id="SearchLegacySunshine64" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="DisplayName" Type="raw" Win64="yes" />
-      <RegistrySearch Id="SearchLegacySunshine32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="DisplayName" Type="raw" />
+      <RegistrySearch Id="SearchLegacySunshine64" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="DisplayName" Type="raw" Bitness="always64" />
+      <RegistrySearch Id="SearchLegacySunshine32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="DisplayName" Type="raw" Bitness="always32" />
     </Property>
     <Property Id="LEGACY_SUNSHINE_UNINSTALL" Secure="yes">
-      <RegistrySearch Id="SearchLegacySunshineUninstall64" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="UninstallString" Type="raw" Win64="yes" />
-      <RegistrySearch Id="SearchLegacySunshineUninstall32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="UninstallString" Type="raw" />
+      <RegistrySearch Id="SearchLegacySunshineUninstall64" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="UninstallString" Type="raw" Bitness="always64" />
+      <RegistrySearch Id="SearchLegacySunshineUninstall32" Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Sunshine" Name="UninstallString" Type="raw" Bitness="always32" />
     </Property>
 
     <!-- Bootstrapper-contract MSI properties. The bootstrapper passes
@@ -190,7 +208,7 @@
     <Property Id="INSTALL_MTTVDD" Value="0" Secure="yes" />
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes" />
 
-    <Condition Message="Administrator privileges are required.">Privileged</Condition>
+    <Launch Condition="Privileged" Message="Administrator privileges are required." />
 
     <!--
       ===========================================================
@@ -198,27 +216,27 @@
       ===========================================================
       Matches what CPack auto-generated from
       CPACK_PACKAGE_INSTALL_DIRECTORY="NortheBridge\LuminalShine":
-        TARGETDIR
-          ProgramFiles64Folder
-            INSTALL_PREFIX_1 (Name=NortheBridge)
-              INSTALL_ROOT   (Name=LuminalShine)
+        ProgramFiles64Folder
+          INSTALL_PREFIX_1 (Name=NortheBridge)
+            INSTALL_ROOT   (Name=LuminalShine)
 
+      In WiX 4+ the implicit TARGETDIR/SourceDir wrapper is gone and
+      ProgramFiles64Folder is referenced via <StandardDirectory/>
+      instead of being nested under <Directory Id="TARGETDIR"/>.
       The DefaultDir 8.3 short names in the golden (edtms2sm /
       r0ubect3) are auto-generated by WiX from the long names; using
       the same long names here reproduces them deterministically.
 
       ProgramMenuFolder + LUMINALSHINE_PROGRAM_MENU_FOLDER are
-      declared by custom_actions.wxs, which extends TARGETDIR via a
-      DirectoryRef. Do NOT re-declare them here (would be a duplicate
-      element error in candle).
+      declared by custom_actions.wxs, which extends the standard
+      ProgramMenuFolder via its own StandardDirectoryRef. Do NOT
+      re-declare them here.
     -->
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALL_PREFIX_1" Name="NortheBridge">
-          <Directory Id="INSTALL_ROOT" Name="LuminalShine" />
-        </Directory>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALL_PREFIX_1" Name="NortheBridge">
+        <Directory Id="INSTALL_ROOT" Name="LuminalShine" />
       </Directory>
-    </Directory>
+    </StandardDirectory>
 
     <!--
       ===========================================================
@@ -228,8 +246,8 @@
       per-group CM_G_* features are emitted by gen_wix_files.py
       into <build>/wix_gen/features.wxs from
       packaging/windows/wix/features.json. We pull them in here
-      via a single FeatureGroupRef — actually just leave the
-      cross-fragment Feature definitions to be linked by light,
+      via a single FeatureRef — actually just leave the
+      cross-fragment Feature definitions to be linked by `wix build`,
       which traces ComponentRef back to its containing Feature
       automatically.
 
@@ -240,7 +258,7 @@
     -->
     <FeatureRef Id="ProductFeature" />
 
-    <Feature Id="LuminalShineExtras" Title="LuminalShine Components" Level="1" Absent="disallow">
+    <Feature Id="LuminalShineExtras" Title="LuminalShine Components" Level="1" AllowAbsent="no">
       <ComponentRef Id="CtlStopSunshine" />
       <ComponentRef Id="SunshineSvc" />
       <ComponentRef Id="LuminalShineXboxBtHelperSvc" />
@@ -258,26 +276,32 @@
       Feature-level Conditions for the virtual-display drivers live in
       packaging/windows/wix/features.json (each component spec carries
       an optional `conditions` field). The generator (gen_wix_files.py)
-      writes them as <Condition Level="N">expression</Condition>
-      children of the corresponding <Feature> in features.wxs.
+      writes them as <Level Value="N" Condition="expression"/> children
+      of the corresponding <Feature> in features.wxs (the v4 form;
+      WiX 3 used <Condition Level="N">expression</Condition>).
 
       An earlier draft tried to add them here via
       <FeatureRef Id="CM_C_mttvdd"><Condition>...</Condition></FeatureRef>
       to mirror the CPackWiXFragment patch mechanism — WiX 3.14's
-      candle rejects that with CNDL0005 ("The FeatureRef element
-      contains an unexpected child element 'Condition'"). The native
-      WiX 3 placement is inside the Feature itself, hence the move
-      into the generator+manifest.
+      candle rejected that with CNDL0005. WiX 4+'s <Level/> element
+      can only sit inside <Feature/>, so the placement decision is the
+      same: emit it from the generator into the feature it gates.
     -->
 
     <!--
       ===========================================================
-      InstallExecuteSequence — folded verbatim from
-      patch_custom_actions.wxs. The conditions and ordering are
-      the production-load-bearing fix shipped in 9d590a6c — keep
-      every clause exactly as-is. The lint
-      scripts/lint_wix_conditions.py enforces these conditions in
-      CI and will reject silent drift.
+      InstallExecuteSequence — folded verbatim from the WiX 3
+      authoring. The conditions and ordering are the production-
+      load-bearing fix shipped in 9d590a6c — keep every clause
+      exactly as-is. The lint scripts/lint_wix_conditions.py
+      enforces these conditions in CI and will reject silent drift.
+
+      WiX 4+ change: <Custom Action="X" After="Y">expr</Custom>
+      (condition as element text) became
+      <Custom Action="X" After="Y" Condition="expr"/> (condition
+      as attribute). Operator whitespace inside the condition is
+      preserved verbatim to match the golden — see the prior
+      file's iter7-8 whitespace fix history.
       ===========================================================
     -->
     <InstallExecuteSequence>
@@ -290,73 +314,73 @@
       <Custom Action="SetARPINSTALLLOCATION" After="CostFinalize" />
 
       <!-- Remove conflicting products before installation starts. -->
-      <Custom Action="RemoveConflictingProducts" After="InstallInitialize">NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS&lt;&gt;"1"</Custom>
+      <Custom Action="RemoveConflictingProducts" After="InstallInitialize" Condition="NOT Installed AND NOT REMOVE AND SKIP_REMOVE_CONFLICTING_PRODUCTS&lt;&gt;&quot;1&quot;" />
 
       <!-- Pre-validate stop/kill: fire across ALL UI levels (including the
            interactive full-UI install path). WIX_UPGRADE_DETECTED covers
            the install pass of a major upgrade — see the lengthy comment
            in patch_custom_actions.wxs (commit 9d590a6c) for why this
            condition shape is non-negotiable. -->
-      <Custom Action="SetKillProcsQuietImmediate" Before="InstallValidate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="KillProcsQuietImmediate" After="SetKillProcsQuietImmediate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="SetStopSvcQuietImmediate" After="KillProcsQuietImmediate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="SetKillProcsQuietImmediate" Before="InstallValidate" Condition="WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE)" />
+      <Custom Action="KillProcsQuietImmediate" After="SetKillProcsQuietImmediate" Condition="WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE)" />
+      <Custom Action="SetStopSvcQuietImmediate" After="KillProcsQuietImmediate" Condition="WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE)" />
+      <Custom Action="StopSvcQuietImmediate" After="SetStopSvcQuietImmediate" Condition="WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE)" />
 
       <!-- Deferred stop -->
-      <Custom Action="SetStopSvcQuiet" After="InstallInitialize">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
-      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet">WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = "ALL" AND NOT UPGRADINGPRODUCTCODE)</Custom>
+      <Custom Action="SetStopSvcQuiet" After="InstallInitialize" Condition="WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE)" />
+      <Custom Action="StopSvcQuiet" After="SetStopSvcQuiet" Condition="WIX_UPGRADE_DETECTED OR (Installed AND NOT REMOVE) OR (REMOVE = &quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE)" />
 
       <!-- Start quietly on repair with basic/silent UI -->
-      <Custom Action="SetStartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel&lt;5</Custom>
-      <Custom Action="StartSvcQuiet" Before="InstallFinalize">Installed AND NOT REMOVE AND UILevel&lt;5</Custom>
+      <Custom Action="SetStartSvcQuiet" Before="InstallFinalize" Condition="Installed AND NOT REMOVE AND UILevel&lt;5" />
+      <Custom Action="StartSvcQuiet" Before="InstallFinalize" Condition="Installed AND NOT REMOVE AND UILevel&lt;5" />
 
       <!-- Manual uninstall: process/legacy service cleanup -->
-      <Custom Action="SetKillProcsQuiet" After="StopSvcQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
-      <Custom Action="KillProcsQuiet" After="SetKillProcsQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
-      <Custom Action="SetRemoveServiceQuiet" After="KillProcsQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
-      <Custom Action="RemoveServiceQuiet" After="SetRemoveServiceQuiet">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="SetKillProcsQuiet" After="StopSvcQuiet" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KillProcsQuiet" After="SetKillProcsQuiet" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="SetRemoveServiceQuiet" After="KillProcsQuiet" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RemoveServiceQuiet" After="SetRemoveServiceQuiet" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
 
       <!-- Post-install chores -->
-      <Custom Action="SetResetAcls" After="InstallFiles">NOT REMOVE</Custom>
-      <Custom Action="ResetAcls" After="SetResetAcls">NOT REMOVE</Custom>
+      <Custom Action="SetResetAcls" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="ResetAcls" After="SetResetAcls" Condition="NOT REMOVE" />
       <!-- Belt-and-suspenders: AND feature action state (=3 -> INSTALLSTATE_LOCAL)
            with the property switch so we never invoke install.ps1 against
            files that weren't staged, even if the feature condition above
            ever drifts out of sync with the INSTALL_* properties. -->
-      <Custom Action="SetInstallMttVdd" After="ResetAcls">NOT REMOVE AND INSTALL_MTTVDD = "1" AND&amp;CM_C_mttvdd=3</Custom>
-      <Custom Action="InstallMttVdd" After="SetInstallMttVdd">NOT REMOVE AND INSTALL_MTTVDD = "1" AND&amp;CM_C_mttvdd=3</Custom>
-      <Custom Action="SetInstallSudovda" After="InstallMttVdd">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND&amp;CM_C_sudovda=3</Custom>
-      <Custom Action="InstallSudovda" After="SetInstallSudovda">NOT REMOVE AND INSTALL_SUDOVDA = "1" AND&amp;CM_C_sudovda=3</Custom>
-      <Custom Action="SetMigrateConfig" After="InstallSudovda">NOT REMOVE</Custom>
-      <Custom Action="MigrateConfig" After="SetMigrateConfig">NOT REMOVE</Custom>
-      <Custom Action="SetRunInstallerMigrations" After="MigrateConfig">NOT REMOVE</Custom>
-      <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations">NOT REMOVE</Custom>
+      <Custom Action="SetInstallMttVdd" After="ResetAcls" Condition="NOT REMOVE AND INSTALL_MTTVDD = &quot;1&quot; AND&amp;CM_C_mttvdd=3" />
+      <Custom Action="InstallMttVdd" After="SetInstallMttVdd" Condition="NOT REMOVE AND INSTALL_MTTVDD = &quot;1&quot; AND&amp;CM_C_mttvdd=3" />
+      <Custom Action="SetInstallSudovda" After="InstallMttVdd" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
+      <Custom Action="InstallSudovda" After="SetInstallSudovda" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
+      <Custom Action="SetMigrateConfig" After="InstallSudovda" Condition="NOT REMOVE" />
+      <Custom Action="MigrateConfig" After="SetMigrateConfig" Condition="NOT REMOVE" />
+      <Custom Action="SetRunInstallerMigrations" After="MigrateConfig" Condition="NOT REMOVE" />
+      <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations" Condition="NOT REMOVE" />
 
       <!-- Uninstall before file removal -->
-      <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles">REMOVE="ALL"</Custom>
-      <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo">REMOVE="ALL"</Custom>
+      <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot;" />
 
       <!-- Clear admin credentials on a real uninstall (skipped during upgrades). -->
-      <Custom Action="SetResetAdminCredentials" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS&lt;&gt;"1"</Custom>
-      <Custom Action="ResetAdminCredentials" After="SetResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS&lt;&gt;"1"</Custom>
+      <Custom Action="SetResetAdminCredentials" After="RestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS&lt;&gt;&quot;1&quot;" />
+      <Custom Action="ResetAdminCredentials" After="SetResetAdminCredentials" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS&lt;&gt;&quot;1&quot;" />
 
       <!-- Wipe session telemetry on a real uninstall (skipped during upgrades). -->
-      <Custom Action="SetResetSessionHistory" After="ResetAdminCredentials">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;"1"</Custom>
-      <Custom Action="ResetSessionHistory" After="SetResetSessionHistory">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;"1"</Custom>
+      <Custom Action="SetResetSessionHistory" After="ResetAdminCredentials" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;&quot;1&quot;" />
+      <Custom Action="ResetSessionHistory" After="SetResetSessionHistory" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;&quot;1&quot;" />
 
       <!-- Remove Virtual Display Drivers only when explicitly requested. -->
-      <Custom Action="SetUninstallMttVdd" After="RestoreNvPrefsUndo">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
-      <Custom Action="UninstallMttVdd" After="SetUninstallMttVdd">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
-      <Custom Action="SetUninstallSudovda" After="UninstallMttVdd">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
-      <Custom Action="UninstallSudovda" After="SetUninstallSudovda">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = "1"</Custom>
+      <Custom Action="SetUninstallMttVdd" After="RestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
+      <Custom Action="UninstallMttVdd" After="SetUninstallMttVdd" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
+      <Custom Action="SetUninstallSudovda" After="UninstallMttVdd" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
+      <Custom Action="UninstallSudovda" After="SetUninstallSudovda" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
 
       <!-- Execute delete/prune after MSI removes its files -->
-      <Custom Action="SetDeleteInstallDir" After="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR = "1"</Custom>
-      <Custom Action="DeleteInstallDir" After="SetDeleteInstallDir">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR = "1"</Custom>
+      <Custom Action="SetDeleteInstallDir" After="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR = &quot;1&quot;" />
+      <Custom Action="DeleteInstallDir" After="SetDeleteInstallDir" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR = &quot;1&quot;" />
 
       <!-- If not deleting whole dir, prune everything but config -->
-      <Custom Action="SetPruneButConfig" After="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR&lt;&gt;"1"</Custom>
-      <Custom Action="PruneButConfig" After="SetPruneButConfig">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR&lt;&gt;"1"</Custom>
+      <Custom Action="SetPruneButConfig" After="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR&lt;&gt;&quot;1&quot;" />
+      <Custom Action="PruneButConfig" After="SetPruneButConfig" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR&lt;&gt;&quot;1&quot;" />
     </InstallExecuteSequence>
 
     <!--
@@ -374,12 +398,20 @@
            InstallUISequence. CostFinalize exists in both sequences. -->
       <Custom Action="SetARPINSTALLLOCATION" After="CostFinalize" />
 
-      <Custom Action="AskUninstallLegacySunshine" After="AppSearch">LEGACY_SUNSHINE_PRESENT AND UILevel&gt;2 AND NOT Installed</Custom>
-      <Custom Action="WaitForLegacyUninstall" After="AskUninstallLegacySunshine">UNINSTALL_LEGACY_SUNSHINE = "1" AND NOT USER_CANCELLED_LEGACY_UNINSTALL</Custom>
-      <Custom Action="BlockUserCancelledLegacy" Before="LaunchConditions">USER_CANCELLED_LEGACY_UNINSTALL = "1"</Custom>
-      <Custom Action="BlockLegacySunshineStillPresent" Before="LaunchConditions">LEGACY_SUNSHINE_STILL_PRESENT = "1"</Custom>
-      <Custom Action="RepairCompletePrompt" After="ExecuteAction">REINSTALL AND NOT REMOVE AND NOT UPGRADINGPRODUCTCODE AND UILevel&gt;2</Custom>
+      <Custom Action="AskUninstallLegacySunshine" After="AppSearch" Condition="LEGACY_SUNSHINE_PRESENT AND UILevel&gt;2 AND NOT Installed" />
+      <Custom Action="WaitForLegacyUninstall" After="AskUninstallLegacySunshine" Condition="UNINSTALL_LEGACY_SUNSHINE = &quot;1&quot; AND NOT USER_CANCELLED_LEGACY_UNINSTALL" />
+      <!-- Order: BlockLegacySunshineStillPresent first, then
+           BlockUserCancelledLegacy. Both were Before="LaunchConditions"
+           and WiX 7 broke the tie the other way from WiX 3. Chaining
+           the first's Before= onto the second's Action= forces the
+           order across toolchains and matches the golden's
+           InstallUISequence rank-9 position (BlockLegacySunshineStillPresent
+           runs FIRST, BlockUserCancelledLegacy SECOND, both still
+           before LaunchConditions). -->
+      <Custom Action="BlockLegacySunshineStillPresent" Before="BlockUserCancelledLegacy" Condition="LEGACY_SUNSHINE_STILL_PRESENT = &quot;1&quot;" />
+      <Custom Action="BlockUserCancelledLegacy" Before="LaunchConditions" Condition="USER_CANCELLED_LEGACY_UNINSTALL = &quot;1&quot;" />
+      <Custom Action="RepairCompletePrompt" After="ExecuteAction" Condition="REINSTALL AND NOT REMOVE AND NOT UPGRADINGPRODUCTCODE AND UILevel&gt;2" />
     </InstallUISequence>
 
-  </Product>
+  </Package>
 </Wix>

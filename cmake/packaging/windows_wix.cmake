@@ -1,10 +1,4 @@
-# WiX 3 MSI build — hand-authored, CPack-WIX-decoupled.
-#
-# Replaces the prior CPACK_GENERATOR "WIX" setup as of PR2.c of the
-# WiX 7 migration. CMake's CPack-WIX generator is hardwired to WiX 3
-# and has no v4+ replacement upstream; owning the candle/light
-# invocation directly here is the prerequisite for the v7 toolchain
-# swap that lands in PR3-4.
+# WiX 7 MSI build — hand-authored, dotnet-tool toolchain.
 #
 # Pipeline (driven by `cmake --build <build> --target luminalshine_msi`):
 #
@@ -12,10 +6,9 @@
 #                --prefix <build>/wix_staging/<comp>` for every install
 #               COMPONENT in LUMINALSHINE_INSTALL_COMPONENTS. Produces a
 #               <staging>/<component>/<install-relative-paths>/<file>
-#               layout that mirrors CPack's _CPack_Packages/win64/WIX/
-#               tree exactly — required for scripts/gen_wix_files.py
-#               to reproduce the byte-identical Component/File/Directory
-#               Ids the table-diff oracle locks down.
+#               layout that the generator walks and turns into byte-
+#               identical Component/File/Directory Ids the table-diff
+#               oracle locks down.
 #
 #   2. GEN    — scripts/gen_wix_files.py walks the staged tree and
 #               writes <build>/wix_gen/files.wxs (Directory hierarchy
@@ -23,25 +16,39 @@
 #               <build>/wix_gen/features.wxs (ProductFeature /
 #               CM_G_* / CM_C_* hierarchy + FeatureComponents
 #               bindings, sourced from packaging/windows/wix/features.json).
+#               Output is WiX-4-namespace .wxs that the WiX-7 toolchain
+#               consumes natively.
 #
-#   3. CANDLE — compile every .wxs (luminalshine.wxs, custom_actions.wxs,
-#               files.wxs, features.wxs) to a .wixobj.
-#
-#   4. LIGHT  — link the .wixobjs into the final MSI, with the WixUI /
-#               WixUtilExtension / WixFirewallExtension extensions
-#               loaded and the MyScripts + PayloadRoot bindpaths
-#               pointing at the in-repo .vbs scripts and the
-#               wix_payload tree (which the build's own targets
-#               populate with the renamed luminalshinesvc.exe / xbox /
-#               sessionmon binaries — see tools/CMakeLists.txt).
+#   3. BUILD  — single `wix build` invocation compiles + links every
+#               .wxs (luminalshine.wxs, custom_actions.wxs, files.wxs,
+#               features.wxs) into the final MSI. Replaces the prior
+#               candle.exe + light.exe pair. Extensions loaded:
+#               WixToolset.UI.wixext (WixUI_FeatureTree dialogs),
+#               WixToolset.Util.wixext (Wix4UtilCA_X64 binary +
+#               WixQuietExec / CAQuietExec entries),
+#               WixToolset.Firewall.wixext (firewall:FirewallException).
+#               Bindpaths MyScripts (for VBScript Binary SourceFiles)
+#               and PayloadRoot (for the renamed luminalshinesvc / xbox
+#               / sessionmon binaries the build's own targets populate
+#               into wix_payload\) match what light was passed.
 #
 # Output: ${CMAKE_BINARY_DIR}/cpack_artifacts/LuminalShine-<ver>-win64.msi
-#         (same directory the prior CPack-WIX path produced, so
-#         build_bootstrapper.ps1 picks it up unchanged).
+#         (same directory and filename pattern the prior CPack-WIX and
+#         WiX-3 candle/light paths produced, so build_bootstrapper.ps1
+#         picks it up unchanged).
 #
-# CPack is still used for the portable ZIP — only the WIX generator
-# is removed. ZIP-vs-WIX separation matches the prior split in
-# .github/workflows/ci-windows.yml.
+# Toolchain provisioning:
+#   `wix` is pinned to a specific version via .config/dotnet-tools.json.
+#   The build invokes `dotnet tool restore` once per configure (cached
+#   in $HOME/.dotnet/toolResolverCache by dotnet's CLI itself), then
+#   runs the local tool via `dotnet wix build ...`. WiX extensions
+#   (WixToolset.UI.wixext etc.) are version-pinned to the same major
+#   as the wix tool and installed into the per-user wix extension
+#   cache by `wix extension add` on first use; subsequent builds use
+#   the cached extension assemblies.
+#
+# CPack is still used for the portable ZIP — ZIP-vs-MSI separation
+# matches the prior split in .github/workflows/ci-windows.yml.
 
 # Only generate the portable ZIP via CPack. The MSI is built by the
 # luminalshine_msi target below.
@@ -50,8 +57,8 @@ set(CPACK_GENERATOR "ZIP")
 # ----------------------------------------------------------------------------
 # Sanitize version for WiX: must be x.x.x.x with integers [0,65534].
 # Carried over verbatim from the prior CPack-WIX configuration. The
-# resulting value is fed to candle via -dProductVersion= AND set as
-# CPACK_PACKAGE_VERSION so the ZIP filename stays version-stamped.
+# resulting value is fed to `wix build` via -d ProductVersion=... AND
+# set as CPACK_PACKAGE_VERSION so the ZIP filename stays version-stamped.
 # ----------------------------------------------------------------------------
 set(_RAW_VER "${PROJECT_VERSION_NUMERIC}")
 set(_WIX_MAJ 0)
@@ -88,18 +95,25 @@ set(CPACK_PACKAGE_VERSION "${LUMINALSHINE_MSI_VERSION}")
 message(STATUS "LUMINALSHINE_MSI_VERSION = ${LUMINALSHINE_MSI_VERSION} (from ${PROJECT_VERSION_FULL})")
 
 # ----------------------------------------------------------------------------
-# WiX 3 toolchain discovery.
-# Chocolatey's wixtoolset install sets %WIX% to the install root; the
-# binaries live in $env:WIX\bin. Also try PATH as a fallback.
+# WiX 7 toolchain discovery.
+# The `wix` command is a .NET tool pinned in .config/dotnet-tools.json
+# and restored into the local tool manifest by `dotnet tool restore`.
+# We invoke it as `dotnet wix build ...`. dotnet itself must be on
+# PATH; the CI installs the .NET 10 SDK via actions/setup-dotnet.
 # ----------------------------------------------------------------------------
-set(_wix_hints "")
-if(DEFINED ENV{WIX})
-  list(APPEND _wix_hints "$ENV{WIX}/bin")
-endif()
-find_program(LUMINALSHINE_CANDLE_EXE candle.exe HINTS ${_wix_hints} REQUIRED)
-find_program(LUMINALSHINE_LIGHT_EXE  light.exe  HINTS ${_wix_hints} REQUIRED)
-message(STATUS "WiX 3 candle: ${LUMINALSHINE_CANDLE_EXE}")
-message(STATUS "WiX 3 light:  ${LUMINALSHINE_LIGHT_EXE}")
+find_program(LUMINALSHINE_DOTNET_EXE dotnet REQUIRED)
+message(STATUS "dotnet: ${LUMINALSHINE_DOTNET_EXE}")
+
+# WiX extensions to load when invoking `wix build`. Versions must
+# match the wix tool version pinned in .config/dotnet-tools.json
+# (mismatch across major versions surfaces as a runtime extension
+# load error).
+set(LUMINALSHINE_WIX_VERSION "7.0.0")
+set(LUMINALSHINE_WIX_EXTENSIONS
+  "WixToolset.UI.wixext"
+  "WixToolset.Util.wixext"
+  "WixToolset.Firewall.wixext"
+)
 
 # Python 3 for scripts/gen_wix_files.py — required here, not QUIET (the
 # build genuinely needs it to author files.wxs / features.wxs).
@@ -112,8 +126,9 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 # upgrade detection for every installed user.
 set(LUMINALSHINE_UPGRADE_GUID "{C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}")
 
-# ProductCode is per-build (CPack-WIX behaved the same way). The table
-# diff normalizes ProductCode out, so a fresh UUID each configure is fine.
+# ProductCode is per-build (CPack-WIX and the prior WiX 3 path behaved
+# the same way). The table diff normalizes ProductCode out, so a fresh
+# UUID each configure is fine.
 execute_process(
   COMMAND ${Python3_EXECUTABLE} -c "import uuid; print('{' + str(uuid.uuid4()).upper() + '}')"
   OUTPUT_VARIABLE LUMINALSHINE_PRODUCT_CODE
@@ -126,7 +141,6 @@ endif()
 message(STATUS "LUMINALSHINE_PRODUCT_CODE = ${LUMINALSHINE_PRODUCT_CODE}")
 
 set(LUMINALSHINE_MSI_STAGING_DIR "${CMAKE_BINARY_DIR}/wix_staging")
-set(LUMINALSHINE_MSI_WIXOBJ_DIR  "${CMAKE_BINARY_DIR}/wix_obj")
 set(LUMINALSHINE_MSI_GEN_DIR     "${CMAKE_BINARY_DIR}/wix_gen")
 set(LUMINALSHINE_MSI_OUT_DIR     "${CMAKE_BINARY_DIR}/cpack_artifacts")
 set(LUMINALSHINE_MSI_OUT_FILE    "${LUMINALSHINE_MSI_OUT_DIR}/LuminalShine-${LUMINALSHINE_MSI_VERSION}-win64.msi")
@@ -155,6 +169,29 @@ set(LUMINALSHINE_INSTALL_COMPONENTS
   sudovda
   Unspecified
 )
+
+# ----------------------------------------------------------------------------
+# Toolchain bootstrap — run `dotnet tool restore` at configure time to
+# install the WiX 7 CLI into the local tool manifest. Cheap on subsequent
+# runs (dotnet caches the resolved tool path), so we do it eagerly here
+# rather than as part of every MSI build. WiX extensions are installed
+# on first use of `wix extension add`, which runs as part of the build
+# step below.
+# ----------------------------------------------------------------------------
+execute_process(
+  COMMAND ${LUMINALSHINE_DOTNET_EXE} tool restore
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  RESULT_VARIABLE _dotnet_restore_rc
+  OUTPUT_VARIABLE _dotnet_restore_out
+  ERROR_VARIABLE _dotnet_restore_err
+)
+if(NOT _dotnet_restore_rc EQUAL 0)
+  message(FATAL_ERROR
+    "`dotnet tool restore` failed (rc=${_dotnet_restore_rc}). "
+    "Make sure .config/dotnet-tools.json is present and the .NET SDK is installed.\n"
+    "stdout: ${_dotnet_restore_out}\nstderr: ${_dotnet_restore_err}")
+endif()
+message(STATUS "dotnet tool restore: ok")
 
 # ----------------------------------------------------------------------------
 # STAGE step — wipe + re-stage every install component in one command
@@ -205,22 +242,39 @@ add_custom_command(
 )
 
 # ----------------------------------------------------------------------------
-# CANDLE step — compile each .wxs to a .wixobj.
-# Extensions and -d preprocessor variables match what CPack-WIX
-# passed today (see prior windows_wix.cmake history) so wxs sources
-# that reference $(var.X) keep resolving.
+# BUILD step — single `wix build` invocation compiles + links the .wxs
+# inputs into the MSI. The -d preprocessor variables match what the
+# prior candle/light pair received; the -bindpath flags resolve the
+# !(bindpath.X)... references in the wxs sources.
+#
+# Extensions: -ext picks the assembly from the per-user extension
+# cache populated by `wix extension add`. We pre-install every required
+# extension into that cache as a one-shot step ahead of the build —
+# WiX caches by version, so this is a no-op on subsequent builds.
 # ----------------------------------------------------------------------------
-set(_candle_extensions -ext WixUtilExtension -ext WixFirewallExtension)
-set(_candle_dvars
-  "-dProductCode=${LUMINALSHINE_PRODUCT_CODE}"
-  "-dProductName=${CMAKE_PROJECT_NAME}"
-  "-dProductVersion=${LUMINALSHINE_MSI_VERSION}"
-  "-dManufacturer=${CPACK_PACKAGE_VENDOR}"
-  "-dUpgradeCode=${LUMINALSHINE_UPGRADE_GUID}"
-  "-dLicenseRtf=${CMAKE_SOURCE_DIR}/packaging/windows/LICENSE.rtf"
-  "-dProductIcon=${CMAKE_SOURCE_DIR}/sunshine.ico"
-  "-dLuminalShineAppId=${WINDOWS_APP_USER_MODEL_ID}"
-  "-dBinDir=${CMAKE_BINARY_DIR}"
+set(_wix_ext_install_commands)
+foreach(_ext ${LUMINALSHINE_WIX_EXTENSIONS})
+  list(APPEND _wix_ext_install_commands
+    COMMAND ${LUMINALSHINE_DOTNET_EXE} wix extension add
+      --global "${_ext}/${LUMINALSHINE_WIX_VERSION}"
+  )
+endforeach()
+
+set(_wix_ext_flags)
+foreach(_ext ${LUMINALSHINE_WIX_EXTENSIONS})
+  list(APPEND _wix_ext_flags -ext "${_ext}/${LUMINALSHINE_WIX_VERSION}")
+endforeach()
+
+set(_wix_dvars
+  "-d" "ProductCode=${LUMINALSHINE_PRODUCT_CODE}"
+  "-d" "ProductName=${CMAKE_PROJECT_NAME}"
+  "-d" "ProductVersion=${LUMINALSHINE_MSI_VERSION}"
+  "-d" "Manufacturer=${CPACK_PACKAGE_VENDOR}"
+  "-d" "UpgradeCode=${LUMINALSHINE_UPGRADE_GUID}"
+  "-d" "LicenseRtf=${CMAKE_SOURCE_DIR}/packaging/windows/LICENSE.rtf"
+  "-d" "ProductIcon=${CMAKE_SOURCE_DIR}/sunshine.ico"
+  "-d" "LuminalShineAppId=${WINDOWS_APP_USER_MODEL_ID}"
+  "-d" "BinDir=${CMAKE_BINARY_DIR}"
 )
 
 set(_wxs_all
@@ -229,41 +283,21 @@ set(_wxs_all
   "${LUMINALSHINE_FEATURES_WXS}"
 )
 
-set(_wixobjs)
-foreach(_wxs ${_wxs_all})
-  get_filename_component(_base "${_wxs}" NAME_WE)
-  set(_obj "${LUMINALSHINE_MSI_WIXOBJ_DIR}/${_base}.wixobj")
-  add_custom_command(
-    OUTPUT "${_obj}"
-    DEPENDS "${_wxs}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${LUMINALSHINE_MSI_WIXOBJ_DIR}"
-    COMMAND "${LUMINALSHINE_CANDLE_EXE}" -nologo -arch x64
-      -out "${_obj}"
-      ${_candle_extensions}
-      ${_candle_dvars}
-      "${_wxs}"
-    COMMENT "candle: ${_base}.wxs"
-    VERBATIM
-  )
-  list(APPEND _wixobjs "${_obj}")
-endforeach()
-
-# ----------------------------------------------------------------------------
-# LIGHT step — link wixobjs into the final MSI. Extensions and
-# bindpaths mirror what the prior CPACK_WIX_LIGHT_EXTRA_FLAGS supplied.
-# ----------------------------------------------------------------------------
 add_custom_command(
   OUTPUT "${LUMINALSHINE_MSI_OUT_FILE}"
-  DEPENDS ${_wixobjs}
+  DEPENDS ${_wxs_all}
   COMMAND ${CMAKE_COMMAND} -E make_directory "${LUMINALSHINE_MSI_OUT_DIR}"
-  COMMAND "${LUMINALSHINE_LIGHT_EXE}" -nologo
-    ${_candle_extensions}
-    -ext WixUIExtension
-    -b "MyScripts=${CMAKE_SOURCE_DIR}/packaging/windows/wix"
-    -b "PayloadRoot=${CMAKE_BINARY_DIR}/wix_payload/"
+  ${_wix_ext_install_commands}
+  COMMAND ${LUMINALSHINE_DOTNET_EXE} wix build
+    -arch x64
+    ${_wix_ext_flags}
+    ${_wix_dvars}
+    -bindpath "MyScripts=${CMAKE_SOURCE_DIR}/packaging/windows/wix"
+    -bindpath "PayloadRoot=${CMAKE_BINARY_DIR}/wix_payload/"
     -out "${LUMINALSHINE_MSI_OUT_FILE}"
-    ${_wixobjs}
-  COMMENT "light: linking ${LUMINALSHINE_MSI_OUT_FILE}"
+    ${_wxs_all}
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  COMMENT "wix build: linking ${LUMINALSHINE_MSI_OUT_FILE}"
   VERBATIM
 )
 
