@@ -266,7 +266,11 @@
       "WebFetch(domain:wixtoolset.org)",
       "WebFetch(domain:docs.firegiant.com)",
       "Bash(gh search *)",
-      "Bash(git rebase *)"
+      "Bash(git rebase *)",
+      "Bash(chmod +x /Users/Avalon/Git/luminalshine/scripts/assert_msi_invariants.py)",
+      "Bash(python3 /Users/Avalon/Git/luminalshine/scripts/assert_msi_invariants.py --selftest)",
+      "Bash(python3 scripts/assert_msi_invariants.py --selftest)",
+      "Bash(python3 scripts/assert_msi_invariants.py /Users/Avalon/Git/luminalshine/tests/fixtures/msi_golden/msi_baseline.txt)"
     ],
     "deny": [],
     "ask": [],
