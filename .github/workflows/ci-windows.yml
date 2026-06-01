@@ -543,6 +543,10 @@ jobs:
           }
 
       - name: Upload MSI compatibility dump
+        # if: always() so the dump uploads even when the diff step fails
+        # — which is exactly when we need the candidate output to debug
+        # what drifted. Without this, a failing diff hides its own input.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: msi-compat-dump
