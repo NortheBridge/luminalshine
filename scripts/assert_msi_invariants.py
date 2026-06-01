@@ -186,16 +186,26 @@ def check_component_guids(tables) -> list[str]:
 
 
 def check_bootstrapper_properties(tables) -> list[str]:
-    """Each bootstrapper-contract property must be declared."""
+    """Each bootstrapper-contract property must be marked Secure (i.e.
+    appear in SecureCustomProperties). Without Secure="yes" on the
+    <Property/> declaration, msiexec silently drops the property when
+    the bootstrapper passes it on the command line — exactly the
+    failure mode we're guarding against."""
     failures: list[str] = []
     rows = tables.get("Property", [])
-    declared = {row.get("Property", "") for row in rows}
+    secure_value = ""
+    for row in rows:
+        if row.get("Property") == "SecureCustomProperties":
+            secure_value = row.get("Value", "")
+            break
+    secure_set = set(secure_value.split(";")) if secure_value else set()
     for required in REQUIRED_BOOTSTRAPPER_PROPERTIES:
-        if required not in declared:
+        if required not in secure_set:
             failures.append(
-                f"Property {required!r} (bootstrapper-contract) is missing. "
-                "The C# bootstrapper passes this on the msiexec command line "
-                "and the MSI silently drops it when the Property row is absent."
+                f"Property {required!r} (bootstrapper-contract) is not "
+                "in SecureCustomProperties. Without Secure=\"yes\" on the "
+                "<Property/> declaration, msiexec silently drops it when "
+                "the bootstrapper passes it on the command line."
             )
     return failures
 
@@ -237,11 +247,7 @@ def check_feature_conditions(tables) -> list[str]:
 _OK_DUMP = """\
 ## TABLE: Property
 Property=UpgradeCode|Value={C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}
-Property=INSTALL_ROOT|Value=
-Property=INSTALL_MTTVDD|Value=0
-Property=INSTALL_SUDOVDA|Value=1
-Property=REMOVEVIRTUALDISPLAYDRIVER|Value=0
-Property=SKIP_REMOVE_CONFLICTING_PRODUCTS|Value=0
+Property=SecureCustomProperties|Value=INSTALL_MTTVDD;INSTALL_ROOT;INSTALL_SUDOVDA;REMOVEVIRTUALDISPLAYDRIVER;SKIP_REMOVE_CONFLICTING_PRODUCTS
 
 ## TABLE: ServiceInstall
 ServiceInstall=A|Name=LuminalShineService|Start=auto
@@ -312,9 +318,9 @@ def _run_selftest() -> int:
     expect("Missing pinned Component must be flagged",
            any("Env_Path" in m and "missing" in m for m in msgs))
 
-    # Case 7: bootstrapper property missing → flagged.
+    # Case 7: bootstrapper property dropped from SecureCustomProperties → flagged.
     no_install_mttvdd = parse_dump(_OK_DUMP.replace(
-        "Property=INSTALL_MTTVDD|Value=0\n", ""))
+        "INSTALL_MTTVDD;", ""))
     msgs = check_bootstrapper_properties(no_install_mttvdd)
     expect("Missing bootstrapper-contract property must be flagged",
            any("INSTALL_MTTVDD" in m for m in msgs))

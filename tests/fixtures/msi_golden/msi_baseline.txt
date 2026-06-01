@@ -14,7 +14,7 @@ Property=ErrorDialog|Value=ErrorDlg
 Property=INSTALL_MTTVDD|Value=0
 Property=INSTALL_SUDOVDA|Value=1
 Property=Manufacturer|Value=NortheBridge Foundation
-Property=ProductCode|Value={180987C1-3495-4901-90F4-7821480C0F07}
+Property=ProductCode|Value={B1D07E80-08FB-41A4-B337-8BCB0F47E0FB}
 Property=ProductLanguage|Value=1033
 Property=ProductName|Value=LuminalShine
 Property=ProductVersion|Value=26.05.0.0
@@ -598,3 +598,7 @@ Action=WelcomeDlg|Condition=NOT Installed OR PATCH|Sequence=1297
 
 ## TABLE: RegistryValue
 # (table absent)
+
+## TABLE: Condition
+Feature_=CM_C_mttvdd|Level=0|Condition=INSTALL_MTTVDD <> "1"
+Feature_=CM_C_sudovda|Level=1|Condition=INSTALL_SUDOVDA = "1"
