@@ -105,11 +105,23 @@ Private Function UninstallConflict(reg, shell, hive, fullPath, subKeyName, displ
 End Function
 
 Private Function IsTargetProduct(displayName)
+    ' Conflict-removal targets the upstream forks LuminalShine descends from
+    ' or that have been observed running side-by-side with it. Each prefix
+    ' is matched against the uppercased registry DisplayName.
+    '
+    ' VIBESHINE intentionally appears here even though LuminalShine inherits
+    ' Vibeshine's MSI UpgradeCode (C2C36624...) and post-Sep-2025 Vibeshine
+    ' MSIs are therefore picked up by MajorUpgrade directly. The prefix
+    ' catches pre-MSI Vibeshine installs (the project shipped NSIS-based
+    ' installers before swapping to WiX), which leave no MSI Upgrade-table
+    ' row for MajorUpgrade to act on but DO leave an Uninstall registry
+    ' entry whose DisplayName begins with "Vibeshine".
     Dim nameUpper
     nameUpper = UCase(Trim(displayName))
     IsTargetProduct = (Left(nameUpper, 8) = "SUNSHINE") _
         Or (Left(nameUpper, 6) = "APOLLO") _
-        Or (Left(nameUpper, 9) = "VIBEPOLLO")
+        Or (Left(nameUpper, 9) = "VIBEPOLLO") _
+        Or (Left(nameUpper, 9) = "VIBESHINE")
 End Function
 
 Private Function BuildMsiUninstallCommand(shell, productCode)
