@@ -70,10 +70,14 @@ jobs:
           files: ../../../../coverage/web/lcov.info
           flags: web
           name: web-vitest
-          # Blocking check: if the upload itself fails, fail the job too. This
-          # is the only knob that decides whether codecov-action's exit code
-          # propagates.
-          fail_ci_if_error: true
+          # Non-blocking: a Codecov upload failure must not gate the PR.
+          # The codecov CLI self-verifies its downloaded binary via GPG, and
+          # Codecov's keyserver intermittently fails to serve the public key
+          # ("gpg: Can't check signature: No public key" -> the wrapper exits
+          # 1), which would otherwise block every merge on a Codecov-side
+          # outage rather than any real coverage problem. This matches the
+          # already-non-blocking Codecov upload in coverage-windows.yml.
+          fail_ci_if_error: false
           verbose: true
 
       - name: Upload test results to Codecov Test Analytics
