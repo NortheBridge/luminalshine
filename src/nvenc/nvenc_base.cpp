@@ -17,6 +17,7 @@
 #include "nvenc_api.h"
 
 // standard includes
+#include <atomic>
 #include <format>
 #include <optional>
 
@@ -799,6 +800,65 @@ namespace nvenc {
   }
 
   void nvenc_base::destroy_encoder() {
+    // Drain any in-flight async picture op before freeing the resources
+    // the GPU may still be queued to read from / write to. This addresses
+    // the post-teardown latent-heap-corruption signature (Windows fast-
+    // fail 0xC0000374 several minutes after the encoder was destroyed),
+    // observed on RTX 40/50 + AV1 + HDR + 10-bit + split-frame=auto in
+    // the 2026-06-08 incident bundle. When encode_frame's wait_for_async_event
+    // times out, the GPU may still complete the picture later and write
+    // into output_bitstream / read from registered_input_buffer; if those
+    // resources have been destroyed/unregistered by then, the driver
+    // writes into freed memory and the allocator's next reuse trips the
+    // heap validator several minutes later in an unrelated allocation.
+    //
+    // Bounded at 2500ms because Windows TDR detection itself is ~2s
+    // (TdrDelay default) and TdrDdiDelay-driven recovery extends to ~7s.
+    // 2500ms unblocks before the kernel has finished a real TDR recovery
+    // — but waiting longer would starve session reinit on the detached
+    // teardown thread (video.cpp:2413). Anything still in flight past
+    // 2500ms is leaked rather than freed; that strictly beats handing
+    // freed memory to a GPU that still has the address queued. Process
+    // exit reclaims the leak; a session reinit does not.
+    if (encoder && async_event_handle && encoder_state.has_pending_async) {
+      // 2500 because Windows TDR detection itself is ~2s (TdrDelay default)
+      // and TdrDdiDelay-driven recovery extends to ~7s. 2500 unblocks
+      // before the kernel has finished a real TDR recovery — but waiting
+      // longer would starve session reinit on the detached teardown
+      // thread (video.cpp:2413). See the leak path below.
+      constexpr uint32_t kDrainMs = 2500;
+      const bool drained = wait_for_async_event(kDrainMs);
+      if (!drained) {
+        // Static counter so a sequence of TDRs that all leak is visible
+        // in the log as "leaked=N" instead of N separate single-event
+        // warnings. The NVENC driver caps the per-process registered-
+        // resource pool around 64 entries on consumer cards; enough
+        // sequential leaks here will eventually trip
+        // NV_ENC_ERR_OUT_OF_MEMORY on the next encoder init, which
+        // would otherwise look like an unrelated "can't probe encoder"
+        // failure miles away from the root cause.
+        static std::atomic<uint64_t> g_drain_leak_count {0};
+        const auto leaked = g_drain_leak_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        BOOST_LOG(warning) << "NvEnc: destroy_encoder async drain timed out after "
+                           << kDrainMs << "ms (last_frame=" << encoder_state.last_encoded_frame_index
+                           << ", session_age="
+                           << (encoder_state.session_start_time != std::chrono::steady_clock::time_point::min()
+                                 ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - encoder_state.session_start_time).count()
+                                 : 0)
+                           << "ms). Leaking output_bitstream + registered_input_buffer instead of "
+                              "freeing them — strictly preferable to handing freed memory to a GPU "
+                              "with the address still queued. Total drain-leak events this process: "
+                           << leaked
+                           << ". The NVENC driver caps the per-process registered-resource pool "
+                              "(~64 on consumer cards); after enough leaks the next encoder init "
+                              "will fail with NV_ENC_ERR_OUT_OF_MEMORY and a host process restart "
+                              "will be required to recover.";
+        output_bitstream = nullptr;
+        registered_input_buffer = nullptr;
+      }
+      encoder_state.has_pending_async = false;
+    }
     if (output_bitstream) {
       if (nvenc_failed(nvenc->nvEncDestroyBitstreamBuffer(encoder, output_bitstream))) {
         BOOST_LOG(error) << "NvEnc: NvEncDestroyBitstreamBuffer() failed: " << last_nvenc_error_string;
@@ -918,6 +978,11 @@ namespace nvenc {
                       << ". A long since_last_encode (>200ms) typically indicates GPU TDR is in progress; "
                          "the encoder will tear down and the D3D11 retry path (D3D11CreateDeviceWithRecovery) will pick up.";
       BOOST_LOG(error) << "NvEnc: frame " << frame_index << " encode wait timeout";
+      // The GPU may still complete this picture's encode later and write
+      // into output_bitstream / read from the registered input texture.
+      // Flag so destroy_encoder knows to drain the completion event before
+      // freeing those resources. Cleared on the next successful wait below.
+      encoder_state.has_pending_async = true;
       return {};
     }
 
@@ -940,6 +1005,13 @@ namespace nvenc {
     }
 
     encoder_state.last_encoded_frame_index = frame_index;
+    // The wait above consumed the async completion event signal for this
+    // picture, so the GPU is no longer queued to touch our buffers for
+    // this frame. Clear the pending-async flag so a teardown right after
+    // this returns can skip the destroy_encoder drain and shut down
+    // promptly. If a subsequent frame's wait times out, the flag will be
+    // re-set above.
+    encoder_state.has_pending_async = false;
 
     if (encoded_frame.idr) {
       BOOST_LOG(debug) << "NvEnc: idr frame " << encoded_frame.frame_index;
