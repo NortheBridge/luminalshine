@@ -4,6 +4,8 @@
  */
 #pragma once
 
+#include <cstdint>
+
 namespace nvenc {
 
   enum class nvenc_two_pass {
@@ -57,6 +59,19 @@ namespace nvenc {
 
     // Add filler data to encoded frames to stay at target bitrate, mainly for testing
     bool insert_filler_data = false;
+
+    // Per-frame ceiling for the encode-async-completion wait inside
+    // encode_frame's WaitForSingleObject. Default 100 ms is the
+    // historical tuning that's safe for RTX 20/30-era workloads.
+    // Render-stack-aware callers bump this to 250 ms when the
+    // foreground process has DLSS-FG or DLAA loaded (see
+    // src/platform/windows/display_vram.cpp::init_encoder), where the
+    // GPU's queued render + frame-gen work routinely exceeds the
+    // 100 ms budget at 4K HDR and would otherwise classify a
+    // legitimately-slow frame as a TDR-class event. See the team's
+    // own comment near evaluate_and_tip in src/video.cpp for the
+    // documented worst case (Frame-Gen + DLAA + AV1 NVENC at 4K).
+    uint32_t encode_wait_timeout_ms = 100;
   };
 
 }  // namespace nvenc

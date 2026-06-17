@@ -17,6 +17,7 @@
 #include "nvenc_api.h"
 
 // standard includes
+#include <algorithm>
 #include <atomic>
 #include <format>
 #include <optional>
@@ -164,6 +165,16 @@ namespace nvenc {
     encoder_params.height = client_config.height;
     encoder_params.buffer_format = buffer_format;
     encoder_params.rfi = true;
+
+    // Cache the per-session encode-wait timeout. Read once here; the
+    // per-frame wait below in encode_frame consults the cached value
+    // every frame instead of the global config so it cannot race a
+    // settings change mid-session, and so the timeout reflects whatever
+    // render-stack-aware tuning the caller applied at session start
+    // (e.g. 250 ms for DLSS-FG + AV1 + 4K HDR vs the 100 ms baseline).
+    // Clamp to >=10 ms so a misconfigured 0 doesn't busy-loop the
+    // encoder thread on every frame.
+    encoder_state.encode_wait_timeout_ms = std::max<uint32_t>(10, config.encode_wait_timeout_ms);
 
     selected_api_version = 0;
 
@@ -956,7 +967,7 @@ namespace nvenc {
     lock_bitstream.outputBitstream = output_bitstream;
     lock_bitstream.doNotWait = async_event_handle ? 1 : 0;
 
-    if (async_event_handle && !wait_for_async_event(100)) {
+    if (async_event_handle && !wait_for_async_event(encoder_state.encode_wait_timeout_ms)) {
       // Capture diagnostic context on the timeout. The previous one-line
       // log gave no signal about whether this was a transient bubble or
       // the start of a TDR — and the line printed two lines before the
