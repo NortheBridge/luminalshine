@@ -83,4 +83,52 @@ namespace cred_store::tpm_seal {
    */
   bool clear();
 
+  /**
+   * @brief Why a previous `unseal()` call returned false. Caller uses
+   *        this to distinguish "transient TPM glitch — keep the blob"
+   *        from "the wrapping key really has rotated and the blob is
+   *        dead — safe to self-heal-erase it."
+   */
+  enum class UnsealFailureCause {
+    /// `looks_sealed(sealed)` is false, OR the sealed blob actually
+    /// just unsealed successfully on retry (caller should re-unseal
+    /// to get the plaintext). Not a real failure — caller should not
+    /// treat this as a reason to erase anything.
+    NotApplicable,
+    /// The persisted RSA wrapping key was not found in the Microsoft
+    /// Platform Crypto Provider. Either it was never created (impossible
+    /// once a sealed blob exists) or it has been deleted out-of-band
+    /// (sysprep, manual `certutil` cleanup, provider state reset, etc.).
+    /// The wrapped blob is orphaned — there is no key on this host that
+    /// can ever decrypt it. Self-heal: safe to erase the blob.
+    KeyMissing,
+    /// The persisted key IS present and demonstrably functional (a
+    /// roundtrip seal+unseal of a random throwaway payload succeeded),
+    /// but `NCryptDecrypt` of the stored wrapped key fails — i.e. the
+    /// blob was wrapped under a *different* key than the one persisted
+    /// today. Almost always means the key was silently rotated by an
+    /// earlier `open_or_create_key` invocation against a transiently-
+    /// failing `NCryptOpenKey`. Self-heal: safe to erase the blob; the
+    /// next save will rewrite it under the now-persisted key.
+    BindingMismatch,
+    /// The persisted key state could not be confirmed — provider open
+    /// failed, the roundtrip probe itself errored out, BCryptGenRandom
+    /// failed, etc. Could be a genuine transient TPM/driver glitch.
+    /// Do NOT self-heal: preserve the blob and let the next start try
+    /// again. The user-driven Reset Admin Password Start Menu shortcut
+    /// remains the manual recovery path for the truly-unrecoverable case.
+    KeyTransientlyUnavailable,
+  };
+
+  /**
+   * @brief Diagnose WHY a previous `unseal(sealed, ...)` returned false.
+   *        Pure observation; never modifies the persisted key or the
+   *        blob. Performs at most one roundtrip seal+unseal of a 16-byte
+   *        random throwaway against the live key. Caller (cred_store
+   *        load path) uses the result to decide whether to self-heal-
+   *        erase the WCM blob. See `UnsealFailureCause` for the
+   *        decision rules each value implies.
+   */
+  UnsealFailureCause diagnose_unseal_failure(std::string_view sealed);
+
 }  // namespace cred_store::tpm_seal

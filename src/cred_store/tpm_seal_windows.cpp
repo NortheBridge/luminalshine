@@ -77,9 +77,44 @@ namespace cred_store::tpm_seal {
       return true;
     }
 
+    /// Open the persisted credential-wrapping key IF it already exists.
+    /// Returns false when `NCryptOpenKey` fails — including the
+    /// "not in store" case (`NTE_BAD_KEYSET`). Never creates. Used by
+    /// every path that reads sealed data (`unseal`, `diagnose_unseal_failure`)
+    /// so a transient `NCryptOpenKey` glitch can't silently rotate the
+    /// key out from under an existing wrapped blob in WCM. The
+    /// `open_or_create_key` helper below is reserved for `seal()` — the
+    /// only call site that legitimately needs to provision the key on
+    /// first use.
+    bool open_existing_key(NCRYPT_PROV_HANDLE prov, NCRYPT_KEY_HANDLE &out_key) {
+      const SECURITY_STATUS s = NCryptOpenKey(prov, &out_key, kKeyName, 0, NCRYPT_MACHINE_KEY_FLAG);
+      if (s == ERROR_SUCCESS) {
+        return true;
+      }
+      // NTE_BAD_KEYSET is the canonical "key not present" return; quieter
+      // log level so the common first-install case isn't a warning spam.
+      const auto severity_missing = (s == NTE_BAD_KEYSET);
+      if (severity_missing) {
+        BOOST_LOG(debug) << "tpm_seal: persisted key '" << "LuminalShineAdminCredentialsKey"
+                         << "' not present (NTE_BAD_KEYSET)";
+      } else {
+        BOOST_LOG(warning) << "tpm_seal: NCryptOpenKey failed (0x"
+                           << std::hex << s << "); refusing to create a "
+                           << "replacement on a read path (would orphan "
+                           << "any existing wrapped credential).";
+      }
+      return false;
+    }
+
     /// Open the persisted credential-wrapping key, creating it if it
     /// doesn't exist. Created keys are non-exportable, machine-scoped,
     /// and 2048-bit RSA.
+    ///
+    /// IMPORTANT: this is the WRITE-PATH helper. Only `seal()` should
+    /// call it. Reads (`unseal`, `diagnose_unseal_failure`) must call
+    /// `open_existing_key` instead — a silently-created replacement key
+    /// during a read would orphan whatever wrapped blob already exists
+    /// in WCM (the prior "credentials lost on upgrade" pathology).
     bool open_or_create_key(NCRYPT_PROV_HANDLE prov, NCRYPT_KEY_HANDLE &out_key) {
       SECURITY_STATUS s = NCryptOpenKey(prov, &out_key, kKeyName, 0, NCRYPT_MACHINE_KEY_FLAG);
       if (s == ERROR_SUCCESS) {
@@ -421,7 +456,13 @@ namespace cred_store::tpm_seal {
       return false;
     }
     NCRYPT_KEY_HANDLE key = 0;
-    if (!open_or_create_key(prov, key)) {
+    // open_existing_key (NOT open_or_create_key): the read path must
+    // never provision a fresh key on a transient OpenKey failure. If we
+    // did, NCryptDecrypt below would silently succeed-mathematically
+    // against a different RSA modulus and produce garbage — or fail
+    // with a misleading "blob unrecoverable" message — either way
+    // orphaning the WCM blob. See open_existing_key's docstring.
+    if (!open_existing_key(prov, key)) {
       NCryptFreeObject(prov);
       return false;
     }
@@ -436,9 +477,12 @@ namespace cred_store::tpm_seal {
     NCryptFreeObject(key);
     NCryptFreeObject(prov);
     if (s != ERROR_SUCCESS || aes_size != kAesKeyLen) {
-      BOOST_LOG(warning) << "tpm_seal: NCryptDecrypt failed (0x"
-                         << std::hex << s << "); credential blob is "
-                         << "unrecoverable on this TPM.";
+      // Quiet failure here — the load path retries once after a short
+      // delay and then calls diagnose_unseal_failure() for the
+      // human-readable explanation. Keeping this at debug avoids
+      // double-logging the same failure in two places.
+      BOOST_LOG(debug) << "tpm_seal: NCryptDecrypt failed (0x"
+                       << std::hex << s << "); caller will diagnose.";
       SecureZeroMemory(aes_key.data(), kAesKeyLen);
       return false;
     }
@@ -487,6 +531,97 @@ namespace cred_store::tpm_seal {
     }
     BOOST_LOG(info) << "tpm_seal: deleted TPM-bound RSA wrapping key.";
     return true;
+  }
+
+  UnsealFailureCause diagnose_unseal_failure(std::string_view sealed) {
+    if (!looks_sealed(sealed)) {
+      return UnsealFailureCause::NotApplicable;
+    }
+    if (!available()) {
+      return UnsealFailureCause::KeyTransientlyUnavailable;
+    }
+
+    NCRYPT_PROV_HANDLE prov = 0;
+    if (!open_provider(prov)) {
+      return UnsealFailureCause::KeyTransientlyUnavailable;
+    }
+
+    // Step 1: does the persisted key exist at all?
+    NCRYPT_KEY_HANDLE key = 0;
+    if (!open_existing_key(prov, key)) {
+      NCryptFreeObject(prov);
+      return UnsealFailureCause::KeyMissing;
+    }
+    // Don't actually need the handle past this point — seal()/unseal()
+    // open their own. Releasing it early keeps the probe path simple.
+    NCryptFreeObject(key);
+    NCryptFreeObject(prov);
+
+    // Step 2: roundtrip probe with a 16-byte random throwaway. If the
+    // currently-persisted key successfully seals AND unseals a fresh
+    // payload, the key is demonstrably live — which means the caller's
+    // sealed input (which failed to unseal) was wrapped under a
+    // DIFFERENT key than the one persisted today. That is the
+    // BindingMismatch case: self-heal is safe.
+    //
+    // Random (not constant) plaintext per the security review: removes
+    // the "is this an oracle for is-key-live" smell entirely, and costs
+    // nothing — BCryptGenRandom is microseconds. The buffer is
+    // SecureZeroMemory'd on every exit path so it can't be observed
+    // later in a memory dump.
+    std::array<BYTE, 16> probe_plain {};
+    if (BCryptGenRandom(nullptr, probe_plain.data(),
+                        static_cast<ULONG>(probe_plain.size()),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+      BOOST_LOG(warning) << "tpm_seal: BCryptGenRandom failed in diagnostic "
+                         << "probe; cannot confirm key liveness.";
+      return UnsealFailureCause::KeyTransientlyUnavailable;
+    }
+    std::string_view probe_view(reinterpret_cast<const char *>(probe_plain.data()),
+                                probe_plain.size());
+
+    std::string probe_sealed;
+    const bool sealed_ok = seal(probe_view, probe_sealed);
+    if (!sealed_ok) {
+      SecureZeroMemory(probe_plain.data(), probe_plain.size());
+      BOOST_LOG(warning) << "tpm_seal: roundtrip seal of probe payload failed; "
+                         << "key state is uncertain — preserving the existing "
+                         << "wrapped credential blob.";
+      return UnsealFailureCause::KeyTransientlyUnavailable;
+    }
+
+    std::string probe_unsealed;
+    const bool unsealed_ok = unseal(probe_sealed, probe_unsealed);
+    // Wipe the sealed-probe envelope from memory regardless — it
+    // contains the wrapped+encrypted random payload and adds no value
+    // past this point.
+    SecureZeroMemory(&probe_sealed[0], probe_sealed.size());
+    if (!unsealed_ok) {
+      SecureZeroMemory(probe_plain.data(), probe_plain.size());
+      SecureZeroMemory(&probe_unsealed[0], probe_unsealed.size());
+      BOOST_LOG(warning) << "tpm_seal: roundtrip unseal of probe payload failed "
+                         << "even though seal succeeded — key state inconsistent; "
+                         << "preserving the existing wrapped credential blob.";
+      return UnsealFailureCause::KeyTransientlyUnavailable;
+    }
+    // Verify integrity. If the roundtrip returns different bytes, the
+    // key is in an unexpected state — treat as transient and preserve.
+    const bool integrity_ok = probe_unsealed.size() == probe_plain.size() &&
+      std::memcmp(probe_unsealed.data(), probe_plain.data(), probe_plain.size()) == 0;
+    SecureZeroMemory(probe_plain.data(), probe_plain.size());
+    SecureZeroMemory(&probe_unsealed[0], probe_unsealed.size());
+    if (!integrity_ok) {
+      BOOST_LOG(warning) << "tpm_seal: roundtrip probe round-tripped but bytes "
+                         << "differ — key state inconsistent; preserving the "
+                         << "existing wrapped credential blob.";
+      return UnsealFailureCause::KeyTransientlyUnavailable;
+    }
+
+    // Key is live AND round-trips correctly. The caller's sealed input
+    // must therefore have been wrapped under a different key — a
+    // silent rotation in some previous service incarnation. Caller is
+    // cleared to erase the orphan blob.
+    return UnsealFailureCause::BindingMismatch;
   }
 
 }  // namespace cred_store::tpm_seal
