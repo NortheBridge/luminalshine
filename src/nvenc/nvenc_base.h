@@ -105,6 +105,27 @@ namespace nvenc {
       return false;
     }
 
+    /**
+     * @brief Optional. Override to put `async_event_handle` back into the
+     *        unsignaled state before issuing the next nvEncEncodePicture.
+     *
+     *        Why this exists: the async completion event is created
+     *        auto-reset. A successful wait on it clears the signal, but a
+     *        TIMED-OUT wait does not — the signal latches. If NVENC then
+     *        completes the picture after our timeout window elapsed, the
+     *        event becomes signaled with no consumer. The very next
+     *        encode_frame's wait would return WAIT_OBJECT_0 immediately on
+     *        that stale signal, before NVENC has actually finished the new
+     *        picture, and the subsequent nvEncLockBitstream would read an
+     *        uncommitted bitstream — undefined behavior, observed as
+     *        bitstream corruption that subsequently trips the heap
+     *        validator on RTX 40/50 with split-frame AV1.
+     *
+     *        Default is a no-op (sync-mode encoders don't need it).
+     */
+    virtual void reset_async_event() {
+    }
+
     bool nvenc_failed(NVENCSTATUS status);
 
     const NV_ENC_DEVICE_TYPE device_type;
