@@ -95,6 +95,37 @@ REQUIRED_FEATURE_CONDITIONS = {
     "CM_C_sudovda": ("1", 'INSTALL_SUDOVDA = "1"'),
 }
 
+# InstallExecuteSequence-level gating for credential-destroying actions.
+# Each entry maps a Custom Action's Id to the list of substrings its
+# scheduling Condition must contain. The Condition strings are compared
+# with whitespace+quote normalisation (so single-quoted vs double-quoted
+# vs spacing variants all pass), but every listed substring must appear.
+#
+# Why these are pinned:
+# `ResetAdminCredentials` runs `luminalshine.exe --reset-admin-credentials`
+# during uninstall, which deletes the WCM entry AND the TPM-bound
+# wrapping key (tpm_seal::clear) — destroying the admin login.
+# Leaving even one clause off the gate exposes users to credential loss
+# on a routine upgrade. Specifically:
+#   - REMOVE="ALL"            — only fire on a real uninstall, not
+#                                 on file-level repair or feature change.
+#   - NOT UPGRADINGPRODUCTCODE — DO NOT fire during the uninstall pass
+#                                 of a major upgrade (where MSI runs the
+#                                 old MSI's uninstall as a nested step
+#                                 inside the new install's transaction).
+#                                 Skipping this clause was the exact bug
+#                                 mechanism investigated in the
+#                                 "credentials lost on upgrade" thread.
+#   - KEEPADMINCREDENTIALS<>"1" — bootstrapper / CLI escape hatch for
+#                                 advanced operators who want a full
+#                                 uninstall without losing the WCM entry.
+PINNED_RESET_ADMIN_CONDITIONS = ('REMOVE="ALL"', 'NOT UPGRADINGPRODUCTCODE',
+                                 'KEEPADMINCREDENTIALS<>"1"')
+REQUIRED_CUSTOM_ACTION_CONDITIONS: "dict[str, tuple[str, ...]]" = {
+    "SetResetAdminCredentials": PINNED_RESET_ADMIN_CONDITIONS,
+    "ResetAdminCredentials": PINNED_RESET_ADMIN_CONDITIONS,
+}
+
 
 # ----------------------------------------------------------------------------
 # Dump parsing (lightweight; shares the format with diff_msi_tables.py
@@ -210,6 +241,58 @@ def check_bootstrapper_properties(tables) -> list[str]:
     return failures
 
 
+def _normalize_condition(expr: str) -> str:
+    """Collapse whitespace and strip spaces around relational operators
+    so substring matching against the pinned clauses survives benign
+    formatting variation between WiX 3 and WiX 7 emitters. Quote style
+    (single vs double) is preserved — the pinned substrings use double
+    quotes because that's what every MSI Condition in this repo emits
+    today, and MSI's own parser treats them identically anyway."""
+    out = " ".join(expr.split())
+    for op in ('<>', '=', '<=', '>=', '<', '>'):
+        # avoid double-rewriting when an op is a prefix of a longer one;
+        # handled implicitly by ordering longer ops first above.
+        out = out.replace(f" {op} ", op)
+    return out
+
+
+def check_custom_action_conditions(tables) -> list[str]:
+    """Every pinned credential-destroying custom action must be scheduled
+    with every required gating clause in its InstallExecuteSequence
+    Condition. Catches the regression where a future MSI edit silently
+    drops one of the gates (e.g. NOT UPGRADINGPRODUCTCODE), turning a
+    routine major-upgrade pass into a credential-erasing event."""
+    failures: list[str] = []
+    rows = tables.get("InstallExecuteSequence", [])
+    by_action: dict[str, str] = {}
+    for row in rows:
+        action = row.get("Action", "")
+        if action:
+            by_action[action] = row.get("Condition", "")
+    for action_id, required_clauses in REQUIRED_CUSTOM_ACTION_CONDITIONS.items():
+        if action_id not in by_action:
+            failures.append(
+                f"InstallExecuteSequence is missing required row for "
+                f"Action={action_id!r}. The credential-destroying custom "
+                "action must be scheduled with its full gating Condition; "
+                "removing the row defeats the gate entirely."
+            )
+            continue
+        normalized = _normalize_condition(by_action[action_id])
+        normalized_required = [_normalize_condition(c) for c in required_clauses]
+        missing = [orig for orig, norm in zip(required_clauses, normalized_required)
+                   if norm not in normalized]
+        if missing:
+            failures.append(
+                f"Condition on Action={action_id!r} is missing required "
+                f"gate clause(s) {missing!r}. Without all three of "
+                f"{list(required_clauses)!r}, the action can fire on a "
+                "routine upgrade and destroy the user's saved admin "
+                f"credential. Observed: {by_action[action_id]!r}"
+            )
+    return failures
+
+
 def check_feature_conditions(tables) -> list[str]:
     """Pinned feature-level Conditions must exist with the expected Level + expression."""
     failures: list[str] = []
@@ -265,6 +348,10 @@ Component=Fw_Exceptions|ComponentId={2A7E0C83-2F3D-4C0C-9D5D-7C0B1A2E3F45}|Direc
 ## TABLE: Condition
 Feature_=CM_C_mttvdd|Level=0|Condition=INSTALL_MTTVDD <> "1"
 Feature_=CM_C_sudovda|Level=1|Condition=INSTALL_SUDOVDA = "1"
+
+## TABLE: InstallExecuteSequence
+Action=SetResetAdminCredentials|Condition=REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS<>"1"|Sequence=3700
+Action=ResetAdminCredentials|Condition=REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS<>"1"|Sequence=3705
 """
 
 
@@ -345,6 +432,55 @@ def _run_selftest() -> int:
     expect("Missing pinned feature condition must be flagged",
            any("CM_C_sudovda" in m and "missing" in m for m in msgs))
 
+    # Case 11: pinned ResetAdminCredentials gating present → no failure.
+    msgs = check_custom_action_conditions(tables)
+    expect(f"OK custom-action gating should pass, got: {msgs}", msgs == [])
+
+    # Case 12: ResetAdminCredentials missing the UPGRADINGPRODUCTCODE
+    # exclusion → flagged (this is the exact "credentials lost on
+    # upgrade" failure mode investigated upstream).
+    no_upgrade_guard = parse_dump(_OK_DUMP.replace(
+        ' AND NOT UPGRADINGPRODUCTCODE', '', 2))  # both rows
+    msgs = check_custom_action_conditions(no_upgrade_guard)
+    expect("Missing NOT UPGRADINGPRODUCTCODE on ResetAdminCredentials must be flagged",
+           any("ResetAdminCredentials" in m and "UPGRADINGPRODUCTCODE" in m
+               for m in msgs))
+
+    # Case 13: KEEPADMINCREDENTIALS escape hatch silently removed → flagged.
+    no_keep = parse_dump(_OK_DUMP.replace(
+        ' AND KEEPADMINCREDENTIALS<>"1"', '', 2))
+    msgs = check_custom_action_conditions(no_keep)
+    expect("Missing KEEPADMINCREDENTIALS clause on ResetAdminCredentials must be flagged",
+           any("KEEPADMINCREDENTIALS" in m for m in msgs))
+
+    # Case 14: REMOVE="ALL" gate dropped (action would fire on patches
+    # / repairs that aren't full uninstalls) → flagged.
+    no_remove = parse_dump(_OK_DUMP.replace(
+        'REMOVE="ALL" AND ', '', 2))
+    msgs = check_custom_action_conditions(no_remove)
+    expect("Missing REMOVE=\"ALL\" clause must be flagged",
+           any('REMOVE="ALL"' in m for m in msgs))
+
+    # Case 15: action row entirely missing from IES → flagged (without
+    # this we'd silently let a future MSI edit drop the action and pass
+    # the gate check vacuously).
+    dropped_row = parse_dump(_OK_DUMP.replace(
+        'Action=ResetAdminCredentials|Condition=REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS<>"1"|Sequence=3705\n',
+        ""))
+    msgs = check_custom_action_conditions(dropped_row)
+    expect("Missing ResetAdminCredentials IES row must be flagged",
+           any("ResetAdminCredentials" in m and "missing" in m for m in msgs))
+
+    # Case 16: whitespace + quote variation in a valid condition should
+    # still pass (normalisation is the point of _normalize_condition).
+    spaced = parse_dump(_OK_DUMP.replace(
+        'REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS<>"1"',
+        'REMOVE = "ALL"   AND   NOT UPGRADINGPRODUCTCODE  AND  KEEPADMINCREDENTIALS  <>  "1"',
+        2))
+    msgs = check_custom_action_conditions(spaced)
+    expect(f"Whitespace-varied valid condition must pass, got: {msgs}",
+           msgs == [])
+
     if failures:
         print("assert_msi_invariants self-test FAILED:", file=sys.stderr)
         for f in failures:
@@ -356,7 +492,8 @@ def _run_selftest() -> int:
         f"({len(PINNED_SERVICE_INSTALL_NAMES)} services, "
         f"{len(PINNED_COMPONENT_GUIDS)} pinned-Guid components, "
         f"{len(REQUIRED_BOOTSTRAPPER_PROPERTIES)} bootstrapper properties, "
-        f"{len(REQUIRED_FEATURE_CONDITIONS)} feature conditions)"
+        f"{len(REQUIRED_FEATURE_CONDITIONS)} feature conditions, "
+        f"{len(REQUIRED_CUSTOM_ACTION_CONDITIONS)} credential-destroying CAs)"
     )
     return 0
 
@@ -392,6 +529,7 @@ def main(argv: list[str]) -> int:
         + check_component_guids(tables)
         + check_bootstrapper_properties(tables)
         + check_feature_conditions(tables)
+        + check_custom_action_conditions(tables)
     )
 
     if failures:
@@ -410,7 +548,8 @@ def main(argv: list[str]) -> int:
         f"{len(PINNED_SERVICE_INSTALL_NAMES)} services, "
         f"{len(PINNED_COMPONENT_GUIDS)} pinned-Guid components, "
         f"{len(REQUIRED_BOOTSTRAPPER_PROPERTIES)} bootstrapper properties, "
-        f"{len(REQUIRED_FEATURE_CONDITIONS)} feature conditions)"
+        f"{len(REQUIRED_FEATURE_CONDITIONS)} feature conditions, "
+        f"{len(REQUIRED_CUSTOM_ACTION_CONDITIONS)} credential-destroying CAs)"
     )
     return 0
 
