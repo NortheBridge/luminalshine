@@ -879,6 +879,14 @@ namespace nvenc {
     pic_params.outputBitstream = output_bitstream;
     pic_params.completionEvent = async_event_handle;
 
+    // Discard any stale signal latched on the auto-reset completion event
+    // by a previously-timed-out wait. Without this, the WaitForSingleObject
+    // below would return WAIT_OBJECT_0 immediately on the stale signal and
+    // we'd proceed to nvEncLockBitstream against an uncommitted bitstream.
+    // See reset_async_event documentation in nvenc_base.h for the failure
+    // mode this defends against. No-op on sync-mode encoders.
+    reset_async_event();
+
     if (nvenc_failed(nvenc->nvEncEncodePicture(encoder, &pic_params))) {
       BOOST_LOG(error) << "NvEnc: NvEncEncodePicture() failed: " << last_nvenc_error_string;
       return {};

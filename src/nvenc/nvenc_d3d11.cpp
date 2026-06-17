@@ -108,5 +108,16 @@ namespace nvenc {
     return WaitForSingleObject(async_event_handle, timeout_ms) == WAIT_OBJECT_0;
   }
 
+  void nvenc_d3d11::reset_async_event() {
+    if (async_event_handle) {
+      // ResetEvent is a no-op when the event is already unsignaled (the
+      // happy-path case after a successful WaitForSingleObject consumed
+      // the signal). Costs ~one syscall and forecloses the stale-signal
+      // pathway entirely. See nvenc_base.h::reset_async_event for the
+      // failure mode this defends against.
+      ResetEvent(async_event_handle);
+    }
+  }
+
 }  // namespace nvenc
 #endif
