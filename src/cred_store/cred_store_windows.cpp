@@ -43,6 +43,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 
 // clang-format off
 #include <winsock2.h>
@@ -335,23 +336,107 @@ namespace cred_store {
     // with credentials that were last written under "on", and a
     // subsequent save will rewrite them as plain.
     if (tpm_seal::looks_sealed(raw)) {
-      if (!tpm_seal::unseal(raw, out)) {
-        // Do NOT auto-delete on unseal failure. The TPM can be in a
-        // transient unavailable state (driver hiccup, suspended state,
-        // policy change) where the key is still good but the unwrap
-        // failed *this time*. Auto-deleting would permanently destroy
-        // recoverable credentials in those windows. Instead, leave the
-        // entry alone, log loudly, and rely on the user-driven Reset
-        // Admin Password shortcut for the truly-unrecoverable case.
-        BOOST_LOG(error) << "cred_store(wcm): credential entry is TPM-sealed but "
-                         << "unseal failed; the credential cannot be read on this "
-                         << "host. Use the Reset LuminalShine Admin Password "
-                         << "shortcut in the Start Menu to recover (preserves "
-                         << "paired clients and apps; only the admin login is "
-                         << "reset).";
-        return false;
+      if (tpm_seal::unseal(raw, out)) {
+        return !out.empty();
       }
-      return !out.empty();
+
+      // One-shot retry after a short pause. The previous failure mode
+      // we're absorbing here is a sub-second TPM / Microsoft Platform
+      // Crypto Provider driver hiccup where NCryptOpenKey or
+      // NCryptDecrypt briefly errors out and then recovers on the very
+      // next call (observed during system suspend/resume and right
+      // after a Windows credential subsystem service restart). Without
+      // this, the diagnostic path below would proceed to roundtrip-
+      // probe and possibly self-heal-erase a perfectly recoverable
+      // blob just because the first call landed during a 100-ms
+      // provider blip. 250ms is well past the observed glitch windows
+      // and is paid only on the cold-failure path — the happy path is
+      // unaffected.
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      if (tpm_seal::unseal(raw, out)) {
+        BOOST_LOG(info) << "cred_store(wcm): TPM unseal recovered on retry "
+                        << "after a brief provider glitch.";
+        return !out.empty();
+      }
+
+      // Persistent failure. Ask tpm_seal to tell us *why* so we can
+      // distinguish "orphaned blob — safe to erase" from "transient
+      // TPM unavailability — preserve the blob and let the user use
+      // the Reset Admin Password shortcut."
+      using tpm_seal::UnsealFailureCause;
+      const auto cause = tpm_seal::diagnose_unseal_failure(raw);
+      switch (cause) {
+        case UnsealFailureCause::KeyMissing: {
+          // No persisted wrapping key on this host. The wrapped blob
+          // is orphaned — no possible key value can ever decrypt it.
+          // Self-heal: erase the blob so the next start observes
+          // "no entry" → first-time setup → recovery. The user does
+          // not need to use the Reset Admin Password shortcut; the
+          // setup screen will appear automatically.
+          BOOST_LOG(warning) << "cred_store(wcm): the credential blob is "
+                             << "TPM-sealed but no matching wrapping key "
+                             << "exists on this host (key was deleted, "
+                             << "sysprep'd, or the NCrypt store was reset). "
+                             << "The blob is unrecoverable; erasing it so "
+                             << "first-time setup can recover. Paired "
+                             << "clients and apps are unaffected.";
+          if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
+            BOOST_LOG(warning) << "cred_store(wcm): CredDelete during orphan "
+                               << "self-heal failed (err="
+                               << GetLastError() << "); manual reset may be "
+                               << "needed via the Reset Admin Password shortcut.";
+          }
+          return false;
+        }
+        case UnsealFailureCause::BindingMismatch: {
+          // Persisted key is live (roundtrip probe succeeded) but the
+          // stored blob was wrapped under a different key. This is
+          // the "silent key rotation" pathology that the
+          // open_or_create_key fix in tpm_seal_windows.cpp now
+          // prevents going forward — but pre-fix installs may have
+          // already wrapped credentials under a rotated-away key.
+          // Self-heal: erase the orphan blob so the user lands at
+          // first-time setup.
+          BOOST_LOG(warning) << "cred_store(wcm): the credential blob is "
+                             << "TPM-sealed under a different wrapping key "
+                             << "than the one currently persisted on this "
+                             << "host (silent rotation by an earlier build). "
+                             << "The blob is unrecoverable; erasing it so "
+                             << "first-time setup can recover. Paired "
+                             << "clients and apps are unaffected.";
+          if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
+            BOOST_LOG(warning) << "cred_store(wcm): CredDelete during binding-"
+                               << "mismatch self-heal failed (err="
+                               << GetLastError() << "); manual reset may be "
+                               << "needed via the Reset Admin Password shortcut.";
+          }
+          return false;
+        }
+        case UnsealFailureCause::KeyTransientlyUnavailable:
+        case UnsealFailureCause::NotApplicable:
+        default:
+          // PRESERVE the blob. The persisted key might come back when
+          // the underlying provider clears whatever it's blocked on
+          // (BitLocker recovery prompt, suspended TPM, AV scan
+          // holding a handle, etc.). Auto-deletion here would
+          // permanently destroy a credential that next boot would
+          // recover. The user-driven Reset Admin Password shortcut
+          // remains the manual escape for the truly-unrecoverable
+          // case. (This branch preserves the historical "Do NOT
+          // auto-delete on unseal failure" guarantee for everything
+          // we can't positively classify as orphan-or-mismatch.)
+          BOOST_LOG(error) << "cred_store(wcm): credential entry is TPM-sealed "
+                           << "but unseal failed and the wrapping key state "
+                           << "could not be confirmed (likely a transient "
+                           << "TPM / Microsoft Platform Crypto Provider "
+                           << "issue). The credential is being preserved in "
+                           << "case the provider recovers on the next start. "
+                           << "If the issue persists, use the Reset "
+                           << "LuminalShine Admin Password shortcut in the "
+                           << "Start Menu to recover (preserves paired "
+                           << "clients and apps; only the admin login is reset).";
+          return false;
+      }
     }
     out = std::move(raw);
     return !out.empty();
