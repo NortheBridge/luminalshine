@@ -148,6 +148,16 @@ namespace nvenc {
       // across system clock changes.
       std::chrono::steady_clock::time_point session_start_time = std::chrono::steady_clock::time_point::min();
       std::chrono::steady_clock::time_point last_successful_encode_time = std::chrono::steady_clock::time_point::min();
+      // True when the most recent nvEncEncodePicture in async mode reached
+      // the wait_for_async_event timeout instead of a successful signal —
+      // meaning the GPU may still be queued to write into output_bitstream
+      // and read from the registered input texture. destroy_encoder uses
+      // this to decide whether it must drain the async completion event
+      // before freeing those resources, or whether a clean teardown can
+      // skip the drain (typical case: the last encode_frame call consumed
+      // the event signal, so there's no in-flight work to wait for and the
+      // drain would just stall for the full timeout on every shutdown).
+      bool has_pending_async = false;
     } encoder_state;
   };
 
