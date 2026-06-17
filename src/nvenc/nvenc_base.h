@@ -185,6 +185,19 @@ namespace nvenc {
       // and re-evaluating each frame would just add jitter while paying
       // ~10ms per snapshot for nothing.
       uint32_t encode_wait_timeout_ms = 100;
+      // Set whenever nvEncMapInputResource succeeds; cleared when the
+      // matching nvEncUnmapInputResource succeeds. On the encode-wait
+      // timeout path encode_frame deliberately does NOT unmap (the GPU
+      // may still be queued to read from this resource), so this field
+      // carries the still-mapped handle from the timed-out frame across
+      // to destroy_encoder, which unmaps it after the async drain
+      // completes. Without the deferred unmap, the GPU's deferred read
+      // from a now-unmapped resource is undefined behavior — observed as
+      // the same heap-corruption fast-fail the destroy_encoder drain
+      // alone closes the bulk of, but extending the safe-handle window
+      // through the input-resource lifecycle too. Holds NV_ENC_INPUT_PTR
+      // (an opaque void* in the NVENC ABI).
+      void *pending_mapped_resource = nullptr;
     } encoder_state;
   };
 
