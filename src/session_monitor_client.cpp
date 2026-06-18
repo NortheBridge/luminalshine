@@ -24,6 +24,7 @@
 #include "logging.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -318,7 +319,34 @@ namespace session_mon {
   }
 
   std::string make_id(std::uint32_t launch_session_id) {
-    return std::to_string(launch_session_id);
+    // Stable per-process prefix: the unix-epoch milliseconds at the
+    // first call into this function. Captured once via the static
+    // local-init guarantee. Combined with the launch_session_id (a
+    // per-process counter starting at 1), this gives every session
+    // a string that is unique across luminalshine.exe restarts.
+    //
+    // Why this exists: launch_session_id alone resets to 1 on every
+    // restart, so the second run's first session would collide with
+    // the persisted "1.json" the monitor rehydrates at startup. The
+    // collision presented in the UI as "duplicate of the original
+    // session, no new sessions ever appearing" because each new
+    // stream silently overwrote the persisted record under the same
+    // id. The epoch prefix is opaque to the rest of the code — the
+    // service treats id as a free-form string key, the Web UI passes
+    // it through encodeURIComponent, and disk filenames are <id>.json
+    // which copes fine with the embedded hyphen.
+    //
+    // Legacy persisted sessions written with the pure-integer ID
+    // remain readable: their map key is "1" / "2" / ..., the new
+    // format's key always contains a hyphen, so the two namespaces
+    // can never collide as map keys.
+    static const std::string prefix = []() {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+                      ).count();
+      return std::to_string(ms);
+    }();
+    return prefix + "-" + std::to_string(launch_session_id);
   }
 
   void session_started(const std::string &id, const SessionMetadata &md) {
