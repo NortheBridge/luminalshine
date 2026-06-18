@@ -98,6 +98,16 @@ namespace {
   // Ring-buffer retention: 24 hours at one bucket per second.
   constexpr std::size_t kRingCapacity = 24 * 60 * 60;
 
+  // Maximum number of ENDED sessions retained in the dashboard.
+  // Live sessions are never counted toward this cap so a long-
+  // running stream cannot push itself out, and a producer that
+  // floods stream_started/stream_ended cycles cannot evict a
+  // currently-active session out from under the user. Hard cap;
+  // the UI's Session History list is already paginated and 25
+  // entries fits one viewport without scrolling on the smallest
+  // supported window. Change deliberately, not as a tuning knob.
+  constexpr std::size_t kMaxEndedSessions = 25;
+
   // Persistence checkpoint cadence. The session also flushes
   // immediately on session_ended.
   constexpr std::chrono::seconds kPersistInterval {5 * 60};
@@ -299,6 +309,45 @@ namespace {
   ///     "id": "<uuid>",
   ///     "ended_at": <unix-seconds> }
   ///
+  /// Drop the oldest ended sessions until at most kMaxEndedSessions
+  /// remain. Live sessions (ended_at_epoch == 0) are exempt. The
+  /// matching on-disk JSON files are unlinked under the lock; the
+  /// caller MUST already hold g_store.mtx. Returns true when at
+  /// least one session was pruned, so the caller can log it.
+  bool prune_excess_ended_sessions_locked() {
+    std::vector<std::pair<std::int64_t, std::string>> ended;
+    ended.reserve(g_store.sessions.size());
+    for (const auto &[id, s] : g_store.sessions) {
+      if (s.ended_at_epoch != 0) {
+        ended.emplace_back(s.ended_at_epoch, id);
+      }
+    }
+    if (ended.size() <= kMaxEndedSessions) {
+      return false;
+    }
+    // Oldest first by ended_at_epoch; ties broken by id which is
+    // deterministic enough for a "least-recently-ended" cull.
+    std::sort(ended.begin(), ended.end());
+    const std::size_t drop = ended.size() - kMaxEndedSessions;
+    for (std::size_t i = 0; i < drop; ++i) {
+      const auto &id = ended[i].second;
+      g_store.sessions.erase(id);
+      std::error_code ec;
+      std::filesystem::remove(sessions_dir() / (id + ".json"), ec);
+      // Best-effort: a removal failure (file already gone, ACL
+      // denial, etc.) is logged but does not abort the prune — the
+      // in-memory map has already been corrected and the next
+      // startup will eventually rediscover the stale file as a
+      // legacy load. We deliberately do NOT touch sessions whose
+      // ended_at_epoch == 0 here even on race; the partition above
+      // never includes them.
+      if (ec) {
+        log_warn("prune: could not remove sessions/" + id + ".json: " + ec.message());
+      }
+    }
+    return true;
+  }
+
   /// Unknown frame types are logged and discarded — forward-compatible
   /// with future producer versions.
   void apply_frame(const nlohmann::json &frame) {
@@ -345,6 +394,12 @@ namespace {
     }
     if (type == "session_ended") {
       s.ended_at_epoch = frame.value("ended_at", epoch_now_seconds());
+      // session_ended is the right place to prune: it's the only
+      // event that grows the "ended sessions" partition by one.
+      // Pruning here also keeps the cap honoured at runtime, not
+      // just across restarts. The lock is already held above so the
+      // helper sees a consistent view of the store.
+      (void) prune_excess_ended_sessions_locked();
       return;
     }
     log_warn("dropping ingest frame with unknown type: " + type);
@@ -766,6 +821,16 @@ namespace {
       } catch (const std::exception &e) {
         log_warn("could not load session from " + entry.path().string() + ": " + e.what());
       }
+    }
+    // After rehydrating everything from disk, enforce the ended-
+    // sessions cap. Pre-cap installs may have left an unbounded
+    // backlog of *.json files in %ProgramData%/LuminalShine/sessions/
+    // — this is where they get culled, with the matching map entries
+    // dropped in the same atomic step as the on-disk unlink.
+    std::lock_guard<std::mutex> guard(g_store.mtx);
+    if (prune_excess_ended_sessions_locked()) {
+      log_info("startup prune: trimmed session history to "
+               + std::to_string(kMaxEndedSessions) + " ended sessions");
     }
   }
 
