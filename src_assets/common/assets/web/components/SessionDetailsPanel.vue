@@ -202,7 +202,33 @@ const charts: Map<string, uPlot> = new Map();
 const chartRefs: Record<string, HTMLDivElement | null> = {};
 
 function setChartRef(id: string, el: HTMLDivElement | null) {
+  // NaiveUI's <NTabs> lazy-mounts inactive panes, so the chart hosts
+  // for the Connection and Host tabs don't exist when loadSession()
+  // first runs redrawAllCharts() — those redraw calls bail because
+  // chartRefs[id] is null. When the user later switches tabs the
+  // host <div> mounts (this callback fires with a non-null el); the
+  // poll loop only re-fires for live sessions, so without this hook
+  // ended sessions would never paint anything on the freshly-mounted
+  // tab. Conversely on unmount (el == null) we tear down the uPlot
+  // instance so a subsequent re-mount creates a fresh one against
+  // the new DOM node instead of trying to size a chart whose canvas
+  // parent has been detached.
+  if (el == null) {
+    const existing = charts.get(id);
+    if (existing) {
+      existing.destroy();
+      charts.delete(id);
+    }
+    chartRefs[id] = null;
+    return;
+  }
   chartRefs[id] = el;
+  if (session.value) {
+    const spec = [...STREAM_CHARTS, ...CONNECTION_CHARTS, ...HOST_CHARTS].find((s) => s.id === id);
+    if (spec) {
+      void nextTick(() => redrawChart(spec));
+    }
+  }
 }
 
 function destroyAllCharts() {
