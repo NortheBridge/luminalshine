@@ -179,6 +179,12 @@ namespace nvenc {
       // the event signal, so there's no in-flight work to wait for and the
       // drain would just stall for the full timeout on every shutdown).
       bool has_pending_async = false;
+      // Cached at create_encoder time from nvenc_config.encode_wait_timeout_ms.
+      // Per-session immutable: deliberately NOT re-snapshotted mid-stream
+      // because the foreground render workload doesn't reclassify in <1s
+      // and re-evaluating each frame would just add jitter while paying
+      // ~10ms per snapshot for nothing.
+      uint32_t encode_wait_timeout_ms = 100;
     } encoder_state;
   };
 

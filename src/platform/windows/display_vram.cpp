@@ -25,6 +25,7 @@ extern "C" {
 #include "src/nvenc/nvenc_d3d11_native.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
+#include "src/platform/windows/render_stack_detect.h"
 #include "src/video.h"
 #include "utf_utils.h"
 
@@ -1108,7 +1109,40 @@ namespace platf::dxgi {
       }
 
       auto nvenc_colorspace = nvenc::nvenc_colorspace_from_sunshine_colorspace(colorspace);
-      if (!nvenc_d3d->create_encoder(config::video.nv, client_config, nvenc_colorspace, buffer_format)) {
+
+      // Render-stack-aware per-session timeout. Take ONE snapshot here
+      // (encoder init = session start), not per frame: snapshot() walks
+      // every accessible process for module matches and costs ~10ms,
+      // and the foreground render workload doesn't reclassify in the
+      // sub-second timescale the encode-wait gate cares about. If the
+      // detection reports DLSS Frame Generation or DLAA loaded in the
+      // foreground process, the GPU's queued render + frame-gen work
+      // regularly exceeds the 100ms default at 4K HDR — keeping the
+      // default would misclassify legitimately-slow frames as TDR-class
+      // and start tearing the encoder down (which prior PRs in the
+      // series harden, but is best avoided in the first place).
+      //
+      // Bump to 250ms when DLSS-FG or DLAA is detected. Plain DLSS
+      // (no FG) does not currently trigger the bump because its
+      // per-frame overhead stays well under 100ms even at 4K. If a
+      // future user-report indicates otherwise, add `has_dlss` to the
+      // condition below.
+      //
+      // The bump is one-way: don't downgrade mid-session if a later
+      // snapshot lost the flag (jitter > value).
+      auto encoder_cfg = config::video.nv;
+      const auto rs = platf::render_stack::snapshot();
+      if (rs.any_match && (rs.has_dlss_fg || rs.has_dlaa)) {
+        encoder_cfg.encode_wait_timeout_ms = 250;
+        BOOST_LOG(info) << "NvEnc: render-stack detection found "
+                        << (rs.has_dlss_fg ? "DLSS-FG " : "")
+                        << (rs.has_dlaa ? "DLAA " : "")
+                        << "in a foreground process; raising encode-wait timeout "
+                        << "from 100ms to " << encoder_cfg.encode_wait_timeout_ms
+                        << "ms for this session.";
+      }
+
+      if (!nvenc_d3d->create_encoder(encoder_cfg, client_config, nvenc_colorspace, buffer_format)) {
         return false;
       }
 
