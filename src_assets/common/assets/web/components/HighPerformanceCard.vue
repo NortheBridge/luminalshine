@@ -15,10 +15,13 @@
         <n-alert type="warning" :show-icon="true" class="rounded-xl">
           <p class="text-sm m-0 font-medium">{{ $t('high_perf.requirements_title') }}</p>
           <ul class="text-xs opacity-90 mt-2 mb-0 ps-5 space-y-1 list-disc">
+            <li>{{ $t('high_perf.req_os') }}</li>
+            <li>{{ $t('high_perf.req_cpu') }}</li>
             <li>{{ $t('high_perf.req_gpu') }}</li>
+            <li>{{ $t('high_perf.req_ram') }}</li>
+            <li>{{ $t('high_perf.req_display') }}</li>
             <li>{{ $t('high_perf.req_host_net') }}</li>
             <li>{{ $t('high_perf.req_client_net') }}</li>
-            <li>{{ $t('high_perf.req_cpu') }}</li>
             <li>{{ $t('high_perf.req_resource_use') }}</li>
           </ul>
         </n-alert>
