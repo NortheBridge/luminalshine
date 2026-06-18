@@ -867,6 +867,25 @@ namespace nvenc {
                               "will be required to recover.";
         output_bitstream = nullptr;
         registered_input_buffer = nullptr;
+        // Leak path: also abandon the still-mapped input resource. The
+        // GPU may still hold a reference via the queued-but-unsignaled
+        // picture; nvEncUnmapInputResource here would have the same UAF
+        // window as the unregister call we just skipped.
+        encoder_state.pending_mapped_resource = nullptr;
+      } else if (encoder_state.pending_mapped_resource) {
+        // Drain succeeded — the GPU has signaled completion of any
+        // queued picture against this mapped resource — so we can now
+        // safely unmap it. This is the deferred-unmap site for the
+        // wait-timeout path in encode_frame, which deliberately left
+        // the resource mapped to keep it alive across the timeout
+        // window. Must run BEFORE the nvEncUnregisterResource call
+        // below: unmap precedes unregister in the NVENC SDK lifecycle.
+        if (nvenc_failed(nvenc->nvEncUnmapInputResource(encoder, encoder_state.pending_mapped_resource))) {
+          BOOST_LOG(warning) << "NvEnc: deferred nvEncUnmapInputResource() after drain failed: "
+                             << last_nvenc_error_string
+                             << " — proceeding with unregister anyway (the drain confirmed the GPU is no longer queued).";
+        }
+        encoder_state.pending_mapped_resource = nullptr;
       }
       encoder_state.has_pending_async = false;
     }
@@ -933,11 +952,26 @@ namespace nvenc {
       BOOST_LOG(error) << "NvEnc: NvEncMapInputResource() failed: " << last_nvenc_error_string;
       return {};
     }
-    auto unmap_guard = util::fail_guard([&] {
-      if (nvenc_failed(nvenc->nvEncUnmapInputResource(encoder, mapped_input_buffer.mappedResource))) {
-        BOOST_LOG(error) << "NvEnc: NvEncUnmapInputResource() failed: " << last_nvenc_error_string;
+    // Record the mapped resource so the encode-wait-timeout path below
+    // (and, transitively, destroy_encoder via the PR-C3 async drain) can
+    // unmap it AFTER the GPU is provably done with it. Cleared on every
+    // synchronous unmap below.
+    encoder_state.pending_mapped_resource = mapped_input_buffer.mappedResource;
+
+    // Helper for the synchronous-unmap sites (submit failed, lock failed,
+    // and the happy path). NOT used on the wait-timeout path — that
+    // deliberately leaves pending_mapped_resource set so the resource
+    // stays alive while the GPU may still be queued to read from it.
+    // destroy_encoder picks up the deferred unmap after its async drain
+    // succeeds.
+    auto unmap_now = [&]() {
+      if (encoder_state.pending_mapped_resource) {
+        if (nvenc_failed(nvenc->nvEncUnmapInputResource(encoder, encoder_state.pending_mapped_resource))) {
+          BOOST_LOG(error) << "NvEnc: NvEncUnmapInputResource() failed: " << last_nvenc_error_string;
+        }
+        encoder_state.pending_mapped_resource = nullptr;
       }
-    });
+    };
 
     NV_ENC_PIC_PARAMS pic_params = {api::pic_params_version(selected_api_version)};
     pic_params.inputWidth = encoder_params.width;
@@ -960,6 +994,9 @@ namespace nvenc {
 
     if (nvenc_failed(nvenc->nvEncEncodePicture(encoder, &pic_params))) {
       BOOST_LOG(error) << "NvEnc: NvEncEncodePicture() failed: " << last_nvenc_error_string;
+      // The submit itself failed — the GPU never queued anything against
+      // the mapped resource, so unmap immediately rather than deferring.
+      unmap_now();
       return {};
     }
 
@@ -1001,12 +1038,23 @@ namespace nvenc {
       // into output_bitstream / read from the registered input texture.
       // Flag so destroy_encoder knows to drain the completion event before
       // freeing those resources. Cleared on the next successful wait below.
+      //
+      // Deliberately do NOT unmap the input resource here. NVENC may still
+      // be queued to read from it; nvEncUnmapInputResource hands a stale
+      // handle to the driver in that window and the deferred dereference
+      // is the use-after-free path. destroy_encoder picks up the deferred
+      // unmap from encoder_state.pending_mapped_resource after its async
+      // drain confirms the GPU is done.
       encoder_state.has_pending_async = true;
       return {};
     }
 
     if (nvenc_failed(nvenc->nvEncLockBitstream(encoder, &lock_bitstream))) {
       BOOST_LOG(error) << "NvEnc: NvEncLockBitstream() failed: " << last_nvenc_error_string;
+      // Wait succeeded — GPU is done with the mapped resource — so it's
+      // safe to unmap synchronously here even though the bitstream lock
+      // failed downstream.
+      unmap_now();
       return {};
     }
 
@@ -1051,6 +1099,12 @@ namespace nvenc {
       encoder_state.session_start_time = now;
     }
     encoder_state.last_successful_encode_time = now;
+
+    // Happy path: wait succeeded, lock + read + unlock all succeeded.
+    // The GPU is provably done with the mapped resource by virtue of the
+    // completion event having signaled, so unmap synchronously rather
+    // than handing this frame's mapping over to destroy_encoder's drain.
+    unmap_now();
 
     return encoded_frame;
   }
