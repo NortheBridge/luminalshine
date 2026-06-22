@@ -826,8 +826,10 @@ namespace nvenc {
     // Bounded at 2500ms because Windows TDR detection itself is ~2s
     // (TdrDelay default) and TdrDdiDelay-driven recovery extends to ~7s.
     // 2500ms unblocks before the kernel has finished a real TDR recovery
-    // — but waiting longer would starve session reinit on the detached
-    // teardown thread (video.cpp:2413). Anything still in flight past
+    // — but waiting longer would back up subsequent teardowns on the
+    // shared serialized teardown worker (encoder_teardown_queue in
+    // video.cpp), which runs sessions one at a time off the encode
+    // thread. Anything still in flight past
     // 2500ms is leaked rather than freed; that strictly beats handing
     // freed memory to a GPU that still has the address queued. Process
     // exit reclaims the leak; a session reinit does not.
@@ -835,8 +837,9 @@ namespace nvenc {
       // 2500 because Windows TDR detection itself is ~2s (TdrDelay default)
       // and TdrDdiDelay-driven recovery extends to ~7s. 2500 unblocks
       // before the kernel has finished a real TDR recovery — but waiting
-      // longer would starve session reinit on the detached teardown
-      // thread (video.cpp:2413). See the leak path below.
+      // longer would back up subsequent teardowns on the shared serialized
+      // teardown worker (encoder_teardown_queue in video.cpp). See the
+      // leak path below.
       constexpr uint32_t kDrainMs = 2500;
       const bool drained = wait_for_async_event(kDrainMs);
       if (!drained) {
