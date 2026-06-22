@@ -8,6 +8,7 @@
 #include <bitset>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <list>
 #include <mutex>
 #include <optional>
@@ -2374,6 +2375,95 @@ namespace video {
     return std::make_unique<nvenc_encode_session_t>(std::move(encode_device));
   }
 
+  /**
+   * @brief Process-wide serializer for asynchronous encode-session teardown.
+   *
+   * Each encode session owns its own ID3D11Device plus NVENC/CUDA resources.
+   * Destroying a session drives Release()/nvEncDestroy* calls deep into the
+   * NVIDIA user-mode driver, which allocates and frees on the shared process
+   * heap. encode_run() used to detach a *fresh* teardown thread on every exit;
+   * during a GPU TDR / DXGI_ERROR_DEVICE_REMOVED storm the capture loop
+   * reinitialises rapidly, so several teardown threads — plus the next
+   * session's device init — pounded the shared driver heap concurrently. That
+   * race was observed to corrupt the heap and fail-fast the whole process with
+   * STATUS_HEAP_CORRUPTION (0xC0000374). A heap-corruption fail-fast is
+   * non-continuable and cannot be intercepted by SEH; the underlying defect is
+   * in the driver's heap concurrency, which we can't fix, so serializing the
+   * destroys is a sufficient mitigation — never let them run concurrently.
+   *
+   * This queue drains sessions one at a time on a single worker, so at most one
+   * session is ever being destroyed at any instant. It also bounds the
+   * documented "NVENC destroy can hang forever on a wedged device" case to a
+   * single stuck worker instead of an unbounded pile-up of detached threads.
+   * The worker is detached and never joined, so a stuck teardown can never
+   * wedge process exit — the same guarantee the previous detached-thread
+   * approach provided.
+   */
+  class encoder_teardown_queue_t {
+  public:
+    void enqueue(std::unique_ptr<encode_session_t> session) {
+      if (!session) {
+        return;
+      }
+      std::lock_guard lg {mutex};
+      pending.push_back(std::move(session));
+      if (!worker_active) {
+        // enqueue() runs from a fail_guard destructor, so it must never throw
+        // (that would std::terminate during stack unwinding). Set worker_active
+        // only after the thread is successfully spawned; if spawning throws
+        // (thread exhaustion), the session stays queued and the next enqueue
+        // retries the worker rather than stalling forever.
+        try {
+          std::thread worker {[this] {
+            drain();
+          }};
+          worker.detach();
+          worker_active = true;
+        } catch (const std::exception &e) {
+          BOOST_LOG(error) << "Failed to spawn encoder teardown worker: "sv << e.what();
+        }
+      }
+    }
+
+  private:
+    void drain() {
+      while (true) {
+        std::unique_ptr<encode_session_t> session;
+        {
+          std::lock_guard lg {mutex};
+          if (pending.empty()) {
+            worker_active = false;
+            return;
+          }
+          session = std::move(pending.front());
+          pending.pop_front();
+        }
+        BOOST_LOG(info) << "Starting async encoder teardown";
+        session.reset();
+        BOOST_LOG(info) << "Async encoder teardown complete";
+      }
+    }
+
+    std::mutex mutex;
+    std::deque<std::unique_ptr<encode_session_t>> pending;
+    bool worker_active = false;
+  };
+
+  /**
+   * @brief Accessor for the single teardown serializer.
+   *
+   * Intentionally leaked (never destroyed): the detached drain worker may still
+   * be running during static destruction at process exit, so this object must
+   * outlive every thread. (This covers the queue itself; a teardown still in
+   * flight at process exit shares the pre-existing exposure that the worker may
+   * touch other singletons — e.g. logging — as they tear down. That window is
+   * strictly smaller than the previous unbounded-detached-threads design.)
+   */
+  encoder_teardown_queue_t &encoder_teardown_queue() {
+    static auto *queue = new encoder_teardown_queue_t();
+    return *queue;
+  }
+
   std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
@@ -2403,19 +2493,21 @@ namespace video {
     }
 
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
-    // we will complete the encoder teardown in a separate thread if supported.
-    // This will move expensive processing off the encoder thread to allow us
-    // to restart encoding as soon as possible. For cases where the NVENC driver
-    // hang occurs, this thread may probably never exit, but it will allow
-    // streaming to continue without requiring a full restart of Sunshine.
+    // we hand the encoder teardown to a serialized worker if supported. This
+    // moves expensive processing off the encoder thread so we can restart
+    // encoding as soon as possible. For cases where the NVENC driver hang
+    // occurs, the worker may never finish that one teardown, but streaming can
+    // continue without requiring a full restart of Sunshine.
+    //
+    // Teardown is routed through encoder_teardown_queue (a single-worker
+    // serializer) rather than its own detached thread: destroying several
+    // sessions concurrently — which happened during a GPU TDR reinit storm —
+    // corrupted the shared NVIDIA driver heap and fail-fast-killed the whole
+    // process (STATUS_HEAP_CORRUPTION). Serializing the destroys removes that
+    // race. See encoder_teardown_queue_t for the full rationale.
     auto fail_guard = util::fail_guard([&encoder, &session] {
       if (encoder.flags & ASYNC_TEARDOWN) {
-        std::thread encoder_teardown_thread {[session = std::move(session)]() mutable {
-          BOOST_LOG(info) << "Starting async encoder teardown";
-          session.reset();
-          BOOST_LOG(info) << "Async encoder teardown complete";
-        }};
-        encoder_teardown_thread.detach();
+        encoder_teardown_queue().enqueue(std::move(session));
       }
     });
 
