@@ -2542,18 +2542,35 @@ namespace webrtc_stream {
         }
 #endif
 
-        if (video::probe_encoders()) {
+        // Capture/encoder acquisition runs on the WebRTC signaling thread.
+        // VDISPLAY::ensure_display() / cleanup_ensure_display() can throw
+        // (std::system_error on the lock, std::bad_alloc) when the display
+        // stack is wedged, and probe_encoders() can fail for the same reason.
+        // An escape here would unwind the signaling thread and fast-fail the
+        // SYSTEM service (0xC0000409). Refuse the session instead — keep the
+        // host alive so the client can retry once the display recovers.
+        try {
+          if (video::probe_encoders()) {
 #ifdef _WIN32
-          // If probe failed, try ensuring a display is available for headless systems
-          auto ensure_result = VDISPLAY::ensure_display();
-          bool retry_failed = ensure_result.success ? video::probe_encoders() : true;
-          VDISPLAY::cleanup_ensure_display(ensure_result, !retry_failed);
-          if (retry_failed) {
-            return std::string {"Failed to initialize video capture/encoding. Is a display connected and turned on?"};
-          }
+            // If probe failed, try ensuring a display is available for headless systems
+            auto ensure_result = VDISPLAY::ensure_display();
+            bool retry_failed = ensure_result.success ? video::probe_encoders() : true;
+            VDISPLAY::cleanup_ensure_display(ensure_result, !retry_failed);
+            if (retry_failed) {
+              return std::string {"Failed to initialize video capture/encoding. Is a display connected and turned on?"};
+            }
 #else
-          return std::string {"Failed to initialize video capture/encoding. Is a display connected and turned on?"};
+            return std::string {"Failed to initialize video capture/encoding. Is a display connected and turned on?"};
 #endif
+          }
+        } catch (const std::exception &e) {
+          BOOST_LOG(error) << "WebRTC capture start: display/encoder acquisition threw (" << e.what()
+                           << "); refusing the session instead of aborting the host.";
+          return std::string {"Failed to initialize video capture/encoding. Is a display connected and turned on?"};
+        } catch (...) {
+          BOOST_LOG(error) << "WebRTC capture start: display/encoder acquisition threw an unknown "
+                              "exception; refusing the session instead of aborting the host.";
+          return std::string {"Failed to initialize video capture/encoding. Is a display connected and turned on?"};
         }
       }
 

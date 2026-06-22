@@ -3567,7 +3567,10 @@ namespace video {
 #endif
   }
 
-  int probe_encoders() {
+  // Internal probe body — never call directly; go through probe_encoders(),
+  // which converts any thrown C++ exception into a probe failure so a wedged
+  // display stack can't fast-fail the SYSTEM service. See probe_encoders().
+  static int probe_encoders_impl() {
     std::lock_guard<std::mutex> lock(encoder_probe_mutex);
     const auto cache_key = build_probe_cache_key();
     const bool hevc_mode_auto = config::video.hevc_mode == 0;
@@ -3804,6 +3807,40 @@ namespace video {
 
     restore_previous_probe_state.disable();
     return 0;
+  }
+
+  /**
+   * @brief Probe available encoders; treat any thrown exception as a probe
+   *        failure rather than letting it abort the process.
+   *
+   * probe_encoders_impl() drives D3D11 device creation, NVENC init and
+   * virtual-display acquisition. On Windows those paths can throw C++
+   * exceptions (e.g. std::bad_alloc / std::system_error from the display,
+   * threading or STL code) when the display stack is wedged — no enumerable
+   * monitors, a SudoVDA enumerate timeout, or a sustained
+   * DXGI_ERROR_DEVICE_REMOVED loop. The per-encoder probe shield is SEH-only
+   * on Windows, so such a C++ exception would unwind out of whichever thread
+   * ran the probe (startup, the nvhttp/RTSP control thread, or the WebRTC
+   * signaling thread) and fast-fail the entire SYSTEM service via
+   * std::terminate (STATUS_STACK_BUFFER_OVERRUN, 0xC0000409) — seen in the
+   * field as "LuminalShine crashed and never came back, screen left blank".
+   *
+   * Returning the existing failure sentinel (-1) instead lets every caller
+   * take its graceful no-display path (log, wait for display activation,
+   * retry) and keeps the daemon alive.
+   */
+  int probe_encoders() {
+    try {
+      return probe_encoders_impl();
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Encoder probe aborted by an exception: "sv << e.what()
+                       << " — treating as probe failure so the host stays up."sv;
+      return -1;
+    } catch (...) {
+      BOOST_LOG(error) << "Encoder probe aborted by an unknown exception — "
+                          "treating as probe failure so the host stays up."sv;
+      return -1;
+    }
   }
 
   // Linux only declaration
