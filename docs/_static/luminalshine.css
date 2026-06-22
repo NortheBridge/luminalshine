@@ -1,160 +1,418 @@
 /*
- * LuminalShine Sphinx (Furo) overrides — NortheBridge aurora palette.
- * Matches https://gitdocs.northebridge.com/luminalshine.
+ * LuminalShine Sphinx (Furo) overrides — light, Microsoft Learn-style.
  *
- * Most colors are wired through Furo's CSS variables in conf.py; this
- * file adds the radial aurora backdrop, Inter webfont, and a few
- * accent-on-black niceties that Furo doesn't expose as variables.
+ * Models the learn.microsoft.com reading experience: white surfaces,
+ * Segoe UI typography, generous whitespace, a breadcrumb trail, an
+ * "In this article" rail, and clean cards/tables/admonitions.
+ *
+ * NortheBridge branding is preserved through "Aurora Blue": the royal
+ * blue (--ls-blue-2, #4a7dff) carries links and accents, and the
+ * cyan->blue duo (--ls-blue-1 -> --ls-blue-2) carries brand elements
+ * such as the site title. The old aurora-3 violet is retired — every
+ * spot that used purple now uses Aurora Blue.
+ *
+ * Most colors flow through Furo's CSS variables set in conf.py; this
+ * file adds the typographic polish and structural pieces Furo doesn't
+ * expose as variables.
  */
-
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root,
 body,
 body[data-theme="light"],
 body[data-theme="dark"] {
-  --ls-bg-base: #04060f;
-  --ls-bg-deep: #070b1f;
-  --ls-blue-1: #1ec8ff;
-  --ls-blue-2: #4a7dff;
-  --ls-violet: #8a5cff;
-  --ls-teal:   #00e0c6;
-  --ls-text:   #f3f6ff;
-  --ls-border: rgba(255, 255, 255, 0.12);
+  --ls-page:        #ffffff;
+  --ls-surface:     #f7f9fc;
+  --ls-surface-alt: #eef2f8;
+  --ls-text:        #1b1f24;
+  --ls-text-2:      #4a5563;
+  --ls-muted:       #6b7280;
+  --ls-border:      #e3e8ef;
+  --ls-border-2:    #d4dae3;
+  --ls-blue-1:      #1ec8ff; /* aurora-1, cyan — brand duo start */
+  --ls-blue-2:      #4a7dff; /* aurora-2, "Aurora Blue" — links/accents */
+  --ls-blue-hover:  #2f5fe0;
+  --ls-accent-soft: #eef3ff;
+
+  --ls-green:  #2e7d32;
+  --ls-amber:  #b86e00;
+  --ls-red:    #d13438;
+
+  --ls-radius: 8px;
+  --ls-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --ls-shadow-md: 0 4px 14px rgba(16, 24, 40, 0.10);
 }
 
-/* Aurora gradient backdrop — same recipe as the gh-pages site */
+/* ----------------------------------------------------------------------
+ * Base surface + typography
+ * -------------------------------------------------------------------- */
+
 body {
-  background-color: var(--ls-bg-base);
-  position: relative;
+  background-color: var(--ls-page);
+  color: var(--ls-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
 }
 
+/* The old dark aurora gradient backdrop is gone — Learn is flat white. */
 body::before {
-  content: "";
-  position: fixed;
-  inset: -20%;
-  z-index: -2;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 60% 50% at 15% 20%, rgba(30, 200, 255, 0.28), transparent 60%),
-    radial-gradient(ellipse 50% 45% at 85% 15%, rgba(138, 92, 255, 0.22), transparent 60%),
-    radial-gradient(ellipse 70% 55% at 50% 95%, rgba(0, 224, 198, 0.16), transparent 65%),
-    radial-gradient(ellipse 45% 40% at 90% 80%, rgba(74, 125, 255, 0.22), transparent 60%),
-    linear-gradient(180deg, var(--ls-bg-deep) 0%, var(--ls-bg-base) 100%);
-  filter: blur(40px) saturate(125%);
+  content: none !important;
 }
 
-/* Keep content surfaces readable on top of the aurora */
+/* This is a light-only site; hide Furo's light/dark toggle. */
+.theme-toggle-container,
+.theme-toggle {
+  display: none !important;
+}
+
+/* Keep content surfaces flat (drop the dark glassmorphism). */
 .sidebar-drawer,
-.content,
 .toc-drawer {
-  background-color: rgba(7, 11, 31, 0.72);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  background-color: var(--ls-page);
 }
 
-/* Brand mark / site title */
-.sidebar-brand-text {
-  background: linear-gradient(135deg, var(--ls-blue-1), var(--ls-violet));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+.content {
+  background-color: var(--ls-page);
+}
+
+article {
+  font-size: 1rem;
+}
+
+/* ----------------------------------------------------------------------
+ * Headings — clean and solid, Learn-style hierarchy (no gradient H1)
+ * -------------------------------------------------------------------- */
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--ls-text);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-/* Headings get a subtle cyan tint, links the brand blue */
-h1, h2, h3, h4, h5, h6 {
-  color: var(--ls-text);
-  letter-spacing: -0.015em;
+h1 {
+  font-size: 2.1rem;
+  line-height: 1.2;
+  margin-bottom: 0.6em;
 }
 
-h1 {
-  background: linear-gradient(135deg, var(--ls-text) 0%, var(--ls-blue-1) 100%);
+h2 {
+  font-size: 1.5rem;
+  margin-top: 1.8em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--ls-border);
+}
+
+h3 { font-size: 1.2rem; }
+
+/* ----------------------------------------------------------------------
+ * Links
+ * -------------------------------------------------------------------- */
+
+a {
+  color: var(--ls-blue-2);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--ls-blue-hover);
+  text-decoration: underline;
+  text-decoration-color: rgba(74, 125, 255, 0.5);
+}
+
+/* ----------------------------------------------------------------------
+ * Sidebar — brand duo title + Learn-style nav
+ * -------------------------------------------------------------------- */
+
+.sidebar-brand-text {
+  /* Brand duo: cyan -> Aurora Blue (deepened cyan keeps it legible on
+     white). This is the only place the cyan end of the duo appears. */
+  background: linear-gradient(135deg, #109fe0 0%, var(--ls-blue-2) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
-a, .toctree-l1 > a:hover {
-  text-decoration-color: rgba(30, 200, 255, 0.4);
+.sidebar-drawer {
+  border-right: 1px solid var(--ls-border);
 }
 
-/* Inline + block code blocks */
-code.literal {
-  background: rgba(30, 200, 255, 0.10);
-  border: 1px solid rgba(30, 200, 255, 0.22);
-  border-radius: 4px;
-  padding: 0.05em 0.35em;
-  color: var(--ls-blue-1);
+.sidebar-tree .caption {
+  color: var(--ls-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
 }
 
-.highlight, pre {
-  background: rgba(7, 11, 31, 0.85) !important;
-  border: 1px solid var(--ls-border);
-  border-radius: 8px;
-}
-
-/* Buttons / admonitions / search */
-.sidebar-search,
-.sidebar-search:focus,
-.sidebar-search-container input[type="search"] {
-  background-color: rgba(7, 11, 31, 0.6);
-  border: 1px solid var(--ls-border);
-  color: var(--ls-text);
-}
-
-.admonition {
-  border-left: 3px solid var(--ls-blue-1);
-  background-color: rgba(7, 11, 31, 0.7);
+.sidebar-tree .reference {
   border-radius: 6px;
 }
 
+/* Selected page gets an Aurora-Blue rail, Learn-style. */
+.sidebar-tree .current-page > .reference {
+  font-weight: 600;
+  color: var(--ls-blue-2);
+  box-shadow: inset 3px 0 0 var(--ls-blue-2);
+}
+
+/* ----------------------------------------------------------------------
+ * Breadcrumb (injected by breadcrumbs.js)
+ * -------------------------------------------------------------------- */
+
+.ls-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 1.4rem;
+  font-size: 0.82rem;
+  color: var(--ls-muted);
+}
+
+.ls-breadcrumb a {
+  color: var(--ls-text-2);
+}
+
+.ls-breadcrumb a:hover {
+  color: var(--ls-blue-2);
+  text-decoration: none;
+}
+
+.ls-breadcrumb .ls-breadcrumb-sep {
+  color: var(--ls-border-2);
+  user-select: none;
+}
+
+.ls-breadcrumb .ls-breadcrumb-current {
+  color: var(--ls-text);
+  font-weight: 500;
+}
+
+/* ----------------------------------------------------------------------
+ * "In this article" right-hand rail
+ * -------------------------------------------------------------------- */
+
+.toc-drawer {
+  border-left: 1px solid var(--ls-border);
+}
+
+.toc-title {
+  /* Relabel Furo's "Contents" to Microsoft Learn's "In this article". */
+  color: var(--ls-text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  visibility: hidden;
+  position: relative;
+}
+
+.toc-title::after {
+  content: "In this article";
+  visibility: visible;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.toc-tree {
+  font-size: 0.85rem;
+  border-left: 1px solid var(--ls-border);
+}
+
+.toc-tree li.scroll-current > .reference {
+  color: var(--ls-blue-2);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--ls-blue-2);
+}
+
+/* ----------------------------------------------------------------------
+ * Inline + block code
+ * -------------------------------------------------------------------- */
+
+code.literal {
+  background: var(--ls-surface-alt);
+  border: 1px solid var(--ls-border);
+  border-radius: 4px;
+  padding: 0.1em 0.38em;
+  font-size: 0.88em;
+  color: #1b1f24;
+}
+
+.highlight,
+pre {
+  background: var(--ls-surface) !important;
+  border: 1px solid var(--ls-border);
+  border-radius: var(--ls-radius);
+}
+
+.highlight {
+  box-shadow: var(--ls-shadow-sm);
+}
+
+/* ----------------------------------------------------------------------
+ * Search box
+ * -------------------------------------------------------------------- */
+
+.sidebar-search,
+.sidebar-search:focus,
+.sidebar-search-container input[type="search"] {
+  background-color: var(--ls-page);
+  border: 1px solid var(--ls-border-2);
+  border-radius: 6px;
+  color: var(--ls-text);
+}
+
+.sidebar-search:focus {
+  border-color: var(--ls-blue-2);
+  box-shadow: 0 0 0 2px rgba(74, 125, 255, 0.2);
+}
+
+/* ----------------------------------------------------------------------
+ * Admonitions — Microsoft Learn note/tip/important/warning boxes
+ * -------------------------------------------------------------------- */
+
+.admonition,
+div.admonition {
+  border: 1px solid var(--ls-border);
+  border-left: 4px solid var(--ls-blue-2);
+  background-color: var(--ls-accent-soft);
+  border-radius: var(--ls-radius);
+  box-shadow: none;
+}
+
+.admonition > .admonition-title {
+  font-weight: 600;
+  background: transparent;
+}
+
 .admonition.note,
-.admonition.tip,
-.admonition.hint {
-  border-left-color: var(--ls-blue-1);
+.admonition.hint,
+.admonition.seealso,
+.admonition.important {
+  border-left-color: var(--ls-blue-2);
+  background-color: var(--ls-accent-soft);
+}
+
+.admonition.tip {
+  border-left-color: var(--ls-green);
+  background-color: #eef7ee;
 }
 
 .admonition.warning,
-.admonition.caution {
-  border-left-color: #ffb454;
+.admonition.caution,
+.admonition.attention {
+  border-left-color: var(--ls-amber);
+  background-color: #fff6e9;
 }
 
 .admonition.danger,
 .admonition.error {
-  border-left-color: #ff6b6b;
+  border-left-color: var(--ls-red);
+  background-color: #fdeded;
 }
 
-/* Tables */
+/* ----------------------------------------------------------------------
+ * Tables — Learn-style: light header, row separators, no heavy chrome
+ * -------------------------------------------------------------------- */
+
 table.docutils {
   border: 1px solid var(--ls-border);
-  border-radius: 6px;
+  border-radius: var(--ls-radius);
+  border-collapse: separate;
+  border-spacing: 0;
   overflow: hidden;
+  box-shadow: var(--ls-shadow-sm);
 }
 
 table.docutils thead {
-  background: rgba(30, 200, 255, 0.08);
+  background: var(--ls-surface);
 }
 
 table.docutils th {
-  color: var(--ls-blue-1);
+  color: var(--ls-text);
   font-weight: 600;
   letter-spacing: 0.01em;
+  border-bottom: 1px solid var(--ls-border-2);
 }
 
-/* Selection */
-::selection {
-  background: rgba(30, 200, 255, 0.35);
+table.docutils td,
+table.docutils th {
+  border-color: var(--ls-border);
+}
+
+table.docutils tbody tr:hover {
+  background: var(--ls-surface);
+}
+
+/* ----------------------------------------------------------------------
+ * Cards (sphinx-design) — Microsoft Learn landing tiles
+ * -------------------------------------------------------------------- */
+
+.sd-card {
+  border: 1px solid var(--ls-border) !important;
+  border-radius: var(--ls-radius) !important;
+  background: var(--ls-page) !important;
+  box-shadow: var(--ls-shadow-sm);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.sd-card:hover {
+  border-color: var(--ls-blue-2) !important;
+  box-shadow: var(--ls-shadow-md);
+  transform: translateY(-2px);
+}
+
+.sd-card .sd-card-title {
+  font-weight: 600;
   color: var(--ls-text);
 }
 
-/* Scrollbar polish */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: var(--ls-bg-base); }
+.sd-card .sd-card-body {
+  color: var(--ls-text-2);
+}
+
+/* Card-as-link: keep the whole tile neutral, accent on hover. */
+.sd-card a.sd-stretched-link,
+.sd-card a.sd-stretched-link:hover {
+  text-decoration: none;
+}
+
+/* ----------------------------------------------------------------------
+ * Buttons (sphinx-design) — Aurora Blue primary
+ * -------------------------------------------------------------------- */
+
+.sd-btn-primary,
+.sd-btn-outline-primary:hover {
+  background-color: var(--ls-blue-2) !important;
+  border-color: var(--ls-blue-2) !important;
+  color: #fff !important;
+}
+
+.sd-btn-primary:hover {
+  background-color: var(--ls-blue-hover) !important;
+  border-color: var(--ls-blue-hover) !important;
+}
+
+/* ----------------------------------------------------------------------
+ * Selection + scrollbar (Aurora Blue, no purple)
+ * -------------------------------------------------------------------- */
+
+::selection {
+  background: rgba(74, 125, 255, 0.22);
+  color: var(--ls-text);
+}
+
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: var(--ls-surface); }
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, var(--ls-blue-2), var(--ls-violet));
-  border-radius: 5px;
+  background: var(--ls-border-2);
+  border: 3px solid var(--ls-surface);
+  border-radius: 7px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ls-blue-2);
 }
