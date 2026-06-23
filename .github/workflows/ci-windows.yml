@@ -484,18 +484,30 @@ jobs:
           $targets = Get-ChildItem -Path 'build' -Filter '*.exe' -Recurse -File |
                        Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike 'test_*' }
           if (-not $targets) { throw 'No executables found under build/ to sign.' }
-          foreach ($t in $targets) {
-            Write-Host "Signing $($t.FullName)"
-            & $bat sign `
-                -username="$env:SSLCOM_USERNAME" `
-                -password="$env:SSLCOM_PASSWORD" `
-                -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
-                -totp_secret="$env:SSLCOM_TOTP_SECRET" `
-                -input_file_path="$($t.FullName)" `
-                -override
-            if ($LASTEXITCODE -ne 0) {
-              throw "CodeSignTool failed for $($t.FullName) (exit $LASTEXITCODE)"
+          # CodeSignTool.bat resolves its bundled JRE (.\jdk-11.0.2\bin\java),
+          # its jar, and conf\code_sign_tool.properties (SSL.com OAuth
+          # endpoints + CLIENT_ID) RELATIVE to the current directory, so it
+          # must run from its own folder or it dies with "The system cannot
+          # find the path specified." before signing. Input paths below are
+          # absolute, so the location change doesn't affect them.
+          $toolDir = Split-Path -Parent $bat
+          Push-Location $toolDir
+          try {
+            foreach ($t in $targets) {
+              Write-Host "Signing $($t.FullName)"
+              & $bat sign `
+                  -username="$env:SSLCOM_USERNAME" `
+                  -password="$env:SSLCOM_PASSWORD" `
+                  -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
+                  -totp_secret="$env:SSLCOM_TOTP_SECRET" `
+                  -input_file_path="$($t.FullName)" `
+                  -override
+              if ($LASTEXITCODE -ne 0) {
+                throw "CodeSignTool failed for $($t.FullName) (exit $LASTEXITCODE)"
+              }
             }
+          } finally {
+            Pop-Location
           }
 
       - name: Package Windows (MSI and portable ZIP)
@@ -582,15 +594,22 @@ jobs:
                    Sort-Object LastWriteTime -Descending |
                    Select-Object -First 1
           if (-not $msi) { throw 'No MSI to sign under build/cpack_artifacts/.' }
+          # Run from the tool dir — see "Sign built executables" for why.
+          $toolDir = Split-Path -Parent $bat
           Write-Host "Signing $($msi.FullName)"
-          & $bat sign `
-              -username="$env:SSLCOM_USERNAME" `
-              -password="$env:SSLCOM_PASSWORD" `
-              -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
-              -totp_secret="$env:SSLCOM_TOTP_SECRET" `
-              -input_file_path="$($msi.FullName)" `
-              -override
-          if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for MSI (exit $LASTEXITCODE)" }
+          Push-Location $toolDir
+          try {
+            & $bat sign `
+                -username="$env:SSLCOM_USERNAME" `
+                -password="$env:SSLCOM_PASSWORD" `
+                -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
+                -totp_secret="$env:SSLCOM_TOTP_SECRET" `
+                -input_file_path="$($msi.FullName)" `
+                -override
+            if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for MSI (exit $LASTEXITCODE)" }
+          } finally {
+            Pop-Location
+          }
 
       - name: Build bootstrapper EXE
         shell: msys2 {0}
@@ -612,15 +631,22 @@ jobs:
           $bat = $env:CODESIGN_TOOL_BAT
           $exe = Join-Path $PWD 'build/cpack_artifacts/LuminalShineSetup.exe'
           if (-not (Test-Path $exe)) { throw "Bootstrapper EXE not found at $exe" }
+          # Run from the tool dir — see "Sign built executables" for why.
+          $toolDir = Split-Path -Parent $bat
           Write-Host "Signing $exe"
-          & $bat sign `
-              -username="$env:SSLCOM_USERNAME" `
-              -password="$env:SSLCOM_PASSWORD" `
-              -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
-              -totp_secret="$env:SSLCOM_TOTP_SECRET" `
-              -input_file_path="$exe" `
-              -override
-          if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for bootstrapper (exit $LASTEXITCODE)" }
+          Push-Location $toolDir
+          try {
+            & $bat sign `
+                -username="$env:SSLCOM_USERNAME" `
+                -password="$env:SSLCOM_PASSWORD" `
+                -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
+                -totp_secret="$env:SSLCOM_TOTP_SECRET" `
+                -input_file_path="$exe" `
+                -override
+            if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for bootstrapper (exit $LASTEXITCODE)" }
+          } finally {
+            Pop-Location
+          }
 
       - name: Stage Windows artifacts
         shell: msys2 {0}
