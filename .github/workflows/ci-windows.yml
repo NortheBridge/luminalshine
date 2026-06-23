@@ -55,7 +55,7 @@ on:
 # Reference: https://www.ssl.com/guide/esigner-codesigntool-command-guide/
 # Product:   https://www.ssl.com/products/software-integrity/signing-service/
 env:
-  SIGN_ARTIFACTS: 'false'
+  SIGN_ARTIFACTS: 'true'
   CODESIGN_TOOL_VERSION: '1.3.2'
 
 jobs:
