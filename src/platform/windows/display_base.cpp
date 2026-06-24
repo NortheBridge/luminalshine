@@ -472,10 +472,22 @@ namespace platf::dxgi {
       // previous attempt so we never accidentally release a half-built
       // device. D3D11CreateDevice itself zero-fills on entry, but only on
       // the happy path.
+      // Release (not merely null) anything a previous failed attempt left
+      // behind. On a mid-creation device-loss, D3D11CreateDevice can populate
+      // an out-param before returning failure, and these out-params write into
+      // util::safe_ptr raw slots — so overwriting with nullptr without
+      // releasing would orphan a full D3D11 device/context on every retry,
+      // an unbounded leak across a sustained TDR/device-removed wedge.
       if (device) {
+        if (*device) {
+          (*device)->Release();
+        }
         *device = nullptr;
       }
       if (context) {
+        if (*context) {
+          (*context)->Release();
+        }
         *context = nullptr;
       }
       if (feature_level) {

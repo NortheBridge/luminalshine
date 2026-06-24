@@ -2407,6 +2407,23 @@ namespace video {
       }
       std::lock_guard lg {mutex};
       pending.push_back(std::move(session));
+      // Bound the backlog. During a sustained streaming reinit storm against a
+      // wedged GPU, each teardown can stall on its device-drain, so sessions
+      // can enqueue faster than the single worker drains them — each one
+      // pinning a D3D11 device + NVENC resources, feeding the process toward
+      // OOM. Cap the backlog and intentionally LEAK the oldest overflow:
+      // release ownership without destroying it, so we never run a concurrent
+      // destroy (the race this serializer exists to prevent) and never block
+      // the encode thread. A bounded per-storm leak is strictly preferable to
+      // unbounded growth.
+      constexpr std::size_t kMaxPendingTeardowns = 8;
+      while (pending.size() > kMaxPendingTeardowns) {
+        pending.front().release();  // intentional leak — must NOT destroy here
+        pending.pop_front();
+        BOOST_LOG(warning) << "Encoder teardown backlog exceeded "sv << kMaxPendingTeardowns
+                           << " (GPU teardown stalled); leaking oldest queued session to bound memory. "
+                              "Total teardown-overflow leaks this process: "sv << ++overflow_leaks << '.';
+      }
       if (!worker_active) {
         // enqueue() runs from a fail_guard destructor, so it must never throw
         // (that would std::terminate during stack unwinding). Set worker_active
@@ -2447,6 +2464,7 @@ namespace video {
     std::mutex mutex;
     std::deque<std::unique_ptr<encode_session_t>> pending;
     bool worker_active = false;
+    uint64_t overflow_leaks = 0;  // count of sessions leaked on backlog overflow
   };
 
   /**

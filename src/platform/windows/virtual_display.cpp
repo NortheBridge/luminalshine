@@ -2910,6 +2910,19 @@ namespace VDISPLAY {
     if (active_backend() == BackendType::MTT) {
       return mtt::initialize();
     }
+    // Idempotency: a prior driver handle may still be open — the recovery
+    // monitor and the several proc::initVDisplayDriver() call sites can
+    // re-enter while a handle is live. Overwriting SUDOVDA_DRIVER_HANDLE below
+    // would leak the old kernel handle on every call; across a multi-minute
+    // display wedge (repeated recovery attempts) that is an unbounded handle
+    // leak. Reuse a still-responsive handle; otherwise close it before
+    // re-opening.
+    if (SUDOVDA_DRIVER_HANDLE != INVALID_HANDLE_VALUE) {
+      if (driver_handle_responsive(SUDOVDA_DRIVER_HANDLE)) {
+        return DRIVER_STATUS::OK;
+      }
+      closeVDisplayDevice();
+    }
     uint32_t retryInterval = 20;
     bool attempted_recovery = false;
     while (true) {

@@ -133,7 +133,26 @@ namespace audio {
     }
   }
 
+  static void capture_impl(safe::mail_t mail, config_t config, void *channel_data);
+
+  // Thread-top exception barrier. The audio capture loop allocates every
+  // iteration (PCM buffers, packets) on its own thread with no outer catch;
+  // under system-wide memory exhaustion a std::bad_alloc here would escape the
+  // thread and std::terminate the whole SYSTEM service (0xC0000409). Contain
+  // it: audio stops for this session, but the host stays up.
   void capture(safe::mail_t mail, config_t config, void *channel_data) {
+    try {
+      capture_impl(std::move(mail), std::move(config), channel_data);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Audio capture thread terminated by exception: "sv << e.what()
+                       << " — audio stops for this session; the host stays up."sv;
+    } catch (...) {
+      BOOST_LOG(error) << "Audio capture thread terminated by an unknown exception — "
+                          "audio stops for this session; the host stays up."sv;
+    }
+  }
+
+  void capture_impl(safe::mail_t mail, config_t config, void *channel_data) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     if (!config::audio.stream) {
       shutdown_event->view();

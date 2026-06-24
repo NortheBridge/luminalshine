@@ -2631,6 +2631,22 @@ namespace nvhttp {
         BOOST_LOG(fatal) << "Couldn't start http server on ports ["sv << port_https << ", "sv << port_https << "]: "sv << err.what();
         shutdown_event->raise(true);
         return;
+      } catch (const std::exception &err) {
+        // Any other exception (e.g. std::bad_alloc under system-wide memory
+        // pressure) must not escape this thread and std::terminate the host.
+        if (shutdown_event->peek()) {
+          return;
+        }
+        BOOST_LOG(fatal) << "nvhttp server thread terminated by exception: "sv << err.what();
+        shutdown_event->raise(true);
+        return;
+      } catch (...) {
+        if (shutdown_event->peek()) {
+          return;
+        }
+        BOOST_LOG(fatal) << "nvhttp server thread terminated by an unknown exception."sv;
+        shutdown_event->raise(true);
+        return;
       }
     };
     std::thread ssl {accept_and_run, &https_server};
