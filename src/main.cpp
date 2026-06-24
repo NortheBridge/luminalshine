@@ -7,6 +7,8 @@
 #include <chrono>
 #include <codecvt>
 #include <csignal>
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -139,6 +141,28 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
 
 int main(int argc, char *argv[]) {
   lifetime::argv = argv;
+
+  // Last-resort diagnostics: if any thread lets an exception escape (e.g.
+  // std::bad_alloc under system-wide memory exhaustion), log what it was
+  // before the runtime aborts, so a crash bundle explains the 0xC0000409
+  // instead of pointing only at ucrtbase. This cannot resume execution —
+  // per-thread catch barriers (audio capture, the HTTP run loops, the encoder
+  // probe) handle graceful degradation; this only makes the hard-abort case
+  // diagnosable.
+  std::set_terminate([]() {
+    if (auto active = std::current_exception()) {
+      try {
+        std::rethrow_exception(active);
+      } catch (const std::exception &e) {
+        BOOST_LOG(fatal) << "std::terminate: unhandled exception escaped a thread: " << e.what();
+      } catch (...) {
+        BOOST_LOG(fatal) << "std::terminate: unhandled non-standard exception escaped a thread.";
+      }
+    } else {
+      BOOST_LOG(fatal) << "std::terminate called with no active exception.";
+    }
+    std::abort();
+  });
 
   task_pool_util::TaskPool::task_id_t force_shutdown = nullptr;
 

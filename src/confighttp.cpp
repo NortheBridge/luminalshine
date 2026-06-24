@@ -4360,6 +4360,22 @@ namespace confighttp {
         BOOST_LOG(fatal) << "Couldn't start Configuration HTTPS server on port ["sv << port_https << "]: "sv << err.what();
         shutdown_event->raise(true);
         return;
+      } catch (const std::exception &err) {
+        // Don't let std::bad_alloc (system-wide memory pressure) or any other
+        // exception escape this thread and std::terminate the host.
+        if (shutdown_event->peek()) {
+          return;
+        }
+        BOOST_LOG(fatal) << "Configuration HTTPS server thread terminated by exception: "sv << err.what();
+        shutdown_event->raise(true);
+        return;
+      } catch (...) {
+        if (shutdown_event->peek()) {
+          return;
+        }
+        BOOST_LOG(fatal) << "Configuration HTTPS server thread terminated by an unknown exception."sv;
+        shutdown_event->raise(true);
+        return;
       }
     };
     api_token_manager.load_api_tokens();
