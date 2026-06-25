@@ -7,6 +7,7 @@
 #include <chrono>
 #include <codecvt>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -143,23 +144,46 @@ int main(int argc, char *argv[]) {
   lifetime::argv = argv;
 
   // Last-resort diagnostics: if any thread lets an exception escape (e.g.
-  // std::bad_alloc under system-wide memory exhaustion), log what it was
-  // before the runtime aborts, so a crash bundle explains the 0xC0000409
-  // instead of pointing only at ucrtbase. This cannot resume execution —
-  // per-thread catch barriers (audio capture, the HTTP run loops, the encoder
-  // probe) handle graceful degradation; this only makes the hard-abort case
+  // std::bad_alloc under system-wide memory exhaustion), record what it was
+  // before the runtime aborts, so a crash bundle explains the abort instead
+  // of pointing only at ucrtbase. This cannot resume execution — per-thread
+  // catch barriers (audio capture, the HTTP run loops, the encoder probe)
+  // handle graceful degradation; this only makes the hard-abort case
   // diagnosable.
+  //
+  // CRITICAL: std::terminate can fire during exit-time static destruction —
+  // e.g. a joinable std::thread destructor invoked from the CRT on-exit
+  // table. At that point Boost.Log's sinks may already be torn down, so
+  // emitting through BOOST_LOG here re-enters the allocator and double-frees
+  // the heap (observed as 0xC0000374 in ucrtbase!_free_base, masking the real
+  // fault). Use only teardown-safe primitives: direct stderr writes and
+  // OutputDebugString, no Boost.Log and no heap allocation of our own.
   std::set_terminate([]() {
+    auto emit = [](const char *msg, const char *detail) noexcept {
+      std::fputs(msg, stderr);
+      if (detail) {
+        std::fputs(detail, stderr);
+      }
+      std::fputc('\n', stderr);
+      std::fflush(stderr);
+#ifdef _WIN32
+      OutputDebugStringA(msg);
+      if (detail) {
+        OutputDebugStringA(detail);
+      }
+      OutputDebugStringA("\n");
+#endif
+    };
     if (auto active = std::current_exception()) {
       try {
         std::rethrow_exception(active);
       } catch (const std::exception &e) {
-        BOOST_LOG(fatal) << "std::terminate: unhandled exception escaped a thread: " << e.what();
+        emit("FATAL: std::terminate: unhandled exception escaped a thread: ", e.what());
       } catch (...) {
-        BOOST_LOG(fatal) << "std::terminate: unhandled non-standard exception escaped a thread.";
+        emit("FATAL: std::terminate: unhandled non-standard exception escaped a thread.", nullptr);
       }
     } else {
-      BOOST_LOG(fatal) << "std::terminate called with no active exception.";
+      emit("FATAL: std::terminate called with no active exception.", nullptr);
     }
     std::abort();
   });
@@ -480,6 +504,20 @@ int main(int argc, char *argv[]) {
   if (config::sunshine.system_tray) {
     system_tray::run_tray();
   }
+
+  // The tray runs on a static std::thread that is only joined by end_tray().
+  // main() has several early-return startup paths (shutdown_event->peek(),
+  // http::init() failure) that bypass the orderly teardown block below — and
+  // thus bypass its end_tray() call — leaving the static thread joinable when
+  // the CRT on-exit handlers destroy it. Destroying a joinable std::thread
+  // calls std::terminate(), which during exit-time teardown corrupted the heap
+  // via the logging path (0xC0000374 in ucrtbase!_free_base). This guard joins
+  // the tray thread on *every* exit path; end_tray() is idempotent, so the
+  // explicit call in the orderly shutdown sequence stays a cheap no-op here.
+  auto tray_guard = util::fail_guard([]() {
+    system_tray::end_tray();
+  });
+
   // Schedule periodic update checks if configured
   if (config::sunshine.update_check_interval_seconds > 0) {
     // Trigger an immediate update check on startup so users don't wait
