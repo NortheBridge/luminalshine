@@ -94,6 +94,14 @@ namespace webrtc_stream {
   void shutdown_all_sessions();
 
   void cancel_paused_display_cleanup();
+
+  /**
+   * @brief Signal process teardown to any in-flight paused-display cleanup thread.
+   *
+   * Mirrors stream::notify_shutdown(): sets a sticky flag so the detached cleanup thread bails out
+   * without logging through Boost.Log after the sinks are torn down during CRT exit.
+   */
+  void notify_shutdown();
   void submit_video_packet(video::packet_raw_t &packet);
   void submit_audio_packet(const audio::buffer_t &packet);
   void submit_video_frame(const std::shared_ptr<platf::img_t> &frame);

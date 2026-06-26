@@ -217,7 +217,15 @@ namespace cred_store {
         return;
       }
 
-      const auto wide = to_wide(blob.str());
+      // Materialize the serialized JSON once into a named local. CredWriteW
+      // below reads cred.CredentialBlob, so the byte buffer must outlive that
+      // call. Binding CredentialBlob to blob.str() directly (a by-value
+      // temporary destroyed at the end of the full-expression) left the pointer
+      // dangling into freed heap — a use-after-free that persisted garbage into
+      // the Credential Manager and could fault under a hardened heap.
+      const std::string payload = blob.str();
+
+      const auto wide = to_wide(payload);
       (void) wide;  // CredWrite takes a byte buffer, not a wide string;
                    // we send the UTF-8 bytes directly so the WCM read
                    // path can round-trip the same JSON we'd have written
@@ -226,8 +234,8 @@ namespace cred_store {
       CREDENTIALW cred {};
       cred.Type = CRED_TYPE_GENERIC;
       cred.TargetName = const_cast<LPWSTR>(kTargetName);
-      cred.CredentialBlobSize = static_cast<DWORD>(blob.str().size());
-      cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(blob.str().data()));
+      cred.CredentialBlobSize = static_cast<DWORD>(payload.size());
+      cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(payload.data()));
       cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
       // UserName isn't part of the auth payload — it's just metadata
       // surfaced in the Credential Manager UI. Use a stable label.

@@ -7,11 +7,15 @@
 
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <future>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <variant>
+#include <vector>
 
 // lib includes
 #include <nlohmann/json.hpp>
@@ -33,11 +37,63 @@ using namespace std::literals;
 namespace update {
   state_t state;
 
+  namespace {
+    // Update checks run on background threads that log via Boost.Log. To avoid a detached thread
+    // outliving main() and logging after the sinks are torn down (CRT-exit heap fast-fail), the
+    // threads are tracked here as joinable and joined from update::shutdown().
+    struct tracked_thread_t {
+      std::thread thread;
+      std::shared_ptr<std::atomic<bool>> done;  ///< Set by the worker just before it returns.
+    };
+
+    std::mutex g_update_threads_mutex;
+    std::vector<tracked_thread_t> g_update_threads;
+    std::atomic<bool> g_update_shutting_down {false};
+
+    // Spawn a tracked, joinable update worker. Threads that have finished are reaped (joined)
+    // opportunistically so the tracking vector does not grow without bound.
+    template<typename Fn>
+    void spawn_tracked_update_thread(Fn &&fn) {
+      if (g_update_shutting_down.load(std::memory_order_acquire)) {
+        return;
+      }
+      auto done = std::make_shared<std::atomic<bool>>(false);
+      auto body = [done, fn = std::forward<Fn>(fn)]() mutable {
+        fn();
+        done->store(true, std::memory_order_release);
+      };
+      std::lock_guard lg {g_update_threads_mutex};
+      if (g_update_shutting_down.load(std::memory_order_acquire)) {
+        return;
+      }
+      // Reap any already-finished worker threads.
+      std::erase_if(g_update_threads, [](tracked_thread_t &t) {
+        if (t.done->load(std::memory_order_acquire)) {
+          if (t.thread.joinable()) {
+            t.thread.join();
+          }
+          return true;
+        }
+        return false;
+      });
+      g_update_threads.push_back({std::thread(std::move(body)), std::move(done)});
+    }
+  }  // namespace
+
   static size_t write_to_string(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t total = size * nmemb;
     auto *out = static_cast<std::string *>(userp);
     out->append(static_cast<char *>(contents), total);
     return total;
+  }
+
+  // Abort an in-flight transfer promptly when shutdown is requested. Because
+  // update workers are now joined at shutdown (to keep them from logging after
+  // Boost.Log's sinks tear down), a request blocked in libcurl would otherwise
+  // hang process exit until the timeout below; returning non-zero here makes
+  // curl_easy_perform() return CURLE_ABORTED_BY_CALLBACK immediately.
+  static int update_xferinfo_cb(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return g_update_shutting_down.load(std::memory_order_acquire) ? 1 : 0;
   }
 
   bool download_github_release_data(const std::string &owner, const std::string &repo, std::string &out_json) {
@@ -60,6 +116,13 @@ namespace update {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_string);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out_json);
+    // Bound the request so a wedged network can't make the (now joined-at-
+    // shutdown) update worker hang process exit. Plus a progress callback that
+    // aborts the moment shutdown is requested, for a prompt, clean teardown.
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, update_xferinfo_cb);
     char errbuf[CURL_ERROR_SIZE] = {0};
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
     CURLcode res = curl_easy_perform(curl);
@@ -251,19 +314,19 @@ namespace update {
       }
     }
     BOOST_LOG(info) << "Update check trigger accepted (force="sv << (force ? "true"sv : "false"sv) << ')';
-    std::thread([]() {
+    spawn_tracked_update_thread([]() {
       perform_check();
-    }).detach();
+    });
   }
 
   // update command removed
 
   void on_stream_started() {
     // Kick a metadata refresh after a small delay but do not auto-execute updates while streaming.
-    std::thread([]() {
+    spawn_tracked_update_thread([]() {
       std::this_thread::sleep_for(3s);
       trigger_check(true);
-    }).detach();
+    });
   }
 
   void periodic() {
@@ -281,6 +344,23 @@ namespace update {
       }
     } catch (...) {
       // swallow errors; opening the URL is best-effort
+    }
+  }
+
+  void shutdown() {
+    // Refuse new worker threads, then join any in-flight ones so none can log through Boost.Log
+    // after the logging sinks are torn down during CRT exit.
+    g_update_shutting_down.store(true, std::memory_order_release);
+    std::vector<tracked_thread_t> threads;
+    {
+      std::lock_guard lg {g_update_threads_mutex};
+      threads = std::move(g_update_threads);
+      g_update_threads.clear();
+    }
+    for (auto &t : threads) {
+      if (t.thread.joinable()) {
+        t.thread.join();
+      }
     }
   }
 }  // namespace update

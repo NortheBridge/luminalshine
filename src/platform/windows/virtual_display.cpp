@@ -2302,6 +2302,10 @@ namespace VDISPLAY {
 
     std::mutex g_virtual_display_recovery_abort_mutex;
     std::map<uuid_util::uuid_t, std::weak_ptr<std::atomic_bool>> g_virtual_display_recovery_abort;
+    // Sticky flag set during process teardown. The recovery monitor runs on a detached thread that
+    // logs via Boost.Log; if it wakes during CRT exit (sinks torn down) it can fast-fail the heap.
+    // The monitor checks this before any logging/work so it bails out cleanly during shutdown.
+    std::atomic<bool> g_recovery_monitors_shutting_down {false};
 
     std::shared_ptr<std::atomic_bool> reset_recovery_monitor_abort_flag(const uuid_util::uuid_t &guid_uuid) {
       std::lock_guard<std::mutex> lock(g_virtual_display_recovery_abort_mutex);
@@ -2571,6 +2575,10 @@ namespace VDISPLAY {
       auto recovery_cooldown_until = std::chrono::steady_clock::now();
 
       while (true) {
+        if (g_recovery_monitors_shutting_down.load(std::memory_order_acquire)) {
+          // Process is tearing down; return without logging to avoid using torn-down log sinks.
+          return;
+        }
         if (monitor_should_abort(state)) {
           BOOST_LOG(debug) << "Virtual display recovery monitor aborted for " << state.describe_target();
           return;
@@ -2829,6 +2837,10 @@ namespace VDISPLAY {
   HANDLE SUDOVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
 
   void closeVDisplayDevice() {
+    // Teardown path: stop any detached recovery monitor threads before the process exits so they
+    // can't log through Boost.Log after the sinks are torn down (CRT-exit heap fast-fail).
+    g_recovery_monitors_shutting_down.store(true, std::memory_order_release);
+    abort_all_recovery_monitors();
     if (active_backend() == BackendType::MTT) {
       mtt::shutdown();
       return;

@@ -1099,6 +1099,7 @@ namespace platf::dxgi {
   }
 
   void WinPipe::disconnect() {
+    std::lock_guard<std::mutex> lock(_disconnect_mutex);
     if (_pipe) {
       CancelIoEx(_pipe.get(), nullptr);
       if (_is_server) {

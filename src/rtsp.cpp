@@ -1120,6 +1120,21 @@ namespace rtsp_stream {
       return;
     }
 
+    // Validate the client-supplied video packet size. It is used downstream in stream.cpp
+    // both as a modulus divisor (packetsize - sizeof(NV_VIDEO_PACKET)) and to size RTP block
+    // buffers (packetsize + MAX_RTP_HEADER_SIZE). A value <= sizeof(NV_VIDEO_PACKET) makes the
+    // divisor zero/negative (divide-by-zero / undefined behavior), and an absurdly large value
+    // would trigger a giant allocation. Reject either as a bad request, matching the other
+    // invalid-arg paths above. Minimum kept conservatively above the NV_VIDEO_PACKET header.
+    constexpr int kMinPacketSize = 64;
+    constexpr int kMaxPacketSize = 65535;
+    if (config.packetsize < kMinPacketSize || config.packetsize > kMaxPacketSize) {
+      BOOST_LOG(warning) << "Rejecting stream setup: client requested invalid packetSize "sv
+                         << config.packetsize;
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
     // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
     // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
     // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
@@ -1281,20 +1296,30 @@ namespace rtsp_stream {
 
     std::thread rtsp_thread {[&shutdown_event] {
       platf::set_thread_name("rtsp::handler");
-      auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
+      // Exception barrier: an exception escaping this thread would std::terminate the host.
+      try {
+        auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
 
-      while (!shutdown_event->peek()) {
-        server.iterate();
+        while (!shutdown_event->peek()) {
+          server.iterate();
 
-        if (broadcast_shutdown_event->peek()) {
-          server.clear();
-        } else {
-          // cleanup all stopped sessions
-          server.clear(false);
+          if (broadcast_shutdown_event->peek()) {
+            server.clear();
+          } else {
+            // cleanup all stopped sessions
+            server.clear(false);
+          }
         }
-      }
 
-      server.clear();
+        server.clear();
+      } catch (const std::exception &e) {
+        BOOST_LOG(fatal) << "RTSP handler thread terminated by exception: "sv << e.what()
+                         << "; shutting down."sv;
+        shutdown_event->raise(true);
+      } catch (...) {
+        BOOST_LOG(fatal) << "RTSP handler thread terminated by an unknown exception; shutting down."sv;
+        shutdown_event->raise(true);
+      }
     }};
 
     // Wait for shutdown

@@ -1187,6 +1187,17 @@ namespace nvhttp {
     auto rikey = util::from_hex_vec(get_arg(args, "rikey"), true);
     std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
 
+    // The GCM key feeds EVP_aes_128_gcm, which reads exactly 16 bytes from the key buffer. A client
+    // that supplies a short rikey would otherwise cause an out-of-bounds read in OpenSSL. Pad an
+    // undersized key to the AES-128 key size so the read stays in bounds (a malformed/short key will
+    // simply fail to decrypt cleanly downstream rather than reading past the buffer).
+    constexpr size_t kAes128KeySize = 16;
+    if (launch_session->gcm_key.size() < kAes128KeySize) {
+      BOOST_LOG(warning) << "Client supplied a short rikey ("sv << launch_session->gcm_key.size()
+                         << " bytes); padding to "sv << kAes128KeySize << " bytes"sv;
+      launch_session->gcm_key.resize(kAes128KeySize, 0);
+    }
+
     launch_session->host_audio = host_audio;
     named_cert_t *client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
     auto parse_mode_string = [&](const std::string &mode_str) -> bool {

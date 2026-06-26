@@ -85,6 +85,7 @@ namespace audio {
   };
 
   void encodeThread(sample_queue_t samples, config_t config, void *channel_data) {
+    try {
     auto packets = mail::man->queue<packet_t>(mail::audio_packets);
     auto stream = stream_configs[map_stream(config.channels, config.flags[config_t::HIGH_QUALITY])];
     if (config.flags[config_t::CUSTOM_SURROUND_PARAMS]) {
@@ -130,6 +131,13 @@ namespace audio {
 
       packet.fake_resize(bytes);
       packets->raise(channel_data, std::move(packet));
+    }
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Audio encode thread terminated by exception: "sv << e.what()
+                       << " — audio stops for this session; the host stays up."sv;
+    } catch (...) {
+      BOOST_LOG(error) << "Audio encode thread terminated by an unknown exception — "
+                          "audio stops for this session; the host stays up."sv;
     }
   }
 

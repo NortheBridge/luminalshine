@@ -46,6 +46,10 @@ namespace steam::vdf {
 
   namespace {
 
+    // Maximum block-nesting depth. VDF files Steam writes are shallow; a malicious file with deeply
+    // nested blocks would otherwise blow the stack via unbounded recursion (local DoS).
+    constexpr int kMaxVdfDepth = 100;
+
     /**
      * @brief Streaming cursor over the input text. Caller-driven; the
      *        tokeniser reads ahead via `peek` and consumes via `next`.
@@ -182,20 +186,23 @@ namespace steam::vdf {
       return parse_bareword(c);
     }
 
-    bool parse_block(Cursor &c, std::vector<Node> &out);
+    bool parse_block(Cursor &c, std::vector<Node> &out, int depth);
 
     /// Parse one key + value pair. Value is either a quoted/bareword
     /// string or a brace-delimited child block. Caller has already
     /// consumed the key via parse_token.
-    bool parse_value_for_key(Cursor &c, std::string key, std::vector<Node> &out) {
+    bool parse_value_for_key(Cursor &c, std::string key, std::vector<Node> &out, int depth) {
       skip_whitespace(c);
       if (c.peek() == '{') {
+        if (depth >= kMaxVdfDepth) {
+          return false;
+        }
         c.next();
         Node node;
         node.key = std::move(key);
         node.value = std::vector<Node> {};
         auto &kids = std::get<std::vector<Node>>(node.value);
-        if (!parse_block(c, kids)) {
+        if (!parse_block(c, kids, depth + 1)) {
           return false;
         }
         skip_whitespace(c);
@@ -219,7 +226,10 @@ namespace steam::vdf {
 
     /// Parse the contents of a block (zero or more key/value pairs),
     /// stopping at `}` or EOF.
-    bool parse_block(Cursor &c, std::vector<Node> &out) {
+    bool parse_block(Cursor &c, std::vector<Node> &out, int depth) {
+      if (depth >= kMaxVdfDepth) {
+        return false;
+      }
       for (;;) {
         skip_whitespace(c);
         if (c.eof() || c.peek() == '}') {
@@ -229,7 +239,7 @@ namespace steam::vdf {
         if (!key) {
           return false;
         }
-        if (!parse_value_for_key(c, std::move(*key), out)) {
+        if (!parse_value_for_key(c, std::move(*key), out, depth)) {
           return false;
         }
       }
@@ -253,7 +263,7 @@ namespace steam::vdf {
     root->key = std::move(*key);
     root->value = std::vector<Node> {};
     auto &kids = std::get<std::vector<Node>>(root->value);
-    if (!parse_block(c, kids)) {
+    if (!parse_block(c, kids, 1)) {
       return nullptr;
     }
     skip_whitespace(c);
@@ -311,7 +321,10 @@ namespace steam::vdf {
       }
     };
 
-    bool parse_bin_block(BinCursor &c, std::vector<Node> &out) {
+    bool parse_bin_block(BinCursor &c, std::vector<Node> &out, int depth) {
+      if (depth >= kMaxVdfDepth) {
+        return false;
+      }
       for (;;) {
         if (!c.has(1)) {
           return false;
@@ -328,7 +341,7 @@ namespace steam::vdf {
         node.key = std::move(*key);
         if (tag == kBinTagBlock) {
           node.value = std::vector<Node> {};
-          if (!parse_bin_block(c, std::get<std::vector<Node>>(node.value))) {
+          if (!parse_bin_block(c, std::get<std::vector<Node>>(node.value), depth + 1)) {
             return false;
           }
         } else if (tag == kBinTagString) {
@@ -374,7 +387,7 @@ namespace steam::vdf {
     auto root = std::make_unique<Node>();
     root->key = std::move(*root_key);
     root->value = std::vector<Node> {};
-    if (!parse_bin_block(c, std::get<std::vector<Node>>(root->value))) {
+    if (!parse_bin_block(c, std::get<std::vector<Node>>(root->value), 1)) {
       return nullptr;
     }
     return root;
