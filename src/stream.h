@@ -79,5 +79,15 @@ namespace stream {
   }  // namespace session
 
   void cancel_paused_display_cleanup();
+
+  /**
+   * @brief Signal process teardown to any in-flight paused-display cleanup thread.
+   *
+   * The paused-display cleanup runs on a detached thread that sleeps for the paused timeout and
+   * then logs via Boost.Log. If it wakes during CRT exit (after log sinks are torn down) it can
+   * fast-fail the heap. This sets a sticky shutting-down flag so the thread bails out without
+   * logging or touching teardown-time statics. Call once during orderly shutdown.
+   */
+  void notify_shutdown();
   void request_idr_for_all_sessions();
 }  // namespace stream

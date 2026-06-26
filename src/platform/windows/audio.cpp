@@ -1174,14 +1174,22 @@ namespace platf::audio {
       std::vector<std::wstring> matched(match_list.size());
       for (auto x = 0; x < count; ++x) {
         audio::device_t device;
-        collection->Item(x, &device);
+        // Item() can fail (e.g. device removed during enumeration), leaving device null. Check the
+        // HRESULT/out-pointer before dereferencing to avoid a NULL-deref crash.
+        if (FAILED(collection->Item(x, &device)) || !device) {
+          continue;
+        }
 
         audio::wstring_t wstring_id;
-        device->GetId(&wstring_id);
+        if (FAILED(device->GetId(&wstring_id)) || !wstring_id) {
+          continue;
+        }
         std::wstring device_id = wstring_id.get();
 
         audio::prop_t prop;
-        device->OpenPropertyStore(STGM_READ, &prop);
+        if (FAILED(device->OpenPropertyStore(STGM_READ, &prop)) || !prop) {
+          continue;
+        }
 
         prop_var_t adapter_friendly_name;
         prop_var_t device_friendly_name;

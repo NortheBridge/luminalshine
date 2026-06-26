@@ -115,11 +115,18 @@ namespace stream {
 #ifdef _WIN32
   namespace {
     std::atomic_uint64_t g_paused_display_cleanup_generation {0};
+    // Set during process teardown so the detached cleanup thread bails out before logging through
+    // Boost.Log or touching statics whose lifetime is ending (CRT-exit heap fast-fail otherwise).
+    std::atomic<bool> g_paused_display_cleanup_shutting_down {false};
 
     void schedule_paused_display_cleanup(std::chrono::seconds timeout, std::string reason, bool enforce_display_restore) {
       const auto generation = g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
       std::thread([timeout, generation, reason = std::move(reason), enforce_display_restore]() {
         std::this_thread::sleep_for(timeout);
+
+        if (g_paused_display_cleanup_shutting_down.load(std::memory_order_acquire)) {
+          return;
+        }
 
         if (g_paused_display_cleanup_generation.load(std::memory_order_acquire) != generation) {
           return;
@@ -146,6 +153,14 @@ namespace stream {
 
   void cancel_paused_display_cleanup() {
 #ifdef _WIN32
+    g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
+#endif
+  }
+
+  void notify_shutdown() {
+#ifdef _WIN32
+    g_paused_display_cleanup_shutting_down.store(true, std::memory_order_release);
+    // Also bump the generation so any sleeping thread that wakes mismatches and returns early.
     g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
 #endif
   }
@@ -747,6 +762,15 @@ namespace stream {
           {
             net::packet_t packet {event.packet};
 
+            // A control message must contain at least the 16-bit type field. A shorter (or null)
+            // packet would otherwise OOB-read the type and underflow the payload length to a huge
+            // size_t. Drop malformed packets from the (paired but potentially hostile) client.
+            if (!packet->data || packet->dataLength < sizeof(std::uint16_t)) {
+              BOOST_LOG(warning) << "Dropping malformed control packet (len="sv
+                                 << (packet ? packet->dataLength : 0) << ")"sv;
+              break;
+            }
+
             auto type = *(std::uint16_t *) packet->data;
             std::string_view payload {(char *) packet->data + sizeof(type), packet->dataLength - sizeof(type)};
 
@@ -1147,6 +1171,11 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
+      // Requires two 64-bit frame indices; reject short payloads to avoid an OOB read.
+      if (payload.size() < 2 * sizeof(std::int64_t)) {
+        BOOST_LOG(warning) << "Dropping malformed IDX_INVALIDATE_REF_FRAMES (len="sv << payload.size() << ")"sv;
+        return;
+      }
       auto frames = (std::int64_t *) payload.data();
       auto firstFrame = frames[0];
       auto lastFrame = frames[1];
@@ -1162,7 +1191,20 @@ namespace stream {
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
+      // The payload begins with a 4-byte big-endian length prefix followed by that many bytes of
+      // tagged ciphertext. Validate both the prefix presence and that the declared length actually
+      // fits within the received payload, otherwise the string_view below would read out of bounds.
+      if (payload.size() < sizeof(int32_t)) {
+        BOOST_LOG(warning) << "Dropping malformed IDX_INPUT_DATA (len="sv << payload.size() << ")"sv;
+        return;
+      }
       auto tagged_cipher_length = util::endian::big(*(int32_t *) payload.data());
+      if (tagged_cipher_length < 0 ||
+          (size_t) tagged_cipher_length > payload.size() - sizeof(tagged_cipher_length)) {
+        BOOST_LOG(warning) << "Dropping IDX_INPUT_DATA with invalid cipher length ("sv
+                           << tagged_cipher_length << " > "sv << (payload.size() - sizeof(tagged_cipher_length)) << ")"sv;
+        return;
+      }
       std::string_view tagged_cipher {payload.data() + sizeof(tagged_cipher_length), (size_t) tagged_cipher_length};
 
       std::vector<uint8_t> plaintext;

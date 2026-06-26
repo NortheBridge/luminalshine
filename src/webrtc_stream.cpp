@@ -90,11 +90,18 @@ namespace webrtc_stream {
   namespace {
     #ifdef _WIN32
     std::atomic_uint64_t g_paused_display_cleanup_generation {0};
+    // Set during process teardown so the detached cleanup thread bails out before logging through
+    // Boost.Log or touching statics whose lifetime is ending (CRT-exit heap fast-fail otherwise).
+    std::atomic<bool> g_paused_display_cleanup_shutting_down {false};
 
     void schedule_paused_display_cleanup(std::chrono::seconds timeout, std::string reason, bool enforce_display_restore) {
       const auto generation = g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
       std::thread([timeout, generation, reason = std::move(reason), enforce_display_restore]() {
         std::this_thread::sleep_for(timeout);
+
+        if (g_paused_display_cleanup_shutting_down.load(std::memory_order_acquire)) {
+          return;
+        }
 
         if (g_paused_display_cleanup_generation.load(std::memory_order_acquire) != generation) {
           return;
@@ -121,6 +128,13 @@ namespace webrtc_stream {
 
   void cancel_paused_display_cleanup() {
 #ifdef _WIN32
+    g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
+#endif
+  }
+
+  void notify_shutdown() {
+#ifdef _WIN32
+    g_paused_display_cleanup_shutting_down.store(true, std::memory_order_release);
     g_paused_display_cleanup_generation.fetch_add(1, std::memory_order_acq_rel);
 #endif
   }
@@ -2857,6 +2871,9 @@ namespace webrtc_stream {
     std::mutex webrtc_media_mutex;
     std::condition_variable webrtc_media_cv;
     std::thread webrtc_media_thread;
+    // Guards all access to webrtc_media_thread (creation/join/joinable) so ensure_media_thread()
+    // and stop_media_thread() can't race on the std::thread object from different threads.
+    std::mutex webrtc_media_thread_mutex;
     std::atomic<bool> webrtc_media_running {false};
     std::atomic<bool> webrtc_media_shutdown {false};
     std::atomic<bool> webrtc_media_has_work {false};
@@ -3701,6 +3718,9 @@ namespace webrtc_stream {
 
     void media_thread_main() {
       using namespace std::chrono_literals;
+      // Exception barrier: an exception escaping this thread would std::terminate the host.
+      // Log and return instead, matching the barrier style used elsewhere in this file.
+      try {
       platf::adjust_thread_priority(platf::thread_priority_e::high);
       auto timer = platf::create_high_precision_timer();
       const bool use_timer = timer && *timer;
@@ -4193,6 +4213,13 @@ namespace webrtc_stream {
           }
         }
       }
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "WebRTC media thread terminated by exception (" << e.what()
+                         << "); stopping media loop instead of aborting the host.";
+      } catch (...) {
+        BOOST_LOG(error) << "WebRTC media thread terminated by an unknown exception; "
+                            "stopping media loop instead of aborting the host.";
+      }
     }
 
     void ensure_media_thread() {
@@ -4202,7 +4229,10 @@ namespace webrtc_stream {
       }
       webrtc_media_shutdown.store(false, std::memory_order_release);
       BOOST_LOG(debug) << "WebRTC: starting media thread";
-      webrtc_media_thread = std::thread(&media_thread_main);
+      {
+        std::lock_guard lg {webrtc_media_thread_mutex};
+        webrtc_media_thread = std::thread(&media_thread_main);
+      }
     }
 
     void stop_media_thread() {
@@ -4212,8 +4242,11 @@ namespace webrtc_stream {
       BOOST_LOG(debug) << "WebRTC: stopping media thread";
       webrtc_media_shutdown.store(true, std::memory_order_release);
       webrtc_media_cv.notify_one();
-      if (webrtc_media_thread.joinable()) {
-        webrtc_media_thread.join();
+      {
+        std::lock_guard lg {webrtc_media_thread_mutex};
+        if (webrtc_media_thread.joinable()) {
+          webrtc_media_thread.join();
+        }
       }
       webrtc_media_running.store(false, std::memory_order_release);
     }

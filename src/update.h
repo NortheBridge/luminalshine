@@ -76,4 +76,14 @@ namespace update {
    * Callback used by tray notifications to open the release page last notified to the user.
    */
   void open_last_notified_release_page();
+
+  /**
+   * @brief Join any outstanding update-check worker threads during process shutdown.
+   *
+   * Update checks run on background threads that log through Boost.Log. If such a thread is
+   * still running when the process exits, it can log after the log sinks have been torn down,
+   * causing heap re-entry / fast-fail (0xC0000374). This sets a shutting-down flag and joins
+   * the outstanding worker(s) so no update thread outlives the logging subsystem.
+   */
+  void shutdown();
 }  // namespace update

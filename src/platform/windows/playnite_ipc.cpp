@@ -58,13 +58,26 @@ namespace platf::playnite {
 
   void IpcClient::stop() {
     running_.store(false);
-    if (pipe_) {
-      pipe_->stop();
+    // Signal the pipe to stop. Move the unique_ptr out under the lock, then stop/destroy it
+    // outside the lock so a (potentially re-entrant) blocking stop() can't deadlock and so the
+    // worker thread can't reset it concurrently.
+    {
+      std::unique_ptr<platf::dxgi::AsyncNamedPipe> local;
+      {
+        std::lock_guard lg {pipe_mutex_};
+        local = std::move(pipe_);
+      }
+      if (local) {
+        local->stop();
+      }
     }
     if (worker_.joinable()) {
       worker_.join();
     }
-    pipe_.reset();
+    {
+      std::lock_guard lg {pipe_mutex_};
+      pipe_.reset();
+    }
     active_.store(false);
   }
 
@@ -105,10 +118,23 @@ namespace platf::playnite {
         broken_.store(true);
       };
 
-      pipe_ = std::make_unique<platf::dxgi::AsyncNamedPipe>(std::move(data_pipe));
-      if (!pipe_->start(on_msg, on_err, on_broken)) {
+      {
+        std::lock_guard lg {pipe_mutex_};
+        pipe_ = std::make_unique<platf::dxgi::AsyncNamedPipe>(std::move(data_pipe));
+      }
+      // start() may be called outside the lock; pipe_ is only reset by stop() which first
+      // moves it out, and we are the only thread that creates it, so this access is safe.
+      bool started = false;
+      {
+        std::lock_guard lg {pipe_mutex_};
+        started = pipe_ && pipe_->start(on_msg, on_err, on_broken);
+      }
+      if (!started) {
         BOOST_LOG(error) << "Playnite IPC: failed to start async pipe";
-        pipe_.reset();
+        {
+          std::lock_guard lg {pipe_mutex_};
+          pipe_.reset();
+        }
         std::this_thread::sleep_for(500ms);
         continue;
       }
@@ -120,9 +146,17 @@ namespace platf::playnite {
         } catch (...) {}
       }
       serve_connected_loop();
-      if (pipe_) {
-        pipe_->stop();
-        pipe_.reset();
+      {
+        // Move the pipe out under the lock, then stop/destroy it outside the lock to avoid
+        // holding the mutex across a blocking stop() and to avoid racing stop()/send_json_line().
+        std::unique_ptr<platf::dxgi::AsyncNamedPipe> local;
+        {
+          std::lock_guard lg {pipe_mutex_};
+          local = std::move(pipe_);
+        }
+        if (local) {
+          local->stop();
+        }
       }
       active_.store(false);
       if (disconnected_handler_) {
@@ -181,7 +215,15 @@ namespace platf::playnite {
 
   void IpcClient::serve_connected_loop() {
     BOOST_LOG(debug) << "Playnite IPC: client connected";
-    while (running_.load() && pipe_ && pipe_->is_connected() && !broken_.load()) {
+    while (running_.load() && !broken_.load()) {
+      bool connected = false;
+      {
+        std::lock_guard lg {pipe_mutex_};
+        connected = pipe_ && pipe_->is_connected();
+      }
+      if (!connected) {
+        break;
+      }
       std::this_thread::sleep_for(200ms);
     }
     BOOST_LOG(debug) << "Playnite IPC: client disconnected";
@@ -201,13 +243,16 @@ namespace platf::playnite {
   }
 
   bool IpcClient::send_json_line(const std::string &json) {
+    std::string payload = json;
+    payload.push_back('\n');
+    auto bytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()), payload.size());
+    // Hold the lock across the connectivity check and send so the worker thread can't reset
+    // pipe_ between the check and the dereference.
+    std::lock_guard lg {pipe_mutex_};
     if (!pipe_ || !pipe_->is_connected()) {
       BOOST_LOG(warning) << "Playnite IPC: send_json_line called but client not connected";
       return false;
     }
-    std::string payload = json;
-    payload.push_back('\n');
-    auto bytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()), payload.size());
     BOOST_LOG(debug) << "Playnite IPC: sending command (" << payload.size() << " bytes)";
     pipe_->send(bytes);
     return true;

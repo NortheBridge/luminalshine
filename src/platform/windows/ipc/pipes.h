@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <thread>
@@ -369,6 +370,9 @@ namespace platf::dxgi {
     winrt::file_handle _pipe;
     std::atomic<bool> _connected {false};
     const bool _is_server;
+    // Serializes disconnect() so the underlying handle is closed exactly once even if two threads
+    // (e.g. the worker and an external stop) call disconnect concurrently.
+    std::mutex _disconnect_mutex;
   };
 
   class IAsyncPipeFactory {

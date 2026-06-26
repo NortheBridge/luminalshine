@@ -28,6 +28,7 @@
 #include "rtsp.h"
 #include "session_monitor_client.h"
 #include "startup_display_wait.h"
+#include "stream.h"
 #include "steam/shortcuts_sync.h"
 #include "steam/steam_sync.h"
 #include "system_tray.h"
@@ -535,6 +536,13 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
+  // Update-check worker threads log through Boost.Log; if one outlives main() it can log after
+  // the sinks are torn down (CRT-exit heap fast-fail). Join them on every exit path. shutdown()
+  // is idempotent, so the explicit call in the orderly teardown stays a cheap no-op.
+  auto update_guard = util::fail_guard([]() {
+    update::shutdown();
+  });
+
   // Create signal handler after logging has been initialized
   auto shutdown_event = mail::man->event<bool>(mail::shutdown);
   on_signal(SIGINT, [&force_shutdown, shutdown_event]() {
@@ -629,6 +637,20 @@ int main(int argc, char *argv[]) {
   }
 
 #ifdef _WIN32
+  // Ensure the SudoVDA virtual-display watchdog (a static std::thread started by
+  // openVDisplayDevice()/initVDisplayDriver() below) is always joined before
+  // main() returns. Like the tray thread, it is otherwise only stopped by the
+  // explicit closeVDisplayDevice() in the orderly teardown block, which the
+  // early-return startup paths below bypass — leaving a joinable static
+  // std::thread for the CRT on-exit handlers to destroy, which calls
+  // std::terminate() (0xC0000374 in ucrtbase via the logging path). This guard
+  // closes it on every exit path; closeVDisplayDevice() is idempotent and a
+  // no-op when the device was never opened, so the explicit teardown call below
+  // stays correct. Mirrors tray_guard above.
+  auto vdisplay_guard = util::fail_guard([]() {
+    VDISPLAY::closeVDisplayDevice();
+  });
+
   // Check if virtual display should be auto-enabled due to no physical monitors.
   //
   // At cold boot, post-resume, or shortly after a TDR the Windows display API
@@ -822,6 +844,11 @@ int main(int argc, char *argv[]) {
   configThread.join();
   rtspThread.join();
 
+  // Signal teardown to any detached paused-display cleanup threads so they bail out instead of
+  // logging through Boost.Log after the sinks are torn down during CRT exit.
+  stream::notify_shutdown();
+  webrtc_stream::notify_shutdown();
+
 #ifdef _WIN32
   // Full process shutdown cannot leave the paused-session watchdog running.
   // If it survives past main(), CRT teardown can fast-fail while the helper
@@ -832,6 +859,9 @@ int main(int argc, char *argv[]) {
   // Ensure it is joined before CRT on-exit handlers destroy the thread object.
   VDISPLAY::closeVDisplayDevice();
 #endif
+
+  // Join any in-flight update-check worker threads before tearing down the task pool and logging.
+  update::shutdown();
 
   task_pool.stop();
   task_pool.join();

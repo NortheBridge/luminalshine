@@ -10,6 +10,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <thread>
@@ -78,6 +79,10 @@ namespace platf::playnite {
 
     std::atomic<bool> running_ {false};
     std::thread worker_;
+    // Guards all access to pipe_ (creation/reset/use). The worker thread (run/serve_connected_loop),
+    // the external stop()/destructor, and send_json_line() can all touch pipe_ concurrently;
+    // without this they can reset it while another thread dereferences it (UAF/double-free).
+    std::mutex pipe_mutex_;
     std::unique_ptr<platf::dxgi::AsyncNamedPipe> pipe_;
     std::function<void(std::span<const uint8_t>)> handler_;
     std::function<void()> connected_handler_;
