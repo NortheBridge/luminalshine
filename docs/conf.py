@@ -1,11 +1,15 @@
 """Sphinx configuration for LuminalShine.
 
-Tunes the Furo theme to a light, content-first layout modelled on
-Microsoft Learn (learn.microsoft.com): white surfaces, Segoe UI
-typography, generous whitespace, breadcrumbs and an "In this article"
-rail. NortheBridge branding is preserved through "Aurora Blue" — the
-royal-blue #4a7dff link/accent and the cyan->blue brand duo — used
-wherever the old dark theme leaned on purple/violet.
+Tunes the Furo theme to a **Microsoft Learn Dark Mode** layout with
+the LuminalShine sunshine palette. Where the prior light theme used
+royal-blue "Aurora Blue" for links and accents, this dark variant
+uses the sunburst gradient from sunshine.png: deep red-orange
+(#ff3d00) → mid-orange (#ff7a1a) → sun-gold (#ffb020). Sun-gold is
+the primary hyperlink and focus color — high-contrast on the
+near-black page background and unambiguously "brand."
+
+The sidebar shows the LuminalShine logo image with the site title
+"LuminalShine" rendered below it in the Segoe UI font stack.
 """
 
 from __future__ import annotations
@@ -86,26 +90,32 @@ suppress_warnings = [
 
 html_theme = "furo"
 html_title = "LuminalShine"
+html_logo = "_static/luminalshine-logo.png"
+html_favicon = "_static/luminalshine-logo.png"
 html_static_path = ["_static"]
 html_css_files = ["luminalshine.css"]
 html_js_files = ["breadcrumbs.js"]
 
-# Microsoft Learn-style light palette with NortheBridge "Aurora Blue"
-# branding. The cyan/blue values are the aurora-1/aurora-2 brand colors;
-# aurora-3 (violet/#8a5cff) is intentionally retired — every spot that
-# used purple now uses Aurora Blue.
+# Microsoft Learn Dark palette with LuminalShine sunshine branding.
+# The warm brand triple (red → orange → gold) replaces every spot that
+# used blue/purple in the previous light theme. Sun-gold is the primary
+# link/focus color; on the near-black page background it lands around
+# a 12:1 contrast ratio (WCAG AAA).
 _PALETTE = {
-    "page_bg": "#ffffff",
-    "surface": "#f7f9fc",          # sidebar / toc rail surface
-    "surface_alt": "#eef2f8",      # hover, code-block chrome
-    "text": "#1b1f24",
-    "text_secondary": "#4a5563",
-    "text_muted": "#6b7280",
-    "border": "#e3e8ef",
-    "aurora_cyan": "#1ec8ff",      # aurora-1 — brand duo start
-    "aurora_blue": "#4a7dff",      # aurora-2 — "Aurora Blue", links/accents
-    "aurora_blue_hover": "#2f5fe0",
-    "accent_soft": "#eef3ff",      # selected nav item / note tint
+    # Dark surfaces
+    "page_bg": "#111111",          # near-black page background
+    "surface": "#1a1a1a",          # sidebar / TOC rail / code
+    "surface_alt": "#242424",      # hover / softer surface
+    "text": "#e6e6e6",             # primary body text
+    "text_secondary": "#b8b8b8",
+    "text_muted": "#8b8b8b",
+    "border": "#2f2f2f",
+    # Sunshine brand triple (extracted from sunshine.png)
+    "brand_red": "#ff3d00",        # outer flare / gradient start
+    "brand_orange": "#ff7a1a",     # mid-tone / warnings
+    "brand_gold": "#ffb020",       # PRIMARY — links, focus, brand
+    "brand_soft": "#ffc857",       # hover / soft accent
+    "accent_soft": "rgba(255, 176, 32, 0.10)",  # selected nav bg tint
 }
 
 # Segoe UI first to match the Microsoft Learn reading experience; system
@@ -120,16 +130,16 @@ _MONO_STACK = (
     'Consolas, "Liberation Mono", monospace'
 )
 
-# Light syntax highlighting in BOTH modes. Combined with identical
-# light/dark CSS variables below, this pins the site to the light
-# Microsoft Learn look regardless of the visitor's OS dark-mode
-# preference (Furo would otherwise swap in a dark Pygments sheet).
-pygments_style = "friendly"
-pygments_dark_style = "friendly"
+# Dark syntax highlighting in BOTH modes. Combined with identical
+# light/dark CSS variables below, this pins the site to the Learn
+# Dark look regardless of the visitor's OS preference (Furo would
+# otherwise swap in its own dark Pygments sheet).
+pygments_style = "monokai"
+pygments_dark_style = "monokai"
 
 _furo_vars = {
-    "color-brand-primary": _PALETTE["aurora_blue"],
-    "color-brand-content": _PALETTE["aurora_blue"],
+    "color-brand-primary": _PALETTE["brand_gold"],
+    "color-brand-content": _PALETTE["brand_gold"],
     "color-background-primary": _PALETTE["page_bg"],
     "color-background-secondary": _PALETTE["surface"],
     "color-background-hover": _PALETTE["surface_alt"],
@@ -138,11 +148,11 @@ _furo_vars = {
     "color-foreground-secondary": _PALETTE["text_secondary"],
     "color-foreground-muted": _PALETTE["text_muted"],
     "color-foreground-border": _PALETTE["border"],
-    "color-link": _PALETTE["aurora_blue"],
-    "color-link--hover": _PALETTE["aurora_blue_hover"],
+    "color-link": _PALETTE["brand_gold"],
+    "color-link--hover": _PALETTE["brand_soft"],
     "color-link-underline": "transparent",
-    "color-link-underline--hover": _PALETTE["aurora_blue_hover"],
-    "color-highlight-on-target": "rgba(74, 125, 255, 0.12)",
+    "color-link-underline--hover": _PALETTE["brand_soft"],
+    "color-highlight-on-target": "rgba(255, 176, 32, 0.18)",
     "color-api-background": _PALETTE["surface"],
     "color-api-background-hover": _PALETTE["surface_alt"],
     "color-admonition-background": _PALETTE["page_bg"],
@@ -157,8 +167,8 @@ _furo_vars = {
 }
 
 html_theme_options = {
-    # Force the light Microsoft Learn look in both modes — Aurora Blue
-    # accents are tuned for a white background and the theme toggle is
+    # Force the Learn Dark look in both modes — brand-gold accents are
+    # tuned for the near-black background and the theme toggle is
     # hidden in luminalshine.css.
     "light_css_variables": _furo_vars,
     "dark_css_variables": _furo_vars,
