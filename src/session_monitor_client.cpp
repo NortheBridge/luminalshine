@@ -12,29 +12,38 @@
  * the head when the queue overflows.
  *
  * The host-perf-counter sampler thread runs separately. It uses
- * GetSystemTimes to derive CPU utilisation and
- * GlobalMemoryStatusEx for RAM. GPU/VRAM are intentionally NOT
- * sampled here yet — those require DXGI / NVML / AMF queries that
- * already live in src/platform/windows/ and want a separate hookup
- * (deferred to a follow-up PR). For now the Web UI's GPU graphs
- * will be empty until the encode-side wiring populates them.
+ * GetSystemTimes to derive CPU utilisation, GlobalMemoryStatusEx for
+ * RAM, and PDH's "GPU Engine" / "GPU Adapter Memory" counter sets
+ * (the same source Task Manager reads) for GPU / encoder / VRAM
+ * utilisation. Total dedicated-VRAM capacity — the denominator for
+ * host_vram_pct — comes from DXGI adapter descriptors, captured once
+ * at sampler start.
  */
 #include "session_monitor_client.h"
 
 #include "logging.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
+
+  #include <dxgi.h>
+  #include <pdh.h>
+  #include <pdhmsg.h>
 #endif
 
 namespace session_mon {
@@ -195,13 +204,159 @@ namespace session_mon {
       }
     }
 
+    /// GPU / encoder / VRAM utilisation via PDH. The "GPU Engine"
+    /// counter set exposes one instance per (process, engine); we
+    /// sum utilisation per engine type and report the busiest type
+    /// as host_gpu_pct (matching Task Manager's headline GPU number)
+    /// and the VideoEncode type as host_gpu_encoder_pct. "GPU
+    /// Adapter Memory / Dedicated Usage" summed across adapters is
+    /// normalised by the DXGI dedicated-VRAM capacity total.
+    ///
+    /// PDH utilisation counters need two collections before yielding
+    /// data, so the first tick after init contributes no GPU keys —
+    /// invisible at 1Hz sampling.
+    class gpu_sampler_t {
+    public:
+      bool init() {
+        if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS) {
+          query = nullptr;
+          return false;
+        }
+        if (PdhAddEnglishCounterW(query, L"\\GPU Engine(*)\\Utilization Percentage", 0, &engine_counter) != ERROR_SUCCESS) {
+          engine_counter = nullptr;
+        }
+        if (PdhAddEnglishCounterW(query, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0, &vram_counter) != ERROR_SUCCESS) {
+          vram_counter = nullptr;
+        }
+        if (!engine_counter && !vram_counter) {
+          close();
+          return false;
+        }
+        total_vram_bytes = query_total_dedicated_vram();
+        // Prime the query: rate counters return data from the second
+        // collection onwards.
+        PdhCollectQueryData(query);
+        return true;
+      }
+
+      void close() {
+        if (query) {
+          PdhCloseQuery(query);
+          query = nullptr;
+          engine_counter = nullptr;
+          vram_counter = nullptr;
+        }
+      }
+
+      /// Collect one round and merge whatever is available into the
+      /// sample. Missing counters simply leave their keys absent.
+      void collect(Sample &sample) {
+        if (!query || PdhCollectQueryData(query) != ERROR_SUCCESS) {
+          return;
+        }
+        if (engine_counter) {
+          // Sum utilisation per engine type across all process
+          // instances (names end in "...engtype_<Type>").
+          std::map<std::wstring, double> by_type;
+          const bool ok = for_each_instance(engine_counter, [&](const wchar_t *name, double value) {
+            std::wstring_view n {name ? name : L""};
+            const auto pos = n.find(L"engtype_");
+            if (pos == std::wstring_view::npos) {
+              return;
+            }
+            by_type[std::wstring {n.substr(pos + 8)}] += value;
+          });
+          if (ok && !by_type.empty()) {
+            double busiest = 0.0;
+            double encoder = 0.0;
+            for (const auto &[type, sum] : by_type) {
+              busiest = std::max(busiest, sum);
+              if (type.find(L"VideoEncode") != std::wstring::npos) {
+                encoder += sum;
+              }
+            }
+            sample["host_gpu_pct"] = std::clamp(busiest, 0.0, 100.0);
+            sample["host_gpu_encoder_pct"] = std::clamp(encoder, 0.0, 100.0);
+          }
+        }
+        if (vram_counter && total_vram_bytes > 0) {
+          double used_bytes = 0.0;
+          const bool ok = for_each_instance(vram_counter, [&](const wchar_t *, double value) {
+            used_bytes += value;
+          });
+          if (ok) {
+            const double pct = 100.0 * used_bytes / static_cast<double>(total_vram_bytes);
+            sample["host_vram_pct"] = std::clamp(pct, 0.0, 100.0);
+          }
+        }
+      }
+
+    private:
+      template<typename F>
+      bool for_each_instance(PDH_HCOUNTER counter, F &&fn) {
+        DWORD bytes = 0;
+        DWORD count = 0;
+        PDH_STATUS st = PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, &bytes, &count, nullptr);
+        if (st != PDH_MORE_DATA || bytes == 0) {
+          return false;
+        }
+        buf.resize(bytes);
+        st = PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, &bytes, &count, reinterpret_cast<PPDH_FMT_COUNTERVALUE_ITEM_W>(buf.data()));
+        if (st != ERROR_SUCCESS) {
+          return false;
+        }
+        auto *items = reinterpret_cast<PPDH_FMT_COUNTERVALUE_ITEM_W>(buf.data());
+        for (DWORD i = 0; i < count; ++i) {
+          const auto status = items[i].FmtValue.CStatus;
+          if (status != PDH_CSTATUS_VALID_DATA && status != PDH_CSTATUS_NEW_DATA) {
+            continue;
+          }
+          fn(items[i].szName, items[i].FmtValue.doubleValue);
+        }
+        return true;
+      }
+
+      /// Total dedicated VRAM across all non-software adapters —
+      /// mirrors the summed "Dedicated Usage" instances above so the
+      /// percentage stays consistent on multi-GPU hosts.
+      static std::uint64_t query_total_dedicated_vram() {
+        IDXGIFactory1 *factory = nullptr;
+        if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void **>(&factory))) || !factory) {
+          return 0;
+        }
+        std::uint64_t total = 0;
+        IDXGIAdapter1 *adapter = nullptr;
+        for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+          DXGI_ADAPTER_DESC1 desc {};
+          if (SUCCEEDED(adapter->GetDesc1(&desc))) {
+            const bool software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0 ||
+                                  desc.VendorId == 0x1414;  // Microsoft Basic Render
+            if (!software) {
+              total += desc.DedicatedVideoMemory;
+            }
+          }
+          adapter->Release();
+          adapter = nullptr;
+        }
+        factory->Release();
+        return total;
+      }
+
+      std::vector<std::uint8_t> buf;
+      PDH_HQUERY query = nullptr;
+      PDH_HCOUNTER engine_counter = nullptr;
+      PDH_HCOUNTER vram_counter = nullptr;
+      std::uint64_t total_vram_bytes = 0;
+    };
+
     /// 1Hz host-perf-counter sampler. Computes CPU utilisation as
     /// the ratio of (kernel+user) time delta to total elapsed time
     /// between consecutive GetSystemTimes calls; RAM utilisation
-    /// from GlobalMemoryStatusEx. Pushes to every currently-active
-    /// session, so multiple concurrent streams (rare on Windows
-    /// hosts but possible with WebRTC) all see the same host
-    /// graphs.
+    /// from GlobalMemoryStatusEx; GPU / encoder / VRAM utilisation
+    /// via the PDH-backed gpu_sampler_t. Pushes to every
+    /// currently-active session, so multiple concurrent streams
+    /// (rare on Windows hosts but possible with WebRTC) all see the
+    /// same host graphs.
     void host_sampler_loop() {
       auto &s = state();
       using namespace std::chrono_literals;
@@ -217,6 +372,19 @@ namespace session_mon {
 
       FILETIME prev_idle {}, prev_kernel {}, prev_user {};
       bool have_prev = false;
+
+      gpu_sampler_t gpu;
+      const bool gpu_ok = gpu.init();
+      if (!gpu_ok) {
+        BOOST_LOG(info) << "session_mon: GPU perf counters unavailable; host GPU/VRAM graphs will be empty";
+      }
+
+      auto gpu_cleanup = std::unique_ptr<gpu_sampler_t, void (*)(gpu_sampler_t *)>(
+        gpu_ok ? &gpu : nullptr,
+        [](gpu_sampler_t *g) {
+          g->close();
+        }
+      );
 
       for (;;) {
         {
@@ -269,6 +437,9 @@ namespace session_mon {
         Sample sample;
         sample["host_cpu_pct"] = cpu_pct;
         sample["host_ram_pct"] = ram_pct;
+        if (gpu_ok) {
+          gpu.collect(sample);
+        }
         const auto ts =
           std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()

@@ -16,57 +16,58 @@ module.exports = {
     extend: {
       // Single source of truth for semantic colors.
       // The app is dark-only; both `light` and `dark` resolve to the same
-      // aurora palette so anything that lands before `.dark` is applied
-      // still gets a coherent surface. Values mirror gitdocs.northebridge.com.
+      // sunshine palette so anything that lands before `.dark` is applied
+      // still gets a coherent surface. Values mirror the LuminalShine docs
+      // theme (appdocs.northebridge.com — docs/_static/luminalshine.css).
       semanticColors: {
         light: {
           // Mirror of dark — see below. Kept identical so `:root` defaults
           // stay coherent if `.dark` is ever absent.
-          dark: '6 10 24',
-          surface: '14 20 36',
-          light: '224 236 255',
-          primary: '30 200 255',
-          secondary: '74 125 255',
-          accent: '138 92 255',
-          info: '0 224 198',
-          success: '16 185 129',
-          warning: '245 158 11',
-          danger: '225 29 72',
-          onPrimary: '6 10 24',
-          onSecondary: '245 249 255',
-          onAccent: '6 10 24',
-          onLight: '6 10 24',
-          onDark: '245 249 255',
-          brand: '144 224 239',
+          dark: '17 17 17',
+          surface: '26 26 26',
+          light: '230 230 230',
+          primary: '255 176 32',
+          secondary: '255 122 26',
+          accent: '255 61 0',
+          info: '255 200 87',
+          success: '76 175 80',
+          warning: '255 167 38',
+          danger: '244 67 54',
+          onPrimary: '26 18 8',
+          onSecondary: '26 18 8',
+          onAccent: '255 248 240',
+          onLight: '17 17 17',
+          onDark: '240 235 228',
+          brand: '255 200 87',
         },
         dark: {
-          // Aurora-glass palette (gitdocs.northebridge.com).
-          // Backgrounds: deep navy near-black starfield.
-          dark: '6 10 24', // #06 0A 18 base
-          surface: '14 20 36', // #0E 14 24 panels
-          light: '224 236 255', // #E0 EC FF pale moon (text helpers)
+          // LuminalShine sunshine palette on Learn-Dark surfaces.
+          // Backgrounds: warm near-black.
+          dark: '17 17 17', // #111111 base
+          surface: '26 26 26', // #1A1A1A panels
+          light: '230 230 230', // #E6E6E6 (text helpers)
 
-          // Aurora accents — Alexa+ cyan leads, with periwinkle/violet/teal
-          // as supporting hues used for halos, gradients, and info states.
-          primary: '30 200 255', // #1EC8FF  Alexa+ cyan
-          secondary: '74 125 255', // #4A7DFF  periwinkle
-          accent: '138 92 255', // #8A5CFF  violet
-          info: '0 224 198', // #00E0C6  teal
+          // Sunshine accents — sun-gold leads, with mid-orange / red-orange
+          // as supporting hues for halos, gradients, and emphasis.
+          primary: '255 176 32', // #FFB020  sun gold (PRIMARY)
+          secondary: '255 122 26', // #FF7A1A  mid orange
+          accent: '255 61 0', // #FF3D00  deep red-orange (outer flare)
+          info: '255 200 87', // #FFC857  soft gold
 
-          // Status colors retain salience by sitting outside the cyan/violet axis.
-          success: '16 185 129', // #10B981  emerald-teal
-          warning: '245 158 11', // #F59E0B  amber
-          danger: '225 29 72', // #E11D48  rose
+          // Status colors — dark-safe semantics from the docs theme.
+          success: '76 175 80', // #4CAF50  green
+          warning: '255 167 38', // #FFA726  amber
+          danger: '244 67 54', // #F44336  red
 
           // Text-on-color (AA+).
-          onDark: '245 249 255',
-          onLight: '6 10 24',
-          onPrimary: '6 10 24',
-          onSecondary: '245 249 255',
-          onAccent: '6 10 24',
+          onDark: '240 235 228',
+          onLight: '17 17 17',
+          onPrimary: '26 18 8',
+          onSecondary: '26 18 8',
+          onAccent: '255 248 240',
 
-          // Pale-cyan brand tint for logos and illustrations.
-          brand: '144 224 239', // #90E0EF
+          // Soft-gold brand tint for logos and illustrations.
+          brand: '255 200 87', // #FFC857
         },
       },
       colors: {
