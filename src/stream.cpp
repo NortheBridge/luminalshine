@@ -487,6 +487,22 @@ namespace stream {
 
     std::uint32_t launch_session_id;
 
+    // Per-second streaming telemetry, flushed to the session monitor
+    // sidecar from the video broadcast thread (~1 Hz). Counters are
+    // atomic because the control thread (loss stats / IDR / ref
+    // invalidation handlers) writes concurrently with the video
+    // thread; last_flush is touched by the video thread only.
+    struct {
+      std::atomic<std::uint32_t> frames {0};
+      std::atomic<std::uint64_t> payload_bytes {0};
+      std::atomic<std::uint64_t> latency_100us_sum {0};
+      std::atomic<std::uint32_t> latency_samples {0};
+      std::atomic<std::uint32_t> client_losses {0};
+      std::atomic<std::uint32_t> idr_requests {0};
+      std::atomic<std::uint32_t> ref_invalidations {0};
+      std::chrono::steady_clock::time_point last_flush {};
+    } telemetry;
+
     safe::mail_raw_t::event_t<bool> shutdown_event;
     safe::signal_t controlEnd;
 
@@ -1162,11 +1178,18 @@ namespace stream {
         << "time in milli since last report [" << t.count() << ']' << std::endl
         << "last good frame [" << lastGoodFrame << ']' << std::endl
         << "---end stats---";
+
+      if (config::stream.session_monitor && count > 0) {
+        session->telemetry.client_losses.fetch_add(static_cast<std::uint32_t>(count), std::memory_order_relaxed);
+      }
     });
 
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
+      if (config::stream.session_monitor) {
+        session->telemetry.idr_requests.fetch_add(1, std::memory_order_relaxed);
+      }
       session->video.idr_events->raise(true);
     });
 
@@ -1185,6 +1208,9 @@ namespace stream {
         << "firstFrame [" << firstFrame << ']' << std::endl
         << "lastFrame [" << lastFrame << ']';
 
+      if (config::stream.session_monitor) {
+        session->telemetry.ref_invalidations.fetch_add(1, std::memory_order_relaxed);
+      }
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
     });
 
@@ -1523,6 +1549,50 @@ namespace stream {
     }
   }
 
+  /**
+   * @brief Drain a session's telemetry accumulators into a per-second
+   *        sample for the session monitor sidecar. Called from the
+   *        video broadcast thread only (after each frame is sent), so
+   *        `last_flush` needs no synchronisation; the counters are
+   *        atomic because the control thread also increments them.
+   *        Emits at most one sample per second per session.
+   */
+  static void telemetry_flush(session_t *session) {
+    auto &t = session->telemetry;
+    const auto now = std::chrono::steady_clock::now();
+    if (t.last_flush == std::chrono::steady_clock::time_point {}) {
+      t.last_flush = now;
+      return;
+    }
+    const auto elapsed = now - t.last_flush;
+    if (elapsed < 1s) {
+      return;
+    }
+    t.last_flush = now;
+    const double secs = std::chrono::duration<double>(elapsed).count();
+
+    const auto frames = t.frames.exchange(0, std::memory_order_relaxed);
+    const auto bytes = t.payload_bytes.exchange(0, std::memory_order_relaxed);
+    const auto lat_sum = t.latency_100us_sum.exchange(0, std::memory_order_relaxed);
+    const auto lat_n = t.latency_samples.exchange(0, std::memory_order_relaxed);
+    const auto losses = t.client_losses.exchange(0, std::memory_order_relaxed);
+    const auto idr = t.idr_requests.exchange(0, std::memory_order_relaxed);
+    const auto ref_inv = t.ref_invalidations.exchange(0, std::memory_order_relaxed);
+
+    session_mon::Sample s;
+    s["actual_fps"] = frames / secs;
+    s["network_throughput_mbps"] = (bytes * 8.0) / 1'000'000.0 / secs;
+    if (lat_n > 0) {
+      // latency accumulates in 100µs units (the wire format of
+      // frame_processing_latency); convert the mean to milliseconds.
+      s["encode_latency_ms"] = (static_cast<double>(lat_sum) / lat_n) / 10.0;
+    }
+    s["client_losses"] = losses / secs;
+    s["idr_requests"] = idr / secs;
+    s["ref_invalidations"] = ref_inv / secs;
+    session_mon::sample_now(session_mon::make_id(session->launch_session_id), s);
+  }
+
   void videoBroadcastThread(udp::socket &sock) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
@@ -1598,6 +1668,10 @@ namespace stream {
         uint16_t latency = duration_to_latency(std::chrono::steady_clock::now() - *host_processing_timestamp);
         frame_header.frame_processing_latency = latency;
         frame_processing_latency_logger.collect_and_log(latency / 10.);
+        if (config::stream.session_monitor) {
+          session->telemetry.latency_100us_sum.fetch_add(latency, std::memory_order_relaxed);
+          session->telemetry.latency_samples.fetch_add(1, std::memory_order_relaxed);
+        }
       } else {
         frame_header.frame_processing_latency = 0;
       }
@@ -1846,6 +1920,12 @@ namespace stream {
         });
 
         session->video.lowseq = lowseq;
+
+        if (config::stream.session_monitor) {
+          session->telemetry.frames.fetch_add(1, std::memory_order_relaxed);
+          session->telemetry.payload_bytes.fetch_add(packet->data_size(), std::memory_order_relaxed);
+          telemetry_flush(session);
+        }
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);

@@ -41,16 +41,16 @@ export function useNaiveThemeOverrides() {
     return toCss(r * (1 - amt), g * (1 - amt), b * (1 - amt));
   };
   const compute = () => {
-    const primary = cssVarRgb('--color-primary', 'rgb(30, 200, 255)');
-    const info = cssVarRgb('--color-info', 'rgb(0, 224, 198)');
-    const success = cssVarRgb('--color-success', 'rgb(16, 185, 129)');
-    const warning = cssVarRgb('--color-warning', 'rgb(245, 158, 11)');
-    const danger = cssVarRgb('--color-danger', 'rgb(225, 29, 72)');
-    // Frosted-glass surfaces — semi-transparent so the aurora background
+    const primary = cssVarRgb('--color-primary', 'rgb(255, 176, 32)');
+    const info = cssVarRgb('--color-info', 'rgb(255, 200, 87)');
+    const success = cssVarRgb('--color-success', 'rgb(76, 175, 80)');
+    const warning = cssVarRgb('--color-warning', 'rgb(255, 167, 38)');
+    const danger = cssVarRgb('--color-danger', 'rgb(244, 67, 54)');
+    // Frosted-glass surfaces — semi-transparent so the sunburst background
     // bleeds through cards, modals, and popovers.
-    const glassSurface = 'rgba(20, 30, 60, 0.55)';
-    const glassPopover = 'rgba(20, 30, 60, 0.72)';
-    const glassTable = 'rgba(14, 20, 36, 0.45)';
+    const glassSurface = 'rgba(46, 34, 22, 0.55)';
+    const glassPopover = 'rgba(46, 34, 22, 0.72)';
+    const glassTable = 'rgba(30, 24, 17, 0.45)';
     const glassBorder = 'rgba(255, 255, 255, 0.12)';
     overrides.value = {
       common: {
@@ -75,9 +75,9 @@ export function useNaiveThemeOverrides() {
         errorColorPressed: darken(danger, 0.14),
         errorColorSuppl: lighten(danger, 0.16),
 
-        baseColor: cssVarRgb('--color-dark', 'rgb(6, 10, 24)'),
-        bodyColor: 'rgba(0, 0, 0, 0)', // transparent so the aurora layer shows through
-        textColorBase: cssVarRgb('--color-onDark', 'rgb(245, 249, 255)'),
+        baseColor: cssVarRgb('--color-dark', 'rgb(17, 17, 17)'),
+        bodyColor: 'rgba(0, 0, 0, 0)', // transparent so the sunburst layer shows through
+        textColorBase: cssVarRgb('--color-onDark', 'rgb(240, 235, 228)'),
         cardColor: glassSurface,
         modalColor: glassSurface,
         popoverColor: glassPopover,
@@ -85,7 +85,7 @@ export function useNaiveThemeOverrides() {
 
         borderColor: glassBorder,
         dividerColor: glassBorder,
-        hoverColor: 'rgba(120, 200, 255, 0.10)',
+        hoverColor: 'rgba(255, 190, 92, 0.10)',
       },
       Card: {
         borderRadius: '22px',
@@ -99,8 +99,8 @@ export function useNaiveThemeOverrides() {
       },
       Input: {
         borderRadius: '12px',
-        color: 'rgba(20, 30, 60, 0.55)',
-        colorFocus: 'rgba(20, 30, 60, 0.65)',
+        color: 'rgba(46, 34, 22, 0.55)',
+        colorFocus: 'rgba(46, 34, 22, 0.65)',
       },
       Tag: {
         borderRadius: '999px',

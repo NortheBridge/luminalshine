@@ -4,13 +4,13 @@
       <n-dialog-provider>
         <n-notification-provider>
           <n-message-provider>
-            <!-- Aurora gradient + dot-grain layers sit behind every view so the
+            <!-- Sunburst gradient + dot-grain layers sit behind every view so the
                  entire UI feels like one continuous pane of glass. -->
-            <div class="aurora-bg" aria-hidden="true"></div>
-            <div class="aurora-grain" aria-hidden="true"></div>
+            <div class="sunburst-bg" aria-hidden="true"></div>
+            <div class="sunburst-grain" aria-hidden="true"></div>
             <div class="min-h-screen flex flex-col text-onDark">
               <header
-                class="sticky top-0 z-30 h-16 flex items-center gap-4 px-4 sm:px-6 border-b border-white/10 bg-[rgba(7,11,31,0.55)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(7,11,31,0.4)]"
+                class="sticky top-0 z-30 h-16 flex items-center gap-4 px-4 sm:px-6 border-b border-white/10 bg-[rgba(20,15,10,0.55)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(20,15,10,0.4)]"
               >
                 <div class="flex items-center gap-3 min-w-0">
                   <RouterLink
@@ -19,7 +19,7 @@
                     aria-label="LuminalShine — NortheBridge Foundation home"
                   >
                     <img
-                      src="/images/logo-sunshine-45.png"
+                      src="/images/logo-luminalshine.png"
                       alt=""
                       aria-hidden="true"
                       class="brand-mark-logo"
@@ -34,7 +34,7 @@
                     aria-hidden="true"
                   ></span>
                   <h1
-                    class="hidden md:block text-sm md:text-base font-medium tracking-tight truncate text-[var(--aurora-text-secondary)]"
+                    class="hidden md:block text-sm md:text-base font-medium tracking-tight truncate text-[var(--sun-text-secondary)]"
                   >
                     {{
                       displayTitle && displayTitle.includes('.') ? $t(displayTitle) : displayTitle
@@ -103,7 +103,7 @@
               <!-- Immediate background for login modal (no transition delay) -->
               <div v-if="loginOverlay" class="fixed inset-0 z-[110]">
                 <div
-                  class="absolute inset-0 bg-gradient-to-br from-[rgba(4,6,15,0.78)] via-[rgba(7,11,31,0.7)] to-[rgba(4,6,15,0.78)] backdrop-blur-md"
+                  class="absolute inset-0 bg-gradient-to-br from-[rgba(15,13,10,0.78)] via-[rgba(28,20,16,0.7)] to-[rgba(15,13,10,0.78)] backdrop-blur-md"
                 ></div>
               </div>
               <LoginModal />
@@ -111,14 +111,14 @@
               <transition name="fade-fast">
                 <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
                   <div
-                    class="absolute inset-0 bg-gradient-to-br from-[rgba(4,6,15,0.82)] via-[rgba(7,11,31,0.72)] to-[rgba(4,6,15,0.82)] backdrop-blur-md"
+                    class="absolute inset-0 bg-gradient-to-br from-[rgba(15,13,10,0.82)] via-[rgba(28,20,16,0.72)] to-[rgba(15,13,10,0.82)] backdrop-blur-md"
                   ></div>
                   <div
                     class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto"
                   >
                     <div class="w-full max-w-md mx-auto text-center space-y-6">
                       <img
-                        src="/images/logo-sunshine-45.png"
+                        src="/images/logo-luminalshine.png"
                         alt="LuminalShine"
                         class="h-24 w-24 opacity-80 mx-auto select-none"
                       />
@@ -190,9 +190,9 @@ const linkClass = (path: string) => {
   if (active)
     return (
       base +
-      ' font-semibold text-onPrimary bg-gradient-to-br from-primary/90 to-secondary/80 shadow-[0_8px_24px_-12px_rgba(30,200,255,0.55)]'
+      ' font-semibold text-onPrimary bg-gradient-to-br from-primary/90 to-secondary/80 shadow-[0_8px_24px_-12px_rgba(255,176,32,0.55)]'
     );
-  return base + ' text-[var(--aurora-text-secondary)] hover:text-onDark hover:bg-white/5';
+  return base + ' text-[var(--sun-text-secondary)] hover:text-onDark hover:bg-white/5';
 };
 const pageTitle = ref('Dashboard');
 const displayTitle = computed(() => {

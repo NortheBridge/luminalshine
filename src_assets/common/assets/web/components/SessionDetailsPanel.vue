@@ -3,9 +3,8 @@
  * Session Details slide-out drawer. Opens from the right edge of
  * the viewport, hosts a sticky compact header (status + identity +
  * key numbers + action bar) above a tabbed chart region. Charts are
- * uPlot canvases coloured with the LuminalShine Aurora palette
- * (Tailwind tokens `primary` / `info` / `accent` / `success` /
- * `warning` / `danger`).
+ * uPlot canvases coloured with a CVD-validated categorical palette
+ * anchored on the LuminalShine sun-gold brand hue (see PAL below).
  *
  * Distinct from the source mockup:
  *   - Header is compact and sticky (not a 12-cell metadata grid).
@@ -180,22 +179,18 @@ onBeforeUnmount(() => {
 
 // ----------------------------------------------------------- uPlot bridge
 //
-// Aurora palette tokens (matches src_assets/.../tailwind.config.js):
-//   #1ec8ff cyan (primary)   — encode latency, host_cpu
-//   #00e0c6 teal (info)      — network throughput, host_gpu_encoder
-//   #8a5cff violet (accent)  — actual fps, host_gpu
-//   #f59e0b amber (warning)  — IDR requests, host_ram
-//   #e11d48 rose  (danger)   — client losses
-//   #10b981 emerald (success) — ref invalidations, host_vram
-//   #4a7dff periwinkle (secondary) — reserved for upcoming series
+// Categorical chart palette — validated (lightness band, chroma floor,
+// CVD separation, contrast) against the warm near-black glass surface.
+// Fixed hue order; the gold slot is the sunshine-brand anchor. Colors
+// follow the entity: CPU/latency/IDR wear gold, GPU/FPS/ref-inv wear
+// blue, losses/RAM wear flare, throughput/VRAM wear teal, encoder
+// wears violet — consistent everywhere a metric appears.
 const PAL = {
-  cyan: '#1ec8ff',
-  teal: '#00e0c6',
-  violet: '#8a5cff',
-  amber: '#f59e0b',
-  rose: '#e11d48',
-  emerald: '#10b981',
-  periwinkle: '#4a7dff',
+  gold: '#c68010',
+  blue: '#3d8fd6',
+  flare: '#e05537',
+  teal: '#2fa89a',
+  violet: '#9a6ae0',
 } as const;
 
 const charts: Map<string, uPlot> = new Map();
@@ -258,9 +253,9 @@ interface ChartSpec {
 // and sees only the relevant data.
 const STREAM_CHARTS: ChartSpec[] = [
   { id: 'encode_latency', title: 'Encode Latency', yLabel: 'ms',
-    series: [{ key: 'encode_latency_ms', label: 'Encode (ms)', stroke: PAL.cyan }] },
+    series: [{ key: 'encode_latency_ms', label: 'Encode (ms)', stroke: PAL.gold }] },
   { id: 'actual_fps', title: 'Actual Frame Rate', yLabel: 'fps',
-    series: [{ key: 'actual_fps', label: 'FPS', stroke: PAL.violet }] },
+    series: [{ key: 'actual_fps', label: 'FPS', stroke: PAL.blue }] },
   { id: 'network_throughput', title: 'Network Throughput', yLabel: 'Mbps',
     series: [{ key: 'network_throughput_mbps', label: 'Mbps', stroke: PAL.teal }] },
 ];
@@ -268,9 +263,9 @@ const STREAM_CHARTS: ChartSpec[] = [
 const CONNECTION_CHARTS: ChartSpec[] = [
   { id: 'connection_quality', title: 'Connection Quality Events', yLabel: 'count/s',
     series: [
-      { key: 'client_losses',      label: 'Losses',     stroke: PAL.rose },
-      { key: 'idr_requests',       label: 'IDR',        stroke: PAL.amber },
-      { key: 'ref_invalidations',  label: 'Ref Inv.',   stroke: PAL.emerald },
+      { key: 'client_losses',      label: 'Losses',     stroke: PAL.flare },
+      { key: 'idr_requests',       label: 'IDR',        stroke: PAL.gold },
+      { key: 'ref_invalidations',  label: 'Ref Inv.',   stroke: PAL.blue },
     ] },
 ];
 
@@ -278,17 +273,27 @@ const HOST_CHARTS: ChartSpec[] = [
   { id: 'host_compute', title: 'Host CPU / GPU', yLabel: '%',
     yScaleMin: 0, yScaleMax: 100,
     series: [
-      { key: 'host_cpu_pct',          label: 'CPU',     stroke: PAL.cyan },
-      { key: 'host_gpu_pct',          label: 'GPU',     stroke: PAL.violet },
-      { key: 'host_gpu_encoder_pct',  label: 'Encoder', stroke: PAL.teal },
+      { key: 'host_cpu_pct',          label: 'CPU',     stroke: PAL.gold },
+      { key: 'host_gpu_pct',          label: 'GPU',     stroke: PAL.blue },
+      { key: 'host_gpu_encoder_pct',  label: 'Encoder', stroke: PAL.violet },
     ] },
   { id: 'host_memory', title: 'Host RAM / VRAM', yLabel: '%',
     yScaleMin: 0, yScaleMax: 100,
     series: [
-      { key: 'host_ram_pct',   label: 'RAM',  stroke: PAL.amber },
-      { key: 'host_vram_pct',  label: 'VRAM', stroke: PAL.emerald },
+      { key: 'host_ram_pct',   label: 'RAM',  stroke: PAL.flare },
+      { key: 'host_vram_pct',  label: 'VRAM', stroke: PAL.teal },
     ] },
 ];
+
+/**
+ * True once any of the chart's series has at least one recorded point.
+ * Used to swap the uPlot host for a "waiting for telemetry" placeholder
+ * so a chart whose producer isn't emitting yet doesn't render as a
+ * confusing empty axis box.
+ */
+function specHasData(spec: ChartSpec): boolean {
+  return spec.series.some((s) => (session.value?.series?.[s.key]?.length ?? 0) > 0);
+}
 
 function buildAlignedData(spec: ChartSpec): AlignedData {
   // uPlot wants column-major data: x-axis array followed by one
@@ -312,12 +317,12 @@ function buildAlignedData(spec: ChartSpec): AlignedData {
 }
 
 function buildOptions(spec: ChartSpec, width: number, height: number): UPlotOptions {
-  // LuminalShine aurora-glass chart styling:
+  // LuminalShine sunshine-glass chart styling:
   //   - Transparent canvas (the surrounding glass card carries the
   //     background) — uPlot's default is opaque white.
-  //   - Subtle axis ticks/labels in muted text (rgba 70%).
-  //   - Grid lines off — keep the chart-card surface clean.
-  //   - Series strokes use the aurora palette per the spec.
+  //   - Subtle axis ticks/labels in muted warm text.
+  //   - Recessive grid on y only — keep the chart-card surface clean.
+  //   - Series strokes use the validated categorical palette per spec.
   return {
     width,
     height,
@@ -328,25 +333,22 @@ function buildOptions(spec: ChartSpec, width: number, height: number): UPlotOpti
       ...spec.series.map((s) => ({
         label: s.label,
         stroke: s.stroke,
-        width: 1.8,
+        width: 2,
         points: { show: false },
       })),
     ],
     axes: [
       {
-        stroke: 'rgba(225,232,255,0.55)',
+        stroke: 'rgba(240,231,218,0.55)',
         grid: { show: false },
-        ticks: { stroke: 'rgba(225,232,255,0.12)', size: 4 },
+        ticks: { stroke: 'rgba(240,231,218,0.12)', size: 4 },
       },
       {
-        stroke: 'rgba(225,232,255,0.55)',
+        stroke: 'rgba(240,231,218,0.55)',
         label: spec.yLabel,
         labelSize: 18,
-        grid: { stroke: 'rgba(225,232,255,0.06)', width: 1 },
-        ticks: { stroke: 'rgba(225,232,255,0.12)', size: 4 },
-        ...(spec.yScaleMin != null && spec.yScaleMax != null
-          ? {} as Record<string, unknown>
-          : {}),
+        grid: { stroke: 'rgba(240,231,218,0.06)', width: 1 },
+        ticks: { stroke: 'rgba(240,231,218,0.12)', size: 4 },
       },
     ],
     scales: {
@@ -531,13 +533,13 @@ function close() {
         <div class="grid grid-cols-3 gap-3 mt-3">
           <div class="rounded-lg px-3 py-2 bg-light/5 dark:bg-dark/30 border border-light/10">
             <div class="text-[10px] uppercase tracking-wider opacity-60">Avg Bitrate</div>
-            <div class="text-lg font-mono font-semibold text-primary">
+            <div class="text-lg font-mono font-semibold opacity-90">
               {{ avgBitrate != null ? avgBitrate.toFixed(0) + ' Mbps' : '—' }}
             </div>
           </div>
           <div class="rounded-lg px-3 py-2 bg-light/5 dark:bg-dark/30 border border-light/10">
             <div class="text-[10px] uppercase tracking-wider opacity-60">Avg FPS</div>
-            <div class="text-lg font-mono font-semibold text-accent">
+            <div class="text-lg font-mono font-semibold opacity-90">
               {{ avgFps != null ? avgFps.toFixed(0) : '—' }}
             </div>
           </div>
@@ -558,7 +560,14 @@ function close() {
           <div class="space-y-4">
             <div v-for="spec in STREAM_CHARTS" :key="spec.id" class="chart-card">
               <h3 class="chart-title">{{ spec.title }}</h3>
-              <div :ref="(el) => setChartRef(spec.id, el as HTMLDivElement)" class="chart-host"/>
+              <div
+                v-if="specHasData(spec)"
+                :ref="(el) => setChartRef(spec.id, el as HTMLDivElement)"
+                class="chart-host"
+              />
+              <div v-else class="chart-empty">
+                {{ isActive ? 'Waiting for telemetry…' : 'No data recorded for this session.' }}
+              </div>
             </div>
           </div>
         </NTabPane>
@@ -566,7 +575,14 @@ function close() {
           <div class="space-y-4">
             <div v-for="spec in CONNECTION_CHARTS" :key="spec.id" class="chart-card">
               <h3 class="chart-title">{{ spec.title }}</h3>
-              <div :ref="(el) => setChartRef(spec.id, el as HTMLDivElement)" class="chart-host"/>
+              <div
+                v-if="specHasData(spec)"
+                :ref="(el) => setChartRef(spec.id, el as HTMLDivElement)"
+                class="chart-host"
+              />
+              <div v-else class="chart-empty">
+                {{ isActive ? 'Waiting for telemetry…' : 'No data recorded for this session.' }}
+              </div>
             </div>
           </div>
         </NTabPane>
@@ -574,7 +590,14 @@ function close() {
           <div class="space-y-4">
             <div v-for="spec in HOST_CHARTS" :key="spec.id" class="chart-card">
               <h3 class="chart-title">{{ spec.title }}</h3>
-              <div :ref="(el) => setChartRef(spec.id, el as HTMLDivElement)" class="chart-host"/>
+              <div
+                v-if="specHasData(spec)"
+                :ref="(el) => setChartRef(spec.id, el as HTMLDivElement)"
+                class="chart-host"
+              />
+              <div v-else class="chart-empty">
+                {{ isActive ? 'Waiting for telemetry…' : 'No data recorded for this session.' }}
+              </div>
             </div>
             <!-- Host hardware footnote -->
             <div class="rounded-lg p-3 bg-light/5 dark:bg-dark/30 border border-light/10 text-xs space-y-1 opacity-80">
@@ -603,20 +626,20 @@ function close() {
 
 <style scoped>
 .session-details-drawer :deep(.n-drawer-body-content-wrapper) {
-  /* Aurora glass body so the drawer sits on the same deep-navy
+  /* Sunshine glass body so the drawer sits on the same warm near-black
      gradient the rest of LuminalShine uses. The transparent uPlot
      canvases inherit this background which is why they don't paint
      a white box behind the chart. */
   background:
-    radial-gradient(1100px 700px at 100% -10%, rgba(30, 200, 255, 0.06), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(138, 92, 255, 0.05), transparent 60%),
-    rgba(6, 10, 24, 0.92);
+    radial-gradient(1100px 700px at 100% -10%, rgba(255, 176, 32, 0.06), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(255, 61, 0, 0.05), transparent 60%),
+    rgba(17, 15, 12, 0.92);
 }
 
 .chart-card {
   border-radius: 18px;
   padding: 12px 16px 14px;
-  background: rgba(20, 30, 60, 0.35);
+  background: rgba(46, 34, 22, 0.35);
   border: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(8px);
 }
@@ -625,7 +648,7 @@ function close() {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(225, 232, 255, 0.7);
+  color: rgba(240, 231, 218, 0.7);
   margin: 0 0 6px;
   font-weight: 600;
 }
@@ -635,11 +658,22 @@ function close() {
   min-height: 200px;
 }
 
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  font-size: 0.8rem;
+  color: rgba(240, 231, 218, 0.45);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+}
+
 /* uPlot legend re-skin: live values get rendered into a tiny strip
    below the chart by default — recolour them so they read on the
    glass surface. */
 :deep(.u-legend) {
-  color: rgba(225, 232, 255, 0.72);
+  color: rgba(240, 231, 218, 0.72);
   font-size: 11px;
 }
 :deep(.u-legend .u-marker) {

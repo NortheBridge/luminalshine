@@ -3,33 +3,40 @@
 @tailwind utilities;
 
 /*
- * Aurora-glass theme (gitdocs.northebridge.com).
- * Dark-only: surfaces sit on a fixed deep-navy gradient with cyan/violet
- * halos. Cards, modals, and inputs are frosted glass that lets the
- * aurora bleed through. Inter is the brand typeface.
+ * Sunshine-glass theme (appdocs.northebridge.com / docs/_static/luminalshine.css).
+ * Dark-only: surfaces sit on a fixed warm near-black gradient with
+ * sunburst gold/orange halos. Cards, modals, and inputs are frosted
+ * glass that lets the sunburst bleed through — one continuous pane of
+ * glass. Inter is the brand typeface.
+ *
+ * Brand triple (extracted from the LuminalShine sunburst logo):
+ *   deep red-orange  #ff3d00   outer flare, gradient start
+ *   mid-orange       #ff7a1a   secondary accents, warnings
+ *   sun gold         #ffb020   PRIMARY — links, focus, brand mark
+ *   soft gold        #ffc857   hover / soft accents
  */
 @layer base {
   :root {
-    --aurora-bg-base: #04060f;
-    --aurora-bg-deep: #070b1f;
-    --aurora-cyan: #1ec8ff;
-    --aurora-periwinkle: #4a7dff;
-    --aurora-violet: #8a5cff;
-    --aurora-teal: #00e0c6;
-    --aurora-text: #f3f6ff;
-    --aurora-text-secondary: rgba(225, 232, 255, 0.72);
-    --aurora-text-muted: rgba(180, 195, 230, 0.55);
-    --aurora-glass-bg: rgba(20, 30, 60, 0.35);
-    --aurora-glass-bg-strong: rgba(20, 30, 60, 0.55);
-    --aurora-glass-border: rgba(255, 255, 255, 0.12);
-    --aurora-glass-border-hover: rgba(120, 200, 255, 0.45);
-    --aurora-glass-highlight: rgba(255, 255, 255, 0.08);
+    --sun-bg-base: #0f0d0a;
+    --sun-bg-deep: #1c1410;
+    --sun-gold: #ffb020;
+    --sun-orange: #ff7a1a;
+    --sun-flare: #ff3d00;
+    --sun-soft: #ffc857;
+    --sun-text: #f5f1ea;
+    --sun-text-secondary: rgba(240, 231, 218, 0.72);
+    --sun-text-muted: rgba(214, 199, 180, 0.55);
+    --sun-glass-bg: rgba(46, 34, 22, 0.35);
+    --sun-glass-bg-strong: rgba(46, 34, 22, 0.55);
+    --sun-glass-border: rgba(255, 255, 255, 0.12);
+    --sun-glass-border-hover: rgba(255, 190, 92, 0.45);
+    --sun-glass-highlight: rgba(255, 255, 255, 0.08);
   }
 
   html,
   body {
-    background-color: var(--aurora-bg-base);
-    color: var(--aurora-text);
+    background-color: var(--sun-bg-base);
+    color: var(--sun-text);
   }
 
   body {
@@ -61,26 +68,26 @@
   }
 }
 
-/* ---------------------------------------------------------------- */
-/* Aurora background — fixed gradient halos + faint dot grid overlay */
-/* ---------------------------------------------------------------- */
+/* ----------------------------------------------------------------- */
+/* Sunburst background — fixed gradient halos + faint dot grid overlay */
+/* ----------------------------------------------------------------- */
 @layer components {
-  .aurora-bg {
+  .sunburst-bg {
     position: fixed;
     inset: -20%;
     z-index: -2;
     background:
-      radial-gradient(ellipse 60% 50% at 15% 20%, rgba(30, 200, 255, 0.35), transparent 60%),
-      radial-gradient(ellipse 50% 45% at 85% 15%, rgba(138, 92, 255, 0.32), transparent 60%),
-      radial-gradient(ellipse 70% 55% at 50% 95%, rgba(0, 224, 198, 0.22), transparent 65%),
-      radial-gradient(ellipse 45% 40% at 90% 80%, rgba(74, 125, 255, 0.28), transparent 60%),
-      linear-gradient(180deg, var(--aurora-bg-deep) 0%, var(--aurora-bg-base) 100%);
-    filter: blur(40px) saturate(125%);
-    animation: aurora-drift 28s ease-in-out infinite alternate;
+      radial-gradient(ellipse 60% 50% at 15% 20%, rgba(255, 176, 32, 0.18), transparent 60%),
+      radial-gradient(ellipse 50% 45% at 85% 15%, rgba(255, 61, 0, 0.14), transparent 60%),
+      radial-gradient(ellipse 70% 55% at 50% 95%, rgba(255, 122, 26, 0.12), transparent 65%),
+      radial-gradient(ellipse 45% 40% at 90% 80%, rgba(255, 200, 87, 0.10), transparent 60%),
+      linear-gradient(180deg, var(--sun-bg-deep) 0%, var(--sun-bg-base) 100%);
+    filter: blur(40px) saturate(120%);
+    animation: sunburst-drift 28s ease-in-out infinite alternate;
     pointer-events: none;
   }
 
-  .aurora-grain {
+  .sunburst-grain {
     position: fixed;
     inset: 0;
     z-index: -1;
@@ -91,7 +98,7 @@
     mix-blend-mode: overlay;
   }
 
-  @keyframes aurora-drift {
+  @keyframes sunburst-drift {
     0% {
       transform: translate3d(0, 0, 0) scale(1);
     }
@@ -104,13 +111,13 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .aurora-bg {
+    .sunburst-bg {
       animation: none;
     }
   }
 
   /* Pulse for the brand-mark dot */
-  @keyframes aurora-pulse {
+  @keyframes sunburst-pulse {
     0%,
     100% {
       opacity: 1;
@@ -124,7 +131,7 @@
 }
 
 /* ---------------------------------------------------------------- */
-/* Section heading helpers (gitdocs-style)                          */
+/* Section heading helpers                                          */
 /* ---------------------------------------------------------------- */
 @layer components {
   .brand-mark {
@@ -132,33 +139,34 @@
     align-items: center;
     gap: 0.6rem;
     padding: 0.4rem 0.95rem 0.4rem 0.55rem;
-    background: var(--aurora-glass-bg);
+    background: var(--sun-glass-bg);
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--aurora-glass-border);
+    border: 1px solid var(--sun-glass-border);
     border-radius: 999px;
     font-size: 0.78rem;
     font-weight: 500;
     letter-spacing: 0.04em;
-    color: var(--aurora-text-secondary);
+    color: var(--sun-text-secondary);
   }
 
   .brand-mark .brand-mark-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--aurora-cyan), var(--aurora-teal));
-    box-shadow: 0 0 12px rgba(30, 200, 255, 0.7);
-    animation: aurora-pulse 2.4s ease-in-out infinite;
+    background: linear-gradient(135deg, var(--sun-flare), var(--sun-gold));
+    box-shadow: 0 0 12px rgba(255, 176, 32, 0.7);
+    animation: sunburst-pulse 2.4s ease-in-out infinite;
   }
 
   /*
    * Stacked variant — used by the nav-bar brand-mark in App.vue:
-   * a Sunshine logo sits on the left, with "LuminalShine" stacked over
-   * "NortheBridge Foundation" on the right. Pill is taller than the
-   * single-line variant to fit two lines of text without crowding.
-   * Existing single-line callers (e.g. the dashboard hero accent) are
-   * unaffected because they don't apply `.brand-mark--stacked`.
+   * the LuminalShine sunburst logo sits on the left, with
+   * "LuminalShine" stacked over "NortheBridge Foundation" on the
+   * right. Pill is taller than the single-line variant to fit two
+   * lines of text without crowding. Existing single-line callers
+   * (e.g. the dashboard hero accent) are unaffected because they
+   * don't apply `.brand-mark--stacked`.
    */
   a.brand-mark,
   a.brand-mark:hover,
@@ -178,8 +186,8 @@
 
   .brand-mark--stacked:hover,
   .brand-mark--stacked:focus-visible {
-    border-color: var(--aurora-glass-border-hover);
-    box-shadow: 0 0 0 1px rgba(120, 200, 255, 0.18);
+    border-color: var(--sun-glass-border-hover);
+    box-shadow: 0 0 0 1px rgba(255, 190, 92, 0.18);
     outline: none;
   }
 
@@ -189,12 +197,12 @@
     flex-shrink: 0;
     border-radius: 50%;
     object-fit: contain;
-    /* Soft cyan halo so the logo reads as part of the aurora-glass family
-       even when the asset itself doesn't have any glow baked in. */
+    /* Soft gold halo so the logo reads as part of the sunshine-glass
+       family even when the asset itself doesn't have any glow baked in. */
     box-shadow:
       0 0 0 1px rgba(255, 255, 255, 0.08) inset,
-      0 0 12px rgba(30, 200, 255, 0.35),
-      0 0 22px rgba(30, 200, 255, 0.2);
+      0 0 12px rgba(255, 176, 32, 0.35),
+      0 0 22px rgba(255, 122, 26, 0.2);
   }
 
   .brand-mark-text {
@@ -211,7 +219,13 @@
     font-size: 0.875rem; /* 14px */
     font-weight: 600;
     letter-spacing: -0.005em;
-    color: var(--aurora-text);
+    /* Sunburst gradient wordmark — mirrors the docs sidebar brand:
+       deep red-orange → sun gold → soft gold. */
+    background: linear-gradient(135deg, #ff5c1a 0%, var(--sun-gold) 55%, var(--sun-soft) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
   }
 
   .brand-mark-org {
@@ -219,7 +233,7 @@
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.14em;
-    color: var(--aurora-text-muted);
+    color: var(--sun-text-muted);
     max-width: 16rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -234,7 +248,7 @@
     font-weight: 600;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: var(--aurora-text-muted);
+    color: var(--sun-text-muted);
     margin: 0 0 1.5rem;
   }
 
@@ -242,11 +256,11 @@
     content: '';
     flex: 1;
     height: 1px;
-    background: linear-gradient(90deg, var(--aurora-glass-border), transparent);
+    background: linear-gradient(90deg, var(--sun-glass-border), transparent);
   }
 
   .gradient-text {
-    background: linear-gradient(135deg, #ffffff 0%, #cfe4ff 45%, #8ecbff 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #ffe9c4 45%, var(--sun-soft) 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -259,13 +273,13 @@
 /* ---------------------------------------------------------------- */
 @layer components {
   :root .n-card {
-    background-color: var(--aurora-glass-bg-strong) !important;
-    border: 1px solid var(--aurora-glass-border) !important;
+    background-color: var(--sun-glass-bg-strong) !important;
+    border: 1px solid var(--sun-glass-border) !important;
     border-radius: 22px !important;
     backdrop-filter: blur(22px) saturate(180%);
     -webkit-backdrop-filter: blur(22px) saturate(180%);
     box-shadow:
-      0 1px 0 var(--aurora-glass-highlight) inset,
+      0 1px 0 var(--sun-glass-highlight) inset,
       0 30px 60px -30px rgba(0, 0, 0, 0.6);
     transition:
       transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -275,12 +289,12 @@
 
   :root .n-card.n-card--hoverable:hover {
     transform: translateY(-4px);
-    border-color: var(--aurora-glass-border-hover) !important;
+    border-color: var(--sun-glass-border-hover) !important;
     box-shadow:
-      0 1px 0 var(--aurora-glass-highlight) inset,
-      0 0 0 1px rgba(120, 200, 255, 0.18),
-      0 25px 55px -20px rgba(30, 120, 220, 0.45),
-      0 40px 80px -30px rgba(138, 92, 255, 0.35);
+      0 1px 0 var(--sun-glass-highlight) inset,
+      0 0 0 1px rgba(255, 190, 92, 0.18),
+      0 25px 55px -20px rgba(255, 122, 26, 0.35),
+      0 40px 80px -30px rgba(255, 61, 0, 0.25);
   }
 
   :root .n-card > .n-card-header,
@@ -296,40 +310,40 @@
   }
 
   :root .n-modal-mask {
-    background: rgba(4, 6, 15, 0.55) !important;
+    background: rgba(15, 13, 10, 0.55) !important;
   }
 
   :root .n-base-selection,
   :root .n-input,
   :root .n-input-wrapper {
-    background-color: var(--aurora-glass-bg-strong) !important;
+    background-color: var(--sun-glass-bg-strong) !important;
     border-radius: 12px !important;
   }
 
   :root .n-input .n-input__border,
   :root .n-input .n-input__state-border {
-    border-color: var(--aurora-glass-border) !important;
+    border-color: var(--sun-glass-border) !important;
     border-radius: 12px !important;
   }
 
   :root .n-input:focus-within .n-input__state-border,
   :root .n-base-selection--focus .n-base-selection__state-border {
     border-color: rgb(var(--color-primary)) !important;
-    box-shadow: 0 0 0 3px rgba(30, 200, 255, 0.25) !important;
+    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.25) !important;
   }
 
   :root .n-tag {
     border-radius: 999px !important;
     background-color: rgba(255, 255, 255, 0.04) !important;
     border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    color: var(--aurora-text-secondary) !important;
+    color: var(--sun-text-secondary) !important;
     font-weight: 500;
     letter-spacing: 0.02em;
   }
 
   :root .n-alert {
     border-radius: 18px !important;
-    border: 1px solid var(--aurora-glass-border);
+    border: 1px solid var(--sun-glass-border);
     backdrop-filter: blur(18px) saturate(170%);
     -webkit-backdrop-filter: blur(18px) saturate(170%);
   }
@@ -360,18 +374,18 @@
   /* Default / neutral: glass surface */
   :root .n-button--default-type {
     background-color: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid var(--aurora-glass-border) !important;
-    color: var(--aurora-text) !important;
+    border: 1px solid var(--sun-glass-border) !important;
+    color: var(--sun-text) !important;
     backdrop-filter: blur(12px) saturate(160%);
     -webkit-backdrop-filter: blur(12px) saturate(160%);
   }
   :root .n-button--default-type:hover {
-    background-color: rgba(120, 200, 255, 0.12) !important;
-    border-color: var(--aurora-glass-border-hover) !important;
-    color: var(--aurora-text) !important;
+    background-color: rgba(255, 190, 92, 0.12) !important;
+    border-color: var(--sun-glass-border-hover) !important;
+    color: var(--sun-text) !important;
   }
 
-  /* Primary: cyan with dark text */
+  /* Primary: sun-gold gradient with dark text */
   :root .n-button--primary-type {
     background: linear-gradient(
       135deg,
@@ -382,45 +396,45 @@
     border: none !important;
     box-shadow:
       0 1px 0 rgba(255, 255, 255, 0.18) inset,
-      0 10px 30px -12px rgba(30, 200, 255, 0.55);
+      0 10px 30px -12px rgba(255, 176, 32, 0.55);
   }
   :root .n-button--primary-type:hover {
     filter: brightness(1.08);
     transform: translateY(-1px);
   }
 
-  /* Secondary / tertiary: violet-tinted glass */
+  /* Secondary / tertiary: orange-tinted glass */
   :root .n-button--secondary,
   :root .n-button--tertiary {
-    background-color: rgba(138, 92, 255, 0.18) !important;
-    border: 1px solid rgba(138, 92, 255, 0.3) !important;
-    color: var(--aurora-text) !important;
+    background-color: rgba(255, 122, 26, 0.16) !important;
+    border: 1px solid rgba(255, 122, 26, 0.3) !important;
+    color: var(--sun-text) !important;
   }
   :root .n-button--secondary:hover,
   :root .n-button--tertiary:hover {
-    background-color: rgba(138, 92, 255, 0.28) !important;
-    border-color: rgba(138, 92, 255, 0.5) !important;
+    background-color: rgba(255, 122, 26, 0.26) !important;
+    border-color: rgba(255, 122, 26, 0.5) !important;
   }
 
   /* Success / Info / Warning / Error: tinted glass with colored border */
   :root .n-button--success-type {
-    background-color: rgba(16, 185, 129, 0.18) !important;
-    border: 1px solid rgba(16, 185, 129, 0.45) !important;
+    background-color: rgba(76, 175, 80, 0.18) !important;
+    border: 1px solid rgba(76, 175, 80, 0.45) !important;
     color: rgb(var(--color-success)) !important;
   }
   :root .n-button--info-type {
-    background-color: rgba(0, 224, 198, 0.18) !important;
-    border: 1px solid rgba(0, 224, 198, 0.45) !important;
+    background-color: rgba(255, 200, 87, 0.16) !important;
+    border: 1px solid rgba(255, 200, 87, 0.45) !important;
     color: rgb(var(--color-info)) !important;
   }
   :root .n-button--warning-type {
-    background-color: rgba(245, 158, 11, 0.18) !important;
-    border: 1px solid rgba(245, 158, 11, 0.45) !important;
+    background-color: rgba(255, 167, 38, 0.16) !important;
+    border: 1px solid rgba(255, 167, 38, 0.45) !important;
     color: rgb(var(--color-warning)) !important;
   }
   :root .n-button--error-type {
-    background-color: rgba(225, 29, 72, 0.18) !important;
-    border: 1px solid rgba(225, 29, 72, 0.45) !important;
+    background-color: rgba(244, 67, 54, 0.16) !important;
+    border: 1px solid rgba(244, 67, 54, 0.45) !important;
     color: rgb(var(--color-danger)) !important;
   }
 
@@ -451,7 +465,7 @@
 
 /* ---------------------------------------------------------------- */
 /* Scrollbar (preserves the previous "thumb gradient" treatment but  */
-/* re-tinted to cyan/periwinkle).                                    */
+/* re-tinted to sun-gold/orange).                                    */
 /* ---------------------------------------------------------------- */
 @layer components {
   .scroll-stable {
@@ -461,13 +475,13 @@
   .app-scrollbar {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
-    scrollbar-color: rgba(30, 200, 255, 0.55) rgba(255, 255, 255, 0.06);
+    scrollbar-color: rgba(255, 176, 32, 0.55) rgba(255, 255, 255, 0.06);
   }
 
   .app-scrollbar-prominent {
     scrollbar-gutter: stable both-edges;
     scrollbar-width: auto;
-    scrollbar-color: rgba(30, 200, 255, 0.68) rgba(255, 255, 255, 0.1);
+    scrollbar-color: rgba(255, 176, 32, 0.68) rgba(255, 255, 255, 0.1);
   }
 
   .app-scrollbar::-webkit-scrollbar,
@@ -495,7 +509,7 @@
 
   .app-scrollbar::-webkit-scrollbar-thumb,
   .app-scrollbar-prominent::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(30, 200, 255, 0.62), rgba(74, 125, 255, 0.45));
+    background: linear-gradient(180deg, rgba(255, 176, 32, 0.62), rgba(255, 122, 26, 0.45));
     border: 3px solid transparent;
     border-radius: 999px;
     background-clip: padding-box;
@@ -507,7 +521,7 @@
 
   .app-scrollbar:hover::-webkit-scrollbar-thumb,
   .app-scrollbar-prominent:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(30, 200, 255, 0.78), rgba(74, 125, 255, 0.6));
+    background: linear-gradient(180deg, rgba(255, 176, 32, 0.78), rgba(255, 122, 26, 0.6));
   }
 
   .app-scrollbar::-webkit-scrollbar-corner,
@@ -523,12 +537,12 @@
   .card {
     @apply p-5;
     border-radius: 22px;
-    background: var(--aurora-glass-bg-strong);
-    border: 1px solid var(--aurora-glass-border);
+    background: var(--sun-glass-bg-strong);
+    border: 1px solid var(--sun-glass-border);
     backdrop-filter: blur(22px) saturate(180%);
     -webkit-backdrop-filter: blur(22px) saturate(180%);
     box-shadow:
-      0 1px 0 var(--aurora-glass-highlight) inset,
+      0 1px 0 var(--sun-glass-highlight) inset,
       0 30px 60px -30px rgba(0, 0, 0, 0.6);
   }
 
@@ -539,9 +553,9 @@
   .form-control {
     @apply w-full px-3 py-2 text-sm;
     border-radius: 12px;
-    background: var(--aurora-glass-bg-strong);
-    border: 1px solid var(--aurora-glass-border);
-    color: var(--aurora-text);
+    background: var(--sun-glass-bg-strong);
+    border: 1px solid var(--sun-glass-border);
+    color: var(--sun-text);
     -webkit-appearance: none;
     appearance: none;
     background-repeat: no-repeat;
@@ -553,12 +567,12 @@
       background-color 0.2s ease;
   }
   .form-control::placeholder {
-    color: var(--aurora-text-muted);
+    color: var(--sun-text-muted);
   }
   .form-control:focus {
     outline: none;
     border-color: rgb(var(--color-primary));
-    box-shadow: 0 0 0 3px rgba(30, 200, 255, 0.25);
+    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.25);
   }
 
   .form-control.monospace {
@@ -571,7 +585,7 @@
 
   .form-text {
     @apply text-[11px] mt-1;
-    color: var(--aurora-text-muted);
+    color: var(--sun-text-muted);
   }
 
   .form-select {
@@ -602,7 +616,7 @@
 
   .table th {
     @apply text-left font-semibold pr-3 pb-2;
-    color: var(--aurora-text-secondary);
+    color: var(--sun-text-secondary);
   }
 
   .table td {
@@ -618,31 +632,31 @@
     border-radius: 18px;
     padding: 0.65rem 0.9rem;
     margin: 0.5rem 0;
-    border: 1px solid var(--aurora-glass-border);
-    background: var(--aurora-glass-bg-strong);
+    border: 1px solid var(--sun-glass-border);
+    background: var(--sun-glass-bg-strong);
     backdrop-filter: blur(16px) saturate(170%);
     -webkit-backdrop-filter: blur(16px) saturate(170%);
-    color: var(--aurora-text);
+    color: var(--sun-text);
   }
 
   .alert-danger {
-    background-color: rgba(225, 29, 72, 0.12);
-    border-color: rgba(225, 29, 72, 0.35);
+    background-color: rgba(244, 67, 54, 0.12);
+    border-color: rgba(244, 67, 54, 0.35);
   }
 
   .alert-success {
-    background-color: rgba(16, 185, 129, 0.12);
-    border-color: rgba(16, 185, 129, 0.35);
+    background-color: rgba(76, 175, 80, 0.12);
+    border-color: rgba(76, 175, 80, 0.35);
   }
 
   .alert-warning {
-    background-color: rgba(245, 158, 11, 0.14);
-    border-color: rgba(245, 158, 11, 0.35);
+    background-color: rgba(255, 167, 38, 0.14);
+    border-color: rgba(255, 167, 38, 0.35);
   }
 
   .alert-info {
-    background-color: rgba(0, 224, 198, 0.12);
-    border-color: rgba(0, 224, 198, 0.35);
+    background-color: rgba(255, 200, 87, 0.12);
+    border-color: rgba(255, 200, 87, 0.35);
   }
 }
 
@@ -685,20 +699,20 @@
 @layer components {
   :root .n-checkbox:not(.n-checkbox--checked) .n-checkbox-box,
   :root .n-checkbox:not(.n-checkbox--checked) .n-checkbox__input {
-    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.45);
-    border-color: rgba(224, 236, 255, 0.45) !important;
-    background-color: rgba(224, 236, 255, 0.06);
+    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.45);
+    border-color: rgba(255, 236, 214, 0.45) !important;
+    background-color: rgba(255, 236, 214, 0.06);
   }
   :root .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox-box,
   :root .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox__input {
-    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.65);
-    border-color: rgba(224, 236, 255, 0.65) !important;
-    background-color: rgba(224, 236, 255, 0.1);
+    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.65);
+    border-color: rgba(255, 236, 214, 0.65) !important;
+    background-color: rgba(255, 236, 214, 0.1);
   }
   :root .n-checkbox .n-checkbox__input:focus-visible .n-checkbox-box {
     box-shadow:
-      0 0 0 3px rgba(30, 200, 255, 0.35),
-      inset 0 0 0 2px rgba(224, 236, 255, 0.55);
+      0 0 0 3px rgba(255, 176, 32, 0.35),
+      inset 0 0 0 2px rgba(255, 236, 214, 0.55);
   }
   :root .n-checkbox.n-checkbox--checked .n-checkbox-box,
   :root .n-checkbox.n-checkbox--checked .n-checkbox__input {
@@ -706,37 +720,37 @@
   }
 
   :root .n-radio:not(.n-radio--checked) .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.55);
-    border-color: rgba(224, 236, 255, 0.55) !important;
-    background-color: rgba(224, 236, 255, 0.06);
+    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.55);
+    border-color: rgba(255, 236, 214, 0.55) !important;
+    background-color: rgba(255, 236, 214, 0.06);
   }
   :root .n-radio:not(.n-radio--checked):hover .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.75);
-    background-color: rgba(224, 236, 255, 0.1);
+    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.75);
+    background-color: rgba(255, 236, 214, 0.1);
   }
   :root .n-radio .n-radio__input:focus-visible {
     box-shadow:
-      0 0 0 3px rgba(30, 200, 255, 0.35),
-      inset 0 0 0 2px rgba(224, 236, 255, 0.55);
+      0 0 0 3px rgba(255, 176, 32, 0.35),
+      inset 0 0 0 2px rgba(255, 236, 214, 0.55);
   }
   :root .n-radio.n-radio--checked .n-radio__dot {
     background-color: rgb(var(--color-primary));
   }
   :root .n-radio:not(.n-radio--checked) .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.55) !important;
+    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.55) !important;
     background-color: transparent !important;
   }
   :root .n-radio:not(.n-radio--checked):hover .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgba(224, 236, 255, 0.75) !important;
-    background-color: rgba(224, 236, 255, 0.1) !important;
+    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.75) !important;
+    background-color: rgba(255, 236, 214, 0.1) !important;
   }
   :root .n-radio:focus-visible .n-radio__dot {
     box-shadow:
-      0 0 0 3px rgba(30, 200, 255, 0.35),
-      inset 0 0 0 2px rgba(224, 236, 255, 0.55) !important;
+      0 0 0 3px rgba(255, 176, 32, 0.35),
+      inset 0 0 0 2px rgba(255, 236, 214, 0.55) !important;
   }
   :root .n-radio .n-radio__label,
   :root .n-radio .n-radio-label {
-    color: var(--aurora-text);
+    color: var(--sun-text);
   }
 }

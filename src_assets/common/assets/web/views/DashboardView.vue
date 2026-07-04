@@ -1184,7 +1184,7 @@ async function onPlayniteReinstallDone(res: { ok: boolean; error?: string }) {
   gap: 0.85rem;
   padding: 1.75rem 1.5rem 1.65rem;
   border-radius: 22px;
-  background: rgba(20, 30, 60, 0.45);
+  background: rgba(46, 34, 22, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(22px) saturate(180%);
   -webkit-backdrop-filter: blur(22px) saturate(180%);
@@ -1200,8 +1200,8 @@ async function onPlayniteReinstallDone(res: { ok: boolean; error?: string }) {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(120% 80% at 0% 0%, rgba(30, 200, 255, 0.18), transparent 55%),
-    radial-gradient(120% 80% at 100% 100%, rgba(138, 92, 255, 0.14), transparent 55%);
+    radial-gradient(120% 80% at 0% 0%, rgba(255, 176, 32, 0.16), transparent 55%),
+    radial-gradient(120% 80% at 100% 100%, rgba(255, 61, 0, 0.12), transparent 55%);
   opacity: 0.85;
   z-index: -1;
 }
