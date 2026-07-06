@@ -1973,13 +1973,8 @@ namespace proc {
     return _app.name;
   }
 
-  std::string proc_t::get_running_app_exe_name() {
-    if (_app_id <= 0) {
-      return {};
-    }
-
+  std::string extract_command_exe_name(std::string_view cmd) {
     // First token of the command, honoring quotes.
-    std::string_view cmd {_app.cmd};
     while (!cmd.empty() && (cmd.front() == ' ' || cmd.front() == '\t')) {
       cmd.remove_prefix(1);
     }
@@ -2015,6 +2010,13 @@ namespace proc {
     }
 
     return std::string {token};
+  }
+
+  std::string proc_t::get_running_app_exe_name() {
+    if (_app_id <= 0) {
+      return {};
+    }
+    return extract_command_exe_name(_app.cmd);
   }
 
   bool proc_t::last_run_app_frame_gen_limiter_fix() const {

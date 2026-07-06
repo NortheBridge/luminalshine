@@ -241,6 +241,14 @@ namespace proc {
 
   bool check_valid_png(const std::filesystem::path &path);
   std::string validate_app_image_path(std::string app_image_path);
+
+  /**
+   * @brief Extract the exe basename from a command line's first token.
+   * @param cmd The raw command string (may be quoted, may be a URI).
+   * @return "game.exe" style basename, or empty when the first token is not an
+   *         .exe path (URIs, scripts, empty commands).
+   */
+  std::string extract_command_exe_name(std::string_view cmd);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);
 
