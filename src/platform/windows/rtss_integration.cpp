@@ -277,7 +277,9 @@ namespace platf {
       if (j.contains("profile") && j["profile"].is_string()) {
         snapshot.profile = j["profile"].get<std::string>();
       }
-      snapshot.profile_created = j.value("profile_created", false);
+      if (j.contains("profile_created") && j["profile_created"].is_boolean()) {
+        snapshot.profile_created = j["profile_created"].get<bool>();
+      }
 
       if (!snapshot_has_changes(snapshot) && !snapshot.profile_created) {
         return std::nullopt;
@@ -1037,7 +1039,7 @@ namespace platf {
         g_settings_dirty = true;
       }
     }
-    if (g_settings_dirty) {
+    if (g_settings_dirty || g_profile_created_by_us) {
       recovery_snapshot_t snapshot;
       snapshot.flags_modified = g_flags_modified && g_original_flags.has_value();
       snapshot.original_flags = g_original_flags;
@@ -1062,7 +1064,8 @@ namespace platf {
     }
 
     if (!g_limit_active && !g_settings_dirty) {
-      return rtss_streaming_start(fps, g_active_profile);
+      // Copy: rtss_streaming_start clears g_active_profile before reading its argument.
+      return rtss_streaming_start(fps, std::string {g_active_profile});
     }
 
     g_rtss_root = resolve_rtss_root();

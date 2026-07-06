@@ -8,6 +8,7 @@
   #include "frame_limiter.h"
 
   #include "src/config.h"
+  #include "src/globals.h"
   #include "src/logging.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/misc.h"
@@ -137,7 +138,42 @@ namespace platf {
       if (proc::proc.running() <= 0) {
         return {};
       }
-      return proc::proc.get_running_app_exe_name();
+      auto exe = proc::proc.get_running_app_exe_name();
+      if (exe.empty()) {
+        return {};
+      }
+
+      // Launchers/bootstrappers spawn the real game under a different exe; a
+      // per-app profile named after them would leave the game uncapped, so
+      // fall back to the Global profile for those.
+      static constexpr std::array k_launcher_exes = {
+        "steam.exe",
+        "steamwebhelper.exe",
+        "epicgameslauncher.exe",
+        "eaapp.exe",
+        "origin.exe",
+        "battle.net.exe",
+        "galaxyclient.exe",
+        "ubisoftconnect.exe",
+        "upc.exe",
+        "playnite.desktopapp.exe",
+        "playnite.fullscreenapp.exe",
+        "launcher.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "explorer.exe",
+      };
+      std::string lowered = exe;
+      std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      for (auto launcher : k_launcher_exes) {
+        if (lowered == launcher) {
+          return {};
+        }
+      }
+      return exe;
     }
   }  // namespace
 
@@ -395,35 +431,56 @@ namespace platf {
       return;
     }
 
-    std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
-    if (g_stream_owner_count == 0) {
-      // No limiter session; nothing to upgrade.
-      return;
-    }
-    if (g_gen1_framegen_fix_active || g_gen2_framegen_fix_active) {
-      // A per-app capture fix is already engaged (manual override).
-      return;
-    }
-    if (g_framegen_auto_fix_applied) {
-      return;
+    {
+      std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
+      if (g_stream_owner_count == 0) {
+        // No limiter session; nothing to upgrade.
+        return;
+      }
+      if (g_gen1_framegen_fix_active || g_gen2_framegen_fix_active) {
+        // A per-app capture fix is already engaged (manual override).
+        return;
+      }
+      if (g_framegen_auto_fix_applied) {
+        return;
+      }
+      // The capture fix is RTSS-based. Without RTSS there is nothing better to
+      // apply, and restarting the limiter would drop an NVCP cap without a
+      // replacement — leave the session alone.
+      if (!rtss_is_configured()) {
+        BOOST_LOG(info) << "Frame generation detected in the streamed game, but RTSS is unavailable; leaving the frame limiter unchanged";
+        g_framegen_auto_fix_applied = true;
+        return;
+      }
+      g_framegen_auto_fix_applied = true;
     }
 
     BOOST_LOG(info) << "Frame generation detected in the streamed game; engaging the capture fix natively";
 
-    // Re-apply the overrides with the gen2 capture fix engaged, reusing the
-    // session's original start parameters. Temporarily collapse the owner
-    // count so stop() performs a full restore before the restart.
-    const unsigned int owners = g_stream_owner_count;
-    const int fps = g_last_start_fps;
-    const auto lossless = g_last_lossless_rtss_limit;
-    const bool smooth = g_last_smooth_motion;
-    std::string provider = g_last_frame_generation_provider.empty() ? std::string {"game-provided"} : g_last_frame_generation_provider;
+    // The RTSS stop/relaunch cycle can block for seconds; run it off the
+    // encoder thread so the session's first frames aren't stalled.
+    task_pool.push([]() {
+      std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
+      if (g_stream_owner_count == 0 || g_gen1_framegen_fix_active || g_gen2_framegen_fix_active) {
+        return;
+      }
 
-    g_stream_owner_count = 1;
-    frame_limiter_streaming_stop();
-    frame_limiter_streaming_start(fps, false, true, lossless, provider, smooth);
-    g_stream_owner_count = owners;
-    g_framegen_auto_fix_applied = true;
+      // Re-apply the overrides with the gen2 capture fix engaged, reusing the
+      // session's original start parameters. Temporarily collapse the owner
+      // count so stop() performs a full restore before the restart.
+      const unsigned int owners = g_stream_owner_count;
+      const int fps = g_last_start_fps;
+      const auto lossless = g_last_lossless_rtss_limit;
+      const bool smooth = g_last_smooth_motion;
+      std::string provider = g_last_frame_generation_provider.empty() ? std::string {"game-provided"} : g_last_frame_generation_provider;
+
+      g_stream_owner_count = 1;
+      frame_limiter_streaming_stop();
+      frame_limiter_streaming_start(fps, false, true, lossless, provider, smooth);
+      g_stream_owner_count = owners;
+      // streaming_start() reset the flag; re-mark so this runs once per session.
+      g_framegen_auto_fix_applied = true;
+    });
   }
 
   frame_limiter_provider frame_limiter_active_provider() {

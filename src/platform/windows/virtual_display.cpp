@@ -4772,6 +4772,12 @@ namespace VDISPLAY {
         if (!g_ensure_display_retained || !guid_equal(g_ensure_display_guid, guid)) {
           return;
         }
+        // Re-check staleness: ensure_display() reuse/create refreshes the
+        // timestamp under this mutex and the persistent GUID is shared, so
+        // reaping past this point would delete a display a launch just claimed.
+        if (std::chrono::steady_clock::now() - g_ensure_display_retained_at < ENSURE_DISPLAY_RETENTION_TIMEOUT) {
+          return;
+        }
         g_ensure_display_retained = false;
         g_ensure_display_failure_count = 0;
         std::memset(&g_ensure_display_guid, 0, sizeof(g_ensure_display_guid));
