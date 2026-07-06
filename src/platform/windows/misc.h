@@ -26,6 +26,16 @@ namespace platf {
   void print_status(const std::string_view &prefix, HRESULT status);
   HDESK syncThreadDesktop();
 
+  /**
+   * @brief Restore this process's GPU scheduling priority to NORMAL.
+   *
+   * Capture init raises the process to REALTIME/HIGH GPU scheduling priority
+   * (display_base.cpp) and there is no automatic revert; call this when no
+   * capture is active (stream stop, after the startup encoder probe) so an
+   * idle LuminalShine never outranks a foreground game at the GPU scheduler.
+   */
+  void reset_gpu_scheduling_priority();
+
   int64_t qpc_counter();
 
   std::chrono::nanoseconds qpc_time_difference(int64_t performance_counter1, int64_t performance_counter2);

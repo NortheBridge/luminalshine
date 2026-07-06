@@ -790,6 +790,14 @@ int main(int argc, char *argv[]) {
     if (encoder_probe_failed) {
       BOOST_LOG(error) << "Failed to probe encoders during startup.";
     }
+
+#ifdef _WIN32
+    // The probe's display/encoder init raises this process to REALTIME/HIGH
+    // GPU scheduling priority; revert it — nothing is capturing yet. Stream
+    // capture init re-raises it for the session and streaming_will_stop()
+    // reverts it again.
+    platf::reset_gpu_scheduling_priority();
+#endif
   };
 
   startup_probe();

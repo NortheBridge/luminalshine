@@ -11,10 +11,12 @@
   #include "src/logging.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/misc.h"
+  #include "src/process.h"
 
   #include <algorithm>
   #include <array>
   #include <cctype>
+  #include <mutex>
   #include <optional>
   #include <string>
   #include <vector>
@@ -25,6 +27,16 @@ namespace platf {
 
     frame_limiter_provider g_active_provider = frame_limiter_provider::none;
     unsigned int g_stream_owner_count = 0;
+    // Serializes limiter lifecycle across the stream-control threads and the
+    // encoder thread (frame_limiter_notify_frame_generation).
+    std::recursive_mutex g_lifecycle_mutex;
+    // Parameters from the session's original start, so the native frame-gen
+    // fix can re-apply the overrides with the capture fix engaged.
+    int g_last_start_fps = 0;
+    std::optional<int> g_last_lossless_rtss_limit;
+    std::string g_last_frame_generation_provider;
+    bool g_last_smooth_motion = false;
+    bool g_framegen_auto_fix_applied = false;
     bool g_nvcp_started = false;
     bool g_gen1_framegen_fix_active = false;
     bool g_gen2_framegen_fix_active = false;
@@ -116,13 +128,32 @@ namespace platf {
     }
   }
 
+  namespace {
+    // Resolve the streamed app's exe name so the RTSS cap can be scoped to an
+    // application profile instead of the Global profile. Empty when the app is
+    // unknown (desktop stream) or launched via a URI/launcher indirection —
+    // those fall back to the Global profile as before.
+    std::string resolve_streamed_app_rtss_profile() {
+      if (proc::proc.running() <= 0) {
+        return {};
+      }
+      return proc::proc.get_running_app_exe_name();
+    }
+  }  // namespace
+
   void frame_limiter_streaming_start(int fps, bool gen1_framegen_fix, bool gen2_framegen_fix, std::optional<int> lossless_rtss_limit, const std::string &frame_generation_provider, bool smooth_motion) {
+    std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
     if (g_stream_owner_count > 0) {
       ++g_stream_owner_count;
       BOOST_LOG(debug) << "Frame limiter start requested while already active; reusing existing overrides (owners=" << g_stream_owner_count << ")";
       return;
     }
     g_stream_owner_count = 1;
+    g_last_start_fps = fps;
+    g_last_lossless_rtss_limit = lossless_rtss_limit;
+    g_last_frame_generation_provider = frame_generation_provider;
+    g_last_smooth_motion = smooth_motion;
+    g_framegen_auto_fix_applied = false;
 
     g_active_provider = frame_limiter_provider::none;
     g_nvcp_started = false;
@@ -219,7 +250,7 @@ namespace platf {
             break;
           }
         } else if (provider == frame_limiter_provider::rtss) {
-          bool ok = rtss_streaming_start(effective_limit);
+          bool ok = rtss_streaming_start(effective_limit, resolve_streamed_app_rtss_profile());
           if (ok) {
             g_active_provider = frame_limiter_provider::rtss;
             applied = true;
@@ -310,7 +341,8 @@ namespace platf {
     return rtss_warmup_process();
   }
 
-  void frame_limiter_streaming_stop(bool keep_rtss_running) {
+  void frame_limiter_streaming_stop() {
+    std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
     if (g_stream_owner_count == 0) {
       return;
     }
@@ -335,7 +367,7 @@ namespace platf {
     }
 
     if (g_active_provider == frame_limiter_provider::rtss) {
-      rtss_streaming_stop(keep_rtss_running);
+      rtss_streaming_stop();
     }
 
     if (g_nvcp_started || g_active_provider == frame_limiter_provider::nvidia_control_panel) {
@@ -348,6 +380,7 @@ namespace platf {
   }
 
   void frame_limiter_streaming_refresh() {
+    std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
     if (g_active_provider != frame_limiter_provider::rtss || g_last_effective_limit <= 0) {
       return;
     }
@@ -355,6 +388,42 @@ namespace platf {
     if (rtss_streaming_refresh(g_last_effective_limit)) {
       BOOST_LOG(info) << "Frame limiter provider 'rtss' refreshed";
     }
+  }
+
+  void frame_limiter_notify_frame_generation(bool dlss_fg_detected) {
+    if (!dlss_fg_detected) {
+      return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
+    if (g_stream_owner_count == 0) {
+      // No limiter session; nothing to upgrade.
+      return;
+    }
+    if (g_gen1_framegen_fix_active || g_gen2_framegen_fix_active) {
+      // A per-app capture fix is already engaged (manual override).
+      return;
+    }
+    if (g_framegen_auto_fix_applied) {
+      return;
+    }
+
+    BOOST_LOG(info) << "Frame generation detected in the streamed game; engaging the capture fix natively";
+
+    // Re-apply the overrides with the gen2 capture fix engaged, reusing the
+    // session's original start parameters. Temporarily collapse the owner
+    // count so stop() performs a full restore before the restart.
+    const unsigned int owners = g_stream_owner_count;
+    const int fps = g_last_start_fps;
+    const auto lossless = g_last_lossless_rtss_limit;
+    const bool smooth = g_last_smooth_motion;
+    std::string provider = g_last_frame_generation_provider.empty() ? std::string {"game-provided"} : g_last_frame_generation_provider;
+
+    g_stream_owner_count = 1;
+    frame_limiter_streaming_stop();
+    frame_limiter_streaming_start(fps, false, true, lossless, provider, smooth);
+    g_stream_owner_count = owners;
+    g_framegen_auto_fix_applied = true;
   }
 
   frame_limiter_provider frame_limiter_active_provider() {

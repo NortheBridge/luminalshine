@@ -41,6 +41,7 @@ extern "C" {
 #include "webrtc_stream.h"
 #ifdef _WIN32
   #include "amf/amf_caps.h"
+  #include "platform/windows/frame_limiter.h"
   #include "platform/windows/render_stack_detect.h"
   #include "system_tray.h"
 #endif
@@ -2770,6 +2771,14 @@ namespace video {
           // already surfaced the message
         }
       }
+
+      // Native frame-gen capture fix: when the streamed game has DLSS Frame
+      // Generation loaded, engage the capture fix automatically instead of
+      // relying on the per-app gen1/gen2 toggles. The notify call no-ops if a
+      // manual fix is active or it already ran this session.
+      platf::frame_limiter_notify_frame_generation(
+        platf::render_stack::snapshot().has_dlss_fg
+      );
 #endif
     }
 

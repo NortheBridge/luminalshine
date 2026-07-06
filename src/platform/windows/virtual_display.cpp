@@ -1,6 +1,7 @@
 #include "virtual_display.h"
 
 #include "src/config.h"
+#include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/display_helper_coordinator.h"
@@ -10,9 +11,11 @@
 #include "src/platform/windows/sudovda_recovery.h"
 #include "src/platform/windows/virtual_display_mtt.h"
 #include "src/process.h"
+#include "src/rtsp.h"
 #include "src/state_storage.h"
 #include "src/tdr_state.h"
 #include "src/uuid.h"
+#include "src/webrtc_stream.h"
 
 #include <algorithm>
 #include <atomic>
@@ -81,6 +84,10 @@ namespace VDISPLAY {
     constexpr auto DEVICE_RESTART_SETTLE_DELAY = std::chrono::milliseconds(200);
     constexpr auto VIRTUAL_DISPLAY_TEARDOWN_COOLDOWN = std::chrono::milliseconds(250);
     constexpr int ENSURE_DISPLAY_MAX_RETRY_FAILURES = 8;
+    // A temporary probe display retained for probe retries is reaped after this
+    // long with no session activity, so a failed startup probe can't leave a
+    // ghost monitor attached indefinitely (games enumerate/land on it).
+    constexpr auto ENSURE_DISPLAY_RETENTION_TIMEOUT = std::chrono::minutes(3);
     constexpr std::wstring_view SUDOVDA_HARDWARE_ID = L"root\\sudomaker\\sudovda";
     constexpr std::wstring_view SUDOVDA_FRIENDLY_NAME_W = L"SudoMaker Virtual Display Adapter";
 
@@ -98,6 +105,9 @@ namespace VDISPLAY {
     bool g_ensure_display_retained = false;
     GUID g_ensure_display_guid {};
     int g_ensure_display_failure_count = 0;
+    std::chrono::steady_clock::time_point g_ensure_display_retained_at {};
+
+    void schedule_ensure_display_reaper();
 
     bool guid_equal(const GUID &lhs, const GUID &rhs) {
       return std::memcmp(&lhs, &rhs, sizeof(GUID)) == 0;
@@ -4723,6 +4733,67 @@ uuid_util::uuid_t VDISPLAY::persistentVirtualDisplayUuid() {
   return ensure_persistent_guid();
 }
 
+namespace VDISPLAY {
+  namespace {
+    // Removes a retained temporary probe display once it has sat unused past
+    // ENSURE_DISPLAY_RETENTION_TIMEOUT with no streaming/app activity. While a
+    // session (or launched app) is alive the display may be its capture target,
+    // so the reaper re-arms instead of reaping.
+    void reap_retained_ensure_display() {
+      GUID guid {};
+      {
+        std::lock_guard<std::mutex> lock(g_ensure_display_state_mutex);
+        if (!g_ensure_display_retained) {
+          return;
+        }
+        if (std::chrono::steady_clock::now() - g_ensure_display_retained_at < ENSURE_DISPLAY_RETENTION_TIMEOUT) {
+          // Retention was refreshed since this reaper was armed; a newer reaper is scheduled.
+          return;
+        }
+        guid = g_ensure_display_guid;
+      }
+
+      const bool busy = rtsp_stream::session_count() > 0 ||
+                        webrtc_stream::has_active_sessions() ||
+                        proc::proc.running() > 0;
+      if (busy) {
+        {
+          std::lock_guard<std::mutex> lock(g_ensure_display_state_mutex);
+          if (g_ensure_display_retained && guid_equal(g_ensure_display_guid, guid)) {
+            g_ensure_display_retained_at = std::chrono::steady_clock::now();
+          }
+        }
+        schedule_ensure_display_reaper();
+        return;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(g_ensure_display_state_mutex);
+        if (!g_ensure_display_retained || !guid_equal(g_ensure_display_guid, guid)) {
+          return;
+        }
+        g_ensure_display_retained = false;
+        g_ensure_display_failure_count = 0;
+        std::memset(&g_ensure_display_guid, 0, sizeof(g_ensure_display_guid));
+      }
+
+      BOOST_LOG(info) << "Retained temporary virtual display expired with no session activity; removing it.";
+      if (!removeVirtualDisplay(guid)) {
+        BOOST_LOG(warning) << "Failed to remove expired temporary virtual display.";
+      }
+    }
+
+    void schedule_ensure_display_reaper() {
+      task_pool.pushDelayed(
+        []() {
+          reap_retained_ensure_display();
+        },
+        ENSURE_DISPLAY_RETENTION_TIMEOUT + std::chrono::seconds(5)
+      );
+    }
+  }  // namespace
+}  // namespace VDISPLAY
+
 VDISPLAY::ensure_display_result VDISPLAY::ensure_display() {
   ensure_display_result result {false, false, false, {}};
 
@@ -4752,6 +4823,7 @@ VDISPLAY::ensure_display_result VDISPLAY::ensure_display() {
       if (is_virtual_display_guid_tracked(result.temporary_guid)) {
         result.success = true;
         result.tracks_temporary_for_probe = true;
+        g_ensure_display_retained_at = std::chrono::steady_clock::now();
         BOOST_LOG(info) << "Reusing retained temporary virtual display for encoder probing (failure_count="
                         << g_ensure_display_failure_count << ").";
         return result;
@@ -4804,7 +4876,9 @@ VDISPLAY::ensure_display_result VDISPLAY::ensure_display() {
     g_ensure_display_retained = true;
     g_ensure_display_guid = result.temporary_guid;
     g_ensure_display_failure_count = 0;
+    g_ensure_display_retained_at = std::chrono::steady_clock::now();
   }
+  schedule_ensure_display_reaper();
 
   // Wait for DXGI to enumerate the new virtual display.
   // CCD (used by wait_for_virtual_display_ready) and DXGI are different enumeration
@@ -4863,6 +4937,14 @@ void VDISPLAY::cleanup_ensure_display(const ensure_display_result &result, bool 
         should_remove = true;
       }
     }
+
+    if (!should_remove) {
+      g_ensure_display_retained_at = std::chrono::steady_clock::now();
+    }
+  }
+
+  if (!should_remove) {
+    schedule_ensure_display_reaper();
   }
 
   if (!probe_succeeded) {

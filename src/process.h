@@ -166,6 +166,14 @@ namespace proc {
     std::vector<ctx_t> get_apps() const;
     std::string get_app_image(int app_id);
     std::string get_last_run_app_name();
+
+    /**
+     * @brief Get the exe basename of the running app's command, e.g. "game.exe".
+     * @return Lower-risk best effort: empty when no app is running, the app has
+     *         no direct command (detached/URI/launcher indirection), or the
+     *         command's first token is not an .exe path.
+     */
+    std::string get_running_app_exe_name();
     bool last_run_app_frame_gen_limiter_fix() const;
     bool is_launch_deferred() const;
     void terminate(bool skip_display_revert = false);
