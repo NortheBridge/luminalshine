@@ -70,7 +70,7 @@ const captureFixDescription = computed(() => {
     return 'Uses RTSS Front Edge Sync while NVIDIA Smooth Motion is active.';
   }
   if (modeModel.value === 'game-provided') {
-    return 'Uses NVIDIA Reflex for game-provided frame generation on NVIDIA systems, and falls back to RTSS Front Edge Sync on AMD systems.';
+    return 'Uses NVIDIA Reflex for game-provided frame generation on NVIDIA systems, and falls back to RTSS Front Edge Sync on AMD systems. LuminalShine detects DLSS Frame Generation during the stream and engages this fix automatically; the toggle forces it on regardless of detection.';
   }
   return 'Enable when the app uses frame generation. Lossless Scaling and NVIDIA Smooth Motion use RTSS Front Edge Sync, while Game Provided uses NVIDIA Reflex unless an AMD GPU is present.';
 });
@@ -395,6 +395,12 @@ const displayTargets = computed(() => props.health?.display.targets || []);
             :disabled="!hasFrameGenSelection"
           />
         </div>
+        <p class="text-[12px] opacity-60 leading-relaxed">
+          <i class="fas fa-wand-magic-sparkles mr-1" />Auto-engages: when the streamed game is
+          detected using DLSS Frame Generation, LuminalShine applies this capture fix for the
+          session on its own &mdash; no interaction required. Use the toggle only to force the fix
+          for games the detection misses.
+        </p>
       </div>
       <div class="space-y-3">
         <n-alert v-if="healthError" type="error" size="small">

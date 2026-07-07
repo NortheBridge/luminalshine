@@ -1268,6 +1268,7 @@
     "stepTitle": "Frame pacing and limiter",
     "enable": "Enable frame limiter",
     "enableHint": "LuminalShine applies the selected limiter provider at stream start and restores the previous driver setting when the stream ends.",
+    "framegenAutoNote": "When a streamed game is detected using DLSS Frame Generation, LuminalShine engages the frame-generation capture fix for that session automatically \u2014 no interaction is required. The per-app capture-fix toggle remains available as a manual override.",
     "providerLabel": "Limiter provider",
     "providerHint": "Auto prefers RTSS whenever it is available and falls back to the NVIDIA Control Panel limiter if needed. NVIDIA's limiter is not recommended because it cannot guarantee perfect frame pacing.",
     "limitLabel": "FPS limit override",
