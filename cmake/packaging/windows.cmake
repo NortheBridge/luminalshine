@@ -150,43 +150,6 @@ install(FILES ${SUDOVDA_DRIVER_FILES}
         DESTINATION "drivers/sudovda"
         COMPONENT sudovda)
 
-# MTT Virtual Display Driver — primary backend on modern Windows builds.
-# Source binaries are vendored under third-party/mtt-vdd/ (see that
-# directory's README for upstream and signing details). The install script
-# lives alongside SudoVDA's under src_assets so package metadata is
-# maintained in one place.
-set(MTT_VDD_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third-party/mtt-vdd")
-set(MTT_VDD_INSTALL_SCRIPT "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/vdd/install.ps1")
-# nefconc.exe is reused from the SudoVDA payload because MTT VDD's install
-# flow needs it to create/remove the ROOT\MttVDD device node. Shipping it
-# under drivers/vdd/ as well lets the MTT-only install path (the default,
-# with SudoVDA deselected) find the tool without depending on the SudoVDA
-# component being present.
-set(MTT_VDD_DRIVER_FILES
-    "${MTT_VDD_INSTALL_SCRIPT}"
-    "${MTT_VDD_SOURCE_DIR}/MttVDD.inf"
-    "${MTT_VDD_SOURCE_DIR}/MttVDD.dll"
-    "${MTT_VDD_SOURCE_DIR}/mttvdd.cat"
-    "${MTT_VDD_SOURCE_DIR}/vdd_settings.xml.template"
-    "${MTT_VDD_SOURCE_DIR}/LICENSE"
-    "${SUDOVDA_SOURCE_DIR}/nefconc.exe"
-)
-
-foreach(_mttvdd_file IN LISTS MTT_VDD_DRIVER_FILES)
-    if (NOT EXISTS "${_mttvdd_file}")
-        message(FATAL_ERROR "Required MTT VDD artifact missing: ${_mttvdd_file}")
-    endif()
-    file(SIZE "${_mttvdd_file}" _mttvdd_file_size)
-    if (_mttvdd_file_size EQUAL 0)
-        message(FATAL_ERROR "Required MTT VDD artifact is empty (0 bytes): ${_mttvdd_file}")
-    endif()
-endforeach()
-unset(_mttvdd_file_size)
-
-install(FILES ${MTT_VDD_DRIVER_FILES}
-        DESTINATION "drivers/vdd"
-        COMPONENT mttvdd)
-
 # Mandatory scripts
 install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/sunshine-setup.ps1"
         DESTINATION "scripts"
@@ -288,18 +251,14 @@ set(CPACK_COMPONENT_ASSETS_GROUP "Core")
 set(CPACK_COMPONENT_ASSETS_REQUIRED true)
 
 # drivers
-# Final install state for both VDD features is driven by the INSTALL_MTTVDD
-# and INSTALL_SUDOVDA MSI properties via feature-level <Condition> elements
-# injected from packaging/windows/wix/patch_custom_actions.wxs. We therefore
-# avoid CPACK_COMPONENT_*_REQUIRED (which emits Absent="disallow" and would
+# Final install state for the VDD feature is driven by the INSTALL_SUDOVDA
+# MSI property via a feature-level <Condition> element injected from
+# packaging/windows/wix/patch_custom_actions.wxs. We therefore avoid
+# CPACK_COMPONENT_*_REQUIRED (which emits Absent="disallow" and would
 # override the conditions) and CPACK_COMPONENT_*_DISABLED (which would lock
 # in Level=2 even when the property requests install).
-set(CPACK_COMPONENT_MTTVDD_DISPLAY_NAME "Virtual Display Driver (MTT)")
-set(CPACK_COMPONENT_MTTVDD_DESCRIPTION "MikeTheTech's IDD-based virtual display driver. Default backend for per-client virtual displays. Recommended for current and Insider Windows builds.")
-set(CPACK_COMPONENT_MTTVDD_GROUP "Drivers")
-
-set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA (Compatibility)")
-set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Legacy virtual display driver. Optional fallback for older Windows builds or troubleshooting MTT VDD.")
+set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA (Virtual Display Driver)")
+set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Virtual display driver for per-client virtual displays. A first-party LuminalShine VDD is planned to replace it in a future release.")
 set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
 
 # audio tool

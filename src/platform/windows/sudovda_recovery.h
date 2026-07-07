@@ -27,8 +27,7 @@
  *    PR; out of scope for this header.)
  *
  * Everything in here is scoped to the SudoVDA device by hardware ID;
- * MTT VDD and other UMDF drivers are never touched. The MTT/SudoVDA
- * coexistence design (mutually exclusive) is preserved.
+ * other UMDF drivers are never touched.
  */
 #pragma once
 

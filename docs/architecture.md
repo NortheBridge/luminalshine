@@ -92,7 +92,6 @@ driver support:
 
 - **SudoVDA** *(default, enabled)* — automatic or explicit GPU
   binding, hybrid-GPU support, headless-friendly.
-- **MTT VDD** *(optional)* — alternative for niche hardware
   configurations. Read the installer notice before selecting it.
 - **LuminalVGD** *(in development)* — a first-party driver from
   NortheBridge that will eventually supersede both.

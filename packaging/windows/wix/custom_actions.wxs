@@ -391,7 +391,6 @@
          install proceed; the C++ runtime carries the same migration
          logic as a safety net on first launch. -->
     <CustomAction Id="RunInstallerMigrations" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
-    <CustomAction Id="InstallMttVdd" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="InstallSudovda" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Uninstall-time actions (deferred, elevated) -->
@@ -408,7 +407,6 @@
     <CustomAction Id="KillProcsQuietImmediate" BinaryRef="Wix4UtilCA_X64" DllEntry="CAQuietExec" Return="ignore" />
     <CustomAction Id="KillProcsQuiet" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RemoveServiceQuiet" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
-    <CustomAction Id="UninstallMttVdd" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="UninstallSudovda" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <!-- Clear the WCM entry + TPM-bound wrapping key on uninstall so an
          uninstall leaves no LuminalShine secrets in the host's credential
@@ -442,9 +440,6 @@
     <CustomAction Id="SetRunInstallerMigrations"
                  Property="RunInstallerMigrations"
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\installer-migrations.ps1&quot;"/>
-    <CustomAction Id="SetInstallMttVdd"
-                 Property="InstallMttVdd"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\vdd\install.ps1&quot;"/>
     <CustomAction Id="SetInstallSudovda"
                  Property="InstallSudovda"
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot;"/>
@@ -498,9 +493,6 @@
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; --reset-session-history) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --reset-session-history)) &amp; exit /b 0"/>
 
 
-    <CustomAction Id="SetUninstallMttVdd"
-                 Property="UninstallMttVdd"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\vdd\install.ps1&quot; -Uninstall"/>
     <CustomAction Id="SetUninstallSudovda"
                  Property="UninstallSudovda"
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot; -Uninstall"/>

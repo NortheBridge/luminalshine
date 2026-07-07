@@ -9,7 +9,6 @@
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/platform/windows/sudovda_recovery.h"
-#include "src/platform/windows/virtual_display_mtt.h"
 #include "src/process.h"
 #include "src/rtsp.h"
 #include "src/state_storage.h"
@@ -2786,9 +2785,6 @@ namespace VDISPLAY {
   }
 
   bool is_virtual_display_guid_tracked(const GUID &guid) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::is_guid_tracked(guid);
-    }
     return is_virtual_display_guid_tracked(guid_to_uuid(guid));
   }
 
@@ -2851,10 +2847,6 @@ namespace VDISPLAY {
     // can't log through Boost.Log after the sinks are torn down (CRT-exit heap fast-fail).
     g_recovery_monitors_shutting_down.store(true, std::memory_order_release);
     abort_all_recovery_monitors();
-    if (active_backend() == BackendType::MTT) {
-      mtt::shutdown();
-      return;
-    }
     g_watchdog_stop_requested.store(true, std::memory_order_release);
     stop_watchdog_thread(true);
     if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
@@ -2874,11 +2866,6 @@ namespace VDISPLAY {
     // process initialization in most cases. Without it the dispatch flag
     // would still be NONE and we'd fall through to SudoVDA defaults.
     select_backend();
-    if (active_backend() == BackendType::MTT) {
-      // MTT registry seeding happens inside mtt::initialize(); SudoVDA's
-      // legacy bit-depth defaults don't apply.
-      return;
-    }
     constexpr const wchar_t *REG_PATH = L"SOFTWARE\\SudoMaker\\SudoVDA";
     HKEY key = nullptr;
     REGSAM access = KEY_WRITE;
@@ -2929,9 +2916,6 @@ namespace VDISPLAY {
     // Resolve which backend to drive on first call. The selector is
     // idempotent and reads `config::video.virtual_display_backend`.
     select_backend();
-    if (active_backend() == BackendType::MTT) {
-      return mtt::initialize();
-    }
     // Idempotency: a prior driver handle may still be open — the recovery
     // monitor and the several proc::initVDisplayDriver() call sites can
     // re-enter while a handle is live. Overwriting SUDOVDA_DRIVER_HANDLE below
@@ -3067,16 +3051,10 @@ namespace VDISPLAY {
   }
 
   bool ensure_driver_is_ready() {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::is_driver_installed() && mtt::is_responsive();
-    }
     return ensure_driver_is_ready_impl(RestartCooldownBehavior::skip);
   }
 
   bool startPingThread(std::function<void()> failCb) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::start_ping_thread(std::move(failCb));
-    }
     stop_watchdog_thread(true);
 
     // Save the callback so recovery can restart the ping thread with the same callback.
@@ -3173,10 +3151,6 @@ namespace VDISPLAY {
   }
 
   void setWatchdogFeedingEnabled(bool enable) {
-    if (active_backend() == BackendType::MTT) {
-      mtt::set_watchdog_feeding_enabled(enable);
-      return;
-    }
     if (enable) {
       const auto deadline = std::chrono::steady_clock::now() + WATCHDOG_INIT_GRACE;
       g_watchdog_grace_deadline_ns.store(steady_ticks_from_time(deadline), std::memory_order_release);
@@ -3185,9 +3159,6 @@ namespace VDISPLAY {
   }
 
   bool setRenderAdapterByName(const std::wstring &adapterName) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::set_render_adapter(adapterName);
-    }
     if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
       return false;
     }
@@ -3220,9 +3191,6 @@ namespace VDISPLAY {
   }
 
   bool setRenderAdapterWithMostDedicatedMemory() {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::set_render_adapter_with_most_vram();
-    }
     if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
       return false;
     }
@@ -3806,11 +3774,6 @@ namespace VDISPLAY {
     uint32_t base_fps_millihz,
     bool framegen_refresh_active
   ) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::create_display(s_client_uid, s_client_name, s_hdr_profile,
-                                 width, height, fps, guid,
-                                 base_fps_millihz, framegen_refresh_active);
-    }
     constexpr int kMaxInitializationAttempts = 3;
     const auto requested_uuid = guid_to_uuid(guid);
 
@@ -3894,9 +3857,6 @@ namespace VDISPLAY {
   }
 
   bool removeAllVirtualDisplays() {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::remove_all_displays();
-    }
     abort_all_recovery_monitors();
     auto all_guids = active_virtual_display_tracker().all();
     if (all_guids.empty()) {
@@ -3923,9 +3883,6 @@ namespace VDISPLAY {
   }
 
   bool removeVirtualDisplay(const GUID &guid) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::remove_display(guid);
-    }
     abort_recovery_monitor(guid_to_uuid(guid));
     auto cached_display_name = resolve_virtual_display_name_from_devices();
 
@@ -3999,9 +3956,6 @@ namespace VDISPLAY {
   }
 
   bool isSudaVDADriverInstalled() {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::is_driver_installed();
-    }
     if (driver_handle_responsive(SUDOVDA_DRIVER_HANDLE)) {
       return true;
     }
@@ -4010,9 +3964,6 @@ namespace VDISPLAY {
   }
 
   std::optional<std::string> resolveVirtualDisplayDeviceId(const std::wstring &display_name) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::resolve_device_id(display_name);
-    }
     if (display_name.empty()) {
       return resolveAnyVirtualDisplayDeviceId();
     }
@@ -4057,9 +4008,6 @@ namespace VDISPLAY {
   }
 
   std::optional<std::string> resolveVirtualDisplayDeviceIdForClient(const std::string &client_name) {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::resolve_device_id_for_client(client_name);
-    }
     if (client_name.empty()) {
       return std::nullopt;
     }
@@ -4103,7 +4051,7 @@ namespace VDISPLAY {
   // gives up and returns nullopt to us, the OS display API is genuinely
   // wedged. Hammering it more from this layer just produces more noise.
   // Instead, after a small consecutive-failure threshold we close and
-  // reopen the SudoVDA / MTT VDD handle (which on Windows triggers a
+  // reopen the SudoVDA handle (which on Windows triggers a
   // device-stack rebuild) and retry exactly once — gated by a 30s rate
   // limit so a permanently-stuck driver can't get reset in a tight loop.
   namespace {
@@ -4294,9 +4242,6 @@ namespace VDISPLAY {
   }
 
   std::optional<std::string> resolveAnyVirtualDisplayDeviceId() {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::resolve_any_device_id();
-    }
     auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
     std::optional<std::string> active_match;
     std::optional<std::string> any_match;
@@ -4330,9 +4275,6 @@ namespace VDISPLAY {
     if (output_identifier.empty()) {
       return false;
     }
-    if (active_backend() == BackendType::MTT) {
-      return mtt::is_mtt_output(output_identifier);
-    }
 
     const auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
     if (!devices) {
@@ -4356,9 +4298,6 @@ namespace VDISPLAY {
   }
 
   std::vector<SudaVDADisplayInfo> enumerateSudaVDADisplays() {
-    if (active_backend() == BackendType::MTT) {
-      return mtt::enumerate_displays();
-    }
     std::vector<SudaVDADisplayInfo> result;
 
     if (!isSudaVDADriverInstalled()) {

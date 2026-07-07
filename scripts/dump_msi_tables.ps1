@@ -61,8 +61,8 @@ $TablesToDump = @(
     "RegistryValue",
     # Condition table holds the feature-level Conditions emitted by
     # scripts/gen_wix_files.py for the virtual-display backends — the
-    # rows that gate the mttvdd / sudovda CM_C_* features on the
-    # bootstrapper-supplied INSTALL_MTTVDD / INSTALL_SUDOVDA properties.
+    # rows that gate the sudovda CM_C_* feature on the
+    # bootstrapper-supplied INSTALL_SUDOVDA property.
     # Without these, the deferred install.ps1 custom actions could fire
     # against files that were never staged. Added to the dump so the
     # oracle catches regressions to the feature-condition wiring.

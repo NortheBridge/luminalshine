@@ -219,8 +219,6 @@ const virtualDisplayBackend = computed(() => {
   switch (b.toLowerCase()) {
     case 'sudovda':
       return 'SudoVDA';
-    case 'mtt':
-      return 'MTT VDD';
     case 'none':
       return t('about.value_none');
     default:

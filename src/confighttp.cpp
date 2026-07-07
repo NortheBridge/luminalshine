@@ -2396,8 +2396,8 @@ namespace confighttp {
       // Non-fatal; keep metadata response minimal if enumeration fails.
     }
 
-    // Virtual display backend status — surfaces the active driver (MTT VDD or
-    // SudoVDA) plus its current health enum so the web UI can render an
+    // Virtual display backend status — surfaces the active driver (SudoVDA)
+    // plus its current health enum so the web UI can render an
     // accurate indicator instead of guessing.
     //
     // Lazy probe: proc::vDisplayDriverStatus is only flipped from UNKNOWN to a

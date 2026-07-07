@@ -76,7 +76,6 @@ on your way in; come back when something is unfamiliar.
   three options:
 
   - **SudoVDA** — the default; flexible, hybrid-GPU aware.
-  - **MTT VDD** — alternative for niche hardware.
   - **LuminalVGD** — NortheBridge's in-house driver, in development.
 
 **Display Setting Automation**

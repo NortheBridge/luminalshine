@@ -80,7 +80,7 @@ Integration tests rely on files copied into the build dir at configure time (`co
 - Audio capture: `src/audio.cpp` + `src/platform/**`. WebRTC sets `bypass_opus=true` and pipes raw PCM into libwebrtc, which does its own encoding; the classic path does Opus.
 - Input injection: `src/input.cpp` consumes Moonlight-format input packets from `third-party/moonlight-common-c`. WebRTC translates JSON / compact-binary data-channel messages into the same Moonlight packets so the mature injection pipeline is reused.
 
-**Display management is non-trivial on Windows.** The `display_helper_*` files in `src/platform/windows/` manage virtual displays (SudoVDA, MTT VDD, future LuminalVGD), apply display configurations atomically, and verify them with timeouts before capture starts. WebRTC calls `display_helper_integration::apply()` then `wait_for_apply_verification(6000ms)` before launching capture; if verification fails, capture refuses to start.
+**Display management is non-trivial on Windows.** The `display_helper_*` files in `src/platform/windows/` manage virtual displays (SudoVDA, future LuminalVGD), apply display configurations atomically, and verify them with timeouts before capture starts. WebRTC calls `display_helper_integration::apply()` then `wait_for_apply_verification(6000ms)` before launching capture; if verification fails, capture refuses to start.
 
 **Web UI.**
 
@@ -120,4 +120,3 @@ Avoid broad rewrites, speculative hardening, or low-value changes unless there i
 - **Don't rename the `sunshine` CMake target or the `SUNSHINE_*` prefix** even though the product is LuminalShine — the build graph and many definitions depend on these names. The product name surfaces only via `OUTPUT_NAME`, packaging metadata, and user-facing strings.
 - **Tailwind, not Bootstrap.** The shim exists for incremental migration; new code should use utilities directly. Dynamic class names need a `safelist` entry in `tailwind.config.js`.
 - **Locale JSON keys are sorted alphabetically** (use jsonabc or equivalent).
-- **MTT VDD's signed driver DLL is tracked in git** despite the `*.dll` ignore — see the explicit `!third-party/mtt-vdd/*.dll` exception in `.gitignore`. The `.cat` catalog must travel with it.

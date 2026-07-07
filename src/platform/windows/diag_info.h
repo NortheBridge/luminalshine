@@ -86,10 +86,10 @@ namespace platf::diag {
 
   /**
    * @brief Driver version string for the currently-installed virtual display
-   *        driver (SudoVDA or MTT VDD), if any.
+   *        driver (SudoVDA), if any.
    *
    * Looks up the display-class registry entry whose Service value matches the
-   * known SudoVDA / MTT service names and returns its DriverVersion. Returns
+   * known SudoVDA service name and returns its DriverVersion. Returns
    * std::nullopt if no virtual display driver is installed or the lookup
    * fails.
    */

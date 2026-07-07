@@ -50,7 +50,7 @@
   LuminalShineSetup.exe / uninstall.exe (the C# / Roslyn binaries
   with the embedded Payload.msi resource) consume the MSI as
   produced; nothing in this file changes the bootstrapper-MSI
-  property contract (INSTALL_ROOT, INSTALL_MTTVDD, INSTALL_SUDOVDA,
+  property contract (INSTALL_ROOT, INSTALL_SUDOVDA,
   KEEPADMINCREDENTIALS, KEEPSESSIONDATA, REMOVEVIRTUALDISPLAYDRIVER,
   DELETEINSTALLDIR, SKIP_REMOVE_CONFLICTING_PRODUCTS).
 -->
@@ -197,7 +197,7 @@
     </Property>
 
     <!-- Bootstrapper-contract MSI properties. The bootstrapper passes
-         INSTALL_MTTVDD / INSTALL_SUDOVDA / REMOVEVIRTUALDISPLAYDRIVER
+         INSTALL_SUDOVDA / REMOVEVIRTUALDISPLAYDRIVER
          / SKIP_REMOVE_CONFLICTING_PRODUCTS / KEEPADMINCREDENTIALS /
          KEEPSESSIONDATA / DELETEINSTALLDIR on the msiexec command line
          (see RunInstallAttempt in LuminalShineInstaller.cs). Defaults
@@ -205,7 +205,6 @@
          bootstrapper overrides per user choice. -->
     <Property Id="REMOVEVIRTUALDISPLAYDRIVER" Value="0" Secure="yes" />
     <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes" />
-    <Property Id="INSTALL_MTTVDD" Value="0" Secure="yes" />
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes" />
 
     <Launch Condition="Privileged" Message="Administrator privileges are required." />
@@ -281,7 +280,7 @@
       WiX 3 used <Condition Level="N">expression</Condition>).
 
       An earlier draft tried to add them here via
-      <FeatureRef Id="CM_C_mttvdd"><Condition>...</Condition></FeatureRef>
+      <FeatureRef Id="CM_C_sudovda"><Condition>...</Condition></FeatureRef>
       to mirror the CPackWiXFragment patch mechanism — WiX 3.14's
       candle rejected that with CNDL0005. WiX 4+'s <Level/> element
       can only sit inside <Feature/>, so the placement decision is the
@@ -347,9 +346,7 @@
            with the property switch so we never invoke install.ps1 against
            files that weren't staged, even if the feature condition above
            ever drifts out of sync with the INSTALL_* properties. -->
-      <Custom Action="SetInstallMttVdd" After="ResetAcls" Condition="NOT REMOVE AND INSTALL_MTTVDD = &quot;1&quot; AND&amp;CM_C_mttvdd=3" />
-      <Custom Action="InstallMttVdd" After="SetInstallMttVdd" Condition="NOT REMOVE AND INSTALL_MTTVDD = &quot;1&quot; AND&amp;CM_C_mttvdd=3" />
-      <Custom Action="SetInstallSudovda" After="InstallMttVdd" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
+      <Custom Action="SetInstallSudovda" After="ResetAcls" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
       <Custom Action="InstallSudovda" After="SetInstallSudovda" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
       <Custom Action="SetMigrateConfig" After="InstallSudovda" Condition="NOT REMOVE" />
       <Custom Action="MigrateConfig" After="SetMigrateConfig" Condition="NOT REMOVE" />
@@ -369,9 +366,7 @@
       <Custom Action="ResetSessionHistory" After="SetResetSessionHistory" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;&quot;1&quot;" />
 
       <!-- Remove Virtual Display Drivers only when explicitly requested. -->
-      <Custom Action="SetUninstallMttVdd" After="RestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
-      <Custom Action="UninstallMttVdd" After="SetUninstallMttVdd" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
-      <Custom Action="SetUninstallSudovda" After="UninstallMttVdd" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
+      <Custom Action="SetUninstallSudovda" After="RestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
       <Custom Action="UninstallSudovda" After="SetUninstallSudovda" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
 
       <!-- Execute delete/prune after MSI removes its files -->

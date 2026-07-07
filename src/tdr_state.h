@@ -32,7 +32,7 @@ namespace tdr {
     /// D3D11CreateDeviceWithRecovery exhausted retries from the Desktop
     /// Duplication probe path.
     dd_test_d3d11 = 2,
-    /// SudoVDA / MTT VDD `AddVirtualDisplay` returned, but Windows never
+    /// SudoVDA `AddVirtualDisplay` returned, but Windows never
     /// enumerated the new display surface within the timeout.
     virtual_display_enumerate = 3,
     /// QueryDisplayConfig returned ERROR_NOT_SUPPORTED for several
