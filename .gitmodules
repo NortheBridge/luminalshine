@@ -91,3 +91,11 @@
 [submodule "winget-pkgs"]
 	path = winget-pkgs
 	url = https://github.com/microsoft/winget-pkgs.git
+# LuminalVGD — the first-party LuminalShine virtual display driver
+# (AGPL-3.0/NALA dual-licensed, pre-development). Tracked here so the
+# driver sources can be pulled as a build requirement once integration
+# starts; nothing in the build graph consumes this path yet.
+[submodule "src/drivers/luminal-display"]
+	path = src/drivers/luminal-display
+	url = https://github.com/NortheBridge/LuminalVGD.git
+	branch = main
