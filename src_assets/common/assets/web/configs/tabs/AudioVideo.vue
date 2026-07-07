@@ -56,8 +56,6 @@ const activeBackend = computed(() => {
 
 const activeBackendLabel = computed(() => {
   switch (activeBackend.value) {
-    case 'mtt':
-      return t('config.virtual_display_backend_mtt');
     case 'sudovda':
       return t('config.virtual_display_backend_sudovda');
     case 'none':
@@ -309,12 +307,9 @@ function selectVirtualDisplayLayout(v: unknown) {
             <PlatformLayout>
               <template #windows>
                 <div class="mt-3 space-y-3">
-                  <!-- Backend selection: SudoVDA is the default backend.
-                       MTT VDD is exposed as an alternative for users hitting
-                       SudoVDA's WUDFHostProblem2 hang on recent Windows 11
-                       release / Insider Preview builds. A first-party
-                       LuminalShine VDD is planned to take over the default
-                       slot in a future release. -->
+                  <!-- Backend selection: SudoVDA is the only shipped backend.
+                       A first-party LuminalShine VDD is planned to take over
+                       the default slot in a future release. -->
                   <div>
                     <ConfigFieldRenderer
                       setting-key="virtual_display_backend"

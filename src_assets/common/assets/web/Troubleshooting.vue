@@ -231,7 +231,7 @@
               {{
                 translate(
                   'troubleshooting.vdd_card_desc',
-                  'Manual recovery for the SudoVDA virtual display driver. Use "Restart Virtual Display Driver" to PnP-disable and re-enable the SudoVDA root device (same as right-click Disable / Enable in Device Manager, but run as SYSTEM and scoped to SudoVDA only — MTT VDD and other devices are not touched). Active streaming sessions will be torn down. Use "Show Diagnostic" to copy SudoVDA status into a support ticket without opening Device Manager.',
+                  'Manual recovery for the SudoVDA virtual display driver. Use "Restart Virtual Display Driver" to PnP-disable and re-enable the SudoVDA root device (same as right-click Disable / Enable in Device Manager, but run as SYSTEM and scoped to SudoVDA only — other devices are not touched). Active streaming sessions will be torn down. Use "Show Diagnostic" to copy SudoVDA status into a support ticket without opening Device Manager.',
                 )
               }}
             </p>
@@ -1216,7 +1216,7 @@ function confirmRestartVdd() {
     ),
     content: translate(
       'troubleshooting.vdd_restart_confirm_body',
-      'This PnP-disables and re-enables the SudoVDA virtual display device. Any active streaming session using a virtual display will be ended; the Moonlight client will need to reconnect. MTT VDD and other devices are not affected.',
+      'This PnP-disables and re-enables the SudoVDA virtual display device. Any active streaming session using a virtual display will be ended; the Moonlight client will need to reconnect. Other devices are not affected.',
     ),
     positiveText: translate('troubleshooting.vdd_restart_yes', 'Restart driver'),
     negativeText: translate('troubleshooting.cancel', 'Cancel'),

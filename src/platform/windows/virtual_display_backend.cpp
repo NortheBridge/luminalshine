@@ -2,14 +2,10 @@
  * @file src/platform/windows/virtual_display_backend.cpp
  * @brief Picks the active virtual-display backend at startup.
  *
- * Resolution order with `virtual_display_backend = auto`:
- *   1. SudoVDA if installed (default backend until the planned LuminalShine
- *      first-party VDD ships).
- *   2. MTT VDD fallback. Emits a warning when SudoVDA is the active choice
- *      because it can hang on the latest Windows 11 release builds and on
- *      Windows 11 Insider Preview channels (WUDFHostProblem2 / HostTimeout);
- *      the warning points users at MTT VDD as the workaround until the
- *      first-party driver ships.
+ * SudoVDA is the only shipped backend (default until the planned LuminalShine
+ * first-party VDD ships). Emits a caveat when selected because SudoVDA can
+ * hang on the latest Windows 11 release builds and on Windows 11 Insider
+ * Preview channels (WUDFHostProblem2 / HostTimeout).
  */
 
 #include "src/platform/windows/virtual_display_backend.h"
@@ -17,7 +13,6 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/windows/virtual_display.h"
-#include "src/platform/windows/virtual_display_mtt.h"
 
 #include <atomic>
 #include <chrono>
@@ -89,45 +84,19 @@ namespace VDISPLAY {
     }
 
     const std::string preference = config::video.virtual_display_backend;
-    const bool mtt_installed = mtt::is_driver_installed();
+    if (preference == "mtt") {
+      BOOST_LOG(warning) << "virtual_display_backend=mtt is no longer supported (MTT VDD was removed); "
+                            "using SudoVDA.";
+    }
     const bool sudovda_installed = sudovda_appears_installed();
 
-    BackendType chosen = BackendType::NONE;
-    if (preference == "mtt") {
-      chosen = mtt_installed ? BackendType::MTT : BackendType::NONE;
-      if (!mtt_installed) {
-        BOOST_LOG(warning) << "virtual_display_backend=mtt requested but MTT VDD is not installed; "
-                              "falling back to SudoVDA.";
-        chosen = sudovda_installed ? BackendType::SUDOVDA : BackendType::NONE;
-      }
-    } else if (preference == "sudovda") {
-      if (!sudovda_installed) {
-        BOOST_LOG(warning) << "virtual_display_backend=sudovda requested but SudoVDA is not installed; "
-                              "falling back to MTT VDD.";
-        chosen = mtt_installed ? BackendType::MTT : BackendType::NONE;
-      } else {
-        chosen = BackendType::SUDOVDA;
-      }
-    } else {
-      // "auto" (or unrecognized) — prefer SudoVDA, fall back to MTT VDD.
-      if (sudovda_installed) {
-        chosen = BackendType::SUDOVDA;
-      } else if (mtt_installed) {
-        chosen = BackendType::MTT;
-      } else {
-        chosen = BackendType::NONE;
-      }
-    }
+    const BackendType chosen = sudovda_installed ? BackendType::SUDOVDA : BackendType::NONE;
 
     if (chosen == BackendType::SUDOVDA) {
       BOOST_LOG(info) << "Virtual-display backend: SudoVDA (default). Heads up: SudoVDA can hang "
                          "on the latest Windows 11 release builds and on Windows 11 Insider "
-                         "Preview channels (WUDFHostProblem2 / HostTimeout). If the virtual "
-                         "display fails to come up, run \"Reconfigure LuminalShine\" from the "
-                         "Start Menu and switch to MTT Virtual Display Driver as a workaround. "
-                         "A first-party LuminalShine VDD is planned for a future release.";
-    } else if (chosen == BackendType::MTT) {
-      BOOST_LOG(info) << "Virtual-display backend: MTT VDD (alternative).";
+                         "Preview channels (WUDFHostProblem2 / HostTimeout). A first-party "
+                         "LuminalShine VDD is planned for a future release.";
     } else {
       BOOST_LOG(warning) << "No virtual-display backend installed; per-client virtual displays will not work.";
     }
@@ -141,10 +110,7 @@ namespace VDISPLAY {
     // Lazy-initialize on first query so callers that run before any explicit
     // select_backend() (e.g. should_auto_enable_virtual_display() during
     // startup probe, or the SudoVDA-specific recovery path) still see the
-    // correct backend. Without this, active_backend() returned NONE at
-    // startup, isSudaVDADriverInstalled() fell through to the SudoVDA path,
-    // and we logged misleading "Suda VDA driver not installed" warnings even
-    // when MTT VDD was actually installed and would be selected.
+    // correct backend instead of a pre-selection NONE.
     if (selection_initialized().load(std::memory_order_acquire)) {
       return selected_backend().load(std::memory_order_acquire);
     }
@@ -153,7 +119,6 @@ namespace VDISPLAY {
 
   std::string active_backend_name() {
     switch (active_backend()) {
-      case BackendType::MTT:     return "mtt";
       case BackendType::SUDOVDA: return "sudovda";
       case BackendType::NONE:    return "none";
     }

@@ -50,8 +50,7 @@ LuminalShine began as a fork of **Vibeshine** specifically to address deficienci
 - **HEVC and AV1 First, with HDR** — Modern codec paths are the default. H.264 remains supported on older builds.
 - **Windows Graphics Capture (WGC) in Service Mode** — Higher throughput, captures full frame-generated frame rates, survives VRAM exhaustion, and falls back automatically so the login screen and UAC prompts remain capturable.
 - **SudoVDA as the Primary Virtual Display Driver** — Ships and is enabled by default with stability improvements. Supports automatic or explicit GPU binding, including hybrid-GPU laptops; ideal for headless setups.
-- **MTT VDD as an Optional Alternative** — Included for compatibility with niche hardware configurations. Please read the notice in the LuminalShine installer before selecting MTT VDD.
-- **Luminal Video Graphics Display Driver (LuminalVGD)** — *Coming later this year.* A first-party virtual display driver developed in-house to eventually supersede both SudoVDA and MTT VDD as the default.
+- **Luminal Video Graphics Display Driver (LuminalVGD)** — *Coming later this year.* A first-party virtual display driver developed in-house to eventually supersede SudoVDA as the default.
 - **Display Setting Automation** — Restores your display layout after hard crashes, shutdowns, or reboots; safeguards against unreleased dummy plugs and virtual displays on Windows 11 24H2 and Insider Preview.
 - **Modern Frontend WebUI** — Fully responsive; manage your library and configuration from a phone or tablet without restarting the service.
 - **WebRTC Browser Streaming** — Stream directly to the browser via the `/webrtc` endpoint — no separate client install needed. The standard Moonlight path is still available.

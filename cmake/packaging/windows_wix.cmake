@@ -165,7 +165,6 @@ set(LUMINALSHINE_INSTALL_COMPONENTS
   autostart
   dxgi
   firewall
-  mttvdd
   sudovda
   Unspecified
 )

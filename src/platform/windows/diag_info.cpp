@@ -354,11 +354,9 @@ namespace platf::diag {
   }
 
   std::optional<std::string> query_virtual_display_driver_version() {
-    // Service names match the driver INF: SudoVDA registers as "SudoVDA",
-    // MTT VDD registers as "MttIddSampleDriver". Either match wins.
+    // Service names match the driver INF: SudoVDA registers as "SudoVDA".
     static const wchar_t *kKnownServices[] = {
-      L"SudoVDA",
-      L"MttIddSampleDriver"
+      L"SudoVDA"
     };
 
     HDEVINFO dev_info = SetupDiGetClassDevsW(

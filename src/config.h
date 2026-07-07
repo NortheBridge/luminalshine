@@ -121,10 +121,10 @@ namespace config {
     virtual_display_mode_e virtual_display_mode;
     virtual_display_layout_e virtual_display_layout;
 
-    /// Selects the virtual-display driver backend. Values: "auto" (prefer MTT
-    /// if installed, fall back to SudoVDA), "mtt", or "sudovda". Default
-    /// "auto". MTT VDD is the supported primary backend; SudoVDA is retained
-    /// for compatibility on Insider Windows builds and as a manual fallback.
+    /// Selects the virtual-display driver backend. Values: "auto" or
+    /// "sudovda" (currently equivalent — SudoVDA is the only shipped
+    /// backend). Default "auto". Kept as a string so a future first-party
+    /// LuminalShine VDD can slot in without a config migration.
     std::string virtual_display_backend;
 
     struct dd_t {

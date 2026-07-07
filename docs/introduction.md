@@ -41,8 +41,7 @@ Vibeshine. It exists because:
   a three-layer recovery flow. Argon2id replaces SHA-256 for the
   password KDF.
 - **First-party virtual display work.** SudoVDA ships and is enabled
-  by default; MTT VDD is available; the in-house LuminalVGD driver
-  is in development.
+  by default; the in-house LuminalVGD driver is in development.
 - **Single-platform focus.** Linux and macOS code from upstream
   Sunshine has been deprecated so the team can invest fully in the
   Windows pipeline.

@@ -527,7 +527,7 @@ export function getConfigSelectOptions(
           label: translateOr(
             t,
             'config.virtual_display_backend_auto',
-            'Auto (recommended) — prefer SudoVDA, fall back to MTT VDD',
+            'Auto (recommended) — SudoVDA',
           ),
           value: 'auto',
         },
@@ -538,14 +538,6 @@ export function getConfigSelectOptions(
             'SudoVDA (default)',
           ),
           value: 'sudovda',
-        },
-        {
-          label: translateOr(
-            t,
-            'config.virtual_display_backend_mtt',
-            'MTT VDD (alternative)',
-          ),
-          value: 'mtt',
         },
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);
