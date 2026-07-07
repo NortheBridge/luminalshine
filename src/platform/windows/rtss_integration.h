@@ -23,15 +23,19 @@ namespace platf {
   };
 
   // Apply RTSS frame limit and related settings at stream start.
-  // fps is the integer client framerate.
-  bool rtss_streaming_start(int fps);
+  // fps is the integer client framerate. app_profile is the streamed app's
+  // exe name ("game.exe") to scope the cap to an RTSS application profile;
+  // empty falls back to the Global profile.
+  bool rtss_streaming_start(int fps, const std::string &app_profile = std::string());
 
   // Re-apply RTSS frame limit and related settings without resetting originals.
   bool rtss_streaming_refresh(int fps);
 
-  // Restore any RTSS settings modified at stream start.
-  // If keep_process_running is true, Sunshine leaves RTSS running for pause/resume scenarios.
-  void rtss_streaming_stop(bool keep_process_running = false);
+  // Restore any RTSS settings modified at stream start and stop the RTSS
+  // process if we started it. RTSS is never left running across paused
+  // sessions: its hooks inject into every new process and can prevent
+  // anti-tamper titles from launching.
+  void rtss_streaming_stop();
 
   void rtss_restore_pending_overrides();
 

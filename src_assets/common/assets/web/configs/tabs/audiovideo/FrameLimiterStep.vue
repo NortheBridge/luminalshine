@@ -310,6 +310,10 @@ onMounted(() => {
         />
       </div>
 
+      <p class="text-xs opacity-70 leading-relaxed">
+        <i class="fas fa-wand-magic-sparkles mr-1" />{{ t('frameLimiter.framegenAutoNote') }}
+      </p>
+
       <ConfigFieldRenderer
         setting-key="frame_limiter_fps_limit"
         v-model="config.frame_limiter_fps_limit"

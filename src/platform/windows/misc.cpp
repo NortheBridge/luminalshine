@@ -1635,6 +1635,27 @@ namespace platf {
     }
   }
 
+  void reset_gpu_scheduling_priority() {
+    // Mirrors display_base.cpp's D3DKMT declarations; NORMAL is 2 in
+    // D3DKMT_SCHEDULINGPRIORITYCLASS (idle, below_normal, normal, ...).
+    typedef NTSTATUS(WINAPI *set_process_priority_fn)(HANDLE, int);
+    constexpr int k_d3dkmt_priority_normal = 2;
+
+    auto gdi32 = GetModuleHandleA("GDI32");
+    if (!gdi32) {
+      return;
+    }
+    auto fn = (set_process_priority_fn) GetProcAddress(gdi32, "D3DKMTSetProcessSchedulingPriorityClass");
+    if (!fn) {
+      return;
+    }
+    if (FAILED(fn(GetCurrentProcess(), k_d3dkmt_priority_normal))) {
+      BOOST_LOG(warning) << "Failed to restore GPU scheduling priority to normal"sv;
+    } else {
+      BOOST_LOG(info) << "GPU scheduling priority restored to normal"sv;
+    }
+  }
+
   void streaming_will_stop() {
     // If the client disconnected without /cancel, Sunshine can leave the app running to allow /resume.
     // In that "paused" state, we must keep feeding the display helper heartbeat to prevent it from
@@ -1647,6 +1668,10 @@ namespace platf {
     }
     // Demote ourselves back to normal priority class
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+
+    // Capture raised our GPU scheduling priority to REALTIME/HIGH; drop back
+    // to NORMAL so an idle host never preempts a foreground game's GPU work.
+    reset_gpu_scheduling_priority();
 
     // End our 0.5ms timer request
     if (used_nt_set_timer_resolution) {

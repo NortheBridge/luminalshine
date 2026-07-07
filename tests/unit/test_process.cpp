@@ -270,3 +270,60 @@ TEST_F(ProcessPNGTest, ValidateAppImagePath_OldSteamDefault) {
   const std::string result = proc::validate_app_image_path("./assets/steam.png");
   EXPECT_EQ(result, SUNSHINE_ASSETS_DIR "/steam.png");
 }
+
+// Tests for extract_command_exe_name (per-app RTSS profile scoping)
+TEST(ExtractCommandExeName, PlainPath) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"(C:\Games\game.exe)"), "game.exe");
+}
+
+TEST(ExtractCommandExeName, QuotedPathWithSpacesAndArgs) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"("C:\Program Files\My Game\game.exe" --fullscreen -w 1920)"), "game.exe");
+}
+
+TEST(ExtractCommandExeName, UnquotedWithArgs) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"(C:\Games\game.exe --launch)"), "game.exe");
+}
+
+TEST(ExtractCommandExeName, ForwardSlashes) {
+  EXPECT_EQ(proc::extract_command_exe_name("C:/Games/game.exe"), "game.exe");
+}
+
+TEST(ExtractCommandExeName, UppercaseExtension) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"(C:\Games\GAME.EXE)"), "GAME.EXE");
+}
+
+TEST(ExtractCommandExeName, LeadingWhitespace) {
+  EXPECT_EQ(proc::extract_command_exe_name("   \tC:\\Games\\game.exe"), "game.exe");
+}
+
+TEST(ExtractCommandExeName, BareExeNoPath) {
+  EXPECT_EQ(proc::extract_command_exe_name("game.exe"), "game.exe");
+}
+
+TEST(ExtractCommandExeName, EmptyCommand) {
+  EXPECT_EQ(proc::extract_command_exe_name(""), "");
+}
+
+TEST(ExtractCommandExeName, WhitespaceOnly) {
+  EXPECT_EQ(proc::extract_command_exe_name("   "), "");
+}
+
+TEST(ExtractCommandExeName, SteamUri) {
+  EXPECT_EQ(proc::extract_command_exe_name("steam://rungameid/1234567"), "");
+}
+
+TEST(ExtractCommandExeName, BatchScript) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"(C:\Games\start.bat)"), "");
+}
+
+TEST(ExtractCommandExeName, MissingClosingQuote) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"("C:\Games\game.exe)"), "");
+}
+
+TEST(ExtractCommandExeName, TooShortToken) {
+  EXPECT_EQ(proc::extract_command_exe_name(".exe"), "");
+}
+
+TEST(ExtractCommandExeName, ExeSubstringButNotSuffix) {
+  EXPECT_EQ(proc::extract_command_exe_name(R"(C:\Games\game.exe.config)"), "");
+}

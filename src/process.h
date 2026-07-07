@@ -166,6 +166,14 @@ namespace proc {
     std::vector<ctx_t> get_apps() const;
     std::string get_app_image(int app_id);
     std::string get_last_run_app_name();
+
+    /**
+     * @brief Get the exe basename of the running app's command, e.g. "game.exe".
+     * @return Lower-risk best effort: empty when no app is running, the app has
+     *         no direct command (detached/URI/launcher indirection), or the
+     *         command's first token is not an .exe path.
+     */
+    std::string get_running_app_exe_name();
     bool last_run_app_frame_gen_limiter_fix() const;
     bool is_launch_deferred() const;
     void terminate(bool skip_display_revert = false);
@@ -233,6 +241,14 @@ namespace proc {
 
   bool check_valid_png(const std::filesystem::path &path);
   std::string validate_app_image_path(std::string app_image_path);
+
+  /**
+   * @brief Extract the exe basename from a command line's first token.
+   * @param cmd The raw command string (may be quoted, may be a URI).
+   * @return "game.exe" style basename, or empty when the first token is not an
+   *         .exe path (URIs, scripts, empty commands).
+   */
+  std::string extract_command_exe_name(std::string_view cmd);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);
 

@@ -1973,6 +1973,52 @@ namespace proc {
     return _app.name;
   }
 
+  std::string extract_command_exe_name(std::string_view cmd) {
+    // First token of the command, honoring quotes.
+    while (!cmd.empty() && (cmd.front() == ' ' || cmd.front() == '\t')) {
+      cmd.remove_prefix(1);
+    }
+    if (cmd.empty()) {
+      return {};
+    }
+
+    std::string_view token;
+    if (cmd.front() == '"') {
+      auto end = cmd.find('"', 1);
+      if (end == std::string_view::npos) {
+        return {};
+      }
+      token = cmd.substr(1, end - 1);
+    } else {
+      token = cmd.substr(0, cmd.find(' '));
+    }
+
+    auto sep = token.find_last_of("\\/");
+    if (sep != std::string_view::npos) {
+      token = token.substr(sep + 1);
+    }
+
+    if (token.size() <= 4) {
+      return {};
+    }
+    auto suffix = token.substr(token.size() - 4);
+    auto lower_eq = [](char a, char b) {
+      return std::tolower(static_cast<unsigned char>(a)) == b;
+    };
+    if (!(lower_eq(suffix[0], '.') && lower_eq(suffix[1], 'e') && lower_eq(suffix[2], 'x') && lower_eq(suffix[3], 'e'))) {
+      return {};
+    }
+
+    return std::string {token};
+  }
+
+  std::string proc_t::get_running_app_exe_name() {
+    if (_app_id <= 0) {
+      return {};
+    }
+    return extract_command_exe_name(_app.cmd);
+  }
+
   bool proc_t::last_run_app_frame_gen_limiter_fix() const {
     return _app.frame_gen_limiter_fix;
   }

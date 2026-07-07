@@ -4693,8 +4693,7 @@ namespace webrtc_stream {
       if (!rtsp_active) {
         VDISPLAY::restorePhysicalHdrProfiles();
         platf::rtss_set_sync_limiter_override(std::nullopt);
-        const bool keep_rtss_running = proc::proc.running() > 0;
-        platf::frame_limiter_streaming_stop(keep_rtss_running);
+        platf::frame_limiter_streaming_stop();
       }
   #endif
       if (!rtsp_sessions_active.load(std::memory_order_relaxed)) {

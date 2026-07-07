@@ -35,8 +35,15 @@ namespace platf {
   };
 
   void frame_limiter_streaming_start(int fps, bool gen1_framegen_fix, bool gen2_framegen_fix, std::optional<int> lossless_rtss_limit, const std::string &frame_generation_provider, bool smooth_motion);
-  void frame_limiter_streaming_stop(bool keep_rtss_running = false);
+  void frame_limiter_streaming_stop();
   void frame_limiter_streaming_refresh();
+
+  // Native frame-generation capture fix: called by the encoder path when the
+  // streamed game is detected running frame generation (e.g. DLSS FG). If no
+  // per-app capture fix is already engaged, re-applies the limiter overrides
+  // with the gen2 capture fix so capture pacing matches generated frames.
+  // Safe to call from any thread; no-ops when nothing needs to change.
+  void frame_limiter_notify_frame_generation(bool dlss_fg_detected);
 
   bool frame_limiter_prepare_launch(bool gen1_framegen_fix, bool gen2_framegen_fix, std::optional<int> lossless_rtss_limit);
 
