@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from collections import OrderedDict
 
@@ -51,6 +52,36 @@ SEQUENCE_TABLES = frozenset({
     "InstallExecuteSequence",
     "InstallUISequence",
 })
+
+# --- Content-hashed web asset normalization -------------------------------
+# The Vite web build embeds a content hash in every bundle filename
+# (AboutView_741e86bd.js). Any frontend change renames those files, which
+# renames their harvested Component/File identifiers AND their
+# path-derived auto GUIDs. That churn is not upgrade-critical (the web
+# assets are wholly replaced on every upgrade; the load-bearing pinned
+# GUIDs are asserted separately by assert_msi_invariants.py), but it used
+# to fail this diff on every frontend change — and only release builds run
+# this gate, so it surfaced as a broken release pipeline. Normalize the
+# hash tokens and the auto GUIDs of hashed rows so only real additions,
+# removals, or GUID drift on stable (non-hashed) files fail the diff.
+_WEB_CHUNK_PREFIX_RE = re.compile(r"(CM_[A-Z]{2}_)[0-9a-f]{7}_")
+_WEB_HASH_FILE_RE = re.compile(r"_[0-9a-f]{8}(?=\.(?:js|css)\b)")
+_COMPONENT_GUID_RE = re.compile(r"ComponentId=\{[0-9A-Fa-f-]+\}")
+
+# Tables that carry harvested web-asset rows.
+_WEB_ASSET_TABLES = frozenset({"Component", "FeatureComponents"})
+
+
+def _normalize_web_asset_row(row: str) -> str:
+    if "assets.assets.web." not in row and not _WEB_CHUNK_PREFIX_RE.search(row):
+        return row
+    normalized = _WEB_CHUNK_PREFIX_RE.sub(r"\1#_", row)
+    normalized = _WEB_HASH_FILE_RE.sub("_#", normalized)
+    if normalized != row:
+        # Only strip the auto GUID when a hash token was actually present;
+        # stable web files (locale JSON, images) keep their GUIDs compared.
+        normalized = _COMPONENT_GUID_RE.sub("ComponentId={WEB-ASSET}", normalized)
+    return normalized
 
 
 def parse_dump(text: str) -> "OrderedDict[str, list[str]]":
@@ -125,6 +156,9 @@ def normalize_table(name: str, rows: "list[str]") -> "list[str]":
             condition = cells.get("Condition", "")
             normalized.append(f"rank={idx}|Action={action}|Condition={condition}")
         return normalized
+
+    if name in _WEB_ASSET_TABLES:
+        return sorted(_normalize_web_asset_row(row) for row in rows)
 
     # Default: faithful, order-insensitive comparison.
     return sorted(rows)
@@ -261,6 +295,34 @@ def _run_selftest() -> int:
         any("UpgradeCode" in m for m in msgs),
     )
 
+    # 2b. Content-hashed web asset rename (new Vite hash + new auto GUID)
+    #     -> normalized away; a genuinely added web file -> still flagged.
+    web_golden = (
+        "## TABLE: Component\n"
+        "Component=CM_CP_assets.assets.web.assets.AboutView_741e86bd.js|ComponentId={D38F8319-121C-5AB2-99F1-50AFBBB396B2}|Directory_=CM_DP_assets.assets.web.assets|Attributes=256|Condition=|KeyPath=CM_FP_assets.assets.web.assets.AboutView_741e86bd.js\n"
+        "Component=CM_CH_5a41e16_Chunk.vue_x|ComponentId={FACE6677-3758-5057-8414-DE5825C01E46}|Directory_=CM_DP_assets.assets.web.assets|Attributes=256|Condition=|KeyPath=CM_FH_5a41e16_Chunk.vue_x\n"
+        "## TABLE: FeatureComponents\n"
+        "Feature_=CM_C_assets|Component_=CM_CP_assets.assets.web.assets.AboutView_741e86bd.js\n"
+    )
+    web_renamed = (
+        "## TABLE: Component\n"
+        "Component=CM_CP_assets.assets.web.assets.AboutView_4501e06f.js|ComponentId={311C9112-D088-5DA7-9330-A094DBC81CA2}|Directory_=CM_DP_assets.assets.web.assets|Attributes=256|Condition=|KeyPath=CM_FP_assets.assets.web.assets.AboutView_4501e06f.js\n"
+        "Component=CM_CH_c3c0923_Chunk.vue_x|ComponentId={6BFDA33A-3A4C-5F8C-9C55-DF0DCD49E9E0}|Directory_=CM_DP_assets.assets.web.assets|Attributes=256|Condition=|KeyPath=CM_FH_c3c0923_Chunk.vue_x\n"
+        "## TABLE: FeatureComponents\n"
+        "Feature_=CM_C_assets|Component_=CM_CP_assets.assets.web.assets.AboutView_4501e06f.js\n"
+    )
+    msgs = diff_dumps(web_golden, web_renamed)
+    expect(
+        f"hash-renamed web assets must normalize equal, got: {msgs}",
+        msgs == [],
+    )
+    web_added = web_renamed + "Feature_=CM_C_assets|Component_=CM_CP_assets.assets.web.images.newthing.png\n"
+    msgs = diff_dumps(web_golden, web_added)
+    expect(
+        "genuinely added web file must still be flagged",
+        any("newthing.png" in m for m in msgs),
+    )
+
     # 3. Service rename -> flagged.
     msgs = diff_dumps(_SELFTEST_GOLDEN, _SELFTEST_CANDIDATE_BAD_SERVICE)
     expect(
@@ -284,7 +346,7 @@ def _run_selftest() -> int:
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print("diff_msi_tables self-test: OK (5 cases)")
+    print("diff_msi_tables self-test: OK (7 cases)")
     return 0
 
 
