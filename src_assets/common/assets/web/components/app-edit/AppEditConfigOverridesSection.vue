@@ -14,6 +14,34 @@
       </div>
     </div>
 
+    <div
+      v-if="scopeSummaryLabel === 'application' && isWindowsPlatform()"
+      class="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-2"
+    >
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="space-y-1">
+          <h4 class="text-xs font-semibold uppercase tracking-wide opacity-70">
+            Application Runtime
+          </h4>
+          <div class="font-medium text-sm">Keep virtual display while paused</div>
+          <p class="text-[12px] opacity-70 leading-relaxed max-w-2xl">
+            When the client disconnects or the device sleeps while this app is running (for
+            example a Steam Deck suspending mid-session via MoonDeck), keep the LuminalShine
+            virtual display active so the stream resumes cleanly on wake instead of failing.
+            While the session is paused, your physical display configuration is not restored
+            until the app quits. Applies for this application's runtime only &mdash; the global
+            revert-on-disconnect behavior is untouched for everything else.
+          </p>
+        </div>
+        <n-switch v-model:value="keepVddWhilePaused" size="large" />
+      </div>
+      <p v-if="keepVddWhilePaused" class="text-[11px] opacity-60 leading-relaxed">
+        Managed via the <span class="font-mono">dd_config_revert_on_disconnect</span> and
+        <span class="font-mono">dd_paused_virtual_display_timeout_secs</span> overrides shown
+        below.
+      </p>
+    </div>
+
     <div class="min-w-0 space-y-3">
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div class="space-y-1">
@@ -706,7 +734,7 @@ import ConfigInputField from '@/ConfigInputField.vue';
 import ConfigSelectField from '@/ConfigSelectField.vue';
 import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { NButton, NInput } from 'naive-ui';
+import { NButton, NInput, NSwitch } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 import {
   buildOverrideOptionsText,
@@ -1079,6 +1107,35 @@ function setOverrideKey(key: string, value: unknown): void {
 function clearOverrideKey(key: string): void {
   clearOverrideKeyFor('live', key);
 }
+
+// "Keep virtual display while paused" quick toggle. Maps to the two
+// runtime overrides that together make stream.cpp keep the virtual
+// display alive across a client disconnect/sleep while the app runs
+// (keep_virtual_display_due_to_pause): revert-on-disconnect off AND the
+// paused-cleanup timeout disabled. Managed here so it stays a plain
+// pair of overrides — visible and editable in the list below like any
+// other override.
+const KEEP_VDD_KEYS = {
+  revert: 'dd_config_revert_on_disconnect',
+  pausedTimeout: 'dd_paused_virtual_display_timeout_secs',
+} as const;
+
+const keepVddWhilePaused = computed<boolean>({
+  get: () => {
+    const revert = getOverrideStringFor('live', KEEP_VDD_KEYS.revert);
+    const timeout = getOverrideStringFor('live', KEEP_VDD_KEYS.pausedTimeout);
+    return revert === 'disabled' && timeout === '0';
+  },
+  set: (enabled) => {
+    if (enabled) {
+      setOverrideKey(KEEP_VDD_KEYS.revert, 'disabled');
+      setOverrideKey(KEEP_VDD_KEYS.pausedTimeout, '0');
+    } else {
+      clearOverrideKey(KEEP_VDD_KEYS.revert);
+      clearOverrideKey(KEEP_VDD_KEYS.pausedTimeout);
+    }
+  },
+});
 
 const overrideKeys = computed<string[]>(() => {
   return Object.keys(getOverridesSource('live')).filter(
