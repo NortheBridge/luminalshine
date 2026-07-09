@@ -106,6 +106,13 @@ const platform = computed(() =>
       <ConfigFieldRenderer setting-key="back_button_timeout" v-model="config.back_button_timeout" />
     </div>
 
+    <div v-if="config.controller === 'enabled'" class="mb-4">
+      <ConfigFieldRenderer
+        v-model="config.gamepad_guide_button_combo"
+        setting-key="gamepad_guide_button_combo"
+      />
+    </div>
+
     <hr />
 
     <ConfigFieldRenderer setting-key="keyboard" v-model="config.keyboard" class="mb-3" />

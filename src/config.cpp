@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <filesystem>
@@ -860,6 +861,7 @@ namespace config {
       {0x12, 0xA4},
     },
     -1ms,  // back_button_timeout
+    "disabled",  // gamepad_guide_button_combo
     500ms,  // key_repeat_delay
     std::chrono::duration<double> {1 / 24.9},  // key_repeat_period
 
@@ -1728,6 +1730,17 @@ namespace config {
       input.back_button_timeout = std::chrono::milliseconds {to};
     }
 
+    string_f(vars, "gamepad_guide_button_combo", input.gamepad_guide_button_combo);
+    {
+      static constexpr std::array<std::string_view, 7> allowed_guide_combos {
+        "disabled", "start_back", "back_x", "back_y", "dpad_right_x", "dpad_left_y", "lb_rb_start"
+      };
+      if (std::find(allowed_guide_combos.begin(), allowed_guide_combos.end(), input.gamepad_guide_button_combo) == allowed_guide_combos.end()) {
+        BOOST_LOG(warning) << "config: gamepad_guide_button_combo has unknown value '" << input.gamepad_guide_button_combo << "'; disabling.";
+        input.gamepad_guide_button_combo = "disabled";
+      }
+    }
+
     double repeat_frequency {0};
     double_between_f(vars, "key_repeat_frequency", repeat_frequency, {0, std::numeric_limits<double>::max()});
 
@@ -2071,6 +2084,7 @@ namespace config {
         "motion_as_ds4",
         "touchpad_as_ds4",
         "back_button_timeout",
+        "gamepad_guide_button_combo",
         "keyboard",
         "key_repeat_delay",
         "key_repeat_frequency",

@@ -491,6 +491,47 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### gamepad_guide_button_combo
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Gamepad button combination that emulates a Home/Guide button press
+            on the virtual controller. Intended for clients that cannot forward
+            a real Guide press — e.g. a Steam Deck running MoonDeck, where the
+            Steam button is consumed locally — so the host's Steam overlay
+            stays reachable mid-session.
+            @tip{The combo buttons themselves still reach the game; pick a
+            combination your game does not use. "lb_rb_start" is the least
+            likely to trigger accidentally.}
+
+            Choices:
+            @code{}
+            disabled     -> combo emulation is off (default)
+            start_back   -> Start (Menu) + Back (View)
+            back_x       -> Back (View) + X
+            back_y       -> Back (View) + Y
+            dpad_right_x -> D-Pad Right + X
+            dpad_left_y  -> D-Pad Left + Y
+            lb_rb_start  -> LB + RB + Start (Menu)
+            @endcode
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            gamepad_guide_button_combo = start_back
+            @endcode</td>
+    </tr>
+</table>
+
 ### keyboard
 
 <table>
