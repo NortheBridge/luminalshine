@@ -256,6 +256,14 @@ namespace config {
     std::unordered_map<int, int> keybindings;
 
     std::chrono::milliseconds back_button_timeout;
+
+    /// Gamepad button combo that emulates a Home/Guide button press on the
+    /// virtual controller, for clients whose Guide button can't be forwarded
+    /// (e.g. Steam Deck via MoonDeck, where gamescope consumes the Steam
+    /// button locally). Values: "disabled" (default), "start_back", "back_x",
+    /// "back_y", "dpad_right_x", "dpad_left_y", "lb_rb_start".
+    std::string gamepad_guide_button_combo;
+
     std::chrono::milliseconds key_repeat_delay;
     std::chrono::duration<double> key_repeat_period;
 

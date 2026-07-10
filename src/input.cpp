@@ -143,6 +143,11 @@ namespace input {
 
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;
 
+    // Debounce for the Guide-button combo (gamepad_guide_button_combo):
+    // once triggered, further triggers are suppressed until the combo is
+    // fully released and this cooldown has elapsed.
+    std::chrono::steady_clock::time_point last_guide_combo_trigger {};
+
     int id;
 
     // When emulating the HOME button, we may need to artificially release the back button.
@@ -1122,6 +1127,37 @@ namespace input {
     platf::gamepad_battery(platf_input, battery);
   }
 
+  /**
+   * @brief Resolve the configured Guide-button combo to a button mask.
+   * @return Mask of buttons that must be held simultaneously, or 0 when the
+   *         feature is disabled.
+   */
+  std::uint32_t guide_combo_mask() {
+    const auto &combo = config::input.gamepad_guide_button_combo;
+    if (combo.empty() || combo == "disabled") {
+      return 0;
+    }
+    if (combo == "start_back") {
+      return platf::START | platf::BACK;
+    }
+    if (combo == "back_x") {
+      return platf::BACK | platf::X;
+    }
+    if (combo == "back_y") {
+      return platf::BACK | platf::Y;
+    }
+    if (combo == "dpad_right_x") {
+      return platf::DPAD_RIGHT | platf::X;
+    }
+    if (combo == "dpad_left_y") {
+      return platf::DPAD_LEFT | platf::Y;
+    }
+    if (combo == "lb_rb_start") {
+      return platf::LEFT_BUTTON | platf::RIGHT_BUTTON | platf::START;
+    }
+    return 0;
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_MULTI_CONTROLLER_PACKET packet) {
     if (!config::input.controller) {
       return;
@@ -1229,6 +1265,41 @@ namespace input {
       } else if (gamepad.back_timeout_id) {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
+      }
+    }
+
+    // Guide-button combo emulation (gamepad_guide_button_combo): some
+    // clients cannot forward a real Guide press — on a Steam Deck running
+    // MoonDeck, gamescope consumes the Steam button locally — which makes
+    // the host's Steam overlay unreachable mid-session. When the configured
+    // combo transitions to fully held, emulate a short Home/Guide press on
+    // the same virtual pad. The combo buttons themselves still reach the
+    // game (mirroring how back_button_timeout behaves before its timeout).
+    if (const auto combo_mask = guide_combo_mask(); combo_mask) {
+      const bool was_held = (gamepad.gamepad_state.buttonFlags & combo_mask) == combo_mask;
+      const bool is_held = (gamepad_state.buttonFlags & combo_mask) == combo_mask;
+      const auto now = std::chrono::steady_clock::now();
+      if (is_held && !was_held && now - gamepad.last_guide_combo_trigger >= 1s) {
+        gamepad.last_guide_combo_trigger = now;
+        task_pool.push([input, controller = packet->controllerNumber]() {
+          auto &gamepad = input->gamepads[controller];
+          if (gamepad.id < 0) {
+            return;
+          }
+
+          auto &state = gamepad.gamepad_state;
+
+          // Press Home/Guide button
+          state.buttonFlags |= platf::HOME;
+          platf::gamepad_update(platf_input, gamepad.id, state);
+
+          // Sleep for a short time to allow the input to be detected
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+          // Release Home/Guide button
+          state.buttonFlags &= ~platf::HOME;
+          platf::gamepad_update(platf_input, gamepad.id, state);
+        });
       }
     }
 

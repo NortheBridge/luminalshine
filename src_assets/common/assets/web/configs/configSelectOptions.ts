@@ -153,6 +153,51 @@ export function getConfigSelectOptions(
       }));
       return ensureIncludesCurrentValue(options, ctx.currentValue);
     }
+    case 'gamepad_guide_button_combo': {
+      const options: ConfigSelectOption[] = [
+        {
+          label: translateOr(t, 'config.gamepad_guide_button_combo_disabled', 'Disabled (default)'),
+          value: 'disabled',
+        },
+        {
+          label: translateOr(
+            t,
+            'config.gamepad_guide_button_combo_start_back',
+            'Start (Menu) + Back (View)',
+          ),
+          value: 'start_back',
+        },
+        {
+          label: translateOr(t, 'config.gamepad_guide_button_combo_back_x', 'Back (View) + X'),
+          value: 'back_x',
+        },
+        {
+          label: translateOr(t, 'config.gamepad_guide_button_combo_back_y', 'Back (View) + Y'),
+          value: 'back_y',
+        },
+        {
+          label: translateOr(
+            t,
+            'config.gamepad_guide_button_combo_dpad_right_x',
+            'D-Pad Right + X',
+          ),
+          value: 'dpad_right_x',
+        },
+        {
+          label: translateOr(t, 'config.gamepad_guide_button_combo_dpad_left_y', 'D-Pad Left + Y'),
+          value: 'dpad_left_y',
+        },
+        {
+          label: translateOr(
+            t,
+            'config.gamepad_guide_button_combo_lb_rb_start',
+            'LB + RB + Start (least accidental)',
+          ),
+          value: 'lb_rb_start',
+        },
+      ];
+      return ensureIncludesCurrentValue(options, ctx.currentValue);
+    }
     case 'gamepad': {
       const labelMap: Record<string, string> = {
         auto: '_common.auto',
