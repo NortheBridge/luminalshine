@@ -34,6 +34,21 @@ const gpuList = computed(() => {
   return Array.isArray(raw) ? raw : [];
 });
 
+const gpuSupportsYuv444 = computed(() => {
+  const probe = metadata.value?.encoder_probe;
+  return !!(probe?.probed && (probe.h264_yuv444 || probe.hevc_yuv444 || probe.av1_yuv444));
+});
+
+// Effective state of the YUV 4:4:4 switch: on capable GPUs it follows the
+// stored value (default on); on GPUs without probed 4:4:4 support it always
+// reads off and the switch is locked, regardless of the stored value.
+const yuv444StreamingModel = computed<boolean>({
+  get: () => gpuSupportsYuv444.value && config.value?.yuv444_streaming !== false,
+  set: (v) => {
+    if (config.value) config.value.yuv444_streaming = v;
+  },
+});
+
 const LOSSLESS_DEFAULT_PATH =
   'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Lossless Scaling\\LosslessScaling.exe';
 
@@ -357,6 +372,21 @@ const shouldShowSoftware = computed(() => showAll() || props.currentTab === 'sw'
       <ConfigFieldRenderer setting-key="capture" v-model="config.capture" />
       <ConfigFieldRenderer setting-key="encoder" v-model="config.encoder" />
       <ConfigFieldRenderer setting-key="prefer_10bit_sdr" v-model="config.prefer_10bit_sdr" />
+      <ConfigFieldRenderer
+        v-model="yuv444StreamingModel"
+        setting-key="yuv444_streaming"
+        :disabled="!gpuSupportsYuv444"
+      >
+        <template #meta>
+          <p class="text-xs opacity-70 leading-snug">
+            {{
+              gpuSupportsYuv444
+                ? t('config.yuv444_streaming_auto_note')
+                : t('config.yuv444_streaming_unsupported_note')
+            }}
+          </p>
+        </template>
+      </ConfigFieldRenderer>
       <ConfigFieldRenderer setting-key="session_monitor" v-model="config.session_monitor" />
       <fieldset
         v-if="platform === 'windows'"

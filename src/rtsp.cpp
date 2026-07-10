@@ -1099,6 +1099,14 @@ namespace rtsp_stream {
       config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
 
+      // Clients normally only request 4:4:4 when we advertised it, but the
+      // toggle may have been flipped since the serverinfo query — enforce it
+      // here so a disabled host never starts a 4:4:4 session.
+      if (config.monitor.chromaSamplingType == 1 && !config::video.yuv444_streaming) {
+        BOOST_LOG(warning) << "Client requested YUV 4:4:4 but yuv444_streaming is disabled; downgrading to YUV 4:2:0"sv;
+        config.monitor.chromaSamplingType = 0;
+      }
+
       // Validate that clientRefreshRateX100 is consistent with maxFPS.
       // Some clients send a stale or incorrect clientRefreshRateX100 (e.g. 6000 = 60fps)
       // while requesting a higher maxFPS (e.g. 120). Since framerateX100 unconditionally

@@ -1152,9 +1152,6 @@ namespace input {
     if (combo == "dpad_left_y") {
       return platf::DPAD_LEFT | platf::Y;
     }
-    if (combo == "lb_rb_start") {
-      return platf::LEFT_BUTTON | platf::RIGHT_BUTTON | platf::START;
-    }
     return 0;
   }
 

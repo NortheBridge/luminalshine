@@ -725,6 +725,7 @@ namespace video {
     safe::mail_raw_t::event_t<bool> idr_events;
     safe::mail_raw_t::event_t<hdr_info_t> hdr_events;
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;
+    safe::mail_raw_t::event_t<bool> chroma_downgrade_events;
 
     config_t config;
     int frame_nr;
@@ -2495,11 +2496,36 @@ namespace video {
     return nullptr;
   }
 
+  // Defined below; needed here for the YUV 4:4:4 fallback retries in encode_run.
+  std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config);
+
+  /**
+   * @brief Downgrade an in-flight YUV 4:4:4 session to 4:2:0 after an encoder failure.
+   * @param config The session's encode configuration, mutated to 4:2:0 on downgrade.
+   * @param chroma_downgrade_events Per-session event used to tell the control plane
+   *        (and through it the session stats) that the effective chroma changed.
+   * @param stage Human-readable description of what failed, for the log line.
+   * @return `true` if the session was downgraded and a retry at 4:2:0 makes sense.
+   */
+  bool downgrade_yuv444_to_420(config_t &config, safe::mail_raw_t::event_t<bool> chroma_downgrade_events, const char *stage) {
+    if (config.chromaSamplingType != 1) {
+      return false;
+    }
+    BOOST_LOG(error) << "YUV 4:4:4 "sv << stage << " failed in flight — the GPU, driver, or display path rejected 4:4:4 output. "
+                     << "Falling back to YUV 4:2:0 for this session. If your TV or monitor cannot accept YUV 4:4:4, "
+                     << "disable 'YUV 4:4:4 Streaming' in Settings to avoid the retry."sv;
+    config.chromaSamplingType = 0;
+    if (chroma_downgrade_events) {
+      chroma_downgrade_events->raise(true);
+    }
+    return true;
+  }
+
   void encode_run(
     int &frame_nr,  // Store progress of the frame number
     safe::mail_t mail,
     img_event_t images,
-    config_t config,
+    config_t &config,
     std::shared_ptr<platf::display_t> disp,
     std::unique_ptr<platf::encode_device_t> encode_device,
     safe::signal_t &reinit_event,
@@ -2507,6 +2533,11 @@ namespace video {
     void *channel_data
   ) {
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
+    if (!session && downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "encoder session creation")) {
+      if (auto fallback_device = make_encode_device(*disp, encoder, config)) {
+        session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(fallback_device));
+      }
+    }
     if (!session) {
       return;
     }
@@ -2547,6 +2578,10 @@ namespace video {
       // in a separate scope.
       auto dummy_img = disp->alloc_img();
       if (!dummy_img || disp->dummy_img(dummy_img.get()) || session->convert(*dummy_img)) {
+        // If the 4:4:4 color conversion path is what failed, downgrade so the
+        // caller's reinit loop retries this session at 4:2:0 instead of
+        // spinning on the same failure.
+        downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "initial frame conversion");
         return;
       }
     }
@@ -2801,6 +2836,9 @@ namespace video {
     encode_session.ctx = &ctx;
 
     auto encode_device = make_encode_device(*disp, encoder, ctx.config);
+    if (!encode_device && downgrade_yuv444_to_420(ctx.config, ctx.chroma_downgrade_events, "encode device creation")) {
+      encode_device = make_encode_device(*disp, encoder, ctx.config);
+    }
     if (!encode_device) {
       return std::nullopt;
     }
@@ -2820,6 +2858,11 @@ namespace video {
     ctx.hdr_events->raise(std::move(hdr_info));
 
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
+    if (!session && downgrade_yuv444_to_420(ctx.config, ctx.chroma_downgrade_events, "encoder session creation")) {
+      if (auto fallback_device = make_encode_device(*disp, encoder, ctx.config)) {
+        session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(fallback_device));
+      }
+    }
     if (!session) {
       return std::nullopt;
     }
@@ -3123,6 +3166,9 @@ namespace video {
       auto &encoder = *enc_ptr;
 
       auto encode_device = make_encode_device(*display, encoder, config);
+      if (!encode_device && downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "encode device creation")) {
+        encode_device = make_encode_device(*display, encoder, config);
+      }
       if (!encode_device) {
         return;
       }
@@ -3182,6 +3228,7 @@ namespace video {
         std::move(idr_events),
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
+        mail->event<bool>(mail::chroma_downgrade),
         config,
         1,
         channel_data,
@@ -3420,7 +3467,11 @@ namespace video {
     {
       // H.264 is special because encoders may support YUV 4:4:4 without supporting 10-bit color depth
       if (encoder.flags & YUV444_SUPPORT) {
-        config_t config_h264_yuv444 {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 1};
+        // All 13 config_t fields must be spelled out: an earlier 11-value
+        // initializer silently landed the trailing 1 on prefer_sdr_10bit,
+        // leaving chromaSamplingType 0 — so this probe validated 4:2:0 and
+        // H.264 4:4:4 was advertised on GPUs that can't encode it.
+        config_t config_h264_yuv444 {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, false, 1, 0};
         encoder.h264[encoder_t::YUV444] = disp->is_codec_supported(encoder.h264.name, config_h264_yuv444) &&
                                           validate_config(disp, encoder, config_h264_yuv444) >= 0;
       } else {

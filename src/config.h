@@ -44,6 +44,12 @@ namespace config {
     int av1_mode;
     bool prefer_10bit_sdr;
 
+    /// Allow YUV 4:4:4 chroma sampling to be advertised to and negotiated
+    /// with clients. Only takes effect when the encoder probe confirmed the
+    /// GPU can encode 4:4:4; on GPUs without that capability nothing is
+    /// advertised regardless of this setting.
+    bool yuv444_streaming;
+
     int min_threads;  // Minimum number of threads/slices for CPU encoding
 
     struct {
@@ -261,7 +267,7 @@ namespace config {
     /// virtual controller, for clients whose Guide button can't be forwarded
     /// (e.g. Steam Deck via MoonDeck, where gamescope consumes the Steam
     /// button locally). Values: "disabled" (default), "start_back", "back_x",
-    /// "back_y", "dpad_right_x", "dpad_left_y", "lb_rb_start".
+    /// "back_y", "dpad_right_x", "dpad_left_y".
     std::string gamepad_guide_button_combo;
 
     std::chrono::milliseconds key_repeat_delay;
