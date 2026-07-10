@@ -2496,6 +2496,9 @@ namespace video {
     return nullptr;
   }
 
+  // Defined below; needed here for the YUV 4:4:4 fallback retries in encode_run.
+  std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config);
+
   /**
    * @brief Downgrade an in-flight YUV 4:4:4 session to 4:2:0 after an encoder failure.
    * @param config The session's encode configuration, mutated to 4:2:0 on downgrade.
