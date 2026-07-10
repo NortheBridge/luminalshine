@@ -35,6 +35,102 @@
       </div>
     </n-alert>
 
+    <!-- Public signing information for the shipped binaries, plus the
+         reserved space for the future LuminalVGD driver's identity block.
+         Static/identity data only — no actions, no backend calls beyond the
+         metadata the store already fetched. -->
+    <section class="troubleshoot-card">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="flex items-start gap-3">
+          <i class="fas fa-file-signature text-primary mt-1" />
+          <div class="min-w-0">
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{ translate('troubleshooting.signing_title', 'Binary Signing — LuminalShine') }}
+            </h2>
+            <p class="text-xs opacity-80 leading-snug mt-1">
+              {{
+                translate(
+                  'troubleshooting.signing_body',
+                  'All release binaries (installer, MSI, portable executables) are Authenticode-signed in CI via SSL.com eSigner cloud signing. To verify a download: right-click the file → Properties → Digital Signatures, or run Get-AuthenticodeSignature in PowerShell — the publisher must read exactly as below.',
+                )
+              }}
+            </p>
+            <div class="mt-2 flex flex-wrap items-center gap-1 text-xs">
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.signing_publisher', 'Publisher') }}: NortheBridge
+                Foundation
+              </span>
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.signing_method', 'Signature') }}: Authenticode
+                (SSL.com eSigner)
+              </span>
+              <span
+                v-if="signingVersionBadge"
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ signingVersionBadge }}
+              </span>
+              <span
+                v-if="signingBuiltBadge"
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.signing_built', 'Built') }}: {{ signingBuiltBadge }}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-start gap-3">
+          <i class="fas fa-display text-primary mt-1 opacity-60" />
+          <div class="min-w-0">
+            <h2 class="text-base font-semibold text-dark dark:text-light">
+              {{
+                translate(
+                  'troubleshooting.luminalvgd_title',
+                  'LuminalVGD (Luminal Video Graphics Display)',
+                )
+              }}
+            </h2>
+            <p class="text-xs opacity-80 leading-snug mt-1">
+              {{
+                translate(
+                  'troubleshooting.luminalvgd_body',
+                  'Reserved for the upcoming LuminalVGD virtual display driver. Once the driver ships, this space will show its public signing information, the driver version, the LuminalShine release it shipped with, and its build time.',
+                )
+              }}
+            </p>
+            <div class="mt-2 flex flex-wrap items-center gap-1 text-xs opacity-60">
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.luminalvgd_driver_version', 'Driver version') }}: —
+              </span>
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{
+                  translate('troubleshooting.luminalvgd_shipped_with', 'Shipped with LuminalShine')
+                }}: —
+              </span>
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.luminalvgd_built', 'Built') }}: —
+              </span>
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.signing_method', 'Signature') }}: —
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div class="troubleshoot-grid">
       <section class="troubleshoot-card">
         <div class="flex items-start justify-between gap-4 flex-wrap">
@@ -734,6 +830,15 @@ const store = useConfigStore();
 const authStore = useAuthStore();
 const { t } = useI18n();
 const platform = computed(() => store.metadata.platform);
+
+// Version/build identity chips for the signing card, from /api/metadata.
+const signingVersionBadge = computed(() => {
+  const version = store.metadata?.version;
+  if (!version) return '';
+  const commit = String(store.metadata?.commit || '').slice(0, 9);
+  return commit ? `v${version} (${commit})` : `v${version}`;
+});
+const signingBuiltBadge = computed(() => store.metadata?.release_date || '');
 
 const crashDump = ref<CrashDumpStatus | null>(null);
 const crashDumpAvailable = computed(() => isCrashDumpEligible(crashDump.value));

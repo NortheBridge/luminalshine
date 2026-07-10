@@ -187,14 +187,6 @@ export function getConfigSelectOptions(
           label: translateOr(t, 'config.gamepad_guide_button_combo_dpad_left_y', 'D-Pad Left + Y'),
           value: 'dpad_left_y',
         },
-        {
-          label: translateOr(
-            t,
-            'config.gamepad_guide_button_combo_lb_rb_start',
-            'LB + RB + Start (least accidental)',
-          ),
-          value: 'lb_rb_start',
-        },
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);
     }

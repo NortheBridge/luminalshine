@@ -41,7 +41,9 @@ interface SessionPayload {
     fps?: number;
     bitrate_mbps_target?: number;
     hdr?: boolean;
-    yuv444?: boolean;
+    // Boolean at session start; may become the string "false" after a
+    // metadata_update patch (the patch channel only carries strings).
+    yuv444?: boolean | string;
     audio_channels?: number;
     application?: string;
     cpu_model?: string;
@@ -84,7 +86,7 @@ const chips = computed(() => {
     out.push({ label: `${m.resolution_w}×${m.resolution_h}${fps}`, tone: 'default' });
   }
   if (m.hdr) out.push({ label: 'HDR', tone: 'warning' });
-  if (m.yuv444) out.push({ label: 'YUV444', tone: 'success' });
+  if (m.yuv444 === true || m.yuv444 === 'true') out.push({ label: 'YUV444', tone: 'success' });
   if (m.audio_channels) out.push({ label: `${m.audio_channels}ch`, tone: 'default' });
   return out;
 });

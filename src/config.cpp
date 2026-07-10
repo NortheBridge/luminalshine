@@ -737,6 +737,7 @@ namespace config {
     0,  // hevc_mode
     0,  // av1_mode
     false,  // prefer_10bit_sdr
+    true,  // yuv444_streaming
 
     2,  // min_threads
     {
@@ -1462,6 +1463,7 @@ namespace config {
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
     int_between_f(vars, "av1_mode", video.av1_mode, {0, 3});
     bool_f(vars, "prefer_10bit_sdr", video.prefer_10bit_sdr);
+    bool_f(vars, "yuv444_streaming", video.yuv444_streaming);
     int_f(vars, "min_threads", video.min_threads);
     string_f(vars, "sw_preset", video.sw.sw_preset);
     if (!video.sw.sw_preset.empty()) {
@@ -1732,8 +1734,8 @@ namespace config {
 
     string_f(vars, "gamepad_guide_button_combo", input.gamepad_guide_button_combo);
     {
-      static constexpr std::array<std::string_view, 7> allowed_guide_combos {
-        "disabled", "start_back", "back_x", "back_y", "dpad_right_x", "dpad_left_y", "lb_rb_start"
+      static constexpr std::array<std::string_view, 6> allowed_guide_combos {
+        "disabled", "start_back", "back_x", "back_y", "dpad_right_x", "dpad_left_y"
       };
       if (std::find(allowed_guide_combos.begin(), allowed_guide_combos.end(), input.gamepad_guide_button_combo) == allowed_guide_combos.end()) {
         BOOST_LOG(warning) << "config: gamepad_guide_button_combo has unknown value '" << input.gamepad_guide_button_combo << "'; disabling.";
@@ -2131,6 +2133,7 @@ namespace config {
         "hevc_mode",
         "av1_mode",
         "prefer_10bit_sdr",
+        "yuv444_streaming",
         "capture",
         "encoder",
 

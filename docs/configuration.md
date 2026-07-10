@@ -503,8 +503,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             Steam button is consumed locally — so the host's Steam overlay
             stays reachable mid-session.
             @tip{The combo buttons themselves still reach the game; pick a
-            combination your game does not use. "lb_rb_start" is the least
-            likely to trigger accidentally.}
+            combination your game does not use.}
 
             Choices:
             @code{}
@@ -514,7 +513,6 @@ editing the `conf` file in a text editor. Use the examples as reference.
             back_y       -> Back (View) + Y
             dpad_right_x -> D-Pad Right + X
             dpad_left_y  -> D-Pad Left + Y
-            lb_rb_start  -> LB + RB + Start (Menu)
             @endcode
         </td>
     </tr>
@@ -2513,6 +2511,37 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td>Example</td>
         <td colspan="2">@code{}
             prefer_10bit_sdr = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### yuv444_streaming
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allow YUV 4:4:4 chroma sampling (full-resolution color) to be
+            advertised to and negotiated with Moonlight clients. Auto-engages:
+            when the encoder probe confirms the GPU can encode 4:4:4, capable
+            clients negotiate it automatically with no interaction required.
+            On GPUs without 4:4:4 support nothing is advertised regardless of
+            this setting.
+            @note{If a 4:4:4 session fails to start mid-stream (e.g. the GPU
+            driver or display path rejects it), LuminalShine logs an error and
+            falls back to YUV 4:2:0 for that session automatically.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            yuv444_streaming = disabled
             @endcode</td>
     </tr>
 </table>

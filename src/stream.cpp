@@ -483,6 +483,7 @@ namespace stream {
 
       platf::feedback_queue_t feedback_queue;
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
+      safe::mail_raw_t::event_t<bool> chroma_downgrade_queue;
     } control;
 
     std::uint32_t launch_session_id;
@@ -1400,6 +1401,20 @@ namespace stream {
               auto hdr_info = hdr_queue->pop();
 
               send_hdr_mode(session, std::move(hdr_info));
+            }
+
+            // The video thread downgraded an in-flight YUV 4:4:4 session to
+            // 4:2:0 — patch the session stats so they show the effective
+            // chroma, not the negotiated one.
+            auto &chroma_downgrade_queue = session->control.chroma_downgrade_queue;
+            while (chroma_downgrade_queue->peek()) {
+              chroma_downgrade_queue->pop();
+              if (config::stream.session_monitor) {
+                session_mon::metadata_update(
+                  session_mon::make_id(session->launch_session_id),
+                  {{"yuv444", "false"}}
+                );
+              }
             }
           }
 
@@ -2688,6 +2703,7 @@ namespace stream {
       session->control.connect_data = launch_session.control_connect_data;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
       session->control.hdr_queue = mail->event<video::hdr_info_t>(mail::hdr);
+      session->control.chroma_downgrade_queue = mail->event<bool>(mail::chroma_downgrade);
       session->control.legacy_input_enc_iv = launch_session.iv;
       session->control.cipher = crypto::cipher::gcm_t {
         launch_session.gcm_key,

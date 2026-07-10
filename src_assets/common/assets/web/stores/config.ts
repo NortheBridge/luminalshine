@@ -249,6 +249,10 @@ const defaultGroups = [
       hevc_mode: 0,
       av1_mode: 0,
       prefer_10bit_sdr: false,
+      // Allow YUV 4:4:4 negotiation. Default ON to match the C++ struct's
+      // `bool yuv444_streaming {true}`; the Capture tab locks the switch off
+      // when the encoder probe reports no 4:4:4-capable codec.
+      yuv444_streaming: true,
       capture: '',
       encoder: '',
       // Per-session telemetry to the LuminalShineSessionMonitor
