@@ -25,6 +25,7 @@ import { NDrawer, NDrawerContent, NButton, NTabs, NTabPane, NTag, useDialog, use
 import uPlot, { type Options as UPlotOptions, type AlignedData } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { http } from '@/http';
+import { useAuthStore } from '@/stores/auth';
 
 type Series = number[];
 interface SessionPayload {
@@ -61,6 +62,8 @@ const emit = defineEmits<{
 
 const dialog = useDialog();
 const message = useMessage();
+const auth = useAuthStore();
+const isStatsOnly = computed(() => auth.isStatsOnly());
 
 const session = ref<SessionPayload | null>(null);
 const loading = ref(false);
@@ -514,10 +517,11 @@ function close() {
             </div>
           </div>
 
-          <!-- Top-right actions -->
+          <!-- Top-right actions (hidden for stats-only sessions — the
+               backend denies these endpoints to that role anyway) -->
           <div class="flex items-center gap-2 shrink-0">
             <NButton
-              v-if="isActive"
+              v-if="isActive && !isStatsOnly"
               type="error"
               size="small"
               strong
@@ -618,7 +622,14 @@ function close() {
         <NButton size="small" tertiary @click="exportSession" :disabled="!session">
           Export JSON
         </NButton>
-        <NButton size="small" type="error" ghost @click="deleteSession" :disabled="!session || isActive">
+        <NButton
+          v-if="!isStatsOnly"
+          size="small"
+          type="error"
+          ghost
+          @click="deleteSession"
+          :disabled="!session || isActive"
+        >
           Delete
         </NButton>
       </footer>

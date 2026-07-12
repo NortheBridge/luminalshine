@@ -72,9 +72,43 @@ namespace cred_store {
   /**
    * @brief Remove the credential record at @p key. Used by the
    *        "Reset Admin Credentials" Troubleshooting flow (PR 3) and
-   *        by the MSI uninstall custom action (PR 6).
+   *        by the MSI uninstall custom action (PR 6). Also clears the
+   *        quarantine slot — a user-intentional reset wants a clean
+   *        slate.
    * @return true on success or "did not exist"; false on hard errors.
    */
   bool erase(std::string_view key);
+
+  /**
+   * @brief Result of a non-destructive credential-record probe.
+   */
+  enum class probe_result {
+    absent,  ///< No record is stored at the key.
+    present_loadable,  ///< A record exists and its bytes can be produced (unsealed if sealed).
+    present_unloadable  ///< A record exists but cannot currently be read or unsealed.
+  };
+
+  /**
+   * @brief Probe the credential record at @p key WITHOUT side effects.
+   *
+   * Unlike `load()`, this never erases, quarantines, or otherwise
+   * mutates the store — it exists so callers can distinguish "no
+   * credentials configured" from "credentials exist but are locked
+   * (e.g. transient TPM unavailability)" before deciding to enter
+   * first-time setup. `present_unloadable` means first-user setup
+   * must be refused: accepting it would overwrite a real record.
+   */
+  probe_result probe(std::string_view key);
+
+  /**
+   * @brief Preserve @p blob in the backend's single quarantine slot
+   *        (overwriting any previous quarantined value). Called by the
+   *        self-heal paths immediately before they remove a record they
+   *        classified as unrecoverable, so a misclassification never
+   *        destroys the only copy. The slot lives in the same trust
+   *        boundary as the primary record.
+   * @return true on success.
+   */
+  bool quarantine(std::string_view key, std::string_view blob);
 
 }  // namespace cred_store

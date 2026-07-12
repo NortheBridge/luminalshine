@@ -55,7 +55,34 @@ namespace cred_store {
 
   namespace {
     constexpr wchar_t kTargetName[] = L"LuminalShine/AdminCredentials";
+    constexpr wchar_t kQuarantineTargetName[] = L"LuminalShine/AdminCredentials.quarantine";
     constexpr const char *kBackendName = "windows-credential-manager";
+
+    /// Write @p blob (raw bytes, sealed or not) to the quarantine slot.
+    /// Single slot, overwritten on each call. Same CRED_TYPE_GENERIC /
+    /// LOCAL_MACHINE persistence — and therefore the same trust
+    /// boundary — as the primary record.
+    bool write_quarantine_slot(std::string_view blob) {
+      CREDENTIALW cred {};
+      cred.Type = CRED_TYPE_GENERIC;
+      cred.TargetName = const_cast<LPWSTR>(kQuarantineTargetName);
+      cred.CredentialBlobSize = static_cast<DWORD>(blob.size());
+      cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(blob.data()));
+      cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+      std::wstring username_label = L"LuminalShine";
+      cred.UserName = username_label.data();
+      if (!CredWriteW(&cred, 0)) {
+        BOOST_LOG(warning) << "cred_store(wcm): quarantine CredWrite failed (err="
+                           << GetLastError() << "); the record will be removed "
+                           << "WITHOUT a preserved copy.";
+        return false;
+      }
+      BOOST_LOG(error) << "cred_store(wcm): the credential record was preserved in "
+                       << "the quarantine slot (LuminalShine/AdminCredentials.quarantine) "
+                       << "before removal. If this self-heal was wrong, support can "
+                       << "recover the original bytes from that slot.";
+      return true;
+    }
 
     // Guards the one-shot import path. We need this lock because the
     // file-to-WCM migration and a concurrent save_user_creds could
@@ -388,6 +415,7 @@ namespace cred_store {
                              << "The blob is unrecoverable; erasing it so "
                              << "first-time setup can recover. Paired "
                              << "clients and apps are unaffected.";
+          write_quarantine_slot(raw);
           if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
             BOOST_LOG(warning) << "cred_store(wcm): CredDelete during orphan "
                                << "self-heal failed (err="
@@ -412,6 +440,7 @@ namespace cred_store {
                              << "The blob is unrecoverable; erasing it so "
                              << "first-time setup can recover. Paired "
                              << "clients and apps are unaffected.";
+          write_quarantine_slot(raw);
           if (!CredDeleteW(kTargetName, CRED_TYPE_GENERIC, 0)) {
             BOOST_LOG(warning) << "cred_store(wcm): CredDelete during binding-"
                                << "mismatch self-heal failed (err="
@@ -487,6 +516,55 @@ namespace cred_store {
     return true;
   }
 
+  probe_result probe(std::string_view key) {
+    maybe_import_file_once(key);
+
+    PCREDENTIALW cred = nullptr;
+    if (!CredReadW(kTargetName, CRED_TYPE_GENERIC, 0, &cred)) {
+      const DWORD err = GetLastError();
+      if (err == ERROR_NOT_FOUND) {
+        return probe_result::absent;
+      }
+      // The record may exist but be unreadable (access/vault error) —
+      // treat as locked rather than absent so callers don't offer
+      // first-time setup over a real record.
+      BOOST_LOG(warning) << "cred_store(wcm): probe CredRead failed (err=" << err
+                         << "); treating record as present but unloadable.";
+      return probe_result::present_unloadable;
+    }
+    std::string raw;
+    if (cred) {
+      if (cred->CredentialBlobSize > 0 && cred->CredentialBlob) {
+        raw.assign(
+          reinterpret_cast<const char *>(cred->CredentialBlob),
+          static_cast<size_t>(cred->CredentialBlobSize)
+        );
+      }
+      CredFree(cred);
+    }
+    if (raw.empty()) {
+      // Broken zero-byte entry. load()'s self-heal owns the cleanup;
+      // the probe just reports that nothing usable can be produced.
+      return probe_result::present_unloadable;
+    }
+    if (tpm_seal::looks_sealed(raw)) {
+      std::string unsealed;
+      const bool ok = tpm_seal::unseal(raw, unsealed) && !unsealed.empty();
+      if (!unsealed.empty()) {
+        SecureZeroMemory(unsealed.data(), unsealed.size());
+      }
+      SecureZeroMemory(raw.data(), raw.size());
+      return ok ? probe_result::present_loadable : probe_result::present_unloadable;
+    }
+    SecureZeroMemory(raw.data(), raw.size());
+    return probe_result::present_loadable;
+  }
+
+  bool quarantine(std::string_view key, std::string_view blob) {
+    (void) key;
+    return write_quarantine_slot(blob);
+  }
+
   bool erase(std::string_view key) {
     (void) key;
     bool ok = true;
@@ -499,6 +577,14 @@ namespace cred_store {
     } else {
       BOOST_LOG(info) << "cred_store(wcm): credential entry " << "LuminalShine/AdminCredentials"
                       << " removed.";
+    }
+    // A user-intentional reset also discards any quarantined copy —
+    // the clean slate must not silently retain old credential bytes.
+    if (!CredDeleteW(kQuarantineTargetName, CRED_TYPE_GENERIC, 0)) {
+      const DWORD err = GetLastError();
+      if (err != ERROR_NOT_FOUND) {
+        BOOST_LOG(warning) << "cred_store(wcm): quarantine-slot CredDelete failed (err=" << err << ")";
+      }
     }
     // Also delete the TPM-bound wrapping key. A future credential save
     // will regenerate it (cheap on TPM 2.0 hardware) so this gives the

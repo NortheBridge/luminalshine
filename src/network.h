@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <array>
 #include <tuple>
 #include <utility>
 
@@ -48,6 +49,29 @@ namespace net {
   std::string_view to_enum_string(net_e net);
 
   net_e from_address(const std::string_view &view);
+
+  /**
+   * @brief Compare the leading bits of two IPv6 addresses.
+   * @param a The first address, as 16 bytes in network byte order.
+   * @param b The second address, as 16 bytes in network byte order.
+   * @param prefix_len The number of leading bits to compare, clamped to 128. 128 requires an exact match; 0 matches everything.
+   * @return true if the first prefix_len bits of both addresses are equal.
+   */
+  bool v6_prefix_match(const std::array<unsigned char, 16> &a, const std::array<unsigned char, 16> &b, unsigned prefix_len);
+
+  /**
+   * @brief Check whether an IPv6 address is on-link for any local network adapter.
+   * @details Enumerates the IPv6 unicast addresses of operational (non-loopback) local adapters and
+   *          checks the given address against each address's real per-address on-link prefix length,
+   *          so peers reached over on-link global-unicast addresses can be classified as LAN.
+   *          The adapter prefix list is cached with a short TTL and refreshed lazily.
+   *          Caveat: On point-to-point or provider-bridged links where the ISP shares an on-link prefix
+   *          across subscribers, on-link peers are classified LAN; the Web UI remains password-gated.
+   *          Windows only; always returns false on other platforms.
+   * @param addr The IPv6 address to check.
+   * @return true if the address falls within an on-link prefix of an operational local adapter.
+   */
+  bool is_on_link_ipv6(const boost::asio::ip::address_v6 &addr);
 
   host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port);
 

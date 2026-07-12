@@ -5,12 +5,14 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -31,6 +33,7 @@
 #include "cred_store/cred_store.h"
 #include "crypto.h"
 #include "file_handler.h"
+#include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
 #include "network.h"
@@ -353,6 +356,86 @@ namespace http {
   int reload_user_creds(const std::string &file);
   bool user_creds_exist(const std::string &file);
 
+  // Guards the in-RAM credential fields in config::sunshine
+  // ({username,password,salt,password_kdf,argon2_*}). Writers
+  // (reload_user_creds, clear_user_creds_in_ram) take it uniquely;
+  // verify_user_password snapshots under a shared lock. This is
+  // deliberately separate from statefile::state_mutex(), which
+  // serializes the PERSISTED record — the RAM fields were previously
+  // read lock-free by the verifier while the upgrade-on-login path
+  // reassigned them, a genuine data race on std::string.
+  //
+  // Lock order where both are held: statefile::state_mutex() FIRST,
+  // then creds_ram_mutex (reload_user_creds runs under state_mutex and
+  // takes creds_ram_mutex internally). Never acquire in the reverse
+  // order.
+  std::shared_mutex creds_ram_mutex;
+
+  namespace {
+    // "Credentials present but locked": set when cred_store::probe()
+    // reports a record that exists but cannot currently be unsealed
+    // (typically the TPM / Platform Crypto Provider losing a race with
+    // service start). While true, first-user setup MUST be refused —
+    // a real record exists and accepting new credentials would
+    // overwrite it — and /api/auth/status reports the state so the
+    // SPA explains instead of offering setup.
+    std::atomic<bool> creds_locked_flag {false};
+
+    void schedule_creds_reload_retry(int attempts_left);
+
+    // One bounded retry attempt. Runs on the task_pool, never on a
+    // request thread; each attempt re-schedules the next until the
+    // store recovers, the record disappears, or attempts run out.
+    void creds_reload_retry_once(int attempts_left) {
+      {
+        std::lock_guard<std::mutex> guard(statefile::state_mutex());
+        const auto probed = cred_store::probe(config::sunshine.credentials_file);
+        if (probed == cred_store::probe_result::absent) {
+          // The record vanished while locked (offline reset shortcut) —
+          // unlock so first-time setup becomes available again.
+          creds_locked_flag.store(false, std::memory_order_release);
+          BOOST_LOG(warning) << "Admin credential record no longer present; first-time setup re-enabled.";
+          return;
+        }
+        if (probed == cred_store::probe_result::present_loadable) {
+          if (reload_user_creds(config::sunshine.credentials_file) == 0) {
+            BOOST_LOG(info) << "Admin credentials recovered after a transient credential-store failure; "
+                            << "login is available again.";
+          } else {
+            // Store-level readable but the record itself is invalid —
+            // run the standard self-heal (quarantine + erase) so the
+            // user lands at first-time setup rather than a dead login.
+            (void) user_creds_exist(config::sunshine.credentials_file);
+          }
+          creds_locked_flag.store(false, std::memory_order_release);
+          return;
+        }
+      }
+      if (attempts_left > 1) {
+        schedule_creds_reload_retry(attempts_left - 1);
+      } else {
+        BOOST_LOG(error) << "Admin credentials are still locked after the bounded retry window "
+                         << "(credential store present but not unsealable). Login and first-user "
+                         << "setup remain disabled to protect the stored record. Restart "
+                         << "LuminalShine once the TPM is available, or use the Start Menu "
+                         << "'Reset LuminalShine Admin Password' shortcut to recover.";
+      }
+    }
+
+    void schedule_creds_reload_retry(int attempts_left) {
+      task_pool.pushDelayed(
+        [attempts_left]() {
+          creds_reload_retry_once(attempts_left);
+        },
+        std::chrono::seconds(10)
+      );
+    }
+  }  // namespace
+
+  bool user_creds_locked() {
+    return creds_locked_flag.load(std::memory_order_acquire);
+  }
+
   std::string unique_id;
   net::net_e origin_web_ui_allowed;
 
@@ -468,10 +551,32 @@ namespace http {
     {
       std::lock_guard<std::mutex> guard(statefile::state_mutex());
       migrate_credentials_into_dedicated_file();
-      if (!user_creds_exist(config::sunshine.credentials_file)) {
-        BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
-      } else if (reload_user_creds(config::sunshine.credentials_file)) {
-        return -1;
+      // Non-destructive probe FIRST: distinguish "no credentials" from
+      // "credentials exist but are locked" (e.g. the TPM / Platform
+      // Crypto Provider losing a race with service start). Entering
+      // first-run mode over a locked record is how stored passwords
+      // got silently overwritten by the setup flow.
+      switch (cred_store::probe(config::sunshine.credentials_file)) {
+        case cred_store::probe_result::absent:
+          BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
+          break;
+        case cred_store::probe_result::present_unloadable:
+          creds_locked_flag.store(true, std::memory_order_release);
+          BOOST_LOG(error) << "Admin credentials exist but could not be unsealed at startup "
+                           << "(transient credential-store / TPM failure suspected). First-user "
+                           << "setup is disabled to protect the stored record; retrying in the "
+                           << "background for up to 5 minutes.";
+          schedule_creds_reload_retry(30);
+          break;
+        case cred_store::probe_result::present_loadable:
+          if (!user_creds_exist(config::sunshine.credentials_file)) {
+            // Present at the store level but not a valid credential
+            // record — user_creds_exist quarantined and erased it.
+            BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
+          } else if (reload_user_creds(config::sunshine.credentials_file)) {
+            return -1;
+          }
+          break;
       }
     }
     return 0;
@@ -623,6 +728,12 @@ namespace http {
       BOOST_LOG(warning) << "user_creds_exist: stored credential at "
                          << file << " is unparseable or missing required fields; "
                          << "erasing so first-time setup can recover.";
+      // Preserve the suspect bytes before removal — if this self-heal
+      // misdiagnosed the record, the quarantine slot is the only copy.
+      if (!cred_store::quarantine(file, blob)) {
+        BOOST_LOG(warning) << "user_creds_exist: quarantine write failed; the "
+                           << "record will be erased without a preserved copy.";
+      }
       if (!cred_store::erase(file)) {
         BOOST_LOG(warning) << "user_creds_exist: cred_store::erase failed during "
                            << "self-heal; the next login attempt will fail again "
@@ -660,6 +771,7 @@ namespace http {
       return -1;
     }
     try {
+      std::unique_lock lock(creds_ram_mutex);
       config::sunshine.username = inputTree.get<std::string>("username");
       config::sunshine.password = inputTree.get<std::string>("password");
       config::sunshine.salt = inputTree.get<std::string>("salt");
@@ -691,26 +803,54 @@ namespace http {
     return 0;
   }
 
+  void clear_user_creds_in_ram() {
+    std::unique_lock lock(creds_ram_mutex);
+    config::sunshine.username.clear();
+    config::sunshine.password.clear();
+    config::sunshine.salt.clear();
+    config::sunshine.password_kdf.clear();
+  }
+
   bool verify_user_password(const std::string &username, const std::string &password) {
+    // Snapshot the in-RAM credential record under the shared lock so a
+    // concurrent reload (upgrade-on-login, password change, reset) can't
+    // mutate the strings mid-compare. The KDF work below runs on the
+    // snapshot, outside the lock.
+    std::string stored_username, stored_password, stored_salt, kdf;
+    std::uint32_t m_cost, t_cost, parallel;
+    {
+      std::shared_lock lock(creds_ram_mutex);
+      stored_username = config::sunshine.username;
+      stored_password = config::sunshine.password;
+      stored_salt = config::sunshine.salt;
+      kdf = config::sunshine.password_kdf;
+      m_cost = config::sunshine.argon2_m_cost_kib;
+      t_cost = config::sunshine.argon2_t_cost;
+      parallel = config::sunshine.argon2_parallel;
+    }
+    auto snapshot_guard = util::fail_guard([&]() {
+      crypto::secure_wipe(stored_password);
+      crypto::secure_wipe(stored_salt);
+    });
+
     // Case-insensitive username comparison preserves the existing
     // behaviour of all three login sites; the encoded password hash
     // is compared byte-for-byte.
-    if (!boost::iequals(username, config::sunshine.username)) {
+    if (!boost::iequals(username, stored_username)) {
       return false;
     }
-    const auto &kdf = config::sunshine.password_kdf;
     const bool legacy = (kdf.empty() || kdf == "sha256");
 
     std::string computed;
     if (legacy) {
-      computed = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
+      computed = util::hex(crypto::hash(password + stored_salt)).to_string();
     } else if (kdf == "argon2id") {
       computed = crypto::argon2id(
         password,
-        config::sunshine.salt,
-        config::sunshine.argon2_m_cost_kib,
-        config::sunshine.argon2_t_cost,
-        config::sunshine.argon2_parallel
+        stored_salt,
+        m_cost,
+        t_cost,
+        parallel
       );
     } else {
       BOOST_LOG(warning) << "verify_user_password: stored KDF '" << kdf
@@ -726,7 +866,7 @@ namespace http {
       crypto::secure_wipe(computed);
     });
 
-    if (computed.empty() || computed != config::sunshine.password) {
+    if (computed.empty() || computed != stored_password) {
       return false;
     }
 

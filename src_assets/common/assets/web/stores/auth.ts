@@ -15,8 +15,10 @@ function readRememberPreference(): boolean {
 
 interface AuthStatusResponse {
   credentials_configured?: boolean;
+  credentials_locked?: boolean;
   authenticated?: boolean;
   login_required?: boolean;
+  role?: string;
 }
 
 export interface AuthSession {
@@ -46,6 +48,14 @@ export const useAuthStore = defineStore('auth', () => {
   const _listeners: AuthListener[] = [];
   const showLoginModal: Ref<boolean> = ref(false);
   const credentialsConfigured: Ref<boolean> = ref(true);
+  // Credentials exist on the host but are temporarily unloadable (e.g.
+  // TPM not ready at service start). Setup must not be offered.
+  const credentialsLocked: Ref<boolean> = ref(false);
+  // Session privilege from /api/auth/status: 'admin' (default) or 'stats'.
+  const role: Ref<string> = ref('admin');
+  // Set when the backend rejects API calls with error === 'origin_forbidden';
+  // carries the host's allowed origin class ('pc' | 'lan' | 'wan').
+  const originForbiddenAllowed: Ref<string> = ref('');
   const loggingIn: Ref<boolean> = ref(false);
   const logoutInitiated: Ref<boolean> = ref(false);
   const sessions: Ref<AuthSession[]> = ref([]);
@@ -105,7 +115,11 @@ export const useAuthStore = defineStore('auth', () => {
       if (typeof payload.credentials_configured === 'boolean') {
         credentialsConfigured.value = payload.credentials_configured;
       }
+      if (typeof payload.credentials_locked === 'boolean') {
+        credentialsLocked.value = payload.credentials_locked;
+      }
       if (payload.authenticated) {
+        role.value = payload.role === 'stats' ? 'stats' : 'admin';
         setAuthenticated(true);
       }
       return !!(payload.login_required && !payload.authenticated);
@@ -223,6 +237,18 @@ export const useAuthStore = defineStore('auth', () => {
     return false;
   }
 
+  function isStatsOnly(): boolean {
+    return isAuthenticated.value && role.value === 'stats';
+  }
+
+  function setRole(v: string): void {
+    role.value = v === 'stats' ? 'stats' : 'admin';
+  }
+
+  function setOriginForbidden(allowed: string): void {
+    originForbiddenAllowed.value = allowed || 'unknown';
+  }
+
   return {
     isAuthenticated,
     ready,
@@ -235,6 +261,12 @@ export const useAuthStore = defineStore('auth', () => {
     hideLogin,
     credentialsConfigured,
     setCredentialsConfigured,
+    credentialsLocked,
+    role,
+    setRole,
+    isStatsOnly,
+    originForbiddenAllowed,
+    setOriginForbidden,
     waitForAuthentication,
     loggingIn,
     logoutInitiated,

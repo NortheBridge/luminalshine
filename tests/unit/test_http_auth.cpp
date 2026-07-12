@@ -388,7 +388,8 @@ TEST(SessionTokenManagerStatefulTest, RefreshTokenRenewsExpiredAccessToken) {
     std::chrono::seconds(60),
     "AgentA",
     "127.0.0.1",
-    true
+    true,
+    SessionRole::admin
   );
 
   EXPECT_EQ(bundle.session_token, "session-1");
@@ -405,6 +406,101 @@ TEST(SessionTokenManagerStatefulTest, RefreshTokenRenewsExpiredAccessToken) {
 
   EXPECT_FALSE(manager.refresh_session_tokens(bundle.refresh_token, "AgentB", "10.0.0.5").has_value());
   EXPECT_TRUE(manager.validate_session_token(refreshed->session_token));
+}
+
+TEST(SessionTokenManagerStatefulTest, RefreshPreservesStatsRole) {
+  SessionTokenManagerDependencies deps;
+  std::vector<std::string> token_stream {"session-1", "refresh-1", "rot-1", "session-2", "refresh-2", "rot-2"};
+  deps.rand_alphabet = [&token_stream](std::size_t) {
+    if (token_stream.empty()) {
+      return std::string("fallback");
+    }
+    auto value = token_stream.front();
+    token_stream.erase(token_stream.begin());
+    return value;
+  };
+  auto now = std::chrono::system_clock::now();
+  deps.now = [&]() {
+    return now;
+  };
+  deps.hash = [](const std::string &input) {
+    return input + "_hash";
+  };
+  deps.file_exists = [](const std::string &) {
+    return false;
+  };
+  deps.read_json = [](const std::string &, pt::ptree &) {
+  };
+  deps.write_json = [](const std::string &, const pt::ptree &) {
+  };
+
+  SessionTokenManager manager(deps);
+  auto bundle = manager.issue_session_tokens(
+    "admin",
+    std::chrono::seconds(60),
+    std::chrono::seconds(600),
+    "AgentA",
+    "127.0.0.1",
+    true,
+    SessionRole::stats
+  );
+
+  auto issued_role = manager.validate_session_token_role(bundle.session_token);
+  ASSERT_TRUE(issued_role.has_value());
+  EXPECT_EQ(*issued_role, SessionRole::stats);
+
+  // Rotation must carry the role verbatim — a stats session escalating
+  // to admin on refresh would be a privilege-escalation vulnerability.
+  auto refreshed = manager.refresh_session_tokens(bundle.refresh_token, "AgentB", "10.0.0.5");
+  ASSERT_TRUE(refreshed.has_value());
+  auto rotated_role = manager.validate_session_token_role(refreshed->session_token);
+  ASSERT_TRUE(rotated_role.has_value());
+  EXPECT_EQ(*rotated_role, SessionRole::stats);
+}
+
+TEST(SessionTokenManagerStatefulTest, PersistedSessionWithoutRoleDeserializesAsAdmin) {
+  // Sessions persisted before roles existed have no "role" key; they
+  // were all full-access logins and must keep working as admin.
+  SessionTokenManagerDependencies deps;
+  auto now = std::chrono::system_clock::now();
+  const auto epoch_secs = [&](std::chrono::system_clock::time_point tp) {
+    return std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch()).count();
+  };
+  deps.rand_alphabet = [](std::size_t) {
+    return std::string("unused");
+  };
+  deps.now = [&]() {
+    return now;
+  };
+  deps.hash = [](const std::string &input) {
+    return input + "_hash";
+  };
+  deps.file_exists = [](const std::string &) {
+    return true;
+  };
+  deps.read_json = [&](const std::string &, pt::ptree &root) {
+    pt::ptree node;
+    node.put("hash", "legacy-session_hash");
+    node.put("username", "admin");
+    node.put("created_at", epoch_secs(now));
+    node.put("expires_at", epoch_secs(now + std::chrono::seconds(600)));
+    node.put("refresh_expires_at", epoch_secs(now + std::chrono::seconds(3600)));
+    node.put("last_seen", epoch_secs(now));
+    node.put("remember_me", true);
+    node.put("refresh_token_hash", "legacy-refresh_hash");
+    pt::ptree sessions;
+    sessions.push_back({"", node});
+    root.put_child("root.session_tokens", sessions);
+  };
+  deps.write_json = [](const std::string &, const pt::ptree &) {
+  };
+
+  SessionTokenManager manager(deps);
+  manager.load_session_tokens();
+
+  auto role = manager.validate_session_token_role("legacy-session");
+  ASSERT_TRUE(role.has_value());
+  EXPECT_EQ(*role, SessionRole::admin);
 }
 
 TEST_F(ApiTokenManagerTest, given_invalid_token_when_authenticating_then_should_return_false) {

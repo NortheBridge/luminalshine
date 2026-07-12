@@ -796,10 +796,7 @@ namespace confighttp {
     // immediately observes the reset (without waiting for a service
     // restart). The first_user fallback path then prompts the Web UI
     // to create a fresh credential.
-    config::sunshine.username.clear();
-    config::sunshine.password.clear();
-    config::sunshine.salt.clear();
-    config::sunshine.password_kdf.clear();
+    http::clear_user_creds_in_ram();
 
     out["status"] = true;
     out["message"] = "Admin credentials removed; next Web UI visit will prompt for a new user.";
@@ -3627,8 +3624,41 @@ namespace confighttp {
         // First-user creation skips the credential check; otherwise
         // dispatch through the cross-KDF verifier so legacy SHA-256
         // records still authenticate and get upgraded.
-        const bool first_user = config::sunshine.username.empty();
-        if (first_user || http::verify_user_password(username, password)) {
+        bool first_user = config::sunshine.username.empty();
+        bool setup_refused = false;
+        if (first_user) {
+          // The in-RAM record being empty does NOT mean no credentials
+          // exist: a boot-time TPM race leaves a real record in the
+          // store while RAM stays empty, and accepting "first-user"
+          // credentials here silently overwrites it. Probe the store
+          // non-destructively under the state lock before trusting the
+          // first-user path.
+          std::lock_guard<std::mutex> guard(statefile::state_mutex());
+          switch (cred_store::probe(config::sunshine.credentials_file)) {
+            case cred_store::probe_result::present_unloadable:
+              setup_refused = true;
+              errors.emplace_back(
+                "Stored admin credentials exist but are temporarily locked "
+                "(credential store / TPM not ready). First-user setup is "
+                "disabled to protect them. Restart LuminalShine once the TPM "
+                "is available, or use the Start Menu 'Reset LuminalShine "
+                "Admin Password' shortcut on the host."
+              );
+              break;
+            case cred_store::probe_result::present_loadable:
+              // The store recovered after boot: load the real record and
+              // require the normal current-password check below.
+              if (http::reload_user_creds(config::sunshine.credentials_file) == 0) {
+                first_user = false;
+              }
+              break;
+            case cred_store::probe_result::absent:
+              break;
+          }
+        }
+        if (setup_refused) {
+          // errors already populated; fall through to the error response.
+        } else if (first_user || http::verify_user_password(username, password)) {
           if (newPassword.empty() || newPassword != confirmPassword) {
             errors.emplace_back("Password Mismatch");
           } else {
@@ -4487,7 +4517,11 @@ namespace confighttp {
       }
       std::string remote_address = net::addr_to_normalized_string(request->remote_endpoint().address());
 
-      APIResponse api_response = session_token_api.login(username, password, redirect_url, remember_me, user_agent, remote_address);
+      // Optional stats-only scope: same credential, least-privilege
+      // session limited to the read-only session-stats allowlist.
+      const auto role = input_tree.value("scope", "") == "stats" ? SessionRole::stats : SessionRole::admin;
+
+      APIResponse api_response = session_token_api.login(username, password, redirect_url, remember_me, user_agent, remote_address, role);
       write_api_response(response, api_response);
 
     } catch (const nlohmann::json::exception &e) {
@@ -4640,27 +4674,33 @@ namespace confighttp {
 
     bool credentials_configured = !config::sunshine.username.empty();
 
-    // Determine if current request has valid auth (session or bearer) using existing check_auth
+    // Determine if current request has valid auth (session or bearer).
     bool authenticated = false;
+    std::optional<SessionRole> session_role;
     if (credentials_configured) {
       if (auto result = check_auth(request); result.ok) {
-        authenticated = true;  // check_auth returns ok for public routes; refine below
-        // We only consider it authenticated if an auth header or cookie was present and validated.
+        // Session (header or cookie): resolve the role directly instead
+        // of probing check_auth with a fixed protected path — a
+        // stats-role session is denied /api/config by design and would
+        // otherwise be misreported as logged out.
+        std::string session_token;
         std::string auth_header;
         if (auto auth_it = request->header.find("authorization"); auth_it != request->header.end()) {
           auth_header = auth_it->second;
-        } else {
-          std::string token = extract_session_token_from_cookie(request->header);
-          if (!token.empty()) {
-            auth_header = "Session " + token;
+          if (auth_header.rfind("Session ", 0) == 0) {
+            session_token = auth_header.substr(8);
           }
-        }
-        if (auth_header.empty()) {
-          authenticated = false;  // public access granted but no credentials supplied
         } else {
-          // Re-run only auth layer for supplied header specifically to ensure validity
+          session_token = extract_session_token_from_cookie(request->header);
+        }
+
+        if (!session_token.empty()) {
+          session_role = session_token_api.session_role(session_token);
+          authenticated = session_role.has_value();
+        } else if (!auth_header.empty()) {
+          // Bearer/Basic: keep the legacy probe against a protected path.
           auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-          auto header_check = check_auth(address, auth_header, "/api/config", "GET");  // use protected path for validation
+          auto header_check = check_auth(address, auth_header, "/api/config", "GET");
           authenticated = header_check.ok;
         }
       }
@@ -4670,8 +4710,15 @@ namespace confighttp {
 
     nlohmann::json tree;
     tree["credentials_configured"] = credentials_configured;
+    // Credentials exist but are temporarily unloadable (boot-time TPM
+    // race). The SPA must show the locked explanation, NOT first-time
+    // setup, while this is true.
+    tree["credentials_locked"] = http::user_creds_locked();
     tree["login_required"] = login_required;
     tree["authenticated"] = authenticated;
+    if (authenticated) {
+      tree["role"] = std::string(session_role_to_string(session_role.value_or(SessionRole::admin)));
+    }
 
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json; charset=utf-8");
