@@ -25,6 +25,25 @@ namespace http {
   int reload_user_creds(const std::string &file);
 
   /**
+   * @brief Clear the in-RAM credential fields (username/password/salt/kdf)
+   *        under the credential RAM lock. Use instead of clearing the
+   *        config::sunshine fields directly — direct writes race
+   *        verify_user_password's snapshot.
+   */
+  void clear_user_creds_in_ram();
+
+  /**
+   * @brief Whether a stored admin credential record exists but is
+   *        currently unloadable (e.g. TPM transiently unavailable at
+   *        service start). While true, first-user setup must be refused
+   *        — accepting new credentials would overwrite the real record —
+   *        and the auth-status API should report the locked state
+   *        instead of offering setup. Cleared by the background retry
+   *        worker once the record loads (or disappears).
+   */
+  bool user_creds_locked();
+
+  /**
    * @brief Verify a plaintext username + password against the in-memory
    *        credential record loaded by `reload_user_creds`.
    *

@@ -27,6 +27,50 @@ INSTANTIATE_TEST_SUITE_P(
   )
 );
 
+namespace {
+  std::array<unsigned char, 16> v6_bytes(const std::string &addr) {
+    return boost::asio::ip::make_address_v6(addr).to_bytes();
+  }
+}  // namespace
+
+struct V6PrefixMatchTest: testing::TestWithParam<std::tuple<std::string, std::string, unsigned, bool>> {};
+
+TEST_P(V6PrefixMatchTest, Run) {
+  auto [a, b, prefix_len, expected] = GetParam();
+  ASSERT_EQ(net::v6_prefix_match(v6_bytes(a), v6_bytes(b), prefix_len), expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  V6PrefixMatchTests,
+  V6PrefixMatchTest,
+  testing::Values(
+    // prefix_len 0 matches everything
+    std::make_tuple("2001:db8::1", "fe80::1", 0u, true),
+    std::make_tuple("::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", 0u, true),
+    // prefix_len 1 compares only the most significant bit
+    std::make_tuple("::", "8000::", 1u, false),
+    std::make_tuple("8000::", "ffff::", 1u, true),
+    // byte-boundary straddling: 2001:db8:0:2:: and 2001:db8:0:3:: differ only at bit 63
+    std::make_tuple("2001:db8:0:2::", "2001:db8:0:3::", 63u, true),
+    std::make_tuple("2001:db8:0:2::", "2001:db8:0:3::", 64u, false),
+    // typical /64: same prefix, different interface identifiers
+    std::make_tuple("2001:db8:0:1::10", "2001:db8:0:1:aaaa:bbbb:cccc:dddd", 64u, true),
+    std::make_tuple("2001:db8:0:1::10", "2001:db8:0:2::10", 64u, false),
+    // bit 64 (first bit past the /64 boundary)
+    std::make_tuple("2001:db8::", "2001:db8:0:0:8000::", 64u, true),
+    std::make_tuple("2001:db8::", "2001:db8:0:0:8000::", 65u, false),
+    std::make_tuple("2001:db8:0:0:8000::", "2001:db8:0:0:8000:0:0:1", 65u, true),
+    // /127 point-to-point pairs differ only in the last bit
+    std::make_tuple("2001:db8::", "2001:db8::1", 127u, true),
+    std::make_tuple("2001:db8::", "2001:db8::1", 128u, false),
+    // prefix_len 128 requires an exact match
+    std::make_tuple("2001:db8::1", "2001:db8::1", 128u, true),
+    // mismatch in the very first byte fails for any non-zero prefix
+    std::make_tuple("2001:db8::1", "3001:db8::1", 8u, false),
+    std::make_tuple("2001:db8::1", "3001:db8::1", 128u, false)
+  )
+);
+
 /**
  * @brief Test fixture for bind_address tests with setup/teardown
  */

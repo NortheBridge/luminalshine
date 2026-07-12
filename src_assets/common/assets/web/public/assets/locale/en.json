@@ -1145,6 +1145,12 @@
     "creating_user": "Creating...",
     "create_user_failed": "Failed to create user",
     "user_created": "User created successfully",
+    "stats_only_label": "Stats view only",
+    "stats_only_hint": "Sign in with read-only access to active stream stats — no settings, apps, or client management. Ideal for a monitoring screen on another PC.",
+    "origin_forbidden": "This host's Web UI is not reachable from your network location: the 'origin_web_ui_allowed' setting currently allows only '{allowed}' access. Change it on the host (Settings → Network) or connect from an allowed location.",
+    "credentials_locked_title": "Credentials Temporarily Locked",
+    "credentials_locked_body": "The host's stored admin credentials exist but could not be unlocked (the TPM / credential store was not ready when LuminalShine started). LuminalShine is retrying in the background — try again in a minute.",
+    "credentials_locked_hint": "If this persists, restart LuminalShine on the host, or use the Start Menu 'Reset LuminalShine Admin Password' shortcut. Do not create new credentials elsewhere — your existing ones are intact and protected.",
     "generate_token_help": "Select one or more API routes and allowed HTTP methods to embed in the new token.",
     "selected_scopes": "Selected Scopes",
     "copy_token": "Copy Token",
@@ -1194,6 +1200,11 @@
     "sessions_time_unknown": "Unknown",
     "sessions_unknown_device": "Unknown device",
     "sessions_unknown_address": "Unknown address"
+  },
+  "stats": {
+    "nav": "Stream Stats",
+    "title": "Active Stream Stats",
+    "subtitle": "Read-only view of active and recent streaming sessions on this host. Click a session for live charts."
   },
   "rtss": {
     "tab": "Frame Limiter",

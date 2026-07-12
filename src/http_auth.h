@@ -178,6 +178,28 @@ namespace confighttp {
     std::map<std::string, ApiTokenInfo, std::less<>> _api_tokens;  ///< Token storage keyed by hash
   };
 
+  /**
+   * @brief Privilege level carried by a cookie session.
+   *
+   * The struct-level default is `stats` (least privilege) so any code
+   * path that forgets to set the role produces a read-only session,
+   * never an accidental admin one. Deserialization of persisted
+   * sessions maps a MISSING role to `admin` explicitly — a deliberate
+   * backward-compat decision for sessions issued before roles existed.
+   */
+  enum class SessionRole {
+    stats,  ///< Read-only: session-stats allowlist only (see stats_role_allows).
+    admin  ///< Full Web UI access (default for normal logins).
+  };
+
+  [[nodiscard]] constexpr std::string_view session_role_to_string(SessionRole role) {
+    return role == SessionRole::admin ? "admin" : "stats";
+  }
+
+  [[nodiscard]] constexpr SessionRole session_role_from_string(std::string_view value) {
+    return value == "stats" ? SessionRole::stats : SessionRole::admin;
+  }
+
   struct SessionToken {
     std::string username;
     std::chrono::system_clock::time_point created_at;
@@ -190,6 +212,7 @@ namespace confighttp {
     std::string device_label;
     std::string refresh_token_hash;
     std::string rotation_id;
+    SessionRole role {SessionRole::stats};
   };
 
   struct SessionTokenView {
@@ -249,9 +272,11 @@ namespace confighttp {
      * @param user_agent Reported user agent string.
      * @param remote_address Source address.
      * @param remember_me Whether to extend refresh lifetime for long-lived device trust.
+     * @param role Privilege level for the issued session. Explicit — no
+     *        default — so every issuance site states its intent.
      * @return Bundle containing raw tokens and effective TTLs.
      */
-    SessionTokenBundle issue_session_tokens(const std::string &username, std::chrono::seconds session_ttl = std::chrono::seconds::zero(), std::chrono::seconds refresh_ttl = std::chrono::seconds::zero(), const std::string &user_agent = std::string {}, const std::string &remote_address = std::string {}, bool remember_me = false);
+    SessionTokenBundle issue_session_tokens(const std::string &username, std::chrono::seconds session_ttl, std::chrono::seconds refresh_ttl, const std::string &user_agent, const std::string &remote_address, bool remember_me, SessionRole role);
     /**
      * @brief Refresh a session using a refresh token.
      * @param refresh_token Raw refresh token value.
@@ -266,6 +291,13 @@ namespace confighttp {
      * @return `true` if exists and not expired.
      */
     bool validate_session_token(const std::string &token);
+    /**
+     * @brief Validate a session token and return its role in one atomic
+     *        lookup — the enforcement point for stats-only sessions must
+     *        never validate and fetch the role in two steps.
+     * @return The session's role if the token is valid; std::nullopt otherwise.
+     */
+    std::optional<SessionRole> validate_session_token_role(const std::string &token);
     /**
      * @brief Revoke (delete) a session token.
      * @param token Token to remove.
@@ -377,7 +409,12 @@ namespace confighttp {
      * @param remember_me Whether the session should persist beyond the browser session.
      * @return API response containing token or error.
      */
-    APIResponse login(const std::string &username, const std::string &password, const std::string &redirect_url = "/", bool remember_me = false, const std::string &user_agent = std::string {}, const std::string &remote_address = std::string {});
+    APIResponse login(const std::string &username, const std::string &password, const std::string &redirect_url = "/", bool remember_me = false, const std::string &user_agent = std::string {}, const std::string &remote_address = std::string {}, SessionRole role = SessionRole::admin);
+    /**
+     * @brief Resolve the role of a valid session token (for /api/auth/status).
+     * @return Role if the token is valid; std::nullopt otherwise.
+     */
+    std::optional<SessionRole> session_role(const std::string &session_token);
     /**
      * @brief Invalidate the provided session token.
      * @param session_token Token to revoke.
@@ -456,7 +493,7 @@ namespace confighttp {
    * @param raw_auth Raw header or cookie string.
    * @return AuthResult with outcome.
    */
-  AuthResult check_session_auth(const std::string &raw_auth);
+  AuthResult check_session_auth(const std::string &raw_auth, const std::string &base_path, const std::string &method);
   /**
    * @brief Determine whether a request path expects an HTML response.
    * @param path Requested URI path.

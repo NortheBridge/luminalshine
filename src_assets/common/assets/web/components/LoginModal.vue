@@ -9,10 +9,16 @@
             <i class="fas fa-lock text-xl" />
           </div>
           <h2 class="text-xl font-semibold tracking-tight">
-            {{ credentialsConfigured ? t('auth.login_title') : t('auth.create_first_user') }}
+            {{
+              credentialsLocked
+                ? t('auth.credentials_locked_title')
+                : credentialsConfigured
+                  ? t('auth.login_title')
+                  : t('auth.create_first_user')
+            }}
           </h2>
           <p
-            v-if="!credentialsConfigured"
+            v-if="!credentialsConfigured && !credentialsLocked"
             class="text-xs font-medium uppercase tracking-wider opacity-70"
           >
             {{ t('auth.first_user_subtitle') }}
@@ -20,7 +26,20 @@
         </div>
       </template>
 
+      <!-- Credentials exist on the host but are temporarily unloadable
+           (TPM/credential store not ready). Never offer setup here —
+           submitting it would overwrite the real stored credentials. -->
+      <div v-if="credentialsLocked" class="px-1 py-2 space-y-4">
+        <n-alert type="warning" :show-icon="true">
+          {{ t('auth.credentials_locked_body') }}
+        </n-alert>
+        <p class="text-xs opacity-70 leading-snug">
+          {{ t('auth.credentials_locked_hint') }}
+        </p>
+      </div>
+
       <form
+        v-else
         id="loginForm"
         class="px-1 py-2 space-y-4"
         novalidate
@@ -46,7 +65,13 @@
           <n-checkbox v-model:checked="rememberMe">
             {{ t('auth.remember_me_label') }}
           </n-checkbox>
+          <n-checkbox v-model:checked="statsOnly">
+            {{ t('auth.stats_only_label') }}
+          </n-checkbox>
         </div>
+        <p v-if="statsOnly && credentialsConfigured" class="text-xs opacity-70 leading-snug">
+          {{ t('auth.stats_only_hint') }}
+        </p>
         <template v-else>
           <div class="space-y-1">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70">{{
@@ -85,12 +110,14 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { http } from '@/http';
 import { useI18n } from 'vue-i18n';
 import { NModal, NCard, NInput, NAlert, NButton, NCheckbox } from 'naive-ui';
 
 const auth = useAuthStore();
+const router = useRouter();
 const { t } = useI18n();
 
 // Show modal only when auth layer is ready, it has requested login,
@@ -100,6 +127,7 @@ const visible = computed(
   () => auth.ready && auth.showLoginModal && !auth.isAuthenticated && !auth.logoutInitiated,
 );
 const credentialsConfigured = computed(() => auth.credentialsConfigured);
+const credentialsLocked = computed(() => auth.credentialsLocked);
 
 const username = ref('');
 const password = ref('');
@@ -118,6 +146,7 @@ const clearRememberPreference = () => {
   }
 };
 const rememberMe = ref(false);
+const statsOnly = ref(false);
 
 watch(visible, (v) => {
   if (v) reset();
@@ -132,6 +161,7 @@ function reset() {
   success.value = '';
   clearRememberPreference();
   rememberMe.value = false;
+  statsOnly.value = false;
 }
 
 async function submit() {
@@ -187,12 +217,19 @@ async function submit() {
       await new Promise((r) => setTimeout(r, 250));
     }
     // Perform login (if first-time, use the newly created password explicitly)
-    const loginRes = await http.post(
+    interface LoginResponse {
+      status?: boolean;
+      error?: string;
+      allowed?: string;
+    }
+    const requestStatsOnly = statsOnly.value && !firstUserFlow;
+    const loginRes = await http.post<LoginResponse>(
       '/api/auth/login',
       {
         username: username.value,
         password: firstUserFlow ? newPassword.value : password.value,
         remember_me: rememberMe.value,
+        ...(requestStatsOnly ? { scope: 'stats' } : {}),
       },
       { validateStatus: () => true },
     );
@@ -202,11 +239,30 @@ async function submit() {
       if (elapsed < MIN_LOGIN_DELAY_MS) {
         await new Promise((r) => setTimeout(r, MIN_LOGIN_DELAY_MS - elapsed));
       }
+      auth.setRole(requestStatsOnly ? 'stats' : 'admin');
       auth.setAuthenticated(true);
       success.value = t('auth.login_success');
       setTimeout(() => {
         auth.hideLogin();
+        if (requestStatsOnly) {
+          router.push('/stats').catch(() => {});
+        }
       }, 400);
+    } else if (
+      loginRes.status === 403 &&
+      loginRes.data &&
+      loginRes.data.error === 'origin_forbidden'
+    ) {
+      // Blocked by the host's origin ACL before credentials were even
+      // checked — name the setting so this isn't mistaken for a bad password.
+      auth.setOriginForbidden(loginRes.data.allowed || '');
+      error.value = t('auth.origin_forbidden', { allowed: loginRes.data.allowed || '?' });
+    } else if (
+      loginRes.status === 503 &&
+      loginRes.data &&
+      loginRes.data.error === 'credentials_locked'
+    ) {
+      error.value = t('auth.credentials_locked_body');
     } else {
       error.value =
         loginRes.data && loginRes.data.error ? loginRes.data.error : t('auth.login_failed');

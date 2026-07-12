@@ -498,10 +498,10 @@ namespace confighttp {
   }
 
   std::string SessionTokenManager::generate_session_token(const std::string &username, std::chrono::seconds lifetime, const std::string &user_agent, const std::string &remote_address, bool remember_me) {
-    return issue_session_tokens(username, lifetime, std::chrono::seconds::zero(), user_agent, remote_address, remember_me).session_token;
+    return issue_session_tokens(username, lifetime, std::chrono::seconds::zero(), user_agent, remote_address, remember_me, SessionRole::admin).session_token;
   }
 
-  SessionTokenBundle SessionTokenManager::issue_session_tokens(const std::string &username, std::chrono::seconds session_ttl, std::chrono::seconds refresh_ttl, const std::string &user_agent, const std::string &remote_address, bool remember_me) {
+  SessionTokenBundle SessionTokenManager::issue_session_tokens(const std::string &username, std::chrono::seconds session_ttl, std::chrono::seconds refresh_ttl, const std::string &user_agent, const std::string &remote_address, bool remember_me, SessionRole role) {
     if (session_ttl <= std::chrono::seconds::zero()) {
       session_ttl = config::sunshine.session_token_ttl;
     }
@@ -537,6 +537,7 @@ namespace confighttp {
         device_label,
         refresh_hash,
         rotation_id,
+        role,
       };
       _session_tokens.erase(session_hash);
       _session_tokens.emplace(session_hash, std::move(token));
@@ -602,6 +603,9 @@ namespace confighttp {
           std::string device_label = derive_device_label(user_agent, remote_address);
           std::string rotation_id = _dependencies.rand_alphabet(24);
 
+          // Rotation preserves the existing session's role verbatim —
+          // defaulting here would let a stats session escalate (or an
+          // admin session degrade) on refresh.
           SessionToken updated {
             entry.username,
             now,
@@ -614,6 +618,7 @@ namespace confighttp {
             device_label,
             new_refresh_hash,
             rotation_id,
+            entry.role,
           };
 
           _session_tokens.erase(sess_it);
@@ -644,14 +649,18 @@ namespace confighttp {
   }
 
   bool SessionTokenManager::validate_session_token(const std::string &token) {
+    return validate_session_token_role(token).has_value();
+  }
+
+  std::optional<SessionRole> SessionTokenManager::validate_session_token_role(const std::string &token) {
     bool should_persist = false;
-    bool valid = false;
+    std::optional<SessionRole> role;
     {
       std::scoped_lock lock(_mutex);
       std::string token_hash = _dependencies.hash(token);
       auto it = _session_tokens.find(token_hash);
       if (it == _session_tokens.end()) {
-        return false;
+        return std::nullopt;
       }
       auto now = _dependencies.now();
       if (now > it->second.refresh_expires_at) {
@@ -661,22 +670,21 @@ namespace confighttp {
         _session_tokens.erase(it);
         _dirty = true;
         should_persist = true;
-        return false;
-      }
-      if (now > it->second.expires_at) {
-        return false;  // access token expired but refresh token may still be valid
-      }
-      valid = true;
-      if (now - it->second.last_seen >= std::chrono::minutes(5)) {
-        it->second.last_seen = now;
-        _dirty = true;
-        should_persist = true;
+      } else if (now > it->second.expires_at) {
+        // access token expired but refresh token may still be valid
+      } else {
+        role = it->second.role;
+        if (now - it->second.last_seen >= std::chrono::minutes(5)) {
+          it->second.last_seen = now;
+          _dirty = true;
+          should_persist = true;
+        }
       }
     }
     if (should_persist) {
       save_session_tokens();
     }
-    return valid;
+    return role;
   }
 
   void SessionTokenManager::revoke_session_token(const std::string &token) {
@@ -844,6 +852,7 @@ namespace confighttp {
         node.put("refresh_expires_at", std::chrono::duration_cast<std::chrono::seconds>(token.refresh_expires_at.time_since_epoch()).count());
         node.put("last_seen", std::chrono::duration_cast<std::chrono::seconds>(token.last_seen.time_since_epoch()).count());
         node.put("remember_me", token.remember_me);
+        node.put("role", std::string(session_role_to_string(token.role)));
         if (!token.refresh_token_hash.empty()) {
           node.put("refresh_token_hash", token.refresh_token_hash);
         }
@@ -930,6 +939,9 @@ namespace confighttp {
           auto last_seen_secs = node.get<std::int64_t>("last_seen", created_secs);
           token.last_seen = std::chrono::system_clock::time_point(std::chrono::seconds(last_seen_secs));
           token.remember_me = node.get<bool>("remember_me", false);
+          // Missing role = session persisted before roles existed →
+          // deliberately admin (those were all full-access logins).
+          token.role = session_role_from_string(node.get<std::string>("role", "admin"));
           token.refresh_token_hash = node.get<std::string>("refresh_token_hash", "");
           token.rotation_id = node.get<std::string>("rotation_id", "");
           token.user_agent = node.get<std::string>("user_agent", "");
@@ -996,7 +1008,14 @@ namespace confighttp {
   SessionTokenAPI::SessionTokenAPI(SessionTokenManager &session_manager):
       _session_manager(session_manager) {}
 
-  APIResponse SessionTokenAPI::login(const std::string &username, const std::string &password, const std::string &redirect_url, bool remember_me, const std::string &user_agent, const std::string &remote_address) {
+  APIResponse SessionTokenAPI::login(const std::string &username, const std::string &password, const std::string &redirect_url, bool remember_me, const std::string &user_agent, const std::string &remote_address, SessionRole role) {
+    if (config::sunshine.username.empty() && http::user_creds_locked()) {
+      // A credential record exists but is temporarily unloadable (e.g.
+      // TPM not ready at service start). Distinguish from "wrong
+      // password" so the UI can explain and the user doesn't assume
+      // their password is gone.
+      return create_error_response("credentials_locked", StatusCode::server_error_service_unavailable);
+    }
     if (!validate_credentials(username, password)) {
       BOOST_LOG(info) << "Web UI: Login failed for user: " << username;
       return create_error_response("Invalid credentials", StatusCode::client_error_unauthorized);
@@ -1008,7 +1027,8 @@ namespace confighttp {
       std::chrono::seconds::zero(),
       user_agent,
       remote_address,
-      remember_me
+      remember_me,
+      role
     );
 
     nlohmann::json response_data;
@@ -1016,6 +1036,7 @@ namespace confighttp {
     response_data["expires_in"] = issued.session_ttl.count();
     response_data["refresh_expires_in"] = issued.refresh_ttl.count();
     response_data["remember_me"] = remember_me;
+    response_data["role"] = std::string(session_role_to_string(role));
 
     // Hardened secure redirect handling
     std::string safe_redirect = "/";
@@ -1099,6 +1120,13 @@ namespace confighttp {
     }
 
     return create_success_response();
+  }
+
+  std::optional<SessionRole> SessionTokenAPI::session_role(const std::string &session_token) {
+    if (session_token.empty()) {
+      return std::nullopt;
+    }
+    return _session_manager.validate_session_token_role(session_token);
   }
 
   APIResponse SessionTokenAPI::refresh_session(const std::string &refresh_token, const std::string &user_agent, const std::string &remote_address) {
@@ -1296,18 +1324,55 @@ namespace confighttp {
     return {true, StatusCode::success_ok, {}, {}};
   }
 
-  AuthResult check_session_auth(const std::string &raw_auth) {
+  namespace {
+    /**
+     * @brief Anchored (method, path) default-deny allowlist for
+     *        stats-only sessions. Mirrors the route regexes registered
+     *        in confighttp.cpp — the frontend router guard is UX only;
+     *        THIS is the security boundary.
+     *
+     * @p base_path must already be query-stripped (check_auth does this).
+     */
+    bool stats_role_allows(const std::string &method, const std::string &base_path) {
+      // Auth endpoints (status/refresh) stay usable so a stats session
+      // can renew itself and report its own state. login/logout are
+      // exempted earlier in check_auth like every other session.
+      if (base_path.rfind("/api/auth/", 0) == 0) {
+        return true;
+      }
+      if (method != "GET") {
+        return false;
+      }
+      if (base_path == "/api/sessions" ||
+          base_path == "/api/metadata" ||
+          base_path == "/api/configLocale") {
+        return true;
+      }
+      static const boost::regex session_detail_re {"^/api/sessions/[A-Za-z0-9_-]+$"};
+      static const boost::regex session_export_re {"^/api/sessions/[A-Za-z0-9_-]+/export\\.json$"};
+      return boost::regex_match(base_path, session_detail_re) ||
+             boost::regex_match(base_path, session_export_re);
+    }
+  }  // namespace
+
+  AuthResult check_session_auth(const std::string &raw_auth, const std::string &base_path, const std::string &method) {
     if (raw_auth.rfind("Session ", 0) != 0) {
       return make_auth_error(StatusCode::client_error_unauthorized, "Invalid session token format");
     }
 
     std::string token = raw_auth.substr(8);
 
-    if (APIResponse api_response = session_token_api.validate_session(token); api_response.status_code == StatusCode::success_ok) {
+    const auto role = session_token_api.session_role(token);
+    if (!role) {
+      return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token");
+    }
+    if (*role == SessionRole::admin) {
       return {true, StatusCode::success_ok, {}, {}};
     }
-
-    return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token");
+    if (stats_role_allows(method, base_path)) {
+      return {true, StatusCode::success_ok, {}, {}};
+    }
+    return make_auth_error(StatusCode::client_error_forbidden, "insufficient_role");
   }
 
   bool is_html_request(const std::string &path) {
@@ -1348,8 +1413,19 @@ namespace confighttp {
     }
 
     if (auto ip_type = net::from_address(remote_address); ip_type > http::origin_web_ui_allowed) {
-      BOOST_LOG(info) << "Web UI: ["sv << remote_address << "] -- denied"sv;
-      return make_auth_error(StatusCode::client_error_forbidden, "Forbidden");
+      BOOST_LOG(warning) << "Web UI: ["sv << remote_address << "] denied by origin_web_ui_allowed"sv
+                         << " (client="sv << net::to_enum_string(ip_type)
+                         << ", allowed="sv << net::to_enum_string(http::origin_web_ui_allowed) << ')';
+      // Structured body so the SPA can tell "blocked by policy" apart
+      // from a generic failure and show an actionable message.
+      auto result = make_auth_error(StatusCode::client_error_forbidden, "origin_forbidden");
+      nlohmann::json j;
+      j["status"] = false;
+      j["error"] = "origin_forbidden";
+      j["client_class"] = std::string(net::to_enum_string(ip_type));
+      j["allowed"] = std::string(net::to_enum_string(http::origin_web_ui_allowed));
+      result.body = j.dump();
+      return result;
     }
 
     // If no username configured yet, allow unauthenticated access so SPA can drive setup (except protected APIs later)
@@ -1367,6 +1443,12 @@ namespace confighttp {
 
     // From here on: /api/ (non-auth) endpoints must have credentials configured and valid session or bearer token
     if (!credentials_configured) {
+      if (http::user_creds_locked()) {
+        // Credentials exist but are temporarily unloadable (boot-time
+        // TPM race). Report the locked state — the SPA must NOT offer
+        // first-time setup here.
+        return make_auth_error(StatusCode::server_error_service_unavailable, "credentials_locked");
+      }
       return make_auth_error(StatusCode::client_error_unauthorized, "Credentials not configured");
     }
 
@@ -1379,13 +1461,10 @@ namespace confighttp {
     }
 
     if (auth_header.rfind("Session ", 0) == 0) {
-      {
-        auto session_res = check_session_auth(auth_header);
-        if (!session_res.ok) {
-          return make_auth_error(StatusCode::client_error_unauthorized, "Invalid or expired session token");
-        }
-        return session_res;
-      }
+      // Return the session result as-is: it distinguishes an invalid
+      // token (401) from a valid stats-role session denied a route
+      // outside its allowlist (403 insufficient_role).
+      return check_session_auth(auth_header, base_path, method);
     }
 
     if (auto scheme_end = auth_header.find(' ');

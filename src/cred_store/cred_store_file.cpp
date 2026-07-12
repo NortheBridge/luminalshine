@@ -10,6 +10,9 @@
  */
 #include "src/cred_store/cred_store.h"
 
+#include <fstream>
+#include <string>
+
 #include "src/config.h"
 #include "src/cred_store/file_backend.h"
 
@@ -36,7 +39,31 @@ namespace cred_store {
   }
 
   bool erase(std::string_view key) {
-    return file_backend::erase(key);
+    bool ok = file_backend::erase(key);
+    // Discard any quarantined copy too — see cred_store.h.
+    (void) file_backend::erase(std::string(key) + ".quarantine");
+    return ok;
+  }
+
+  probe_result probe(std::string_view key) {
+    if (!file_backend::exists(key)) {
+      return probe_result::absent;
+    }
+    std::string blob;
+    const bool loadable = file_backend::load(key, blob) && !blob.empty();
+    return loadable ? probe_result::present_loadable : probe_result::present_unloadable;
+  }
+
+  bool quarantine(std::string_view key, std::string_view blob) {
+    // Raw byte write on purpose: the quarantined blob is by definition
+    // suspect (possibly not valid JSON), so file_backend::store's JSON
+    // validation must not apply here.
+    std::ofstream out(std::string(key) + ".quarantine", std::ios::binary | std::ios::trunc);
+    if (!out) {
+      return false;
+    }
+    out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+    return out.good();
   }
 
 }  // namespace cred_store

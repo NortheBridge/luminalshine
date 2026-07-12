@@ -10,6 +10,7 @@ const TroubleshootingView = () => import('@/views/TroubleshootingView.vue');
 const ClientManagementView = () => import('@/views/ClientManagementView.vue');
 const WebRtcClientView = () => import('@/views/WebRtcClientView.vue');
 const AboutView = () => import('@/views/AboutView.vue');
+const StatsView = () => import('@/views/StatsView.vue');
 
 const routes = [
   { path: '/', component: DashboardView },
@@ -25,6 +26,7 @@ const routes = [
     redirect: { path: '/clients', query: { sec: 'tokens' } },
   },
   { path: '/webrtc', component: WebRtcClientView, meta: { container: 'full' } },
+  { path: '/stats', component: StatsView },
 ];
 
 const CHUNK_RELOAD_FLAG = 'sunshine:chunk-reload';
@@ -62,7 +64,7 @@ export const router = createRouter({
 
 // Lightweight guard: if navigating to a protected route and not authenticated,
 // open login modal (in-memory redirect) but allow navigation so URL stays.
-router.beforeEach(async (_to: RouteLocationNormalized) => {
+router.beforeEach(async (to: RouteLocationNormalized) => {
   if (typeof window === 'undefined') return true;
   try {
     const auth = useAuthStore();
@@ -73,6 +75,12 @@ router.beforeEach(async (_to: RouteLocationNormalized) => {
       } catch {
         /* ignore */
       }
+    }
+    // Stats-only sessions are pinned to /stats. UX only — the backend
+    // allowlist is the actual security boundary; admin pages would just
+    // render dead panels behind 403s.
+    if (auth.isAuthenticated && auth.isStatsOnly() && to.path !== '/stats') {
+      return { path: '/stats' };
     }
     // If not authenticated, trigger overlay (do not redirect)
     if (!auth.isAuthenticated) auth.requireLogin();

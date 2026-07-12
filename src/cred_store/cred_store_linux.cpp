@@ -37,6 +37,7 @@
 #include <libsecret/secret.h>
 #include <mutex>
 #include <sstream>
+#include <fstream>
 #include <string>
 
 namespace cred_store {
@@ -313,6 +314,26 @@ namespace cred_store {
       BOOST_LOG(info) << "cred_store(libsecret): credential entry removed.";
     }
     return true;
+  }
+
+  probe_result probe(std::string_view key) {
+    if (!exists(key)) {
+      return probe_result::absent;
+    }
+    std::string blob;
+    const bool loadable = load(key, blob) && !blob.empty();
+    return loadable ? probe_result::present_loadable : probe_result::present_unloadable;
+  }
+
+  bool quarantine(std::string_view key, std::string_view blob) {
+    // Legacy platform: preserve the suspect bytes next to the configured
+    // credentials file. Raw write on purpose — the blob may not be JSON.
+    std::ofstream out(std::string(key) + ".quarantine", std::ios::binary | std::ios::trunc);
+    if (!out) {
+      return false;
+    }
+    out.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+    return out.good();
   }
 
 }  // namespace cred_store

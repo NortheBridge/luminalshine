@@ -128,6 +128,20 @@ function initAuthHandling(): void {
       );
       const userLoggedOut = (auth as any).logoutInitiated === true;
 
+      // Origin-ACL denial: the host blocks this network location before
+      // credentials are even checked. Record it so the UI can explain
+      // instead of showing a dead page or a misleading login error.
+      const respData: unknown = error?.response?.data;
+      if (
+        status === 403 &&
+        respData &&
+        typeof respData === 'object' &&
+        (respData as { error?: unknown }).error === 'origin_forbidden'
+      ) {
+        const allowed = (respData as { allowed?: unknown }).allowed;
+        auth.setOriginForbidden(typeof allowed === 'string' ? allowed : '');
+      }
+
       if (status === 401 && !skipAuthRetry && !isAuthRequest && !userLoggedOut) {
         const refreshed = await refreshSession();
         if (refreshed) {

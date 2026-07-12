@@ -42,28 +42,35 @@
                   </h1>
                 </div>
                 <nav class="hidden md:flex items-center gap-0.5 text-sm font-medium ml-2">
-                  <RouterLink to="/" :class="linkClass('/')">
-                    <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
-                  </RouterLink>
-                  <RouterLink to="/applications" :class="linkClass('/applications')">
-                    <i class="fas fa-table-cells-large" /><span>{{
-                      $t('navbar.applications')
-                    }}</span>
-                  </RouterLink>
-                  <RouterLink to="/clients" :class="linkClass('/clients')">
-                    <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
-                  </RouterLink>
-                  <RouterLink to="/webrtc" :class="linkClass('/webrtc')">
-                    <i class="fas fa-satellite-dish" /><span>{{ $t('webrtc.nav') }}</span>
-                  </RouterLink>
-                  <RouterLink to="/settings" :class="linkClass('/settings')">
-                    <i class="fas fa-sliders" /><span>{{ $t('navbar.configuration') }}</span>
-                  </RouterLink>
-                  <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
-                    <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
-                  </RouterLink>
-                  <RouterLink to="/about" :class="linkClass('/about')">
-                    <i class="fas fa-circle-info" /><span>{{ $t('navbar.about') }}</span>
+                  <!-- Stats-only sessions see just their page + logout;
+                       the backend allowlist is the actual boundary. -->
+                  <template v-if="!statsOnly">
+                    <RouterLink to="/" :class="linkClass('/')">
+                      <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
+                    </RouterLink>
+                    <RouterLink to="/applications" :class="linkClass('/applications')">
+                      <i class="fas fa-table-cells-large" /><span>{{
+                        $t('navbar.applications')
+                      }}</span>
+                    </RouterLink>
+                    <RouterLink to="/clients" :class="linkClass('/clients')">
+                      <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
+                    </RouterLink>
+                    <RouterLink to="/webrtc" :class="linkClass('/webrtc')">
+                      <i class="fas fa-satellite-dish" /><span>{{ $t('webrtc.nav') }}</span>
+                    </RouterLink>
+                    <RouterLink to="/settings" :class="linkClass('/settings')">
+                      <i class="fas fa-sliders" /><span>{{ $t('navbar.configuration') }}</span>
+                    </RouterLink>
+                    <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
+                      <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
+                    </RouterLink>
+                    <RouterLink to="/about" :class="linkClass('/about')">
+                      <i class="fas fa-circle-info" /><span>{{ $t('navbar.about') }}</span>
+                    </RouterLink>
+                  </template>
+                  <RouterLink v-else to="/stats" :class="linkClass('/stats')">
+                    <i class="fas fa-chart-line" /><span>{{ $t('stats.nav') }}</span>
                   </RouterLink>
                   <a href="#" :class="linkClass('/logout')" @click.prevent="logout">
                     <i class="fas fa-sign-out-alt" /><span>{{ $t('navbar.logout') }}</span>
@@ -231,6 +238,7 @@ const loginOverlay = computed(
     !authForOverlay.isAuthenticated &&
     !authForOverlay.logoutInitiated,
 );
+const statsOnly = computed(() => authForOverlay.isStatsOnly());
 
 async function logout() {
   const authStore = useAuthStore();
@@ -260,6 +268,13 @@ function refreshPage() {
 const { t } = useI18n();
 const mobileMenuOptions = computed(() => {
   const icon = (cls: string) => () => h('i', { class: cls });
+  if (statsOnly.value) {
+    return [
+      { label: t('stats.nav'), key: '/stats', icon: icon('fas fa-chart-line') },
+      { type: 'divider' as const },
+      { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
+    ];
+  }
   return [
     { label: t('navbar.home'), key: '/', icon: icon('fas fa-gauge') },
     {

@@ -286,7 +286,7 @@ namespace confighttp {
   }
 
   TEST(ConfigHttpSessionAuthTest, given_invalid_session_format_then_should_return_error) {
-    auto result = check_session_auth("Invalid token");
+    auto result = check_session_auth("Invalid token", "/api/config", "GET");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
     auto json_response = nlohmann::json::parse(result.body);
@@ -294,7 +294,7 @@ namespace confighttp {
   }
 
   TEST(ConfigHttpSessionAuthTest, given_invalid_session_token_then_should_return_error) {
-    auto result = check_session_auth("Session fake_token");
+    auto result = check_session_auth("Session fake_token", "/api/config", "GET");
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.code, SimpleWeb::StatusCode::client_error_unauthorized);
     auto json_response = nlohmann::json::parse(result.body);
