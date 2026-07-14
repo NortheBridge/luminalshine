@@ -6,12 +6,12 @@
   <a href="https://github.com/NortheBridge/luminalshine/releases/latest"><img src="https://img.shields.io/github/v/release/NortheBridge/luminalshine?include_prereleases&label=Release&color=blue&style=for-the-badge" alt="Latest Release"/></a>
   <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/n/NortheBridge/LuminalShine"><img src="https://img.shields.io/winget/v/NortheBridge.LuminalShine?label=WinGet&color=blue&style=for-the-badge" alt="WinGet Version"/></a>
   <a href="https://github.com/NortheBridge/luminalshine/commits/main"><img src="https://img.shields.io/github/commits-since/NortheBridge/luminalshine/latest?include_prereleases&label=Commits%20since%20release&color=blue&style=for-the-badge" alt="Commits since latest release"/></a>
-  <a href="https://github.com/NortheBridge/luminalshine/releases"><img src="https://img.shields.io/github/downloads/NortheBridge/luminalshine/total?label=Downloads&color=blue&style=for-the-badge" alt="GitHub Downloads"/></a>
+  <a href="https://github.com/NortheBridge/luminalshine/releases"><img src="https://img.shields.io/github/downloads/NortheBridge/luminalshine/total?label=Downloads&color=blue&style=for-the-badge&logo=github&logoColor=white" alt="GitHub Downloads"/></a>
   <a href="https://github.com/NortheBridge/luminalshine/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/NortheBridge/luminalshine/ci.yml?label=CI&style=for-the-badge" alt="CI"/></a>
   <a href="https://codecov.io/gh/NortheBridge/luminalshine"><img src="https://img.shields.io/codecov/c/github/NortheBridge/luminalshine?token=BCG83VQ1LZ&label=Coverage&style=for-the-badge" alt="codecov"/></a>
   <a href="https://github.com/NortheBridge/luminalshine/actions/workflows/update-pages.yml"><img src="https://img.shields.io/github/actions/workflow/status/NortheBridge/luminalshine/update-pages.yml?label=Build%20GH-Pages&style=for-the-badge" alt="Build GH-Pages"/></a>
   <a href="https://github.com/NortheBridge/luminalshine"><img src="https://img.shields.io/github/languages/code-size/NortheBridge/luminalshine?label=Code%20size&color=blue&style=for-the-badge" alt="Code size in bytes"/></a>
-  <a href="https://github.com/NortheBridge/luminalshine/stargazers"><img src="https://img.shields.io/github/stars/NortheBridge/luminalshine?label=Stars&color=blue&style=for-the-badge" alt="GitHub stars"/></a>
+  <a href="https://github.com/NortheBridge/luminalshine/stargazers"><img src="https://img.shields.io/github/stars/NortheBridge/luminalshine?label=Stars&color=blue&style=for-the-badge&logo=github&logoColor=white" alt="GitHub stars"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/NortheBridge/luminalshine?label=License&color=blue&style=for-the-badge" alt="License"/></a>
 </p>
 
