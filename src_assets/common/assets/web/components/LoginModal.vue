@@ -72,7 +72,9 @@
         <p v-if="statsOnly && credentialsConfigured" class="text-xs opacity-70 leading-snug">
           {{ t('auth.stats_only_hint') }}
         </p>
-        <template v-else>
+        <!-- First-user setup only. Must NOT chain v-else off the stats hint
+             above: that renders these fields on every normal login. -->
+        <template v-if="!credentialsConfigured">
           <div class="space-y-1">
             <label class="text-xs font-semibold uppercase tracking-wide opacity-70">{{
               t('auth.new_password')
