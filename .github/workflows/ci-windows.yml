@@ -11,6 +11,14 @@ on:
       release_version:
         required: true
         type: string
+      nightly:
+        # Unsigned per-commit build for nightly.link consumption: signing
+        # and the MSI golden/invariant gates are skipped (the version base
+        # differs from the release baseline by design), and only the
+        # portable ZIP is uploaded, under a stable artifact name.
+        required: false
+        type: boolean
+        default: false
     # Secrets are forwarded from ci.yml via `secrets: inherit`. They are
     # declared optional here so the build still runs while SIGN_ARTIFACTS
     # is disabled (no values present) and only enforced inside the signing
@@ -62,6 +70,10 @@ jobs:
   build_windows:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Shadows the workflow-level gate: nightly builds always ship
+      # unsigned regardless of the release signing configuration above.
+      SIGN_ARTIFACTS: ${{ inputs.nightly && 'false' || 'true' }}
     defaults:
       run:
         shell: msys2 {0}
@@ -527,6 +539,7 @@ jobs:
           cpack -G ZIP
 
       - name: MSI upgrade-compatibility check
+        if: inputs.nightly != true
         # MSI table compatibility oracle. Dumps the freshly built MSI's
         # upgrade-critical tables and diffs them against the committed
         # baseline (tests/fixtures/msi_golden/msi_baseline.txt). PR 4
@@ -551,6 +564,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "MSI upgrade-compatibility diff failed (see above)." }
 
       - name: MSI invariants gate
+        if: inputs.nightly != true
         # Hard gate that runs after the diff. Where the diff says "this
         # MSI matches the committed snapshot," this asserts "this MSI
         # carries the upgrade-load-bearing values regardless of what the
@@ -572,7 +586,7 @@ jobs:
         # if: always() so the dump uploads even when the diff step fails
         # — which is exactly when we need the candidate output to debug
         # what drifted. Without this, a failing diff hides its own input.
-        if: always()
+        if: always() && inputs.nightly != true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: msi-compat-dump
@@ -773,6 +787,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Package Windows Debug Info
+        if: inputs.nightly != true
         shell: pwsh
         working-directory: build
         run: |
@@ -787,8 +802,21 @@ jobs:
             a "../artifacts/LuminalShine_x64-debuginfo.7z" "*.dbg"
 
       - name: Upload Artifacts
+        if: inputs.nightly != true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: build-${{ matrix.name }}
           path: artifacts/
           if-no-files-found: error
+
+      - name: Upload nightly portable ZIP
+        # Stable artifact name so nightly.link can address the latest
+        # push-to-main build:
+        # https://nightly.link/NortheBridge/luminalshine/workflows/nightly-windows/main/luminalshine-nightly-portable.zip
+        if: inputs.nightly == true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: luminalshine-nightly-portable
+          path: artifacts/LuminalShine_x64-portable.zip
+          if-no-files-found: error
+          retention-days: 14

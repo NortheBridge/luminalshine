@@ -1,0 +1,42 @@
+---
+# Per-commit unsigned Windows build for nightly.link consumption.
+#
+# Every push to main runs the full ci-windows.yml packaging build in
+# nightly mode: signing and the MSI golden/invariant gates are skipped,
+# tests still run, and the portable ZIP is uploaded under the stable
+# artifact name `luminalshine-nightly-portable`. The latest build is then
+# permanently addressable at:
+#   https://nightly.link/NortheBridge/luminalshine/workflows/nightly-windows/main/luminalshine-nightly-portable.zip
+#
+# The pull_request trigger is path-filtered to the two workflow files so
+# changes to the nightly pipeline validate themselves end to end on the
+# PR; ordinary PRs never pay the ~30 min build.
+name: Nightly (Windows)
+permissions: {}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/nightly-windows.yml'
+      - '.github/workflows/ci-windows.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  nightly-windows:
+    name: Nightly
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-windows.yml
+    with:
+      release_commit: ${{ github.sha }}
+      # 0.0.<run>-nightly keeps nightly binaries unmistakably below any
+      # real release (MSI stamps 0.0.<run>.0) while staying unique per run.
+      release_version: 0.0.${{ github.run_number }}-nightly
+      nightly: true
