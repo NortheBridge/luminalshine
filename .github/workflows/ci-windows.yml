@@ -573,7 +573,7 @@ jobs:
         # — which is exactly when we need the candidate output to debug
         # what drifted. Without this, a failing diff hides its own input.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: msi-compat-dump
           path: msi_compat/
@@ -766,7 +766,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-results-${{ matrix.name }}
           path: build/tests/test_results.xml
@@ -787,7 +787,7 @@ jobs:
             a "../artifacts/LuminalShine_x64-debuginfo.7z" "*.dbg"
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: build-${{ matrix.name }}
           path: artifacts/
