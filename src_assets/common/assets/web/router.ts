@@ -11,6 +11,8 @@ const ClientManagementView = () => import('@/views/ClientManagementView.vue');
 const WebRtcClientView = () => import('@/views/WebRtcClientView.vue');
 const AboutView = () => import('@/views/AboutView.vue');
 const StatsView = () => import('@/views/StatsView.vue');
+const VgdControlPanelView = () => import('@/views/VgdControlPanelView.vue');
+const VgdAboutView = () => import('@/views/VgdAboutView.vue');
 
 const routes = [
   { path: '/', component: DashboardView },
@@ -27,6 +29,10 @@ const routes = [
   },
   { path: '/webrtc', component: WebRtcClientView, meta: { container: 'full' } },
   { path: '/stats', component: StatsView },
+  // Single-depth paths on purpose: the Vite build uses base './', so assets
+  // resolve relative to the URL — a nested route would request /vgd/assets/*.
+  { path: '/vgd-control-panel', component: VgdControlPanelView, meta: { container: 'lg' } },
+  { path: '/vgd-about', component: VgdAboutView, meta: { container: 'lg' } },
 ];
 
 const CHUNK_RELOAD_FLAG = 'sunshine:chunk-reload';

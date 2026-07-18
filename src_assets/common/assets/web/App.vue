@@ -65,6 +65,17 @@
                     <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
                       <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
                     </RouterLink>
+                    <n-dropdown
+                      trigger="hover"
+                      :show-arrow="true"
+                      :options="vgdMenuOptions"
+                      @select="onNavSelect"
+                    >
+                      <button type="button" :class="vgdLinkClass()">
+                        <i class="fas fa-display" /><span>{{ $t('vgd.nav') }}</span>
+                        <i class="fas fa-chevron-down text-[10px] opacity-70" />
+                      </button>
+                    </n-dropdown>
                     <RouterLink to="/about" :class="linkClass('/about')">
                       <i class="fas fa-circle-info" /><span>{{ $t('navbar.about') }}</span>
                     </RouterLink>
@@ -220,6 +231,8 @@ watch(
       '/troubleshooting': 'navbar.troubleshoot',
       '/clients': 'clients.nav',
       '/webrtc': 'webrtc.nav',
+      '/vgd-control-panel': 'vgd.nav_control_panel',
+      '/vgd-about': 'vgd.nav_about',
     };
     const v = map[p] || 'LuminalShine';
     pageTitle.value = v;
@@ -266,8 +279,36 @@ function refreshPage() {
 }
 
 const { t } = useI18n();
+const navIcon = (cls: string) => () => h('i', { class: cls });
+
+// "LuminalVGD Options" dropdown, shared between the desktop nav and the
+// mobile menu (as a submenu).
+const vgdMenuOptions = computed(() => [
+  {
+    label: t('vgd.nav_control_panel'),
+    key: '/vgd-control-panel',
+    icon: navIcon('fas fa-sliders'),
+  },
+  { label: t('vgd.nav_about'), key: '/vgd-about', icon: navIcon('fas fa-circle-info') },
+]);
+
+const vgdLinkClass = () => {
+  const base =
+    'inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] transition-colors';
+  if (route.path.startsWith('/vgd-'))
+    return (
+      base +
+      ' font-semibold text-onPrimary bg-gradient-to-br from-primary/90 to-secondary/80 shadow-[0_8px_24px_-12px_rgba(255,176,32,0.55)]'
+    );
+  return base + ' text-[var(--sun-text-secondary)] hover:text-onDark hover:bg-white/5';
+};
+
+function onNavSelect(key: string | number): void {
+  if (typeof key === 'string') void router.push(key);
+}
+
 const mobileMenuOptions = computed(() => {
-  const icon = (cls: string) => () => h('i', { class: cls });
+  const icon = navIcon;
   if (statsOnly.value) {
     return [
       { label: t('stats.nav'), key: '/stats', icon: icon('fas fa-chart-line') },
@@ -286,6 +327,12 @@ const mobileMenuOptions = computed(() => {
     { label: t('webrtc.nav'), key: '/webrtc', icon: icon('fas fa-satellite-dish') },
     { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
     { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },
+    {
+      label: t('vgd.nav'),
+      key: '__vgd',
+      icon: icon('fas fa-display'),
+      children: vgdMenuOptions.value,
+    },
     { label: t('navbar.about'), key: '/about', icon: icon('fas fa-circle-info') },
     { type: 'divider' as const },
     { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
