@@ -344,7 +344,7 @@
     "virtual_display_backend_auto": "Auto (recommended) — SudoVDA",
     "virtual_display_backend_sudovda": "SudoVDA (default)",
     "virtual_display_backend_none": "No virtual display driver installed",
-    "virtual_display_backend_sudovda_warning": "Heads up: SudoVDA may hang on the latest Windows 11 release builds and on Windows 11 Insider Preview channels (WUDFHostProblem2). If your virtual display fails to come up, use Troubleshooting \u2192 Restart Virtual Display Driver.",
+    "virtual_display_backend_sudovda_warning": "Heads up: SudoVDA may hang on the latest Windows 11 release builds and on Windows 11 Insider Preview channels (WUDFHostProblem2). If your virtual display fails to come up, use Troubleshooting → Restart Virtual Display Driver.",
     "virtual_display_backend_future_note": "A first-party LuminalShine Virtual Display Driver is planned for a future release and will replace SudoVDA as the default once it ships.",
     "virtual_display_backend_none_warning": "No virtual display driver is installed. Per-client virtual displays will not work. Open the Start Menu and run \"Reconfigure LuminalShine\" (or relaunch the installer) and pick SudoVDA to install one.",
     "dd_pre_stream_setup": "Pre-stream setup",
@@ -1290,7 +1290,7 @@
     "stepTitle": "Frame pacing and limiter",
     "enable": "Enable frame limiter",
     "enableHint": "LuminalShine applies the selected limiter provider at stream start and restores the previous driver setting when the stream ends.",
-    "framegenAutoNote": "When a streamed game is detected using DLSS Frame Generation, LuminalShine engages the frame-generation capture fix for that session automatically \u2014 no interaction is required. The per-app capture-fix toggle remains available as a manual override.",
+    "framegenAutoNote": "When a streamed game is detected using DLSS Frame Generation, LuminalShine engages the frame-generation capture fix for that session automatically — no interaction is required. The per-app capture-fix toggle remains available as a manual override.",
     "providerLabel": "Limiter provider",
     "providerHint": "Auto prefers RTSS whenever it is available and falls back to the NVIDIA Control Panel limiter if needed. NVIDIA's limiter is not recommended because it cannot guarantee perfect frame pacing.",
     "limitLabel": "FPS limit override",
@@ -1342,5 +1342,24 @@
     },
     "noticeTitle": "RTSS recommended",
     "noticeCopy": "RTSS offers the most stable frame pacing. LuminalShine will use it automatically when available; NVIDIA's limiter is not recommended because it cannot guarantee perfect frame pacing."
+  },
+  "vgd": {
+    "about_check_updates": "Check for LuminalVGD updates",
+    "about_checking": "Checking for updates…",
+    "about_driver_card": "Driver identity",
+    "about_host_card": "LuminalShine pairing",
+    "about_no_release": "No public LuminalVGD releases yet — the driver is still in prototype.",
+    "about_official_site": "Official site",
+    "about_subtitle": "Information about the installed LuminalVGD driver and its pairing with this LuminalShine host.",
+    "about_title": "About LuminalVGD",
+    "about_update_error": "Update check failed — the release service could not be reached.",
+    "about_update_found": "Latest release: {tag} (published {date})",
+    "control_panel_subtitle": "Everything LuminalShine will configure for the LuminalVGD virtual display driver, as defined by the driver design documentation.",
+    "control_panel_title": "LuminalVGD Control Panel",
+    "nav": "LuminalVGD Options",
+    "nav_about": "About LuminalVGD",
+    "nav_control_panel": "LuminalVGD Control Panel",
+    "proto_notice": "LuminalVGD is currently in prototype and not currently available.",
+    "proto_visit": "Visit {link} for more information."
   }
 }
