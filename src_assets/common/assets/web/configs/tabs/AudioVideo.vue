@@ -56,6 +56,8 @@ const activeBackend = computed(() => {
 
 const activeBackendLabel = computed(() => {
   switch (activeBackend.value) {
+    case 'luminalvgd':
+      return t('config.virtual_display_backend_luminalvgd');
     case 'sudovda':
       return t('config.virtual_display_backend_sudovda');
     case 'none':

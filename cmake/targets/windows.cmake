@@ -1,5 +1,8 @@
 # windows specific target definitions
 set_target_properties(sunshine PROPERTIES LINK_SEARCH_START_STATIC 1)
+
+# The LuminalVGD FFI staticlib must exist before the sunshine link step.
+add_dependencies(sunshine luminal_vgd_ffi_build)
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".dll")
 find_library(ZLIB ZLIB1)
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES

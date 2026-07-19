@@ -80,7 +80,7 @@ Integration tests rely on files copied into the build dir at configure time (`co
 - Audio capture: `src/audio.cpp` + `src/platform/**`. WebRTC sets `bypass_opus=true` and pipes raw PCM into libwebrtc, which does its own encoding; the classic path does Opus.
 - Input injection: `src/input.cpp` consumes Moonlight-format input packets from `third-party/moonlight-common-c`. WebRTC translates JSON / compact-binary data-channel messages into the same Moonlight packets so the mature injection pipeline is reused.
 
-**Display management is non-trivial on Windows.** The `display_helper_*` files in `src/platform/windows/` manage virtual displays (SudoVDA, future LuminalVGD), apply display configurations atomically, and verify them with timeouts before capture starts. WebRTC calls `display_helper_integration::apply()` then `wait_for_apply_verification(6000ms)` before launching capture; if verification fails, capture refuses to start.
+**Display management is non-trivial on Windows.** The `display_helper_*` files in `src/platform/windows/` manage virtual displays (LuminalVGD first-party backend via `virtual_display_vgd.cpp` + the vendored Rust FFI at `src/drivers/luminal-display`; SudoVDA as legacy fallback), apply display configurations atomically, and verify them with timeouts before capture starts. WebRTC calls `display_helper_integration::apply()` then `wait_for_apply_verification(6000ms)` before launching capture; if verification fails, capture refuses to start.
 
 **Web UI.**
 

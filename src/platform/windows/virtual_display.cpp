@@ -8,6 +8,7 @@
 #include "src/platform/windows/ipc/display_settings_client.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
+#include "src/platform/windows/virtual_display_vgd.h"
 #include "src/platform/windows/sudovda_recovery.h"
 #include "src/process.h"
 #include "src/rtsp.h"
@@ -2785,6 +2786,9 @@ namespace VDISPLAY {
   }
 
   bool is_virtual_display_guid_tracked(const GUID &guid) {
+    if (is_luminalvgd_active()) {
+      return vgd::is_guid_tracked(guid);
+    }
     return is_virtual_display_guid_tracked(guid_to_uuid(guid));
   }
 
@@ -2843,6 +2847,10 @@ namespace VDISPLAY {
   HANDLE SUDOVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
 
   void closeVDisplayDevice() {
+    if (is_luminalvgd_active()) {
+      vgd::close_device();
+      return;
+    }
     // Teardown path: stop any detached recovery monitor threads before the process exits so they
     // can't log through Boost.Log after the sinks are torn down (CRT-exit heap fast-fail).
     g_recovery_monitors_shutting_down.store(true, std::memory_order_release);
@@ -2916,6 +2924,9 @@ namespace VDISPLAY {
     // Resolve which backend to drive on first call. The selector is
     // idempotent and reads `config::video.virtual_display_backend`.
     select_backend();
+    if (is_luminalvgd_active()) {
+      return vgd::open_device();
+    }
     // Idempotency: a prior driver handle may still be open — the recovery
     // monitor and the several proc::initVDisplayDriver() call sites can
     // re-enter while a handle is live. Overwriting SUDOVDA_DRIVER_HANDLE below
@@ -3051,10 +3062,16 @@ namespace VDISPLAY {
   }
 
   bool ensure_driver_is_ready() {
+    if (is_luminalvgd_active()) {
+      return vgd::driver_ready();
+    }
     return ensure_driver_is_ready_impl(RestartCooldownBehavior::skip);
   }
 
   bool startPingThread(std::function<void()> failCb) {
+    if (is_luminalvgd_active()) {
+      return vgd::start_ping_thread(std::move(failCb));
+    }
     stop_watchdog_thread(true);
 
     // Save the callback so recovery can restart the ping thread with the same callback.
@@ -3151,6 +3168,10 @@ namespace VDISPLAY {
   }
 
   void setWatchdogFeedingEnabled(bool enable) {
+    if (is_luminalvgd_active()) {
+      vgd::set_watchdog_feeding(enable);
+      return;
+    }
     if (enable) {
       const auto deadline = std::chrono::steady_clock::now() + WATCHDOG_INIT_GRACE;
       g_watchdog_grace_deadline_ns.store(steady_ticks_from_time(deadline), std::memory_order_release);
@@ -3159,6 +3180,12 @@ namespace VDISPLAY {
   }
 
   bool setRenderAdapterByName(const std::wstring &adapterName) {
+    if (is_luminalvgd_active()) {
+      // LuminalVGD picks the largest-VRAM adapter by default; explicit
+      // adapter steering arrives with the SET_RENDER_ADAPTER FFI.
+      BOOST_LOG(debug) << "LuminalVGD: setRenderAdapterByName ignored (driver default in effect).";
+      return true;
+    }
     if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
       return false;
     }
@@ -3191,6 +3218,9 @@ namespace VDISPLAY {
   }
 
   bool setRenderAdapterWithMostDedicatedMemory() {
+    if (is_luminalvgd_active()) {
+      return true;  // the driver's built-in default is exactly this
+    }
     if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
       return false;
     }
@@ -3774,6 +3804,14 @@ namespace VDISPLAY {
     uint32_t base_fps_millihz,
     bool framegen_refresh_active
   ) {
+    if (is_luminalvgd_active()) {
+      if (s_hdr_profile && *s_hdr_profile) {
+        BOOST_LOG(info) << "LuminalVGD: HDR profile requested but the backend is SDR-only for now.";
+      }
+      return vgd::create_virtual_display(
+        s_client_uid, s_client_name, width, height, fps, guid, base_fps_millihz,
+        framegen_refresh_active);
+    }
     constexpr int kMaxInitializationAttempts = 3;
     const auto requested_uuid = guid_to_uuid(guid);
 
@@ -3857,6 +3895,9 @@ namespace VDISPLAY {
   }
 
   bool removeAllVirtualDisplays() {
+    if (is_luminalvgd_active()) {
+      return vgd::remove_all_virtual_displays();
+    }
     abort_all_recovery_monitors();
     auto all_guids = active_virtual_display_tracker().all();
     if (all_guids.empty()) {
@@ -3883,6 +3924,9 @@ namespace VDISPLAY {
   }
 
   bool removeVirtualDisplay(const GUID &guid) {
+    if (is_luminalvgd_active()) {
+      return vgd::remove_virtual_display(guid);
+    }
     abort_recovery_monitor(guid_to_uuid(guid));
     auto cached_display_name = resolve_virtual_display_name_from_devices();
 

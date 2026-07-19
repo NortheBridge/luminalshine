@@ -1,0 +1,51 @@
+﻿[2026-07-19 06:55:21.026]: Tests: From C:/Users/Avalon.Danvers/Git/luminalshine/luminalshine/tests/integration/test_locale_consistency.cpp:205
+[2026-07-19 06:55:21.026]: Tests:   LocaleConsistencyTest/ConfigCppAndGeneralVueLocalesMatch started
+[2026-07-19 06:55:21.029]: Tests: At C:/Users/Avalon.Danvers/Git/luminalshine/luminalshine/tests/integration/test_locale_consistency.cpp:243
+[2026-07-19 06:55:21.029]: Tests:   Failure: Failed
+Locales in config.cpp but not in General.vue:
+  bg
+  cs
+  de
+  en
+  en_GB
+  en_US
+  es
+  fr
+  hu
+  it
+  ja
+  ko
+  pl
+  pt
+  pt_BR
+  ru
+  sv
+  tr
+  uk
+  vi
+  zh
+  zh_TW
+
+[2026-07-19 06:55:21.029]: Tests: LocaleConsistencyTest/ConfigCppAndGeneralVueLocalesMatch failed
+[2026-07-19 06:55:21.029]: Tests: From C:/Users/Avalon.Danvers/Git/luminalshine/luminalshine/tests/integration/test_config_consistency.cpp:646
+[2026-07-19 06:55:21.029]: Tests:   ConfigConsistencyTest/AllConfigOptionsExistInAllFiles started
+[2026-07-19 06:55:21.063]: Tests: At C:/Users/Avalon.Danvers/Git/luminalshine/luminalshine/tests/integration/test_config_consistency.cpp:674
+[2026-07-19 06:55:21.063]: Tests:   Failure: Failed
+Config options missing from files:
+  configuration.md missing: amd_split_encode
+  configuration.md missing: dd_paused_virtual_display_timeout_secs
+  config.html missing: dd_wa_hdr_toggle
+  configuration.md missing: dd_wa_hdr_toggle
+  config.html missing: dd_wa_hdr_toggle_delay
+  configuration.md missing: dd_wa_hdr_toggle_delay
+  configuration.md missing: lossless_scaling_legacy_auto_detect
+  en.json missing: lossless_scaling_legacy_auto_detect
+  configuration.md missing: nonsteam_shortcuts_auto_sync
+  configuration.md missing: session_monitor
+  configuration.md missing: steam_auto_sync
+  configuration.md missing: steam_include_family_shared
+  configuration.md missing: tpm_binding
+  config.html missing: virtual_display_backend
+  configuration.md missing: virtual_display_backend
+
+[2026-07-19 06:55:21.063]: Tests: ConfigConsistencyTest/AllConfigOptionsExistInAllFiles failed
