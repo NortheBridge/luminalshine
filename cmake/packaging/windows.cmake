@@ -124,6 +124,12 @@ endif()
 install(FILES "${CMAKE_BINARY_DIR}/uninstall.exe" DESTINATION "." COMPONENT application)
 
 # Drivers (SudoVDA virtual display)
+#
+# The signed driver bundle is a packaging input, not a build input: code
+# builds don't need it. Default stays strict so release/CI packaging can
+# never silently ship without the driver; dev machines without the bundle
+# configure with -DSUNSHINE_PACKAGE_SUDOVDA=OFF.
+option(SUNSHINE_PACKAGE_SUDOVDA "Require and package the SudoVDA driver artifacts" ON)
 set(SUDOVDA_SOURCE_DIR "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/sudovda")
 set(SUDOVDA_DRIVER_FILES
     "${SUDOVDA_SOURCE_DIR}/install.ps1"
@@ -135,20 +141,25 @@ set(SUDOVDA_DRIVER_FILES
     "${SUDOVDA_SOURCE_DIR}/nefconc.exe"
 )
 
-foreach(_sudovda_file IN LISTS SUDOVDA_DRIVER_FILES)
-    if (NOT EXISTS "${_sudovda_file}")
-        message(FATAL_ERROR "Required SudoVDA driver artifact missing: ${_sudovda_file}")
-    endif()
-    file(SIZE "${_sudovda_file}" _sudovda_file_size)
-    if (_sudovda_file_size EQUAL 0)
-        message(FATAL_ERROR "Required SudoVDA driver artifact is empty (0 bytes): ${_sudovda_file}")
-    endif()
-endforeach()
-unset(_sudovda_file_size)
+if (SUNSHINE_PACKAGE_SUDOVDA)
+    foreach(_sudovda_file IN LISTS SUDOVDA_DRIVER_FILES)
+        if (NOT EXISTS "${_sudovda_file}")
+            message(FATAL_ERROR "Required SudoVDA driver artifact missing: ${_sudovda_file} "
+                                "(dev builds without the driver bundle: -DSUNSHINE_PACKAGE_SUDOVDA=OFF)")
+        endif()
+        file(SIZE "${_sudovda_file}" _sudovda_file_size)
+        if (_sudovda_file_size EQUAL 0)
+            message(FATAL_ERROR "Required SudoVDA driver artifact is empty (0 bytes): ${_sudovda_file}")
+        endif()
+    endforeach()
+    unset(_sudovda_file_size)
 
-install(FILES ${SUDOVDA_DRIVER_FILES}
-        DESTINATION "drivers/sudovda"
-        COMPONENT sudovda)
+    install(FILES ${SUDOVDA_DRIVER_FILES}
+            DESTINATION "drivers/sudovda"
+            COMPONENT sudovda)
+else()
+    message(WARNING "SUNSHINE_PACKAGE_SUDOVDA=OFF: SudoVDA driver artifacts will NOT be packaged (dev build only).")
+endif()
 
 # Mandatory scripts
 install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/sunshine-setup.ps1"
