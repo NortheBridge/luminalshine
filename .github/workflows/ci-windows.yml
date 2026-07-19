@@ -507,15 +507,26 @@ jobs:
           try {
             foreach ($t in $targets) {
               Write-Host "Signing $($t.FullName)"
-              & $bat sign `
+              # CodeSignTool.bat exits 0 even when signing fails (e.g.
+              # "Error: The OTP is invalid"), so the exit-code check alone
+              # is not enough: scan its output for error markers AND
+              # positively verify the signature landed, so a broken
+              # credential fails here instead of 25 minutes later at
+              # "Verify signatures".
+              $out = & $bat sign `
                   -username="$env:SSLCOM_USERNAME" `
                   -password="$env:SSLCOM_PASSWORD" `
                   -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
                   -totp_secret="$env:SSLCOM_TOTP_SECRET" `
                   -input_file_path="$($t.FullName)" `
-                  -override
-              if ($LASTEXITCODE -ne 0) {
-                throw "CodeSignTool failed for $($t.FullName) (exit $LASTEXITCODE)"
+                  -override 2>&1
+              $out | ForEach-Object { Write-Host $_ }
+              if ($LASTEXITCODE -ne 0 -or ($out -match '(?i)\berror\b')) {
+                throw "CodeSignTool failed for $($t.FullName) (exit $LASTEXITCODE; see output above)"
+              }
+              $sig = Get-AuthenticodeSignature -FilePath $t.FullName
+              if ($sig.Status -ne 'Valid') {
+                throw "$($t.FullName) is not validly signed after CodeSignTool run: $($sig.Status)"
               }
             }
           } finally {
@@ -613,14 +624,22 @@ jobs:
           Write-Host "Signing $($msi.FullName)"
           Push-Location $toolDir
           try {
-            & $bat sign `
+            # Exit code alone is unreliable — see "Sign built executables".
+            $out = & $bat sign `
                 -username="$env:SSLCOM_USERNAME" `
                 -password="$env:SSLCOM_PASSWORD" `
                 -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
                 -totp_secret="$env:SSLCOM_TOTP_SECRET" `
                 -input_file_path="$($msi.FullName)" `
-                -override
-            if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for MSI (exit $LASTEXITCODE)" }
+                -override 2>&1
+            $out | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0 -or ($out -match '(?i)\berror\b')) {
+              throw "CodeSignTool failed for MSI (exit $LASTEXITCODE; see output above)"
+            }
+            $sig = Get-AuthenticodeSignature -FilePath $msi.FullName
+            if ($sig.Status -ne 'Valid') {
+              throw "MSI is not validly signed after CodeSignTool run: $($sig.Status)"
+            }
           } finally {
             Pop-Location
           }
@@ -650,14 +669,22 @@ jobs:
           Write-Host "Signing $exe"
           Push-Location $toolDir
           try {
-            & $bat sign `
+            # Exit code alone is unreliable — see "Sign built executables".
+            $out = & $bat sign `
                 -username="$env:SSLCOM_USERNAME" `
                 -password="$env:SSLCOM_PASSWORD" `
                 -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
                 -totp_secret="$env:SSLCOM_TOTP_SECRET" `
                 -input_file_path="$exe" `
-                -override
-            if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed for bootstrapper (exit $LASTEXITCODE)" }
+                -override 2>&1
+            $out | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0 -or ($out -match '(?i)\berror\b')) {
+              throw "CodeSignTool failed for bootstrapper (exit $LASTEXITCODE; see output above)"
+            }
+            $sig = Get-AuthenticodeSignature -FilePath $exe
+            if ($sig.Status -ne 'Valid') {
+              throw "Bootstrapper is not validly signed after CodeSignTool run: $($sig.Status)"
+            }
           } finally {
             Pop-Location
           }
