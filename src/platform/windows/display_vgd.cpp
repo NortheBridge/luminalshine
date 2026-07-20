@@ -160,7 +160,6 @@ namespace platf::dxgi {
     _session_id = target->session_id;
     _ring_slots = target->ring_slots;
     _display_name = display_name;
-    _last_delivery = std::chrono::steady_clock::now();
     capture_format = DXGI_FORMAT_UNKNOWN;  // latched from the first claimed frame
 
     BOOST_LOG(info) << "LuminalVGD capture: consuming frame ring of session 0x"
@@ -254,17 +253,26 @@ namespace platf::dxgi {
       return capture_e::timeout;
     }
 
-    // The driver is publishing but nothing has reached the encoder for a
-    // while: the reader side is broken (claim CAS, texture path). Blacklist
-    // this session's ring so the reinit falls back to WGC/DDA instead of
-    // leaving the stream black.
-    if (status.frames_published > _published_at_last_delivery &&
-        std::chrono::steady_clock::now() - _last_delivery > kDeliveryStall) {
-      BOOST_LOG(error) << "LuminalVGD capture: driver published frames but none were delivered for "
-                       << std::chrono::duration_cast<std::chrono::seconds>(kDeliveryStall).count()
-                       << " s; disabling ring capture for this session.";
-      g_broken_session.store(_session_id, std::memory_order_release);
-      return capture_e::reinit;
+    // A frame NEWER than the one we last delivered sitting unclaimed for a
+    // long stretch means the reader side is broken (claim CAS, texture
+    // path) — blacklist the ring so the reinit falls back to WGC/DDA
+    // instead of leaving the stream black. Cumulative publish counters are
+    // deliberately NOT used here: an idle desktop (driver publishing
+    // nothing new) is indistinguishable from a stall by counters alone.
+    if (status.latest_sequence > _last_sequence) {
+      const auto now = std::chrono::steady_clock::now();
+      if (!_undelivered_since) {
+        _undelivered_since = now;
+      } else if (now - *_undelivered_since > kDeliveryStall) {
+        BOOST_LOG(error) << "LuminalVGD capture: a newer frame (seq " << status.latest_sequence
+                         << " vs delivered " << _last_sequence << ") sat unclaimed for "
+                         << std::chrono::duration_cast<std::chrono::seconds>(kDeliveryStall).count()
+                         << " s; disabling ring capture for this session.";
+        g_broken_session.store(_session_id, std::memory_order_release);
+        return capture_e::reinit;
+      }
+    } else {
+      _undelivered_since.reset();
     }
 
     // Claim the freshest published frame, honoring the caller's timeout.
@@ -374,8 +382,7 @@ namespace platf::dxgi {
     claim_guard.disable();
     vgd_ring_release(_ring, frame.index);
     _last_sequence = frame.sequence;
-    _last_delivery = host_processing_timestamp;
-    _published_at_last_delivery = status.frames_published;
+    _undelivered_since.reset();
 
     d3d_img->blank = false;
     d3d_img->format = capture_format;

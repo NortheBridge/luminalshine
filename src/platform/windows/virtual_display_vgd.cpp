@@ -233,7 +233,8 @@ namespace VDISPLAY::vgd {
     uint32_t fps_millihz,
     const GUID &guid,
     uint32_t base_fps_millihz,
-    bool framegen_refresh_active
+    bool framegen_refresh_active,
+    bool enable_hdr
   ) {
     const auto before = luminal_display_names();
 
@@ -269,8 +270,18 @@ namespace VDISPLAY::vgd {
     req.display_id = display_id_for_client(s_client_uid);
     req.adapter_luid = 0;        // driver default (largest VRAM)
     req.lease_timeout_ms = 0;    // driver default; ping thread feeds it
-    req.bit_depth = 8;           // SDR-8 (HDR arrives with driver caps::HDR10)
-    req.hdr = 0;
+    // HDR10 when the client asked for it and the driver advertises the cap;
+    // otherwise SDR-8. The driver's EDID grows the CTA-861.3 HDR block and
+    // Windows offers advanced color on the monitor.
+    const bool hdr = enable_hdr && g_caps && (g_caps->caps & VGD_CAP_HDR10);
+    // Proto wire encoding (SudoVDA-ported): Sdr8=8, Sdr10=10, Hdr10=110,
+    // Hdr12=112 — HDR depths carry a leading "1"; plain 10 with hdr=1 is
+    // rejected as BAD_BIT_DEPTH.
+    req.bit_depth = hdr ? 110 : 8;
+    req.hdr = hdr ? 1 : 0;
+    if (enable_hdr && !hdr) {
+      BOOST_LOG(info) << "LuminalVGD: client requested HDR but the installed driver lacks HDR10 caps; creating SDR monitor.";
+    }
     req.flags = 0;
     req.mode_count = 1;
     // Callers pass millihertz (nvhttp/webrtc normalize Hz → mHz before the
@@ -390,6 +401,11 @@ namespace VDISPLAY::vgd {
     return "proto " + std::to_string(g_caps->proto_major) + '.' +
            std::to_string(g_caps->proto_minor) + " build " +
            std::to_string(g_caps->driver_build);
+  }
+
+  bool driver_supports_hdr() {
+    std::lock_guard lk(g_mutex);
+    return g_caps && (g_caps->caps & VGD_CAP_HDR10);
   }
 
   std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name) {

@@ -14,6 +14,7 @@
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/platform/windows/virtual_display_backend.h"
+  #include "src/platform/windows/virtual_display_vgd.h"
   #include "src/process.h"
 
   #include <algorithm>
@@ -303,10 +304,12 @@ namespace display_helper_integration::helpers {
 
     auto vd_cfg = *cfg;
 
-    // The LuminalVGD driver does not advertise HDR10 yet; asking Windows to
-    // enable HDR on its monitor makes the whole ApplySettings call fail.
-    if (vd_cfg.m_hdr_state == display_device::HdrState::Enabled && VDISPLAY::is_luminalvgd_active()) {
-      BOOST_LOG(warning) << "LuminalVGD does not support HDR yet; applying the virtual display in SDR.";
+    // Asking Windows to enable HDR on a monitor without HDR10 caps fails
+    // the whole ApplySettings call — downgrade to SDR when the installed
+    // LuminalVGD driver doesn't advertise HDR10.
+    if (vd_cfg.m_hdr_state == display_device::HdrState::Enabled &&
+        VDISPLAY::is_luminalvgd_active() && !VDISPLAY::vgd::driver_supports_hdr()) {
+      BOOST_LOG(warning) << "Installed LuminalVGD driver lacks HDR10 caps; applying the virtual display in SDR.";
       vd_cfg.m_hdr_state = std::nullopt;
     }
 
