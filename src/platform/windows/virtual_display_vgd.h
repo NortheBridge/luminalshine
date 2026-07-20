@@ -39,7 +39,7 @@ namespace VDISPLAY::vgd {
     const char *s_client_name,
     uint32_t width,
     uint32_t height,
-    uint32_t fps,
+    uint32_t fps_millihz,
     const GUID &guid,
     uint32_t base_fps_millihz,
     bool framegen_refresh_active

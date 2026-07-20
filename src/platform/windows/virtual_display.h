@@ -105,6 +105,11 @@ namespace VDISPLAY {
   std::optional<std::string> resolveAnyVirtualDisplayDeviceId();
   bool is_virtual_display_output(const std::string &output_identifier);
 
+  /// Backend-agnostic check whether a monitor PnP/EDID hardware id (e.g.
+  /// SudoVDA "SMKD1CE", LuminalVGD "NBF5001") belongs to a known
+  /// virtual-display driver.
+  bool is_virtual_display_hardware_id(const std::string &hardware_id);
+
   std::vector<std::wstring> matchDisplay(std::wstring sMatch);
 
   struct SudaVDADisplayInfo {

@@ -1816,16 +1816,34 @@ namespace VDISPLAY {
             contains_ci(device.m_monitor_device_path, "SUDOMAKER")) {
           return true;
         }
+
+        // Backend-agnostic: the monitor hardware id is the segment between
+        // the first two '#'s of the device path
+        // (e.g. \\?\DISPLAY#NBF5001#1&15ecd195&11&UID257#{...}).
+        const auto first_hash = device.m_monitor_device_path.find('#');
+        if (first_hash != std::string::npos) {
+          const auto second_hash = device.m_monitor_device_path.find('#', first_hash + 1);
+          const auto hardware_id = device.m_monitor_device_path.substr(
+            first_hash + 1,
+            second_hash == std::string::npos ? std::string::npos : second_hash - first_hash - 1
+          );
+          if (is_virtual_display_hardware_id(hardware_id)) {
+            return true;
+          }
+        }
       }
 
       // Fallback: some environments may return an adapter-like friendly name instead of the per-display name.
       static const std::string sudoMakerDeviceString = "SudoMaker Virtual Display Adapter";
-      if (equals_ci(device.m_friendly_name, sudoMakerDeviceString)) {
+      static const std::string luminalVgdDeviceString = "Luminal Video Graphics Display";
+      if (equals_ci(device.m_friendly_name, sudoMakerDeviceString) ||
+          equals_ci(device.m_friendly_name, luminalVgdDeviceString)) {
         return true;
       }
 
-      // Fallback: SudoVDA's synthetic EDID commonly uses manufacturer "SMK" (SudoMaker).
-      if (device.m_edid && equals_ci(device.m_edid->m_manufacturer_id, "SMK")) {
+      // Fallback: match the synthetic EDID manufacturer id — SudoVDA uses
+      // "SMK" (SudoMaker), LuminalVGD uses "NBF" (NortheBridge Foundation).
+      if (device.m_edid && is_virtual_display_hardware_id(device.m_edid->m_manufacturer_id)) {
         return true;
       }
 
@@ -4313,6 +4331,26 @@ namespace VDISPLAY {
       return any_match;
     }
     return std::nullopt;
+  }
+
+  bool is_virtual_display_hardware_id(const std::string &hardware_id) {
+    const auto starts_with_ci = [](const std::string &value, std::string_view prefix) {
+      if (value.size() < prefix.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < prefix.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(value[i])) != std::tolower(static_cast<unsigned char>(prefix[i]))) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    // Monitor PnP/EDID vendor prefixes, one per virtual-display backend:
+    //  - "SMK" — SudoVDA (SudoMaker), e.g. SMKD1CE.
+    //  - "NBF" — LuminalVGD (NortheBridge Foundation), e.g. NBF5000/NBF5001.
+    return starts_with_ci(hardware_id, "SMK") ||
+           starts_with_ci(hardware_id, "NBF");
   }
 
   bool is_virtual_display_output(const std::string &output_identifier) {

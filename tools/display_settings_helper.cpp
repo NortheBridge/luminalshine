@@ -1497,6 +1497,11 @@ namespace {
       return lhs.size() == rhs.size() && contains_ci(lhs, rhs);
     }
 
+    // Keep in sync with VDISPLAY::is_virtual_display_hardware_id /
+    // is_virtual_display_device in src/platform/windows/virtual_display.cpp:
+    // SudoVDA monitors carry the SudoMaker identity (EDID vendor "SMK"),
+    // LuminalVGD monitors use PnP/EDID vendor "NBF" (e.g. NBF5001) and the
+    // adapter description "Luminal Video Graphics Display".
     static bool is_virtual_display_device(const display_device::EnumeratedDevice &device) {
       if (contains_ci(device.m_device_id, "SUDOVDA") ||
           contains_ci(device.m_device_id, "SUDOMAKER") ||
@@ -1507,11 +1512,14 @@ namespace {
         return true;
       }
 
-      if (equals_ci(device.m_friendly_name, "SudoMaker Virtual Display Adapter")) {
+      if (equals_ci(device.m_friendly_name, "SudoMaker Virtual Display Adapter") ||
+          equals_ci(device.m_friendly_name, "Luminal Video Graphics Display")) {
         return true;
       }
 
-      return device.m_edid && equals_ci(device.m_edid->m_manufacturer_id, "SMK");
+      return device.m_edid &&
+             (equals_ci(device.m_edid->m_manufacturer_id, "SMK") ||
+              equals_ci(device.m_edid->m_manufacturer_id, "NBF"));
     }
 
     static bool is_active_display_device(const display_device::EnumeratedDevice &device) {

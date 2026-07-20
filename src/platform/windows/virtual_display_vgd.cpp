@@ -226,7 +226,7 @@ namespace VDISPLAY::vgd {
     const char *s_client_name,
     uint32_t width,
     uint32_t height,
-    uint32_t fps,
+    uint32_t fps_millihz,
     const GUID &guid,
     uint32_t base_fps_millihz,
     bool framegen_refresh_active
@@ -251,6 +251,7 @@ namespace VDISPLAY::vgd {
       if (!names.empty()) {
         result.display_name = names.front();
         result.monitor_device_path = monitor_device_path_of(names.front());
+        result.device_id = resolveVirtualDisplayDeviceId(names.front());
       }
       return result;
     }
@@ -264,8 +265,10 @@ namespace VDISPLAY::vgd {
     req.hdr = 0;
     req.flags = 0;
     req.mode_count = 1;
-    req.modes[0] = VgdModeSpec {width, height, fps * 1000};
-    if (framegen_refresh_active && base_fps_millihz != 0 && base_fps_millihz != fps * 1000) {
+    // Callers pass millihertz (nvhttp/webrtc normalize Hz → mHz before the
+    // call); the spec below must NOT rescale it again.
+    req.modes[0] = VgdModeSpec {width, height, fps_millihz};
+    if (framegen_refresh_active && base_fps_millihz != 0 && base_fps_millihz != fps_millihz) {
       // Advertise the base rate too so the OS can drop out of the
       // frame-generation-doubled mode without a monitor cycle.
       req.modes[1] = VgdModeSpec {width, height, base_fps_millihz};
@@ -292,7 +295,7 @@ namespace VDISPLAY::vgd {
     };
     BOOST_LOG(info) << "LuminalVGD monitor created: session 0x" << std::hex << req.session_id
                     << " display 0x" << reply.display_id << std::dec << " connector "
-                    << reply.connector_index << ' ' << width << 'x' << height << '@' << fps;
+                    << reply.connector_index << ' ' << width << 'x' << height << '@' << fps_millihz << "mHz";
     lk.unlock();
 
     // The monitor arrives asynchronously; wait briefly for the OS to
@@ -307,6 +310,20 @@ namespace VDISPLAY::vgd {
         if (std::find(before.begin(), before.end(), name) == before.end()) {
           result.display_name = name;
           result.monitor_device_path = monitor_device_path_of(name);
+          // Resolve the libdisplaydevice device id so the display-helper
+          // topology layer can target the new monitor directly.
+          result.device_id = resolveVirtualDisplayDeviceId(name);
+          return result;
+        }
+      }
+      // The monitor arrives inactive (it only attaches to the desktop once
+      // the display helper applies the topology), so the attached-display
+      // poll above may never see it. The client-name resolver enumerates
+      // inactive devices too — a resolved device id is enough for the
+      // topology layer to activate the display.
+      if (s_client_name) {
+        if (auto id = resolveVirtualDisplayDeviceIdForClient(s_client_name)) {
+          result.device_id = std::move(id);
           return result;
         }
       }
