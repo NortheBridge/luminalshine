@@ -53,4 +53,17 @@ namespace VDISPLAY::vgd {
   /// diagnostics/web UI.
   std::optional<std::string> driver_version_string();
 
+  /// What the ring-consuming capture backend needs to map a session's
+  /// frame ring (see display_vgd.cpp).
+  struct RingTargetInfo {
+    uint64_t session_id;
+    uint32_t ring_slots;
+  };
+
+  /// Resolve the tracked session whose monitor backs `display_name`
+  /// (e.g. "\\\\.\\DISPLAY274"). With a single tracked session (the
+  /// common per-client case) that session is returned directly;
+  /// otherwise the session whose recorded display name matches wins.
+  std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name);
+
 }  // namespace VDISPLAY::vgd

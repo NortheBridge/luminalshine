@@ -26,6 +26,10 @@ namespace VDISPLAY::vgd {
       uint64_t session_id;
       uint64_t display_id;
       std::string client_name;
+      uint32_t ring_slots;
+      /// GDI display name ("\\\\.\\DISPLAY274") once the monitor surfaced;
+      /// empty while the display is still inactive pre-APPLY.
+      std::wstring display_name;
     };
 
     struct GuidKey {
@@ -252,6 +256,10 @@ namespace VDISPLAY::vgd {
         result.display_name = names.front();
         result.monitor_device_path = monitor_device_path_of(names.front());
         result.device_id = resolveVirtualDisplayDeviceId(names.front());
+        std::lock_guard relock(g_mutex);
+        if (auto again = g_sessions.find(key_of(guid)); again != g_sessions.end()) {
+          again->second.display_name = names.front();
+        }
       }
       return result;
     }
@@ -292,6 +300,8 @@ namespace VDISPLAY::vgd {
       req.session_id,
       reply.display_id,
       s_client_name ? s_client_name : "",
+      reply.ring_slots,
+      {},
     };
     BOOST_LOG(info) << "LuminalVGD monitor created: session 0x" << std::hex << req.session_id
                     << " display 0x" << reply.display_id << std::dec << " connector "
@@ -313,6 +323,14 @@ namespace VDISPLAY::vgd {
           // Resolve the libdisplaydevice device id so the display-helper
           // topology layer can target the new monitor directly.
           result.device_id = resolveVirtualDisplayDeviceId(name);
+          {
+            // Record the GDI name so the ring capture backend can map
+            // this display back to its session.
+            std::lock_guard relock(g_mutex);
+            if (auto it = g_sessions.find(key_of(guid)); it != g_sessions.end()) {
+              it->second.display_name = name;
+            }
+          }
           return result;
         }
       }
@@ -372,6 +390,26 @@ namespace VDISPLAY::vgd {
     return "proto " + std::to_string(g_caps->proto_major) + '.' +
            std::to_string(g_caps->proto_minor) + " build " +
            std::to_string(g_caps->driver_build);
+  }
+
+  std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name) {
+    std::wstring wanted(display_name.begin(), display_name.end());
+    std::lock_guard lk(g_mutex);
+    if (g_sessions.empty()) {
+      return std::nullopt;
+    }
+    if (g_sessions.size() == 1) {
+      const auto &s = g_sessions.begin()->second;
+      return RingTargetInfo {s.session_id, s.ring_slots};
+    }
+    for (const auto &[k, s] : g_sessions) {
+      if (!s.display_name.empty() && s.display_name == wanted) {
+        return RingTargetInfo {s.session_id, s.ring_slots};
+      }
+    }
+    BOOST_LOG(warning) << "LuminalVGD: no tracked session matches display '"
+                       << display_name << "' (" << g_sessions.size() << " sessions).";
+    return std::nullopt;
   }
 
 }  // namespace VDISPLAY::vgd

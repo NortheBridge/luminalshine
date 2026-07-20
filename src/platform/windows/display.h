@@ -27,6 +27,10 @@
 #include "src/utility.h"
 #include "src/video.h"
 
+// Opaque LuminalVGD frame-ring handle (luminal_vgd.h); forward-declared so
+// only display_vgd.cpp needs the FFI header.
+struct VgdRingHandle;
+
 namespace platf::dxgi {
   extern const char *format_str[];
 
@@ -548,6 +552,63 @@ namespace platf::dxgi {
     std::string _display_name;
     bool _session_initialized_logged = false;
     bool _frame_locked = false;
+  };
+
+  /**
+   * @class display_vgd_vram_t
+   * @brief Capture backend that consumes the LuminalVGD driver's shared-texture
+   * frame ring directly (no WGC helper process, no desktop-capture API).
+   *
+   * The driver publishes every composed frame of its virtual monitor into a
+   * small ring of named keyed-mutex shared textures. This backend claims the
+   * freshest published slot (a cross-process CAS keeps the driver's writer off
+   * it), GPU-copies the pixels into a pooled img_d3d_t under the slot's keyed
+   * mutex, and releases the slot — claims are never held across encode.
+   */
+  class display_vgd_vram_t: public display_vram_t {
+  public:
+    ~display_vgd_vram_t() override;
+
+    /**
+     * @brief Factory: returns a ring-backed display for `display_name`, or
+     * nullptr when the display is not a live LuminalVGD monitor (callers fall
+     * back to WGC/DDA).
+     */
+    static std::shared_ptr<display_t> create(const ::video::config_t &config, const std::string &display_name);
+
+    int init(const ::video::config_t &config, const std::string &display_name);
+
+    capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
+
+    int dummy_img(platf::img_t *img_base) override;
+
+  protected:
+    capture_e release_snapshot() override;
+
+  private:
+    struct slot_texture_t {
+      texture2d_t texture;
+      keyed_mutex_t mutex;
+    };
+
+    /// Open (or fetch the cached) named shared texture for a ring slot of the
+    /// current generation. Returns nullptr on open failure.
+    slot_texture_t *slot_texture(uint32_t generation, uint32_t slot);
+
+    ::VgdRingHandle *_ring = nullptr;
+    uint64_t _session_id = 0;
+    uint32_t _ring_slots = 0;
+    /// Generation the cached slot textures were opened for; a bump retires them.
+    uint32_t _texture_generation = 0;
+    std::vector<slot_texture_t> _slot_textures;
+    uint64_t _last_sequence = 0;
+    std::string _display_name;
+
+    // Broken-ring detection (see display_vgd.cpp): consecutive texture-open
+    // failures, and publish-vs-delivery stall tracking.
+    int _open_failures = 0;
+    uint64_t _published_at_last_delivery = 0;
+    std::chrono::steady_clock::time_point _last_delivery {};
   };
 
   class display_wgc_ipc_ram_t: public display_ram_t {

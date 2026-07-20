@@ -2567,7 +2567,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="6">Choices</td>
+        <td rowspan="7">Choices</td>
         <td>nvfbc</td>
         <td>Use NVIDIA Frame Buffer Capture to capture direct to GPU memory. This is usually the fastest method for
             NVIDIA cards. NvFBC does not have native Wayland support and does not work with XWayland.
@@ -2607,6 +2607,12 @@ editing the `conf` file in a text editor. Use the examples as reference.
             @note{Windows only.}
             @note{NVIDIA Ultra Low Latency Mode (ULLM) can hurt performance; avoid this by either using a monitor whose refresh rate exceeds the stream and capping FPS to stop ULLM from engaging, or simply disable Low Latency Mode in the driver.}
             @tip{On NVIDIA cards, selecting this option will resolve stream freezes caused by high VRAM utilization.}</td>
+    </tr>
+    <tr>
+        <td>vgd</td>
+        <td>Consume the LuminalVGD virtual display driver's frame ring directly, bypassing desktop-capture APIs entirely.
+            Used automatically when streaming from a LuminalVGD virtual display; falls back to WGC/DDA for physical displays.
+            @note{Windows only; requires the LuminalVGD driver.}</td>
     </tr>
 </table>
 

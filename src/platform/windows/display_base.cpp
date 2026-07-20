@@ -38,6 +38,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "src/display_device.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/windows/virtual_display_backend.h"
 #include "src/tdr_state.h"
 #include "src/video.h"
 #include "utf_utils.h"
@@ -1671,9 +1672,24 @@ namespace platf {
     const bool user_requested_ddx = capture_mode == "ddx";
     const bool default_to_wgc = dxgi::should_use_wgc_default();
     const bool wgc_requested = capture_mode.starts_with("wgc");
-    const bool prefer_wgc_backend = !user_requested_ddx && (wgc_requested || default_to_wgc);
+    const bool vgd_requested = capture_mode == "vgd";
+    const bool prefer_wgc_backend = !user_requested_ddx && !vgd_requested && (wgc_requested || default_to_wgc);
 
     if (hwdevice_type == mem_type_e::dxgi) {
+      // A LuminalVGD virtual monitor carries its own frame ring — consume it
+      // directly instead of re-capturing the desktop. create() returns null
+      // for non-VGD displays (or if the ring can't be mapped), falling back
+      // to WGC/DDA below; explicit capture=vgd also degrades rather than
+      // failing the stream.
+      if (!user_requested_ddx && !wgc_requested && (vgd_requested || VDISPLAY::is_luminalvgd_active())) {
+        if (auto disp = dxgi::display_vgd_vram_t::create(config, display_name)) {
+          return disp;
+        }
+        if (vgd_requested) {
+          BOOST_LOG(warning) << "capture=vgd requested but the LuminalVGD ring is unavailable for "
+                             << display_name << "; falling back to WGC/DDA.";
+        }
+      }
       if (prefer_wgc_backend) {
         auto disp = dxgi::display_wgc_ipc_vram_t::create(config, display_name);
         if (disp || wgc_requested) {
