@@ -3820,15 +3820,13 @@ namespace VDISPLAY {
     uint32_t fps,
     const GUID &guid,
     uint32_t base_fps_millihz,
-    bool framegen_refresh_active
+    bool framegen_refresh_active,
+    bool enable_hdr
   ) {
     if (is_luminalvgd_active()) {
-      if (s_hdr_profile && *s_hdr_profile) {
-        BOOST_LOG(info) << "LuminalVGD: HDR profile requested but the backend is SDR-only for now.";
-      }
       return vgd::create_virtual_display(
         s_client_uid, s_client_name, width, height, fps, guid, base_fps_millihz,
-        framegen_refresh_active);
+        framegen_refresh_active, enable_hdr);
     }
     constexpr int kMaxInitializationAttempts = 3;
     const auto requested_uuid = guid_to_uuid(guid);

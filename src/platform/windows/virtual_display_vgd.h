@@ -42,8 +42,13 @@ namespace VDISPLAY::vgd {
     uint32_t fps_millihz,
     const GUID &guid,
     uint32_t base_fps_millihz,
-    bool framegen_refresh_active
+    bool framegen_refresh_active,
+    bool enable_hdr = false
   );
+
+  /// True when the connected driver advertises HDR10 (caps gate for
+  /// requesting HDR monitors and for skipping the SDR topology downgrade).
+  bool driver_supports_hdr();
 
   bool remove_virtual_display(const GUID &guid);
   bool remove_all_virtual_displays();

@@ -605,10 +605,9 @@ namespace platf::dxgi {
     std::string _display_name;
 
     // Broken-ring detection (see display_vgd.cpp): consecutive texture-open
-    // failures, and publish-vs-delivery stall tracking.
+    // failures, and how long a newer-than-delivered frame has sat unclaimed.
     int _open_failures = 0;
-    uint64_t _published_at_last_delivery = 0;
-    std::chrono::steady_clock::time_point _last_delivery {};
+    std::optional<std::chrono::steady_clock::time_point> _undelivered_since;
   };
 
   class display_wgc_ipc_ram_t: public display_ram_t {

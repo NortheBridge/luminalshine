@@ -420,7 +420,8 @@ namespace webrtc_stream {
         vd_fps,
         virtual_display_guid,
         base_vd_fps_millihz,
-        framegen_refresh_active
+        framegen_refresh_active,
+        session->enable_hdr
       );
 
       if (display_info) {
