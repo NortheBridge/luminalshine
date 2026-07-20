@@ -13,6 +13,7 @@
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
+  #include "src/platform/windows/virtual_display_backend.h"
   #include "src/process.h"
 
   #include <algorithm>
@@ -301,6 +302,13 @@ namespace display_helper_integration::helpers {
     }
 
     auto vd_cfg = *cfg;
+
+    // The LuminalVGD driver does not advertise HDR10 yet; asking Windows to
+    // enable HDR on its monitor makes the whole ApplySettings call fail.
+    if (vd_cfg.m_hdr_state == display_device::HdrState::Enabled && VDISPLAY::is_luminalvgd_active()) {
+      BOOST_LOG(warning) << "LuminalVGD does not support HDR yet; applying the virtual display in SDR.";
+      vd_cfg.m_hdr_state = std::nullopt;
+    }
 
     std::string target_device_id;
     if (auto resolved = resolve_virtual_device_id(effective_video_config_, session_)) {

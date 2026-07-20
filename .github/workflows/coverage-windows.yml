@@ -186,6 +186,15 @@ jobs:
           if (-not $sudoDll) { throw "SudoVDA.dll not found inside Apollo installer" }
           Copy-Item $sudoDll.FullName (Join-Path $driversDir 'SudoVDA.dll') -Force
 
+      - name: Add Rust gnullvm target
+        shell: pwsh
+        # The vendored luminal-vgd-ffi staticlib builds for
+        # x86_64-pc-windows-gnullvm (UCRT-compatible, links into the MSYS2
+        # clang build). The runner's preinstalled rustup lacks that
+        # target's std, which fails cargo with E0463 "can't find crate for
+        # `core`".
+        run: rustup target add x86_64-pc-windows-gnullvm
+
       - name: Configure CMake (coverage)
         env:
           CC: clang

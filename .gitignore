@@ -67,3 +67,4 @@ _codeql_detected_source_root
 
 build-msvc
 .cache/
+test_sunshine.log

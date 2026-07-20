@@ -27,7 +27,12 @@
 // - NV_ENC_*_VER definitions where the value inside NVENCAPI_STRUCT_VERSION() was increased
 // - Incompatible struct changes in nvEncodeAPI.h (fields removed, semantics changed, etc.)
 // - Test both old and new drivers with all supported codecs
-#if !((NVENCAPI_MAJOR_VERSION == 12 && NVENCAPI_MINOR_VERSION <= 2) || (NVENCAPI_MAJOR_VERSION == 13 && NVENCAPI_MINOR_VERSION == 0))
+// 13.1 accepted 2026-07: the third-party/nv-codec-headers pin moved to
+// Video Codec SDK 13.1 ("Update headers for Video Codec SDK 13.1")
+// without widening this guard, breaking every full build. Reviewed as a
+// conventional additive minor bump; full NVENC hardware regression pass
+// still owed per the checklist above.
+#if !((NVENCAPI_MAJOR_VERSION == 12 && NVENCAPI_MINOR_VERSION <= 2) || (NVENCAPI_MAJOR_VERSION == 13 && NVENCAPI_MINOR_VERSION <= 1))
   #error Check and update NVENC code for backwards compatibility!
 #endif
 

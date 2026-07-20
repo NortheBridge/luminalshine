@@ -21,8 +21,10 @@ namespace VDISPLAY {
   enum class BackendType : int {
     /// No virtual-display driver available.
     NONE = 0,
-    /// SudoVDA (default backend).
+    /// SudoVDA (legacy default; being replaced by LuminalVGD).
     SUDOVDA = 1,
+    /// LuminalVGD — the first-party IddCx driver (preferred when installed).
+    LUMINALVGD = 2,
   };
 
   /// Select and initialize the backend for this process.
@@ -41,6 +43,10 @@ namespace VDISPLAY {
   /// Convenience helper — never runs selection on its own.
   inline bool is_sudovda_active() {
     return active_backend() == BackendType::SUDOVDA;
+  }
+
+  inline bool is_luminalvgd_active() {
+    return active_backend() == BackendType::LUMINALVGD;
   }
 
   /// Friendly name of the active backend, for logs and the web UI.

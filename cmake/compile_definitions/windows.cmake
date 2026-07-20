@@ -41,6 +41,34 @@ file(GLOB NVPREFS_FILES CONFIGURE_DEPENDS
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include")
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/sudovda")
 
+# LuminalVGD — first-party virtual display driver. The C ABI staticlib is
+# built by cargo from the vendored driver workspace (git submodule). The
+# gnullvm target matches this UCRT64 toolchain; see the driver repo's
+# docs/BUILDING.md.
+set(LUMINAL_VGD_DIR "${CMAKE_SOURCE_DIR}/src/drivers/luminal-display")
+set(LUMINAL_VGD_FFI_LIB
+    "${LUMINAL_VGD_DIR}/target/x86_64-pc-windows-gnullvm/release/libluminal_vgd_ffi.a")
+include_directories(SYSTEM "${LUMINAL_VGD_DIR}/crates/luminal-vgd-ffi/include")
+find_program(LUMINAL_VGD_CARGO_EXE
+    NAMES cargo cargo.exe
+    PATHS "$ENV{USERPROFILE}/.cargo/bin")
+if(NOT LUMINAL_VGD_CARGO_EXE)
+    message(FATAL_ERROR "cargo not found (needed for luminal-vgd-ffi); install rustup or set LUMINAL_VGD_CARGO_EXE")
+endif()
+# Produce the staticlib via cargo. add_custom_command(OUTPUT ...) gives
+# ninja a rule for the exact link-input path; cargo is its own (fast,
+# incremental) dependency tracker, so we always invoke it and let it
+# decide whether a rebuild is needed. The custom target drives the
+# command and sunshine depends on it (cmake/targets/windows.cmake).
+add_custom_command(
+    OUTPUT "${LUMINAL_VGD_FFI_LIB}"
+    COMMAND "${LUMINAL_VGD_CARGO_EXE}" build -p luminal-vgd-ffi --release --target x86_64-pc-windows-gnullvm
+    WORKING_DIRECTORY "${LUMINAL_VGD_DIR}"
+    COMMENT "cargo build luminal-vgd-ffi (staticlib, x86_64-pc-windows-gnullvm)"
+    VERBATIM)
+add_custom_target(luminal_vgd_ffi_build DEPENDS "${LUMINAL_VGD_FFI_LIB}")
+set_source_files_properties("${LUMINAL_VGD_FFI_LIB}" PROPERTIES GENERATED TRUE)
+
 # sunshine icon
 if(NOT DEFINED SUNSHINE_ICON_PATH)
     set(SUNSHINE_ICON_PATH "${CMAKE_SOURCE_DIR}/sunshine.ico")
@@ -117,6 +145,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/render_stack_detect.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_backend.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_backend.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_vgd.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_vgd.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda-ioctl.h"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frame_limiter.h"
@@ -146,6 +176,8 @@ set(OPENSSL_LIBRARIES
         libcrypto.a)
 
 list(PREPEND PLATFORM_LIBRARIES
+        "${LUMINAL_VGD_FFI_LIB}"
+        cfgmgr32
         ${CURL_STATIC_LIBRARIES}
         avrt
         d3d11

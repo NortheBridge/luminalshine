@@ -403,6 +403,15 @@ jobs:
           Write-Host "SudoVDA driver bundle ready:"
           Get-ChildItem $driversDir | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
 
+      - name: Add Rust gnullvm target
+        shell: pwsh
+        # The vendored luminal-vgd-ffi staticlib builds for
+        # x86_64-pc-windows-gnullvm (UCRT-compatible, links into the MSYS2
+        # clang build). The runner's preinstalled rustup lacks that
+        # target's std, which fails cargo with E0463 "can't find crate for
+        # `core`".
+        run: rustup target add x86_64-pc-windows-gnullvm
+
       - name: Build Windows
         shell: msys2 {0}
         env:
