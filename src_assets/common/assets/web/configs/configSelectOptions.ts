@@ -234,6 +234,7 @@ export function getConfigSelectOptions(
           { label: 'Windows Graphics Capture (variable)', value: 'wgc' },
           { label: 'Windows Graphics Capture (constant)', value: 'wgcc' },
           { label: 'Desktop Duplication API', value: 'ddx' },
+          { label: 'LuminalVGD frame ring (virtual displays)', value: 'vgd' },
         );
       } else if (platform === 'linux') {
         options.push(
