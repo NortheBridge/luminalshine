@@ -92,6 +92,21 @@ namespace version_compare {
     return ascii_lower(std::get<std::string>(version.prerelease.front())) == "stable";
   }
 
+  // Split a leading run of digits off an alphanumeric identifier
+  // ("1shfx01" -> {1, "shfx01"}). Returns -1 as the prefix when the
+  // identifier has no leading digits or the run is too long to be a
+  // plausible respin number.
+  inline std::pair<long long, std::string_view> split_numeric_prefix(const std::string &identifier) {
+    size_t digits = 0;
+    while (digits < identifier.size() && std::isdigit(static_cast<unsigned char>(identifier[digits])) != 0) {
+      ++digits;
+    }
+    if (digits == 0 || digits > 18) {
+      return {-1, std::string_view {identifier}};
+    }
+    return {std::stoll(identifier.substr(0, digits)), std::string_view {identifier}.substr(digits)};
+  }
+
   inline int compare_identifier_lists(
     const std::vector<prerelease_identifier_t> &lhs,
     const std::vector<prerelease_identifier_t> &rhs,
@@ -120,13 +135,41 @@ namespace version_compare {
         continue;
       }
 
+      // LuminalShine hotfix tags glue a suffix onto the respin number
+      // ("beta.1shfx01" = hotfix on beta.1). Strict semver would rank any
+      // such alphanumeric identifier above every numeric one, making
+      // beta.1shfx01 "newer" than beta.2. Instead, rank identifiers with a
+      // leading number by that number first, with the suffixed form as a
+      // respin above its base but below the next number.
       if (left_is_num != right_is_num) {
+        const auto &alpha = std::get<std::string>(left_is_num ? right : left);
+        const auto [prefix, suffix] = split_numeric_prefix(alpha);
+        if (prefix < 0) {
+          // No leading digits: keep strict semver (numeric < alphanumeric).
+          return left_is_num ? -1 : 1;
+        }
+        const long long num = std::get<int>(left_is_num ? left : right);
+        if (num != prefix) {
+          return (left_is_num ? num < prefix : prefix < num) ? -1 : 1;
+        }
+        // Equal number: the pure number is the base, the suffixed form the respin.
         return left_is_num ? -1 : 1;
       }
 
       const auto &left_value = std::get<std::string>(left);
       const auto &right_value = std::get<std::string>(right);
       if (left_value != right_value) {
+        const auto [left_prefix, left_suffix] = split_numeric_prefix(left_value);
+        const auto [right_prefix, right_suffix] = split_numeric_prefix(right_value);
+        if (left_prefix >= 0 && right_prefix >= 0) {
+          if (left_prefix != right_prefix) {
+            return left_prefix < right_prefix ? -1 : 1;
+          }
+          if (left_suffix != right_suffix) {
+            return left_suffix < right_suffix ? -1 : 1;
+          }
+          continue;
+        }
         return left_value < right_value ? -1 : 1;
       }
     }
