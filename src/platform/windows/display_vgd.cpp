@@ -284,11 +284,15 @@ namespace platf::dxgi {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (true) {
       if (vgd_ring_claim(_ring, &frame)) {
-        if (frame.sequence != _last_sequence) {
+        if (frame.sequence > _last_sequence) {
           claimed = true;
           break;
         }
-        // Freshest published frame is the one we already delivered.
+        // At or below the last delivered sequence: either the frame we
+        // already delivered, or an OLDER still-published leftover that
+        // became the "freshest" after we released the newest slot —
+        // delivering it would send frames out of order. Release and wait
+        // for something genuinely new.
         vgd_ring_release(_ring, frame.index);
       }
       if (std::chrono::steady_clock::now() >= deadline) {
