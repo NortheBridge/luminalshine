@@ -60,8 +60,14 @@ namespace platf::dxgi {
     constexpr uint32_t kRingStateDead = 3;
 
     /// Driver heartbeats the ring header at least every 500 ms even when no
-    /// frames flow; treat several missed beats as a dead worker.
+    /// frames flow; treat several missed beats as the worker being stopped.
     constexpr auto kHeartbeatStale = std::chrono::milliseconds(2000);
+
+    /// How long to wait out a stale heartbeat before reinitializing: mode
+    /// transitions unassign the swapchain (worker stops, heartbeat halts)
+    /// for a few seconds; only a persistently silent ring is worth the
+    /// cost of a capture teardown.
+    constexpr auto kHeartbeatReinitGrace = std::chrono::seconds(10);
 
     /// Circuit breaker: a session whose ring consistently fails to deliver
     /// (texture opens failing, or frames publishing that we can never claim)
@@ -241,11 +247,28 @@ namespace platf::dxgi {
     if (status.qpc_frequency != 0 && status.heartbeat_qpc != 0) {
       const auto beats_behind = qpc_time_difference(qpc_counter(), static_cast<int64_t>(status.heartbeat_qpc));
       if (beats_behind > kHeartbeatStale) {
-        BOOST_LOG(warning) << "LuminalVGD capture: ring heartbeat stale ("
-                           << std::chrono::duration_cast<std::chrono::milliseconds>(beats_behind).count()
-                           << " ms); reinitializing.";
-        return capture_e::reinit;
+        // The heartbeat stops whenever the OS unassigns the swapchain
+        // (game fullscreen/mode transitions) — the worker isn't dead, it's
+        // between assignments, and frames resume within seconds. Tearing
+        // the capture pipeline down for that turns a sub-second hiccup
+        // into a multi-second outage (encoder teardown + re-detection +
+        // settle), so wait out a grace window first.
+        const auto now = std::chrono::steady_clock::now();
+        if (!_heartbeat_stale_since) {
+          _heartbeat_stale_since = now;
+          BOOST_LOG(info) << "LuminalVGD capture: ring heartbeat stale ("
+                          << std::chrono::duration_cast<std::chrono::milliseconds>(beats_behind).count()
+                          << " ms); waiting out a possible swapchain reassignment.";
+        }
+        if (now - *_heartbeat_stale_since > kHeartbeatReinitGrace) {
+          BOOST_LOG(warning) << "LuminalVGD capture: ring heartbeat stale for "
+                             << std::chrono::duration_cast<std::chrono::seconds>(now - *_heartbeat_stale_since).count()
+                             << " s; reinitializing.";
+          return capture_e::reinit;
+        }
+        return capture_e::timeout;
       }
+      _heartbeat_stale_since.reset();
     }
     if (status.state == kRingStateRebuilding) {
       // The driver is retiring/recreating textures (mode change, swapchain

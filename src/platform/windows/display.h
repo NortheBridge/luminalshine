@@ -608,6 +608,9 @@ namespace platf::dxgi {
     // failures, and how long a newer-than-delivered frame has sat unclaimed.
     int _open_failures = 0;
     std::optional<std::chrono::steady_clock::time_point> _undelivered_since;
+    // How long the driver's heartbeat has been stale (swapchain unassigned
+    // during mode transitions stops the worker without marking the ring).
+    std::optional<std::chrono::steady_clock::time_point> _heartbeat_stale_since;
   };
 
   class display_wgc_ipc_ram_t: public display_ram_t {
