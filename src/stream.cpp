@@ -654,6 +654,16 @@ namespace stream {
       deferred_stream_start_state().reset();
     }
 
+    // Re-check liveness after consuming the deferred state: session::stop can
+    // run (e.g. ping timeout on the video/audio thread) between the caller's
+    // gate and this point. A cancelled session must not start its start-side
+    // platform actions — the teardown's frame-limiter/NVCP restore may already
+    // be executing on another thread inside the 10s hang watchdog.
+    if (session::active_sessions.load(std::memory_order_acquire) == 0) {
+      BOOST_LOG(info) << "Skipping deferred stream-start actions; session is already stopping.";
+      return false;
+    }
+
     BOOST_LOG(info) << "Stream-start actions applied after user session became available.";
     platf::frame_limiter_streaming_start(
       deferred->fps,
@@ -1425,7 +1435,16 @@ namespace stream {
 #ifdef _WIN32
       if (session::running_sessions.load(std::memory_order_relaxed) > 0) {
         (void) display_helper_integration::apply_pending_if_ready();
-        (void) apply_deferred_stream_start_actions_if_ready();
+        // Gate the deferred RTSS/NVCP start actions on active_sessions, not
+        // running_sessions: after "Initial Ping Timeout" the session is
+        // STOPPING (active_sessions == 0) while its threads are still being
+        // joined (running_sessions == 1). Applying start-side driver
+        // overrides in that window races the teardown's restore path —
+        // observed 2026-07-22 as concurrent NvAPI DRS transactions that
+        // wedged post-join cleanup past the 10s hang watchdog.
+        if (session::active_sessions.load(std::memory_order_acquire) > 0) {
+          (void) apply_deferred_stream_start_actions_if_ready();
+        }
       }
 #endif
 
@@ -2522,6 +2541,20 @@ namespace stream {
 #ifdef _WIN32
         VDISPLAY::restorePhysicalHdrProfiles();
         platf::rtss_set_sync_limiter_override(std::nullopt);
+        // The NVCP restore inside frame_limiter_streaming_stop tears down and
+        // re-creates an NvAPI DRS session (Initialize/LoadSettings/SaveSettings).
+        // Those calls serialize on the driver's settings store and have been
+        // observed to exceed 10 seconds when the display stack is busy (e.g.
+        // right after rapid virtual-display churn) or when a start-side NvAPI
+        // user (nvprefs / frame_limiter_nvcp) is still mid-transaction on
+        // another thread (2026-07-22 crash bundles). That is slow progress,
+        // not a wedge — and both nvprefs and frame_limiter_nvcp keep on-disk
+        // undo files as a crash backstop. Re-arm the hang watchdog with a
+        // longer bound for this stage so we don't _Exit() out from under a
+        // driver call that would complete on its own.
+        task_pool.cancel(force_kill);
+        force_kill = task_pool.pushDelayed(task, 60s).task_id;
+        BOOST_LOG(debug) << "Restoring frame limiter / NVIDIA Control Panel state..."sv;
         platf::frame_limiter_streaming_stop();
 #endif
         platf::streaming_will_stop();
