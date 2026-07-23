@@ -18,7 +18,7 @@
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
         <!-- requireAdministrator: every code path in this binary needs admin
              (sc.exe stop, msiexec /i against an HKLM-scoped MSI, pnputil for
-             SudoVDA, %ProgramData% writes, the LuminalShineService
+             LuminalVGD, %ProgramData% writes, the LuminalShineService
              rebound dance). Previously asInvoker with a Process.Start runas
              re-spawn after the user clicked Install — but that left a window
              where the bootstrapper was unelevated and msiexec's helper

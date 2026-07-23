@@ -130,76 +130,99 @@ namespace LuminalShineInstaller {
   }
 
   internal enum VirtualDisplayBackendChoice {
-    Sudovda = 0,  // SudoVDA — the only shipped backend. Richer feature set
-                  // (HDR bit-depth control, per-client virtual displays,
-                  // etc.). Slated to be replaced by a LuminalShine-built
-                  // driver tailored to modern Windows 11 / Insider Preview
-                  // when that driver ships; until then SudoVDA stays primary.
-    None = 1,     // No virtual display driver — for users with their own.
+    Luminalvgd = 0,  // LuminalVGD — NortheBridge's first-party IddCx virtual
+                     // display driver, the only shipped backend. Per-client
+                     // virtual displays with exact modes, HDR10, direct
+                     // frame-ring capture. Replaces SudoVDA, which is
+                     // unmaintained and has been removed from LuminalShine;
+                     // the LuminalVGD install script actively uninstalls any
+                     // SudoVDA driver it detects.
+    None = 1,        // No virtual display driver — for users with their own.
   }
 
   internal static class VirtualDisplayBackendChoiceHelpers {
     public static string ToToken(VirtualDisplayBackendChoice choice) {
       switch (choice) {
         case VirtualDisplayBackendChoice.None: return "none";
-        default:                               return "sudovda";
+        default:                               return "luminalvgd";
       }
     }
 
     public static VirtualDisplayBackendChoice ParseToken(string token) {
       if (string.IsNullOrWhiteSpace(token)) {
-        return VirtualDisplayBackendChoice.Sudovda;
+        return VirtualDisplayBackendChoice.Luminalvgd;
       }
       var trimmed = token.Trim();
-      if (string.Equals(trimmed, "mtt", StringComparison.OrdinalIgnoreCase)) {
-        // Back-compat: MTT VDD has been removed from LuminalShine; SudoVDA
-        // is the only shipped virtual display driver. Accept the old token
-        // so existing scripts keep working, but install SudoVDA instead.
-        Console.WriteLine("Warning: MTT VDD has been removed from LuminalShine; \"mtt\" now selects SudoVDA.");
-        return VirtualDisplayBackendChoice.Sudovda;
+      if (string.Equals(trimmed, "sudovda", StringComparison.OrdinalIgnoreCase)
+          || string.Equals(trimmed, "mtt", StringComparison.OrdinalIgnoreCase)) {
+        // Back-compat: SudoVDA (and the even older MTT VDD) have been
+        // removed from LuminalShine; LuminalVGD is the only shipped virtual
+        // display driver. Accept the old tokens so existing scripts keep
+        // working, but install LuminalVGD instead. The LuminalVGD install
+        // script also removes any SudoVDA driver it detects.
+        Console.WriteLine("Warning: SudoVDA has been removed from LuminalShine; \"" + trimmed + "\" now selects LuminalVGD, and any existing SudoVDA driver will be uninstalled.");
+        return VirtualDisplayBackendChoice.Luminalvgd;
       }
       if (string.Equals(trimmed, "none", StringComparison.OrdinalIgnoreCase)
           || string.Equals(trimmed, "off", StringComparison.OrdinalIgnoreCase)
+          || string.Equals(trimmed, "false", StringComparison.OrdinalIgnoreCase)
           || string.Equals(trimmed, "0", StringComparison.OrdinalIgnoreCase)) {
         return VirtualDisplayBackendChoice.None;
       }
-      // Default to SudoVDA for any other input including "sudovda", "auto",
-      // "1", or unrecognized values — matches the bootstrapper's default
-      // selection.
-      return VirtualDisplayBackendChoice.Sudovda;
+      // Default to LuminalVGD for any other input including "luminalvgd",
+      // "auto", "1", or unrecognized values — matches the bootstrapper's
+      // default selection.
+      return VirtualDisplayBackendChoice.Luminalvgd;
     }
 
     public static string ToDisplayName(VirtualDisplayBackendChoice choice) {
       switch (choice) {
         case VirtualDisplayBackendChoice.None: return "(none)";
-        default:                               return "SudoVDA";
+        default:                               return "LuminalVGD";
       }
     }
 
-    /// Detects which virtual-display backend is currently installed by
-    /// probing the registry markers each driver writes during install.
+    /// Detects which virtual-display backend is currently installed.
     /// Used so the bootstrapper can pre-select the matching radio when the
     /// user re-runs the installer to upgrade or reconfigure.
     ///
-    /// Detection rules:
-    ///   - SudoVDA: presence of `HKLM\SOFTWARE\SudoMaker\SudoVDA\sdrBits`
-    ///     (the WiX-installed `SudoVdaRegistryDefaults` component).
-    ///   - If it is not present, returns None.
+    /// Detection rule: LuminalVGD is detected by the presence of the UMDF
+    /// driver DLL that its INF copies to `%12%\UMDF`
+    /// (System32\drivers\UMDF\luminal_vgd_driver.dll). If it is not
+    /// present, returns None.
     ///
-    /// This is a heuristic — orphaned registry keys after a manual driver
-    /// removal would mis-attribute. The reconfigure flow re-runs the
-    /// per-backend install.ps1 scripts which are idempotent, so a wrong
-    /// guess only costs an extra no-op.
+    /// This is a heuristic — an orphaned DLL after a manual driver removal
+    /// would mis-attribute. The reconfigure flow re-runs the driver
+    /// install.ps1 script, which is idempotent, so a wrong guess only costs
+    /// an extra no-op.
     public static VirtualDisplayBackendChoice DetectInstalledBackend() {
-      bool sudovdaDetected = false;
+      bool luminalVgdDetected = false;
       try {
-        using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\SudoMaker\SudoVDA")) {
-          sudovdaDetected = k != null && k.GetValue("sdrBits") != null;
-        }
+        var umdfDllPath = Path.Combine(
+          Environment.GetFolderPath(Environment.SpecialFolder.System),
+          @"drivers\UMDF\luminal_vgd_driver.dll");
+        luminalVgdDetected = File.Exists(umdfDllPath);
       } catch { }
 
-      if (sudovdaDetected) return VirtualDisplayBackendChoice.Sudovda;
+      if (luminalVgdDetected) return VirtualDisplayBackendChoice.Luminalvgd;
       return VirtualDisplayBackendChoice.None;
+    }
+
+    /// Detects a leftover legacy SudoVDA install via the registry marker the
+    /// old WiX `SudoVdaRegistryDefaults` component wrote
+    /// (`HKLM\SOFTWARE\SudoMaker\SudoVDA`, with or without values). SudoVDA
+    /// has been removed from LuminalShine; this is used only to show the
+    /// "SudoVDA detected; it will be removed and replaced by LuminalVGD"
+    /// banner. The actual removal is done by drivers\luminalvgd\install.ps1,
+    /// which always uninstalls SudoVDA when it is detected.
+    public static bool LegacySudoVdaDetected() {
+      try {
+        using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\SudoMaker\SudoVDA")) {
+          return k != null;
+        }
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -207,7 +230,7 @@ namespace LuminalShineInstaller {
     private readonly InstallerArguments _arguments;
     private readonly Border _installSection;
     private readonly TextBox _installPathTextBox;
-    private readonly RadioButton _vddSudovdaRadio;
+    private readonly RadioButton _vddLuminalVgdRadio;
     private readonly RadioButton _vddNoneRadio;
     private VirtualDisplayBackendChoice _initiallyInstalledBackend = VirtualDisplayBackendChoice.None;
     private readonly TextBlock _statusText;
@@ -296,9 +319,9 @@ namespace LuminalShineInstaller {
               + displayVersion;
       // Window sizing notes:
       //
-      // Vertical: the install-options flow shows a driver chooser (3 radio
-      // buttons + per-option descriptions, including an Insider-Preview note
-      // about HEVC/AV1 on SudoVDA), an optional "currently installed" banner
+      // Vertical: the install-options flow shows a driver chooser (radio
+      // buttons + per-option descriptions), an optional "currently installed"
+      // / "legacy SudoVDA will be removed" banner
       // on reconfigure, a tips section, and a status section. Earlier revisions
       // of this layout used Auto-sized rows on a Top-aligned card, which let
       // tall content push the footer (action buttons) below the visible
@@ -662,29 +685,27 @@ namespace LuminalShineInstaller {
 
       const string vddRadioGroup = "VddBackendGroup";
 
-      // SudoVDA is the default backend — per-client virtual displays, HDR
-      // bit-depth control, etc. The intent is for a LuminalShine-built
-      // driver tailored to modern Windows 11 and Windows 11 Insider Preview
-      // to eventually replace SudoVDA, but until that ships SudoVDA stays
-      // the recommended backend.
-      _vddSudovdaRadio = new RadioButton {
-        Content = "SudoVDA Virtual Display Driver (recommended)",
+      // LuminalVGD is the default and only shipped backend — NortheBridge's
+      // first-party IddCx driver with per-client virtual displays, HDR10,
+      // and direct frame-ring capture. It replaces SudoVDA, which is
+      // unmaintained and has been removed from LuminalShine; the LuminalVGD
+      // install script actively uninstalls any SudoVDA driver it detects.
+      _vddLuminalVgdRadio = new RadioButton {
+        Content = "LuminalVGD Virtual Display Driver (recommended)",
         GroupName = vddRadioGroup,
         FontSize = 13,
         FontWeight = FontWeights.SemiBold,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 4, 0, 2),
         IsChecked = true,
-        ToolTip = "Default. Recommended backend for LuminalShine with per-client virtual displays and HDR bit-depth control."
+        ToolTip = "Default. NortheBridge's first-party IddCx driver with per-client virtual displays, HDR10, and direct frame-ring capture."
       };
-      installStack.Children.Add(_vddSudovdaRadio);
+      installStack.Children.Add(_vddLuminalVgdRadio);
       installStack.Children.Add(new TextBlock {
-        Text = "Default virtual display backend. "
-             + "Note: on Windows Insider Preview builds, SudoVDA only supports HEVC and AV1 "
-             + "encoding (with or without HDR). A future LuminalShine release will "
-             + "introduce a virtual display driver tailored to modern Windows 11 and Windows 11 "
-             + "Insider Preview builds that will eventually replace SudoVDA, but for now SudoVDA "
-             + "remains the default choice.",
+        Text = "Default virtual display backend. LuminalVGD is NortheBridge's first-party "
+             + "IddCx driver: per-client virtual displays with exact modes, HDR10 support, "
+             + "and direct frame-ring capture. The legacy SudoVDA driver, if present, "
+             + "will be removed and replaced during installation.",
         FontSize = 12,
         Foreground = new SolidColorBrush(Color.FromRgb(190, 208, 236)),
         Margin = new Thickness(24, 0, 0, 6),
@@ -719,22 +740,26 @@ namespace LuminalShineInstaller {
           _continueButton.Content = BuildInstallButtonLabel();
         }
       };
-      _vddSudovdaRadio.Checked += refreshLabel;
+      _vddLuminalVgdRadio.Checked += refreshLabel;
       _vddNoneRadio.Checked += refreshLabel;
 
       // Pre-select the radio matching the currently-installed backend so an
       // upgrade or reconfigure starts on the user's existing choice.
       _initiallyInstalledBackend = VirtualDisplayBackendChoiceHelpers.DetectInstalledBackend();
-      // SudoVDA is the recommended default whether or not an existing
-      // SudoVDA install was detected (fresh installs, and upgrades from
-      // builds that didn't ship a VDD, both start on it).
-      _vddSudovdaRadio.IsChecked = true;
+      // LuminalVGD is the recommended default whether or not an existing
+      // LuminalVGD install was detected (fresh installs, and upgrades from
+      // builds that shipped SudoVDA or no VDD, both start on it).
+      _vddLuminalVgdRadio.IsChecked = true;
 
       // Show a small banner explaining what the bootstrapper detected — only
-      // when an existing install is present, so fresh installs aren't
-      // cluttered.
-      if (_installedProduct != null) {
-        var bannerText = _initiallyInstalledBackend == VirtualDisplayBackendChoice.None
+      // when an existing install (or a leftover legacy SudoVDA driver) is
+      // present, so fresh installs aren't cluttered.
+      var legacySudoVdaDetected = VirtualDisplayBackendChoiceHelpers.LegacySudoVdaDetected();
+      if (_installedProduct != null || legacySudoVdaDetected) {
+        var bannerText = legacySudoVdaDetected
+          ? "SudoVDA detected. SudoVDA has been removed from LuminalShine; it will be "
+            + "uninstalled and replaced by LuminalVGD when the driver install runs."
+          : _initiallyInstalledBackend == VirtualDisplayBackendChoice.None
           ? "No virtual display driver currently installed. Pick one above and click "
             + BuildInstallButtonLabel().ToLower() + " to install it."
           : "Currently installed: "
@@ -1342,9 +1367,9 @@ namespace LuminalShineInstaller {
       if (_vddNoneRadio.IsChecked == true) {
         return VirtualDisplayBackendChoice.None;
       }
-      // SudoVDA is the recommended default; treat any indeterminate/no-pick
-      // state as "SudoVDA selected".
-      return VirtualDisplayBackendChoice.Sudovda;
+      // LuminalVGD is the recommended default; treat any indeterminate/no-pick
+      // state as "LuminalVGD selected".
+      return VirtualDisplayBackendChoice.Luminalvgd;
     }
 
     private async Task RunUninstallFlow() {
@@ -1592,7 +1617,7 @@ namespace LuminalShineInstaller {
       // a no-op reinstall. The radios may not yet be initialized when this is
       // called from the very first UpdateActionUiState during construction;
       // in that case fall back to Reinstall.
-      if (_vddSudovdaRadio != null) {
+      if (_vddLuminalVgdRadio != null) {
         var pendingChoice = ResolveSelectedVddBackend();
         if (pendingChoice != _initiallyInstalledBackend) {
           return InstallActionKind.Reconfigure;
@@ -1760,7 +1785,7 @@ namespace LuminalShineInstaller {
       if (BuildFlavor.IsUninstallOnly && !_reconfigureRequested) {
         var allowUninstall = !_isBusy && _installedProduct != null;
         _installPathTextBox.IsEnabled = false;
-        _vddSudovdaRadio.IsEnabled = false;
+        _vddLuminalVgdRadio.IsEnabled = false;
         _vddNoneRadio.IsEnabled = false;
         _browseButton.IsEnabled = false;
         _installSection.Visibility = Visibility.Collapsed;
@@ -1777,7 +1802,7 @@ namespace LuminalShineInstaller {
         var allowInputs = !_isBusy && _installedProduct != null;
         _installPathTextBox.IsEnabled = false;
         _browseButton.IsEnabled = false;
-        _vddSudovdaRadio.IsEnabled = allowInputs;
+        _vddLuminalVgdRadio.IsEnabled = allowInputs;
         _vddNoneRadio.IsEnabled = allowInputs;
         _installSection.Visibility = _installedProduct != null
           ? Visibility.Visible
@@ -1796,7 +1821,7 @@ namespace LuminalShineInstaller {
       // honor the existing install location to avoid stranding the user's
       // data in two places. Only fresh installs let the user pick a path.
       _installPathTextBox.IsEnabled = allowInstallInputs && _installedProduct == null;
-      _vddSudovdaRadio.IsEnabled = allowInstallInputs;
+      _vddLuminalVgdRadio.IsEnabled = allowInstallInputs;
       _vddNoneRadio.IsEnabled = allowInstallInputs;
       _browseButton.IsEnabled = allowInstallInputs && _installedProduct == null;
       var hasInstalledProduct = _installedProduct != null;
@@ -1959,7 +1984,7 @@ namespace LuminalShineInstaller {
 
     private async Task<UninstallOptions?> ShowOverlayUninstallOptionsAsync() {
       var removeDriverCheckBox = new CheckBox {
-        Content = "Remove virtual display driver (SudoVDA)",
+        Content = "Remove virtual display driver (LuminalVGD)",
         FontSize = 13,
         Foreground = new SolidColorBrush(Color.FromRgb(226, 235, 250)),
         Margin = new Thickness(0, 0, 0, 8),
@@ -2383,12 +2408,13 @@ namespace LuminalShineInstaller {
     private const string InternalElevatedInstallToken = "--internal-elevated-install";
     private const string InternalElevatedUninstallToken = "--internal-elevated-uninstall";
     private const string InternalInstallPathToken = "--internal-install-path";
-    /// Legacy boolean flag, retained so older invocations still work. Maps
-    /// `1` -> `Sudovda`, `0` -> `None`.
+    /// Legacy boolean flag from the SudoVDA era, retained so older
+    /// invocations still work. SudoVDA has been removed from LuminalShine;
+    /// this now maps truthy -> `Luminalvgd`, falsy -> `None`.
     private const string InternalInstallSudoVdaToken = "--internal-install-sudovda";
-    /// Backend token: "sudovda" | "none". The removed backend's old "mtt"
-    /// token is still accepted for backward compatibility and maps to
-    /// Sudovda (with a console warning).
+    /// Backend token: "luminalvgd" | "none". The removed backends' old
+    /// "sudovda" and "mtt" tokens are still accepted for backward
+    /// compatibility and map to Luminalvgd (with a console warning).
     private const string InternalInstallVddBackendToken = "--internal-install-vdd";
     /// Backend that was already installed before the user opened the
     /// installer. Used by the reconfigure path so the elevated child
@@ -2398,7 +2424,12 @@ namespace LuminalShineInstaller {
     private const string InternalInstallSaveLogsToken = "--internal-install-save-logs";
     private const string InternalInstallResultPathToken = "--internal-install-result-path";
     private const string InternalUninstallDeleteInstallDirToken = "--internal-uninstall-delete-install-dir";
-    private const string InternalUninstallRemoveSudoVdaToken = "--internal-uninstall-remove-sudovda";
+    private const string InternalUninstallRemoveLuminalVgdToken = "--internal-uninstall-remove-luminalvgd";
+    /// Legacy alias for InternalUninstallRemoveLuminalVgdToken from the
+    /// SudoVDA era. Internal-only contract (the bootstrapper relaunches
+    /// itself with these args), but kept parseable in case an old
+    /// bootstrapper hands off to a newer one mid-upgrade.
+    private const string InternalUninstallRemoveSudoVdaLegacyToken = "--internal-uninstall-remove-sudovda";
 
     public bool ShowUi { get; set; }
     public bool UninstallUiRequested { get; set; }
@@ -2426,10 +2457,10 @@ namespace LuminalShineInstaller {
     public List<string> ForwardedArguments { get; private set; }
 
     public InstallerArguments() {
-      // Default to SudoVDA — the recommended backend until the planned
-      // first-party LuminalShine VDD ships. Legacy `--internal-install-sudovda`
-      // and the explicit `--internal-install-vdd` token can override this.
-      InternalInstallVddBackend = VirtualDisplayBackendChoice.Sudovda;
+      // Default to LuminalVGD — the first-party recommended backend. The
+      // legacy `--internal-install-sudovda` flag and the explicit
+      // `--internal-install-vdd` token can override this.
+      InternalInstallVddBackend = VirtualDisplayBackendChoice.Luminalvgd;
       // No previously-installed backend by default. The elevated install
       // path reads the parent process's auto-detected value via the
       // `--internal-install-previous-vdd` token.
@@ -2488,10 +2519,11 @@ namespace LuminalShineInstaller {
           continue;
         }
         if (string.Equals(arg, InternalInstallSudoVdaToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
-          // Legacy fallback: older invocations only knew SudoVDA. Map
-          // truthy -> Sudovda, falsy -> None to keep old scripts working.
+          // Legacy fallback: older invocations only knew SudoVDA, which has
+          // been removed from LuminalShine. Map truthy -> Luminalvgd,
+          // falsy -> None to keep old scripts working.
           parsed.InternalInstallVddBackend = ParseBooleanToken(args[++index])
-            ? VirtualDisplayBackendChoice.Sudovda
+            ? VirtualDisplayBackendChoice.Luminalvgd
             : VirtualDisplayBackendChoice.None;
           continue;
         }
@@ -2515,7 +2547,9 @@ namespace LuminalShineInstaller {
           parsed.InternalUninstallDeleteInstallDir = ParseBooleanToken(args[++index]);
           continue;
         }
-        if (string.Equals(arg, InternalUninstallRemoveSudoVdaToken, StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) {
+        if ((string.Equals(arg, InternalUninstallRemoveLuminalVgdToken, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(arg, InternalUninstallRemoveSudoVdaLegacyToken, StringComparison.OrdinalIgnoreCase))
+            && index + 1 < args.Length) {
           parsed.InternalUninstallRemoveVirtualDisplayDriver = ParseBooleanToken(args[++index]);
           continue;
         }
@@ -2578,15 +2612,16 @@ namespace LuminalShineInstaller {
       Console.WriteLine();
       Console.WriteLine("Supported MSI properties:");
       Console.WriteLine("  INSTALL_ROOT=<path>     Install to a custom directory (default: %ProgramFiles%\\NortheBridge\\LuminalShine)");
-      Console.WriteLine("  INSTALL_SUDOVDA=1|0     Install SudoVDA (default 1). Current default backend until the");
-      Console.WriteLine("                          planned first-party LuminalShine VDD ships.");
+      Console.WriteLine("  INSTALL_LUMINALVGD=1|0  Install the LuminalVGD virtual display driver (default 1).");
+      Console.WriteLine("                          Note: SudoVDA has been removed from LuminalShine; any existing");
+      Console.WriteLine("                          SudoVDA driver is uninstalled automatically during driver install.");
       Console.WriteLine();
       Console.WriteLine("Examples:");
       Console.WriteLine("  LuminalShineSetup.exe /qn");
       Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_ROOT=\"D:\\LuminalShine\"");
       Console.WriteLine("  LuminalShineSetup.exe /x {PRODUCT-CODE} /qn");
-      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_SUDOVDA=1   (default)");
-      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_SUDOVDA=0   (no driver)");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_LUMINALVGD=1   (default)");
+      Console.WriteLine("  LuminalShineSetup.exe /qn INSTALL_LUMINALVGD=0   (no driver)");
       Console.WriteLine("  LuminalShineSetup.exe /uninstall");
       Console.WriteLine("  LuminalShineSetup.exe /uninstall /quiet");
       Console.WriteLine("  LuminalShineSetup.exe --msi C:\\temp\\LuminalShine.msi /passive");
@@ -3240,12 +3275,13 @@ namespace LuminalShineInstaller {
       }
 
       // Reconfigure pre-step (runs in the elevated process only): when the
-      // user is switching backends, uninstall the previously-installed driver
-      // first so we don't end up with two virtual display drivers active
-      // simultaneously. WiX's UninstallSudovda action only fires on
-      // REMOVE=ALL, so a same-MSI reconfigure won't trigger it — we invoke
-      // the install scripts here directly instead. Always-elevated because
-      // nefconc/pnputil require admin.
+      // user is switching away from an installed driver (to None), uninstall
+      // it first so it doesn't linger active. WiX's UninstallLuminalVgd
+      // action only fires on REMOVE=ALL, so a same-MSI reconfigure won't
+      // trigger it — we invoke the install script here directly instead.
+      // (Switching *to* LuminalVGD needs no pre-step: its install.ps1 also
+      // removes any legacy SudoVDA driver it detects.) Always-elevated
+      // because pnputil requires admin.
       if (previousBackend != VirtualDisplayBackendChoice.None && previousBackend != vddChoice) {
         TryRunDriverUninstall(installDirectory, previousBackend);
       }
@@ -3382,44 +3418,45 @@ namespace LuminalShineInstaller {
         return result;
       }
 
-      // Step 1: uninstall the previously-active backend (if any). This
-      // is best-effort — if the old driver was already gone we still
-      // proceed with the new install. We do, however, bubble up an
-      // unexpected failure as a component-failure entry so the UI can
+      // Switching to "no driver": uninstall the currently-active LuminalVGD
+      // driver via its install.ps1 -Uninstall. This is best-effort — if the
+      // driver was already gone we still report success, but an unexpected
+      // failure is bubbled up as a component-failure entry so the UI can
       // mention it.
-      // Pre-existing MTT VDD installs from older LuminalShine builds are
-      // left untouched: its drivers/vdd payload (and install.ps1) no longer
-      // ships, so there is nothing here that could remove it. Users can
-      // remove it via Device Manager or pnputil.
-      if (previousChoice != VirtualDisplayBackendChoice.None) {
-        var prevScript = Path.Combine(installDirectory, "drivers", "sudovda", "install.ps1");
-        if (File.Exists(prevScript)) {
-          try {
-            var exit = RunDriverScript(prevScript, true, 60000);
-            if (exit != 0 && exit != 3010) {
+      // Legacy backends (SudoVDA, MTT VDD) no longer ship their own scripts,
+      // so nothing here can remove them on the switch-to-None path; users
+      // can remove leftovers via Device Manager or pnputil. Installing
+      // LuminalVGD (below) does remove SudoVDA: its install.ps1 always
+      // uninstalls SudoVDA when it is detected.
+      if (newChoice == VirtualDisplayBackendChoice.None) {
+        if (previousChoice != VirtualDisplayBackendChoice.None) {
+          var prevScript = Path.Combine(installDirectory, "drivers", "luminalvgd", "install.ps1");
+          if (File.Exists(prevScript)) {
+            try {
+              var exit = RunDriverScript(prevScript, true, 60000);
+              if (exit != 0 && exit != 3010) {
+                result.ComponentFailures.Add(
+                  "Failed to uninstall the previous "
+                  + VirtualDisplayBackendChoiceHelpers.ToDisplayName(previousChoice)
+                  + " driver (exit code " + exit + ").");
+              }
+            } catch (Exception ex) {
               result.ComponentFailures.Add(
-                "Failed to uninstall the previous "
-                + VirtualDisplayBackendChoiceHelpers.ToDisplayName(previousChoice)
-                + " driver (exit code " + exit + "). The new driver was still attempted.");
+                "Could not run the previous-driver uninstall script: " + ex.Message);
             }
-          } catch (Exception ex) {
-            result.ComponentFailures.Add(
-              "Could not run the previous-driver uninstall script: " + ex.Message);
           }
         }
-      }
-
-      // Step 2: install the newly-selected backend. None means "leave
-      // virtual displays alone after the previous backend's uninstall."
-      if (newChoice == VirtualDisplayBackendChoice.None) {
         result.Message = "Switched to no virtual display driver. Per-client virtual displays are now disabled.";
         return result;
       }
 
-      var newScript = Path.Combine(installDirectory, "drivers", "sudovda", "install.ps1");
+      // Switching to LuminalVGD: run its install script. No separate
+      // previous-backend uninstall step is needed — the script installs
+      // LuminalVGD and removes any legacy SudoVDA driver it detects.
+      var newScript = Path.Combine(installDirectory, "drivers", "luminalvgd", "install.ps1");
       if (!File.Exists(newScript)) {
         result.ExitCode = 2;
-        result.Message = "Reconfigure failed: sudovda/install.ps1 was not found in the install directory.";
+        result.Message = "Reconfigure failed: luminalvgd/install.ps1 was not found in the install directory.";
         return result;
       }
 
@@ -3449,7 +3486,7 @@ namespace LuminalShineInstaller {
     }
 
     /// Best-effort driver uninstall used by the reconfigure path. Invokes
-    /// the per-backend `install.ps1 -Uninstall` script so we don't rely on
+    /// the driver's `install.ps1 -Uninstall` script so we don't rely on
     /// WiX's REMOVEVIRTUALDISPLAYDRIVER trigger (which only fires on a full
     /// product uninstall). Logs and swallows failures: a stale leftover
     /// driver is preferable to aborting the user's reconfigure attempt.
@@ -3459,7 +3496,7 @@ namespace LuminalShineInstaller {
         return;
       }
 
-      var scriptPath = Path.Combine(installDirectory, "drivers", "sudovda", "install.ps1");
+      var scriptPath = Path.Combine(installDirectory, "drivers", "luminalvgd", "install.ps1");
       if (!File.Exists(scriptPath)) {
         // Nothing to invoke — most likely the driver folder was already
         // removed by an earlier full uninstall. Treat as success.
@@ -3486,7 +3523,7 @@ namespace LuminalShineInstaller {
         using (var process = Process.Start(psi)) {
           if (process != null) {
             // Bound the wait so a hung driver-uninstall script can't pin the
-            // installer indefinitely. 60s is generous for nefconc/pnputil.
+            // installer indefinitely. 60s is generous for pnputil.
             if (!process.WaitForExit(60000)) {
               try { process.Kill(); } catch { }
             }
@@ -3591,7 +3628,7 @@ namespace LuminalShineInstaller {
       bool competingProductsRequireRestart,
       string logPhase) {
       var logPath = BuildLogPath(logPhase);
-      var installSudovda = vddChoice == VirtualDisplayBackendChoice.Sudovda;
+      var installLuminalVgd = vddChoice == VirtualDisplayBackendChoice.Luminalvgd;
       var args = new List<string> {
         "/i",
         msiPath,
@@ -3600,7 +3637,7 @@ namespace LuminalShineInstaller {
         "/l*v",
         logPath,
         CreatePropertyArgument("INSTALL_ROOT", installDirectory),
-        "INSTALL_SUDOVDA=" + (installSudovda ? "1" : "0"),
+        "INSTALL_LUMINALVGD=" + (installLuminalVgd ? "1" : "0"),
         "SKIP_REMOVE_CONFLICTING_PRODUCTS=1",
         "REBOOT=ReallySuppress",
         "SUPPRESSMSGBOXES=1"
@@ -4491,8 +4528,8 @@ namespace LuminalShineInstaller {
 
       try {
         var lines = File.ReadAllLines(installLogPath);
-        var actionName = "InstallSudovda";
-        var driverName = "SudoVDA";
+        var actionName = "InstallLuminalVgd";
+        var driverName = "LuminalVGD";
         var failedMarker = "CustomAction " + actionName + " returned actual error code";
         var driverFailed = lines.Any(line =>
           !string.IsNullOrWhiteSpace(line)
@@ -4518,7 +4555,7 @@ namespace LuminalShineInstaller {
         return string.Empty;
       }
 
-      var driverTag = "[SudoVDA]";
+      var driverTag = "[LuminalVGD]";
 
       for (var index = lines.Length - 1; index >= 0; index--) {
         var line = lines[index];
@@ -4629,7 +4666,7 @@ namespace LuminalShineInstaller {
         "--internal-elevated-uninstall",
         "--internal-uninstall-delete-install-dir",
         deleteInstallDirectory ? "1" : "0",
-        "--internal-uninstall-remove-sudovda",
+        "--internal-uninstall-remove-luminalvgd",
         removeVirtualDisplayDriver ? "1" : "0"
       };
       if (!string.IsNullOrWhiteSpace(arguments.MsiPathOverride)) {

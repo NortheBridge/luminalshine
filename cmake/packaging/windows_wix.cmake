@@ -165,7 +165,7 @@ set(LUMINALSHINE_INSTALL_COMPONENTS
   autostart
   dxgi
   firewall
-  sudovda
+  luminalvgd
   Unspecified
 )
 

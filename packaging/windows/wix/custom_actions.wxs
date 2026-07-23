@@ -271,16 +271,10 @@
     </DirectoryRef>
   </Fragment>
 
-  <Fragment>
-    <DirectoryRef Id="INSTALL_ROOT">
-      <Component Id="SudoVdaRegistryDefaults" Guid="*" Bitness="always64">
-        <RegistryKey Root="HKLM" Key="SOFTWARE\SudoMaker\SudoVDA">
-          <RegistryValue Id="RegSudoVdaSdrBits" Name="sdrBits" Type="integer" Value="10" KeyPath="yes"/>
-          <RegistryValue Id="RegSudoVdaHdrBits" Name="hdrBits" Type="integer" Value="12"/>
-        </RegistryKey>
-      </Component>
-    </DirectoryRef>
-  </Fragment>
+  <!-- SudoVDA is gone (decision 2026-07-23). The SudoVdaRegistryDefaults
+       component (HKLM\SOFTWARE\SudoMaker\SudoVDA) was removed; MSI's
+       component rules delete the registry keys on upgrade, and
+       drivers\luminalvgd\install.ps1 sweeps any leftovers. -->
 
   <!-- Official service installation component (installed under INSTALL_ROOT\tools) -->
   <Fragment>
@@ -391,7 +385,7 @@
          install proceed; the C++ runtime carries the same migration
          logic as a safety net on first launch. -->
     <CustomAction Id="RunInstallerMigrations" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
-    <CustomAction Id="InstallSudovda" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="InstallLuminalVgd" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Uninstall-time actions (deferred, elevated) -->
     <!-- Best-effort cleanup: a missing/broken legacy sunshine.exe (e.g. unable to load runtime DLLs)
@@ -407,7 +401,7 @@
     <CustomAction Id="KillProcsQuietImmediate" BinaryRef="Wix4UtilCA_X64" DllEntry="CAQuietExec" Return="ignore" />
     <CustomAction Id="KillProcsQuiet" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <CustomAction Id="RemoveServiceQuiet" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
-    <CustomAction Id="UninstallSudovda" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="UninstallLuminalVgd" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
     <!-- Clear the WCM entry + TPM-bound wrapping key on uninstall so an
          uninstall leaves no LuminalShine secrets in the host's credential
          vault or TPM. The actual work happens inside sunshine.exe (which
@@ -440,9 +434,12 @@
     <CustomAction Id="SetRunInstallerMigrations"
                  Property="RunInstallerMigrations"
                  Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]scripts\installer-migrations.ps1&quot;"/>
-    <CustomAction Id="SetInstallSudovda"
-                 Property="InstallSudovda"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot;"/>
+    <!-- Install/update/reinstall: drivers\luminalvgd\install.ps1 also
+         removes SudoVDA whenever detected (decision 2026-07-23 — SudoVDA
+         is unmaintained; no LuminalShine version ships or keeps it). -->
+    <CustomAction Id="SetInstallLuminalVgd"
+                 Property="InstallLuminalVgd"
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\luminalvgd\install.ps1&quot;"/>
 
 
     <!-- Guard NV prefs restore on uninstall: probe both the post-26.05.1
@@ -493,9 +490,9 @@
                  Value="&quot;[SystemFolder]cmd.exe&quot; /C (if exist &quot;[INSTALL_ROOT]luminalshine.exe&quot; (&quot;[INSTALL_ROOT]luminalshine.exe&quot; --reset-session-history) else if exist &quot;[INSTALL_ROOT]sunshine.exe&quot; (&quot;[INSTALL_ROOT]sunshine.exe&quot; --reset-session-history)) &amp; exit /b 0"/>
 
 
-    <CustomAction Id="SetUninstallSudovda"
-                 Property="UninstallSudovda"
-                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\sudovda\install.ps1&quot; -Uninstall"/>
+    <CustomAction Id="SetUninstallLuminalVgd"
+                 Property="UninstallLuminalVgd"
+                 Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALL_ROOT]drivers\luminalvgd\install.ps1&quot; -Uninstall"/>
 
     <CustomAction Id="SetDeleteInstallDir"
                  Property="DeleteInstallDir"

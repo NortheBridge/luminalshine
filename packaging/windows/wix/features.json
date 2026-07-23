@@ -6,7 +6,7 @@
     "components": "Each becomes a Feature named CM_C_<install_component> with parent CM_G_<group> (or ProductFeature for the unspecified group). File-component ComponentRefs into this Feature are auto-derived from the staging tree.",
     "required": "true → emits Absent=\"disallow\" AllowAdvertise=\"no\" which WiX 3 compiles to Attributes=16. Used by CPack for CPACK_COMPONENT_*_REQUIRED.",
     "depends": "CPack uses this to grey-out unselectable child components in the installer UI when a parent is deselected. Not emitted into the MSI tables for runtime — runtime install state is governed by the feature-level Conditions defined below. Retained here as documentation only.",
-    "conditions": "Optional list of {level, expression} entries written into the MSI Condition table inside the Feature element. When the expression evaluates true at install time, MSI overrides this feature's Level to the given value (Level=0 means uninstalled, Level=1 means installed). The sudovda backend gates file staging on the bootstrapper-supplied INSTALL_SUDOVDA MSI property — without this the VDD custom actions in luminalshine.wxs could fire against files that were never copied. CPack expressed these via <CPackWiXFragment Id=\"CM_C_sudovda\"><Condition>...</Condition></CPackWiXFragment> patch fragments; WiX-native equivalent is a <Condition> child of the <Feature> itself, which gen_wix_files.py emits when this field is present."
+    "conditions": "Optional list of {level, expression} entries written into the MSI Condition table inside the Feature element. When the expression evaluates true at install time, MSI overrides this feature's Level to the given value (Level=0 means uninstalled, Level=1 means installed). The luminalvgd driver feature gates file staging on the bootstrapper-supplied INSTALL_LUMINALVGD MSI property — without this the VDD custom actions in luminalshine.wxs could fire against files that were never copied. CPack expressed these via <CPackWiXFragment Id=\"CM_C_sudovda\"><Condition>...</Condition></CPackWiXFragment> patch fragments; WiX-native equivalent is a <Condition> child of the <Feature> itself, which gen_wix_files.py emits when this field is present."
   },
   "product_feature": {
     "id": "ProductFeature",
@@ -56,14 +56,14 @@
       "required": false
     },
     {
-      "name": "sudovda",
-      "title": "SudoVDA (Virtual Display Driver)",
-      "description": "Virtual display driver for per-client virtual displays. A first-party LuminalShine VDD is planned to replace it in a future release.",
+      "name": "luminalvgd",
+      "title": "LuminalVGD (Virtual Display Driver)",
+      "description": "NortheBridge's first-party virtual display driver for per-client virtual displays with exact modes and HDR10. Replaces SudoVDA, which the installer removes when detected.",
       "group": "Drivers",
       "display": 2,
       "required": false,
       "conditions": [
-        { "level": 1, "expression": "INSTALL_SUDOVDA = \"1\"" }
+        { "level": 1, "expression": "INSTALL_LUMINALVGD = \"1\"" }
       ]
     },
     {
