@@ -112,10 +112,35 @@ namespace platf::dxgi {
     }
 #endif
 
+    /// 16-byte-aligned immutable constant buffer (display_vram.cpp's
+    /// make_buffer is file-local there).
+    template<class T>
+    buf_t make_cbuffer(device_t::pointer device, const T &t) {
+      static_assert(sizeof(T) % 16 == 0, "Buffer needs to be aligned on a 16-byte alignment");
+      D3D11_BUFFER_DESC buffer_desc {
+        sizeof(T),
+        D3D11_USAGE_IMMUTABLE,
+        D3D11_BIND_CONSTANT_BUFFER
+      };
+      D3D11_SUBRESOURCE_DATA init_data {&t};
+
+      buf_t::pointer buf_p;
+      auto status = device->CreateBuffer(&buffer_desc, &init_data, &buf_p);
+      if (status) {
+        BOOST_LOG(error) << "Failed to create buffer: [0x"sv << util::hex(status).to_string_view() << ']';
+        return nullptr;
+      }
+      return buf_t {buf_p};
+    }
+
   }  // namespace
 
   display_vgd_vram_t::~display_vgd_vram_t() {
     _slot_textures.clear();
+    if (_cursor) {
+      vgd_cursor_close(_cursor);
+      _cursor = nullptr;
+    }
     if (_ring) {
       vgd_ring_close(_ring);
       _ring = nullptr;
@@ -168,10 +193,172 @@ namespace platf::dxgi {
     _display_name = display_name;
     capture_format = DXGI_FORMAT_UNKNOWN;  // latched from the first claimed frame
 
+    // Hardware-cursor plane: with a cursor-capable driver (build >= 4) the
+    // cursor is NOT in the frames — it must be blended here. A missing
+    // section means an older driver still composing the cursor; both are
+    // fine. What is NOT fine is a cursor-capable driver with broken blend
+    // resources (the stream would simply have no cursor), so that falls
+    // back to WGC, which draws the cursor itself.
+    _cursor = vgd_cursor_open(_session_id);
+    if (_cursor) {
+      if (init_cursor_render(config)) {
+        BOOST_LOG(warning) << "LuminalVGD capture: cursor blend init failed; "
+                              "falling back so the stream keeps a cursor.";
+        return -1;
+      }
+      BOOST_LOG(info) << "LuminalVGD capture: hardware-cursor plane active "
+                         "(blending at encode time).";
+    } else {
+      BOOST_LOG(info) << "LuminalVGD capture: no cursor section (pre-cursor "
+                         "driver); cursor arrives composed into frames.";
+    }
+
     BOOST_LOG(info) << "LuminalVGD capture: consuming frame ring of session 0x"
                     << std::hex << _session_id << std::dec << " (" << _ring_slots
                     << " slots) for " << display_name;
     return 0;
+  }
+
+  int display_vgd_vram_t::init_cursor_render(const ::video::config_t &config) {
+    // Mirrors display_ddup_vram_t::init()'s cursor block (display_vram.cpp):
+    // same shaders, same blend states, same b2 rotation constant buffer.
+    D3D11_SAMPLER_DESC sampler_desc {};
+    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler_desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampler_desc.MinLOD = 0;
+    sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
+
+    auto status = device->CreateSamplerState(&sampler_desc, &_cursor_sampler);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "LuminalVGD capture: failed to create cursor sampler state [0x"sv << util::hex(status).to_string_view() << ']';
+      return -1;
+    }
+
+    status = device->CreateVertexShader(cursor_vs_hlsl->GetBufferPointer(), cursor_vs_hlsl->GetBufferSize(), nullptr, &_cursor_vs);
+    if (status) {
+      BOOST_LOG(error) << "LuminalVGD capture: failed to create cursor vertex shader [0x"sv << util::hex(status).to_string_view() << ']';
+      return -1;
+    }
+
+    {
+      int32_t rotation_modifier = display_rotation == DXGI_MODE_ROTATION_UNSPECIFIED ? 0 : display_rotation - 1;
+      int32_t rotation_data[16 / sizeof(int32_t)] {rotation_modifier};  // aligned to 16-byte
+      auto rotation = make_cbuffer(device.get(), rotation_data);
+      if (!rotation) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to create rotation constant buffer";
+        return -1;
+      }
+      device_ctx->VSSetConstantBuffers(2, 1, &rotation);
+    }
+
+    if (config.dynamicRange && is_hdr()) {
+      // Normalize the cursor to a 300-nit target on scRGB desktops (same
+      // rationale as the DDA path).
+      status = device->CreatePixelShader(cursor_ps_normalize_white_hlsl->GetBufferPointer(), cursor_ps_normalize_white_hlsl->GetBufferSize(), nullptr, &_cursor_ps);
+      if (status) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to create cursor (normalized white) pixel shader [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
+
+      float white_multiplier_data[16 / sizeof(float)] {300.0f / 80.f};  // aligned to 16-byte
+      auto white_multiplier = make_cbuffer(device.get(), white_multiplier_data);
+      if (!white_multiplier) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to create white multiplier constant buffer";
+        return -1;
+      }
+      device_ctx->PSSetConstantBuffers(1, 1, &white_multiplier);
+    } else {
+      status = device->CreatePixelShader(cursor_ps_hlsl->GetBufferPointer(), cursor_ps_hlsl->GetBufferSize(), nullptr, &_cursor_ps);
+      if (status) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to create cursor pixel shader [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
+    }
+
+    _blend_alpha = make_blend(device.get(), true, false);
+    _blend_invert = make_blend(device.get(), true, true);
+    _blend_disable = make_blend(device.get(), false, false);
+    if (!_blend_disable || !_blend_alpha || !_blend_invert) {
+      return -1;
+    }
+
+    device_ctx->OMSetBlendState(_blend_disable.get(), nullptr, 0xFFFFFFFFu);
+    device_ctx->PSSetSamplers(0, 1, &_cursor_sampler);
+    device_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    _cursor_shape_buf.resize(VGD_CURSOR_SHAPE_BUFFER_SIZE);
+    return 0;
+  }
+
+  void display_vgd_vram_t::sync_cursor() {
+    VgdCursorState state {};
+    if (vgd_cursor_state(_cursor, &state) != 0) {
+      return;
+    }
+
+    if (state.shape_generation != 0 && state.shape_generation != _cursor_shape_generation) {
+      VgdCursorShape shape {};
+      if (vgd_cursor_shape(_cursor, _cursor_shape_buf.data(), (uint32_t) _cursor_shape_buf.size(), &shape)) {
+        // The section carries 32bpp rows at width*4 pitch; describe them in
+        // DDA terms so the display_vram.cpp converters apply unchanged.
+        // Driver-side XOR emulation means shapes are ALPHA in practice;
+        // MASKED is mapped defensively.
+        DXGI_OUTDUPL_POINTER_SHAPE_INFO shape_info {};
+        shape_info.Type = shape.kind == VGD_CURSOR_KIND_MASKED ?
+                            DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR :
+                            DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+        shape_info.Width = shape.width;
+        shape_info.Height = shape.height;
+        shape_info.Pitch = shape.width * 4;
+        shape_info.HotSpot = {(LONG) shape.hotspot_x, (LONG) shape.hotspot_y};
+
+        util::buffer_t<std::uint8_t> img_data {(size_t) shape.width * shape.height * 4};
+        std::copy_n(_cursor_shape_buf.data(), img_data.size(), std::begin(img_data));
+
+        auto alpha_img = make_cursor_alpha_image(img_data, shape_info);
+        auto xor_img = make_cursor_xor_image(img_data, shape_info);
+        if (set_cursor_texture(device.get(), _cursor_alpha, std::move(alpha_img), shape_info) &&
+            set_cursor_texture(device.get(), _cursor_xor, std::move(xor_img), shape_info)) {
+          _cursor_shape_generation = shape.generation;
+        }
+      }
+      // A failed fetch (driver mid-rewrite) retries on the next snapshot.
+    }
+
+    _cursor_alpha.set_pos(state.x, state.y, width_before_rotation, height_before_rotation, display_rotation, state.visible != 0);
+    _cursor_xor.set_pos(state.x, state.y, width_before_rotation, height_before_rotation, display_rotation, state.visible != 0);
+  }
+
+  void display_vgd_vram_t::blend_cursor_into(img_d3d_t &d3d_img) {
+    // Mirrors the DDA blend_cursor lambda (display_vram.cpp).
+    device_ctx->VSSetShader(_cursor_vs.get(), nullptr, 0);
+    device_ctx->PSSetShader(_cursor_ps.get(), nullptr, 0);
+    device_ctx->OMSetRenderTargets(1, &d3d_img.capture_rt, nullptr);
+
+    if (_cursor_alpha.texture.get()) {
+      device_ctx->OMSetBlendState(_blend_alpha.get(), nullptr, 0xFFFFFFFFu);
+      device_ctx->PSSetShaderResources(0, 1, &_cursor_alpha.input_res);
+      device_ctx->RSSetViewports(1, &_cursor_alpha.cursor_view);
+      device_ctx->Draw(3, 0);
+    }
+
+    if (_cursor_xor.texture.get()) {
+      device_ctx->OMSetBlendState(_blend_invert.get(), nullptr, 0x00FFFFFFu);
+      device_ctx->PSSetShaderResources(0, 1, &_cursor_xor.input_res);
+      device_ctx->RSSetViewports(1, &_cursor_xor.cursor_view);
+      device_ctx->Draw(3, 0);
+    }
+
+    device_ctx->OMSetBlendState(_blend_disable.get(), nullptr, 0xFFFFFFFFu);
+
+    ID3D11RenderTargetView *empty_rt = nullptr;
+    device_ctx->OMSetRenderTargets(1, &empty_rt, nullptr);
+    device_ctx->RSSetViewports(0, nullptr);
+    ID3D11ShaderResourceView *empty_srv = nullptr;
+    device_ctx->PSSetShaderResources(0, 1, &empty_srv);
   }
 
   display_vgd_vram_t::slot_texture_t *display_vgd_vram_t::slot_texture(uint32_t generation, uint32_t slot) {
@@ -228,12 +415,16 @@ namespace platf::dxgi {
   }
 
   capture_e display_vgd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
-    // The IddCx path composes the cursor into the frame (no hardware-cursor
-    // DDIs yet), so cursor_visible needs no handling here.
-    (void) cursor_visible;
-
     if (!_ring) {
       return capture_e::error;
+    }
+
+    // Cursor-capable driver: frames arrive cursor-free; pull the live
+    // shape/position so this frame (or a cursor-only redelivery below)
+    // blends the current cursor. Pre-cursor drivers compose it into the
+    // frames and `_cursor` stays null.
+    if (_cursor) {
+      sync_cursor();
     }
 
     VgdRingStatus status {};
@@ -324,6 +515,53 @@ namespace platf::dxgi {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (!claimed) {
+      // Nothing published — but with the cursor on its own plane, cursor
+      // motion over an idle desktop produces no frames at all. Redeliver
+      // the last frame with a fresh blend when the cursor state moved past
+      // what the client last saw.
+      if (_cursor && _last_frame && capture_format != DXGI_FORMAT_UNKNOWN) {
+        const bool cursor_changed =
+          (int32_t) _cursor_alpha.topleft_x != _delivered_cursor_x ||
+          (int32_t) _cursor_alpha.topleft_y != _delivered_cursor_y ||
+          _cursor_alpha.visible != _delivered_cursor_visible ||
+          _cursor_shape_generation != _delivered_cursor_generation;
+        if (cursor_changed) {
+          std::shared_ptr<platf::img_t> img;
+          if (!pull_free_image_cb(img)) {
+            return capture_e::interrupted;
+          }
+          auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
+          if (complete_img(d3d_img.get(), false)) {
+            return capture_e::error;
+          }
+          const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, 3000);
+          if (dst_acquire != S_OK && dst_acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
+            BOOST_LOG(error) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << ']';
+            return capture_e::error;
+          }
+          device_ctx->CopyResource(d3d_img->capture_texture.get(), _last_frame.get());
+          if (cursor_visible && (_cursor_alpha.visible || _cursor_xor.visible)) {
+            blend_cursor_into(*d3d_img);
+          }
+          seh_release_sync(d3d_img->capture_mutex.get(), 0);
+
+          _delivered_cursor_x = (int32_t) _cursor_alpha.topleft_x;
+          _delivered_cursor_y = (int32_t) _cursor_alpha.topleft_y;
+          _delivered_cursor_visible = _cursor_alpha.visible;
+          _delivered_cursor_generation = _cursor_shape_generation;
+
+          const auto now = std::chrono::steady_clock::now();
+          d3d_img->blank = false;
+          d3d_img->format = capture_format;
+          d3d_img->pixel_pitch = get_pixel_pitch();
+          d3d_img->row_pitch = d3d_img->pixel_pitch * d3d_img->width;
+          d3d_img->data = (std::uint8_t *) d3d_img->capture_texture.get();
+          img->frame_timestamp = now;
+          img->host_processing_timestamp = now;
+          img_out = img;
+          return capture_e::ok;
+        }
+      }
       return capture_e::timeout;
     }
 
@@ -400,6 +638,33 @@ namespace platf::dxgi {
     }
 
     device_ctx->CopyResource(d3d_img->capture_texture.get(), slot->texture.get());
+
+    if (_cursor) {
+      // Cursor-free copy of this frame (the driver owns the cursor plane,
+      // so slot pixels never contain it) for idle cursor-only redelivery.
+      // Reads the slot texture, so this stays inside the slot-mutex hold.
+      if (!_last_frame) {
+        D3D11_TEXTURE2D_DESC copy_desc = desc;
+        copy_desc.Usage = D3D11_USAGE_DEFAULT;
+        copy_desc.BindFlags = 0;
+        copy_desc.CPUAccessFlags = 0;
+        copy_desc.MiscFlags = 0;
+        if (FAILED(device->CreateTexture2D(&copy_desc, nullptr, &_last_frame))) {
+          BOOST_LOG(warning) << "LuminalVGD capture: last-frame copy unavailable; "
+                                "cursor motion over an idle desktop will not refresh.";
+        }
+      }
+      if (_last_frame) {
+        device_ctx->CopyResource(_last_frame.get(), slot->texture.get());
+      }
+      if (cursor_visible && (_cursor_alpha.visible || _cursor_xor.visible)) {
+        blend_cursor_into(*d3d_img);
+      }
+      _delivered_cursor_x = (int32_t) _cursor_alpha.topleft_x;
+      _delivered_cursor_y = (int32_t) _cursor_alpha.topleft_y;
+      _delivered_cursor_visible = _cursor_alpha.visible;
+      _delivered_cursor_generation = _cursor_shape_generation;
+    }
 
     seh_release_sync(d3d_img->capture_mutex.get(), 0);
 

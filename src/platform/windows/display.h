@@ -27,9 +27,10 @@
 #include "src/utility.h"
 #include "src/video.h"
 
-// Opaque LuminalVGD frame-ring handle (luminal_vgd.h); forward-declared so
-// only display_vgd.cpp needs the FFI header.
+// Opaque LuminalVGD frame-ring / cursor-section handles (luminal_vgd.h);
+// forward-declared so only display_vgd.cpp needs the FFI header.
 struct VgdRingHandle;
+struct VgdCursorHandle;
 
 namespace platf::dxgi {
   extern const char *format_str[];
@@ -143,6 +144,7 @@ namespace platf::dxgi {
   }  // namespace video
 
   class hwdevice_t;
+  struct img_d3d_t;  // display_vram.h
 
   struct cursor_t {
     std::vector<std::uint8_t> img_data;
@@ -611,6 +613,44 @@ namespace platf::dxgi {
     // How long the driver's heartbeat has been stale (swapchain unassigned
     // during mode transitions stops the worker without marking the ring).
     std::optional<std::chrono::steady_clock::time_point> _heartbeat_stale_since;
+
+    // --- Hardware-cursor plane (driver caps::HW_CURSOR) ---------------
+    // With a cursor-capable driver, frames arrive cursor-free (the driver
+    // owns the cursor plane and republishes shape/position into a shared
+    // section). The blend machinery mirrors display_ddup_vram_t's; shape
+    // conversion reuses the display_vram.cpp utilities.
+
+    /// Initialize the blend states/shaders (only when `_cursor` opened).
+    int init_cursor_render(const ::video::config_t &config);
+    /// Pull shape/position from the cursor section into the GPU cursors.
+    void sync_cursor();
+    /// Draw the cursor into a pooled image's render target (mirrors the
+    /// DDA blend_cursor lambda; caller holds the image's key-0 mutex).
+    void blend_cursor_into(img_d3d_t &d3d_img);
+
+    ::VgdCursorHandle *_cursor = nullptr;
+    sampler_state_t _cursor_sampler;
+    blend_t _blend_alpha;
+    blend_t _blend_invert;
+    blend_t _blend_disable;
+    ps_t _cursor_ps;
+    vs_t _cursor_vs;
+    gpu_cursor_t _cursor_alpha;
+    gpu_cursor_t _cursor_xor;
+    std::vector<std::uint8_t> _cursor_shape_buf;
+    /// Shape generation currently uploaded to the GPU cursors.
+    uint32_t _cursor_shape_generation = 0;
+
+    // Cursor state baked into the last delivered image. While the desktop
+    // is idle the driver publishes nothing on cursor motion (the cursor is
+    // its own plane), so a live-state difference triggers a redelivery of
+    // `_last_frame` with a fresh blend.
+    int32_t _delivered_cursor_x = 0;
+    int32_t _delivered_cursor_y = 0;
+    bool _delivered_cursor_visible = false;
+    uint32_t _delivered_cursor_generation = 0;
+    /// Cursor-free copy of the last delivered frame (cursor-only updates).
+    texture2d_t _last_frame;
   };
 
   class display_wgc_ipc_ram_t: public display_ram_t {

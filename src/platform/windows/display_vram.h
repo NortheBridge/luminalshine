@@ -39,4 +39,16 @@ namespace platf::dxgi {
     }
   };
 
+  // Cursor-compositing utilities defined in display_vram.cpp, shared by the
+  // DDA path and the LuminalVGD ring path (display_vgd.cpp). The converters
+  // take DDA-native shape descriptions; non-DDA callers synthesize the
+  // DXGI_OUTDUPL_POINTER_SHAPE_INFO (Type/Width/Height/Pitch) themselves.
+  extern blob_t cursor_ps_hlsl;
+  extern blob_t cursor_ps_normalize_white_hlsl;
+  extern blob_t cursor_vs_hlsl;
+  blend_t make_blend(device_t::pointer device, bool enable, bool invert);
+  util::buffer_t<std::uint8_t> make_cursor_alpha_image(const util::buffer_t<std::uint8_t> &img_data, DXGI_OUTDUPL_POINTER_SHAPE_INFO shape_info);
+  util::buffer_t<std::uint8_t> make_cursor_xor_image(const util::buffer_t<std::uint8_t> &img_data, DXGI_OUTDUPL_POINTER_SHAPE_INFO shape_info);
+  bool set_cursor_texture(device_t::pointer device, gpu_cursor_t &cursor, util::buffer_t<std::uint8_t> &&cursor_img, DXGI_OUTDUPL_POINTER_SHAPE_INFO &shape_info);
+
 }  // namespace platf::dxgi
