@@ -531,13 +531,18 @@ namespace platf::dxgi {
             return capture_e::interrupted;
           }
           auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
+          // Recoverable conditions must be `reinit`, never `error`: `error`
+          // kills the capture thread and with it EVERY session, while this
+          // path runs continuously whenever the cursor moves over an idle
+          // desktop. A mutex timeout / DEVICE_REMOVED here (the display can
+          // vanish mid-stream) is exactly what reinit + fallback exist for.
           if (complete_img(d3d_img.get(), false)) {
-            return capture_e::error;
+            return capture_e::reinit;
           }
           const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, 3000);
           if (dst_acquire != S_OK && dst_acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
-            BOOST_LOG(error) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << ']';
-            return capture_e::error;
+            BOOST_LOG(warning) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << "]; reinitializing."sv;
+            return capture_e::reinit;
           }
           device_ctx->CopyResource(d3d_img->capture_texture.get(), _last_frame.get());
           if (cursor_visible && (_cursor_alpha.visible || _cursor_xor.visible)) {
@@ -626,15 +631,19 @@ namespace platf::dxgi {
     auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
 
     // Lazily create the pooled GPU texture + encoder handle (idempotent).
+    // Recoverable failures are `reinit`, not `error`: `error` tears down
+    // the capture thread and every session, while a mutex timeout or
+    // DEVICE_REMOVED (the virtual display can vanish mid-stream) is what
+    // reinit + WGC/DDA fallback exist for.
     if (complete_img(d3d_img.get(), false)) {
-      return capture_e::error;
+      return capture_e::reinit;
     }
 
     // Pooled textures follow the capture<->encoder key-0 convention.
     const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, 3000);
     if (dst_acquire != S_OK && dst_acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
-      BOOST_LOG(error) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << ']';
-      return capture_e::error;
+      BOOST_LOG(warning) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << "]; reinitializing."sv;
+      return capture_e::reinit;
     }
 
     device_ctx->CopyResource(d3d_img->capture_texture.get(), slot->texture.get());
