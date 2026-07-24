@@ -2892,6 +2892,11 @@ namespace VDISPLAY {
     // process initialization in most cases. Without it the dispatch flag
     // would still be NONE and we'd fall through to SudoVDA defaults.
     select_backend();
+    if (!is_sudovda_active()) {
+      // LuminalVGD needs no registry defaults — and recreating the SudoMaker
+      // key here would undo the installer's SudoVDA eviction on every start.
+      return;
+    }
     constexpr const wchar_t *REG_PATH = L"SOFTWARE\\SudoMaker\\SudoVDA";
     HKEY key = nullptr;
     REGSAM access = KEY_WRITE;
@@ -2944,6 +2949,12 @@ namespace VDISPLAY {
     select_backend();
     if (is_luminalvgd_active()) {
       return vgd::open_device();
+    }
+    if (!is_sudovda_active()) {
+      // No backend installed — fail fast instead of spinning the legacy
+      // SudoVDA open/retry ladder (seconds of sleeps plus device-restart
+      // recovery) against a device that cannot exist.
+      return DRIVER_STATUS::FAILED;
     }
     // Idempotency: a prior driver handle may still be open — the recovery
     // monitor and the several proc::initVDisplayDriver() call sites can
@@ -3082,6 +3093,9 @@ namespace VDISPLAY {
   bool ensure_driver_is_ready() {
     if (is_luminalvgd_active()) {
       return vgd::driver_ready();
+    }
+    if (!is_sudovda_active()) {
+      return false;
     }
     return ensure_driver_is_ready_impl(RestartCooldownBehavior::skip);
   }

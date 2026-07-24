@@ -2394,32 +2394,42 @@ namespace confighttp {
       // Non-fatal; keep metadata response minimal if enumeration fails.
     }
 
-    // Virtual display backend status — surfaces the active driver (SudoVDA)
+    // Virtual display backend status — surfaces the active driver (LuminalVGD)
     // plus its current health enum so the web UI can render an
     // accurate indicator instead of guessing.
     //
     // Lazy probe: proc::vDisplayDriverStatus is only flipped from UNKNOWN to a
     // real state by proc::initVDisplayDriver(), which on a typical desktop host
     // (physical monitors present, no active stream yet) is never called until
-    // streaming starts. That left the web UI permanently showing "unknown."
-    // We kick off a single one-shot probe the first time the metadata endpoint
-    // is hit while still in UNKNOWN, so the dashboard and Audio/Video tab can
-    // surface a real status without waiting for a stream session. Subsequent
-    // failures (FAILED / VERSION_INCOMPATIBLE / WATCHDOG_FAILED) stay sticky so
-    // we don't repeatedly slam a broken driver — the user can still act on the
-    // result via the installer's reconfigure flow.
+    // streaming starts. Probe on demand whenever the metadata endpoint is hit
+    // while the status is not OK, rate-limited to one attempt per 10 s. A
+    // once-only probe used to leave a transient startup failure (driver
+    // installed after the service started, PnP race at boot) sticky as
+    // "Failed to initialize" until the next stream, and made the Audio/Video
+    // tab's "Re-check driver" button a no-op. The rate limit keeps a genuinely
+    // broken/missing driver from being slammed on every dashboard poll.
     try {
-      static std::once_flag s_vdisplay_probe_once;
-      if (proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::UNKNOWN) {
-        std::call_once(s_vdisplay_probe_once, []() {
-          try {
-            proc::initVDisplayDriver();
-          } catch (...) {
-            // initVDisplayDriver swallows most errors itself; this is belt-
-            // and-braces so a probe failure can't take down the metadata
-            // endpoint.
-          }
-        });
+      using probe_clock = std::chrono::steady_clock;
+      static std::mutex s_vdisplay_probe_mutex;
+      static probe_clock::time_point s_vdisplay_last_probe {};
+      bool do_probe = false;
+      if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+        std::lock_guard lk(s_vdisplay_probe_mutex);
+        const auto now = probe_clock::now();
+        if (s_vdisplay_last_probe == probe_clock::time_point {} ||
+            now - s_vdisplay_last_probe >= std::chrono::seconds(10)) {
+          s_vdisplay_last_probe = now;
+          do_probe = true;
+        }
+      }
+      if (do_probe) {
+        try {
+          proc::initVDisplayDriver();
+        } catch (...) {
+          // initVDisplayDriver swallows most errors itself; this is belt-
+          // and-braces so a probe failure can't take down the metadata
+          // endpoint.
+        }
       }
       output_tree["virtual_display_backend"] = VDISPLAY::active_backend_name();
       output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
