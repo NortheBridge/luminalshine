@@ -123,42 +123,51 @@ if (TARGET sunshine_display_helper)
 endif()
 install(FILES "${CMAKE_BINARY_DIR}/uninstall.exe" DESTINATION "." COMPONENT application)
 
-# Drivers (SudoVDA virtual display)
+# Drivers (LuminalVGD virtual display — first-party IddCx driver)
 #
 # The signed driver bundle is a packaging input, not a build input: code
-# builds don't need it. Default stays strict so release/CI packaging can
-# never silently ship without the driver; dev machines without the bundle
-# configure with -DSUNSHINE_PACKAGE_SUDOVDA=OFF.
-option(SUNSHINE_PACKAGE_SUDOVDA "Require and package the SudoVDA driver artifacts" ON)
-set(SUDOVDA_SOURCE_DIR "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/sudovda")
-set(SUDOVDA_DRIVER_FILES
-    "${SUDOVDA_SOURCE_DIR}/install.ps1"
-    "${SUDOVDA_SOURCE_DIR}/uninstall.bat"
-    "${SUDOVDA_SOURCE_DIR}/SudoVDA.inf"
-    "${SUDOVDA_SOURCE_DIR}/SudoVDA.dll"
-    "${SUDOVDA_SOURCE_DIR}/sudovda.cat"
-    "${SUDOVDA_SOURCE_DIR}/sudovda.cer"
-    "${SUDOVDA_SOURCE_DIR}/nefconc.exe"
+# builds don't need it. Drop the SIGNED driver-package files (from a
+# LuminalVGD release, github.com/NortheBridge/LuminalVGD) into
+# src_assets/windows/drivers/luminalvgd/driver-package/ before packaging.
+# Default stays strict so release/CI packaging can never silently ship
+# without the driver; dev machines without the bundle configure with
+# -DSUNSHINE_PACKAGE_LUMINALVGD=OFF.
+#
+# SudoVDA is gone by decision (2026-07-23): no LuminalShine version ships
+# it, and drivers/luminalvgd/install.ps1 actively removes SudoVDA on
+# every install, update, and reinstall.
+option(SUNSHINE_PACKAGE_LUMINALVGD "Require and package the LuminalVGD driver artifacts" ON)
+set(LUMINALVGD_SOURCE_DIR "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/luminalvgd")
+set(LUMINALVGD_SCRIPT_FILES
+    "${LUMINALVGD_SOURCE_DIR}/install.ps1"
+)
+set(LUMINALVGD_PACKAGE_FILES
+    "${LUMINALVGD_SOURCE_DIR}/driver-package/luminalvgd.inf"
+    "${LUMINALVGD_SOURCE_DIR}/driver-package/luminal_vgd_driver.dll"
+    "${LUMINALVGD_SOURCE_DIR}/driver-package/luminalvgd.cat"
 )
 
-if (SUNSHINE_PACKAGE_SUDOVDA)
-    foreach(_sudovda_file IN LISTS SUDOVDA_DRIVER_FILES)
-        if (NOT EXISTS "${_sudovda_file}")
-            message(FATAL_ERROR "Required SudoVDA driver artifact missing: ${_sudovda_file} "
-                                "(dev builds without the driver bundle: -DSUNSHINE_PACKAGE_SUDOVDA=OFF)")
+if (SUNSHINE_PACKAGE_LUMINALVGD)
+    foreach(_luminalvgd_file IN LISTS LUMINALVGD_SCRIPT_FILES LUMINALVGD_PACKAGE_FILES)
+        if (NOT EXISTS "${_luminalvgd_file}")
+            message(FATAL_ERROR "Required LuminalVGD driver artifact missing: ${_luminalvgd_file} "
+                                "(dev builds without the driver bundle: -DSUNSHINE_PACKAGE_LUMINALVGD=OFF)")
         endif()
-        file(SIZE "${_sudovda_file}" _sudovda_file_size)
-        if (_sudovda_file_size EQUAL 0)
-            message(FATAL_ERROR "Required SudoVDA driver artifact is empty (0 bytes): ${_sudovda_file}")
+        file(SIZE "${_luminalvgd_file}" _luminalvgd_file_size)
+        if (_luminalvgd_file_size EQUAL 0)
+            message(FATAL_ERROR "Required LuminalVGD driver artifact is empty (0 bytes): ${_luminalvgd_file}")
         endif()
     endforeach()
-    unset(_sudovda_file_size)
+    unset(_luminalvgd_file_size)
 
-    install(FILES ${SUDOVDA_DRIVER_FILES}
-            DESTINATION "drivers/sudovda"
-            COMPONENT sudovda)
+    install(FILES ${LUMINALVGD_SCRIPT_FILES}
+            DESTINATION "drivers/luminalvgd"
+            COMPONENT luminalvgd)
+    install(FILES ${LUMINALVGD_PACKAGE_FILES}
+            DESTINATION "drivers/luminalvgd/driver-package"
+            COMPONENT luminalvgd)
 else()
-    message(WARNING "SUNSHINE_PACKAGE_SUDOVDA=OFF: SudoVDA driver artifacts will NOT be packaged (dev build only).")
+    message(WARNING "SUNSHINE_PACKAGE_LUMINALVGD=OFF: LuminalVGD driver artifacts will NOT be packaged (dev build only).")
 endif()
 
 # Mandatory scripts

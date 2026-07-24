@@ -141,50 +141,29 @@ jobs:
           # which then errors out on missing libxml2 headers).
           pacman -Syu --noconfirm "${dependencies[@]}"
 
-      - name: Fetch SudoVDA driver bundle
+      - name: Fetch LuminalVGD driver bundle
         # Same fetch as ci-windows.yml so the CMake configure step doesn't fail
         # on missing driver assets. We only need the files staged; we don't
         # sign/install them in the coverage workflow.
         shell: pwsh
         env:
-          APOLLO_VERSION: '0.4.6'
-          NEFCON_VERSION: 'v1.17.40'
+          LUMINALVGD_VERSION: 'v0.1.0-alpha.1'
         run: |
           $ErrorActionPreference = 'Stop'
-          $driversDir = Join-Path $PWD 'src_assets/windows/drivers/sudovda'
-          if (-not (Test-Path $driversDir)) {
-            throw "Drivers directory missing: $driversDir"
+          $packageDir = Join-Path $PWD 'src_assets/windows/drivers/luminalvgd/driver-package'
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+
+          $zipUrl = "https://github.com/NortheBridge/LuminalVGD/releases/download/$($env:LUMINALVGD_VERSION)/LuminalVGD-$($env:LUMINALVGD_VERSION)-x64.zip"
+          $zipPath = Join-Path $env:RUNNER_TEMP 'luminalvgd.zip'
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+          $tmp = Join-Path $env:RUNNER_TEMP 'luminalvgd'
+          Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
+
+          foreach ($file in 'luminalvgd.inf', 'luminal_vgd_driver.dll', 'luminalvgd.cat') {
+            $src = Join-Path $tmp "driver-package/$file"
+            if (-not (Test-Path $src)) { throw "missing $file in LuminalVGD release zip" }
+            Copy-Item $src (Join-Path $packageDir $file) -Force
           }
-
-          $apolloRaw = "https://raw.githubusercontent.com/ClassicOldSong/Apollo/v$($env:APOLLO_VERSION)/src_assets/windows/drivers/sudovda"
-          foreach ($file in 'SudoVDA.inf', 'sudovda.cat', 'sudovda.cer', 'uninstall.bat') {
-            $dest = Join-Path $driversDir $file
-            Invoke-WebRequest -Uri "$apolloRaw/$file" -OutFile $dest -UseBasicParsing
-          }
-
-          $nefconTmp = Join-Path $env:RUNNER_TEMP 'nefcon'
-          New-Item -ItemType Directory -Path $nefconTmp -Force | Out-Null
-          $nefconZip = Join-Path $nefconTmp 'nefcon.zip'
-          $nefconUrl = "https://github.com/nefarius/nefcon/releases/download/$($env:NEFCON_VERSION)/nefcon_$($env:NEFCON_VERSION).zip"
-          Invoke-WebRequest -Uri $nefconUrl -OutFile $nefconZip -UseBasicParsing
-          Expand-Archive -Path $nefconZip -DestinationPath $nefconTmp -Force
-          $nefconc = Get-ChildItem -Path $nefconTmp -Recurse -Filter 'nefconc.exe' |
-                       Where-Object { $_.FullName -match '(?i)x64|amd64' } |
-                       Select-Object -First 1
-          if (-not $nefconc) { throw "nefconc.exe (x64) not found" }
-          Copy-Item $nefconc.FullName (Join-Path $driversDir 'nefconc.exe') -Force
-
-          $apolloTmp = Join-Path $env:RUNNER_TEMP 'apollo'
-          New-Item -ItemType Directory -Path $apolloTmp -Force | Out-Null
-          $apolloExe = Join-Path $apolloTmp "Apollo-$($env:APOLLO_VERSION).exe"
-          $apolloUrl = "https://github.com/ClassicOldSong/Apollo/releases/download/v$($env:APOLLO_VERSION)/Apollo-$($env:APOLLO_VERSION).exe"
-          Invoke-WebRequest -Uri $apolloUrl -OutFile $apolloExe -UseBasicParsing
-          $apolloExtracted = Join-Path $apolloTmp 'extracted'
-          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
-          & $sevenZip x "-o$apolloExtracted" $apolloExe -y | Out-Null
-          $sudoDll = Get-ChildItem -Path $apolloExtracted -Recurse -Filter 'SudoVDA.dll' | Select-Object -First 1
-          if (-not $sudoDll) { throw "SudoVDA.dll not found inside Apollo installer" }
-          Copy-Item $sudoDll.FullName (Join-Path $driversDir 'SudoVDA.dll') -Force
 
       - name: Add Rust gnullvm target
         shell: pwsh

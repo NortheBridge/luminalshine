@@ -197,14 +197,14 @@
     </Property>
 
     <!-- Bootstrapper-contract MSI properties. The bootstrapper passes
-         INSTALL_SUDOVDA / REMOVEVIRTUALDISPLAYDRIVER
+         INSTALL_LUMINALVGD / REMOVEVIRTUALDISPLAYDRIVER
          / SKIP_REMOVE_CONFLICTING_PRODUCTS / KEEPADMINCREDENTIALS /
          KEEPSESSIONDATA / DELETEINSTALLDIR on the msiexec command line
          (see RunInstallAttempt in LuminalShineInstaller.cs). Defaults
          here are the values used when the property is unset; the
          bootstrapper overrides per user choice. -->
     <Property Id="REMOVEVIRTUALDISPLAYDRIVER" Value="0" Secure="yes" />
-    <Property Id="INSTALL_SUDOVDA" Value="1" Secure="yes" />
+    <Property Id="INSTALL_LUMINALVGD" Value="1" Secure="yes" />
     <Property Id="SKIP_REMOVE_CONFLICTING_PRODUCTS" Value="0" Secure="yes" />
 
     <Launch Condition="Privileged" Message="Administrator privileges are required." />
@@ -253,7 +253,7 @@
       The LuminalShineExtras feature stays hand-authored here
       because its ComponentRefs target hand-authored Components
       from custom_actions.wxs that are out of the auto-generator's
-      scope (services, shortcuts, env, firewall, ARP, sudovda regs).
+      scope (services, shortcuts, env, firewall, ARP).
     -->
     <FeatureRef Id="ProductFeature" />
 
@@ -267,7 +267,6 @@
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="ReconfigureStartMenuShortcut" />
       <ComponentRef Id="ResetAdminStartMenuShortcut" />
-      <ComponentRef Id="SudoVdaRegistryDefaults" />
       <ComponentRef Id="ArpCustomUninstallEntry" />
     </Feature>
 
@@ -346,9 +345,9 @@
            with the property switch so we never invoke install.ps1 against
            files that weren't staged, even if the feature condition above
            ever drifts out of sync with the INSTALL_* properties. -->
-      <Custom Action="SetInstallSudovda" After="ResetAcls" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
-      <Custom Action="InstallSudovda" After="SetInstallSudovda" Condition="NOT REMOVE AND INSTALL_SUDOVDA = &quot;1&quot; AND&amp;CM_C_sudovda=3" />
-      <Custom Action="SetMigrateConfig" After="InstallSudovda" Condition="NOT REMOVE" />
+      <Custom Action="SetInstallLuminalVgd" After="ResetAcls" Condition="NOT REMOVE AND INSTALL_LUMINALVGD = &quot;1&quot; AND&amp;CM_C_luminalvgd=3" />
+      <Custom Action="InstallLuminalVgd" After="SetInstallLuminalVgd" Condition="NOT REMOVE AND INSTALL_LUMINALVGD = &quot;1&quot; AND&amp;CM_C_luminalvgd=3" />
+      <Custom Action="SetMigrateConfig" After="InstallLuminalVgd" Condition="NOT REMOVE" />
       <Custom Action="MigrateConfig" After="SetMigrateConfig" Condition="NOT REMOVE" />
       <Custom Action="SetRunInstallerMigrations" After="MigrateConfig" Condition="NOT REMOVE" />
       <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations" Condition="NOT REMOVE" />
@@ -366,8 +365,8 @@
       <Custom Action="ResetSessionHistory" After="SetResetSessionHistory" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND KEEPSESSIONDATA&lt;&gt;&quot;1&quot;" />
 
       <!-- Remove Virtual Display Drivers only when explicitly requested. -->
-      <Custom Action="SetUninstallSudovda" After="RestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
-      <Custom Action="UninstallSudovda" After="SetUninstallSudovda" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
+      <Custom Action="SetUninstallLuminalVgd" After="RestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
+      <Custom Action="UninstallLuminalVgd" After="SetUninstallLuminalVgd" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND REMOVEVIRTUALDISPLAYDRIVER = &quot;1&quot;" />
 
       <!-- Execute delete/prune after MSI removes its files -->
       <Custom Action="SetDeleteInstallDir" After="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND DELETEINSTALLDIR = &quot;1&quot;" />

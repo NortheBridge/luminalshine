@@ -68,3 +68,7 @@ _codeql_detected_source_root
 build-msvc
 .cache/
 test_sunshine.log
+
+# LuminalVGD signed driver-package: packaging input dropped in from a
+# LuminalVGD release (or a local signed build) - never committed.
+src_assets/windows/drivers/luminalvgd/driver-package/

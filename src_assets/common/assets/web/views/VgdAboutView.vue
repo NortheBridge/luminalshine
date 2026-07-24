@@ -9,8 +9,10 @@
       </p>
     </div>
 
-    <n-alert type="warning" :show-icon="true">
-      <span class="font-semibold">{{ t('vgd.proto_notice') }}</span>
+    <n-alert v-if="!vgdInstalled" type="warning" :show-icon="true">
+      <span class="font-semibold">{{
+        tr('vgd.about_not_installed_notice', 'LuminalVGD driver not detected.')
+      }}</span>
       <i18n-t keypath="vgd.proto_visit" tag="span" class="block mt-0.5">
         <template #link>
           <a
@@ -25,8 +27,8 @@
     </n-alert>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Driver identity: static design-document facts until the driver
-           ships and /api/metadata starts carrying live handshake data. -->
+      <!-- Driver identity: live data from /api/metadata (vgd_installed,
+           vgd_handshake, vgd_hdr10, virtual_display_backend_version). -->
       <section class="rounded-xl border border-white/10 bg-white/[0.03] p-4 sm:p-5 space-y-3">
         <div class="flex items-center gap-2">
           <i class="fas fa-display text-primary" />
@@ -112,7 +114,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { storeToRefs } from 'pinia';
 import { NAlert, NButton } from 'naive-ui';
@@ -120,8 +122,6 @@ import { useConfigStore } from '@/stores/config';
 
 const { t } = useI18n();
 const VGD_SITE_URL = 'https://apps.northebridge.com/en/LuminalVGD';
-// Public releases feed of the driver repo; returns 404 until the first
-// release ships, which the UI reports as "still in prototype".
 const VGD_RELEASES_API = 'https://api.github.com/repos/NortheBridge/LuminalVGD/releases/latest';
 
 const tr = (key: string, fallback: string) => {
@@ -132,39 +132,75 @@ const tr = (key: string, fallback: string) => {
 const store = useConfigStore();
 const { metadata } = storeToRefs(store);
 
-const driverRows = computed(() => [
-  {
-    label: tr('vgd.about_status', 'Status'),
-    value: tr('vgd.about_status_prototype', 'Prototype (pre-development)'),
-  },
-  {
-    label: tr('vgd.about_driver_version', 'Driver version'),
-    value: tr('vgd.about_not_installed', 'Not installed'),
-  },
-  { label: tr('vgd.about_protocol', 'Design protocol'), value: 'v0.3' },
-  {
-    label: tr('vgd.about_device', 'Device'),
-    value: 'Luminal Video Graphics Display (root\\luminal_vgd)',
-  },
-  { label: tr('vgd.about_provider', 'Provider'), value: 'NortheBridge Foundation' },
-]);
-
-const hostRows = computed(() => {
-  const md = (metadata.value || {}) as { version?: string; release_date?: string };
-  return [
-    {
-      label: tr('vgd.about_this_host', 'This LuminalShine'),
-      value: md?.version || '—',
-    },
-    {
-      label: tr('vgd.about_host_built', 'LuminalShine built'),
-      value: md?.release_date || '—',
-    },
-    { label: tr('vgd.about_shipped_with', 'Driver shipped with LuminalShine'), value: '—' },
-    { label: tr('vgd.about_driver_built', 'Driver built'), value: '—' },
-    { label: tr('vgd.about_signature', 'Driver signature'), value: '—' },
-  ];
+onMounted(() => {
+  // Refresh so the driver identity is live, not whatever an earlier page
+  // cached (the driver can be (un)installed while the UI stays open).
+  void store.fetchMetadata();
 });
+
+interface VgdMetadata {
+  version?: string;
+  release_date?: string;
+  virtual_display_backend?: string;
+  virtual_display_backend_version?: string;
+  virtual_display_driver_ready?: boolean;
+  vgd_installed?: boolean;
+  vgd_handshake?: string;
+  vgd_hdr10?: boolean;
+}
+
+const md = computed(() => (metadata.value || {}) as VgdMetadata);
+const vgdInstalled = computed(() => Boolean(md.value.vgd_installed));
+
+const driverRows = computed(() => {
+  const rows = [
+    {
+      label: tr('vgd.about_status', 'Status'),
+      value: !vgdInstalled.value
+        ? tr('vgd.about_not_installed', 'Not installed')
+        : md.value.virtual_display_driver_ready
+          ? tr('vgd.about_status_ready', 'Installed and ready')
+          : tr('vgd.about_status_installed', 'Installed'),
+    },
+    {
+      label: tr('vgd.about_driver_version', 'Driver version'),
+      value: md.value.virtual_display_backend_version || '—',
+    },
+    {
+      label: tr('vgd.about_protocol', 'Driver identity'),
+      value: md.value.vgd_handshake || '—',
+    },
+    {
+      label: tr('vgd.about_hdr10', 'HDR10 capable'),
+      value: !vgdInstalled.value
+        ? '—'
+        : md.value.vgd_hdr10
+          ? tr('vgd.about_yes', 'Yes')
+          : tr('vgd.about_no', 'No'),
+    },
+    {
+      label: tr('vgd.about_device', 'Device'),
+      value: 'Luminal Video Graphics Display (root\\luminal_vgd)',
+    },
+    { label: tr('vgd.about_provider', 'Provider'), value: 'NortheBridge Foundation' },
+  ];
+  return rows;
+});
+
+const hostRows = computed(() => [
+  {
+    label: tr('vgd.about_this_host', 'This LuminalShine'),
+    value: md.value.version || '—',
+  },
+  {
+    label: tr('vgd.about_host_built', 'LuminalShine built'),
+    value: md.value.release_date || '—',
+  },
+  {
+    label: tr('vgd.about_active_backend', 'Active virtual display backend'),
+    value: md.value.virtual_display_backend || '—',
+  },
+]);
 
 type UpdateState = 'idle' | 'checking' | 'none' | 'found' | 'error';
 const updateState = ref<UpdateState>('idle');
