@@ -354,8 +354,11 @@ namespace platf::diag {
   }
 
   std::optional<std::string> query_virtual_display_driver_version() {
-    // Service names match the driver INF: SudoVDA registers as "SudoVDA".
+    // Service names match the driver INFs: LuminalVGD's UmdfService is
+    // "LuminalVGD" (first-party, preferred); legacy SudoVDA installs
+    // register as "SudoVDA" until the installer evicts them.
     static const wchar_t *kKnownServices[] = {
+      L"LuminalVGD",
       L"SudoVDA"
     };
 

@@ -74,6 +74,7 @@
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_backend.h"
   #include "platform/windows/virtual_display_cleanup.h"
+  #include "platform/windows/virtual_display_vgd.h"
   #include "process.h"
 #endif
 
@@ -2426,6 +2427,18 @@ namespace confighttp {
         proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK;
       if (auto vdd_version = platf::diag::query_virtual_display_driver_version()) {
         output_tree["virtual_display_backend_version"] = *vdd_version;
+      }
+      // LuminalVGD detail for the vgd-about page: install presence, the
+      // live handshake identity ("proto X.Y build N"), and the HDR10 cap.
+      // Each is cheap (one CM enumeration / one buffered IOCTL); failures
+      // fall through to the outer catch and simply omit the fields.
+      const bool vgd_installed = VDISPLAY::vgd::driver_appears_installed();
+      output_tree["vgd_installed"] = vgd_installed;
+      if (vgd_installed) {
+        if (auto handshake = VDISPLAY::vgd::driver_version_string()) {
+          output_tree["vgd_handshake"] = *handshake;
+        }
+        output_tree["vgd_hdr10"] = VDISPLAY::vgd::driver_supports_hdr();
       }
     } catch (...) {
       // Non-fatal; the UI gracefully falls back to "unknown" status.

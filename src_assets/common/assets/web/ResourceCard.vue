@@ -77,7 +77,7 @@ function withFallback(key: string, fallback: string) {
 
 const resources = computed(() => [
   {
-    href: 'https://moonlight-stream.org/discord',
+    href: 'https://discord.com/channels/352065098472488960/1528712503054303423',
     icon: 'fab fa-discord',
     title: 'Discord',
     description: withFallback('resource_card.discord_desc', 'Join the community'),
