@@ -309,9 +309,9 @@ function selectVirtualDisplayLayout(v: unknown) {
             <PlatformLayout>
               <template #windows>
                 <div class="mt-3 space-y-3">
-                  <!-- Backend selection: SudoVDA is the only shipped backend.
-                       A first-party LuminalShine VDD is planned to take over
-                       the default slot in a future release. -->
+                  <!-- Backend selection: LuminalVGD is the only shipped
+                       backend; legacy sudovda/mtt config values surface via
+                       ensureIncludesCurrentValue until re-saved. -->
                   <div>
                     <ConfigFieldRenderer
                       setting-key="virtual_display_backend"

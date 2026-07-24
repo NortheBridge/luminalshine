@@ -217,6 +217,8 @@ const displays = computed<DisplayRow[]>(() => {
 const virtualDisplayBackend = computed(() => {
   const b = metadata.value?.virtual_display_backend || 'none';
   switch (b.toLowerCase()) {
+    case 'luminalvgd':
+      return 'LuminalVGD';
     case 'sudovda':
       return 'SudoVDA';
     case 'none':
