@@ -378,7 +378,7 @@ namespace nvhttp {
         if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
           proc::initVDisplayDriver();
           if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
-            BOOST_LOG(warning) << "SudaVDA driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus) << "). Continuing with best-effort virtual display creation.";
+            BOOST_LOG(warning) << "Virtual display driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus) << "). Continuing with best-effort virtual display creation.";
           }
         }
         if (!config::video.adapter_name.empty()) {

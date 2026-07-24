@@ -2,10 +2,10 @@
  * @file src/platform/windows/virtual_display_backend.cpp
  * @brief Picks the active virtual-display backend at startup.
  *
- * SudoVDA is the only shipped backend (default until the planned LuminalShine
- * first-party VDD ships). Emits a caveat when selected because SudoVDA can
- * hang on the latest Windows 11 release builds and on Windows 11 Insider
- * Preview channels (WUDFHostProblem2 / HostTimeout).
+ * LuminalVGD (the first-party IddCx driver) is the only supported backend.
+ * SudoVDA was retired in 2026-07 — the installer evicts it and the runtime
+ * never selects it; the legacy `virtual_display_backend` config tokens
+ * ("sudovda", "mtt") map forward to auto with a warning.
  */
 
 #include "src/platform/windows/virtual_display_backend.h"
@@ -16,9 +16,7 @@
 #include "src/platform/windows/virtual_display_vgd.h"
 
 #include <atomic>
-#include <chrono>
 #include <mutex>
-#include <thread>
 
 namespace VDISPLAY {
 
@@ -42,40 +40,6 @@ namespace VDISPLAY {
       return b;
     }
 
-    bool sudovda_appears_installed() {
-      // Mirror the existing detection logic in virtual_display.cpp's
-      // `find_sudovda_device_instance_id()`. We don't link to that helper
-      // directly to keep this file independent; a registry probe is enough
-      // for "is the user-mode side present" and the existing SudoVDA code
-      // will fail-open if the device isn't actually responsive.
-      //
-      // Bounded one-shot retry: on Windows 11 Insider Preview Canary
-      // builds the UMDF host that publishes the SudoVDA registry tree
-      // can lag the SunshineService start by a few hundred milliseconds
-      // on cold boot. A single hit-and-miss probe loses that race and
-      // we fall through to BackendType::NONE for the entire process
-      // lifetime. Retry up to ~750 ms total before giving up — plenty
-      // of headroom on Canary, still negligible on systems where the
-      // key is already present (we exit on the first attempt).
-      constexpr int max_attempts = 4;
-      constexpr auto retry_backoff = std::chrono::milliseconds(250);
-      for (int attempt = 0; attempt < max_attempts; ++attempt) {
-        HKEY key = nullptr;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\SudoMaker\\SudoVDA", 0,
-                          KEY_READ, &key) == ERROR_SUCCESS) {
-          RegCloseKey(key);
-          if (attempt > 0) {
-            BOOST_LOG(info) << "SudoVDA registry key appeared on attempt " << (attempt + 1)
-                            << " (~" << (attempt * retry_backoff.count()) << " ms after first probe).";
-          }
-          return true;
-        }
-        if (attempt + 1 < max_attempts) {
-          std::this_thread::sleep_for(retry_backoff);
-        }
-      }
-      return false;
-    }
   }  // namespace
 
   BackendType select_backend() {
@@ -85,41 +49,22 @@ namespace VDISPLAY {
     }
 
     const std::string preference = config::video.virtual_display_backend;
-    if (preference == "mtt") {
-      BOOST_LOG(warning) << "virtual_display_backend=mtt is no longer supported (MTT VDD was removed); "
+    if (preference == "mtt" || preference == "sudovda") {
+      BOOST_LOG(warning) << "virtual_display_backend=" << preference
+                         << " is no longer supported (LuminalVGD is the only backend); "
                             "falling back to auto selection.";
     }
 
     const bool luminalvgd_installed = vgd::driver_appears_installed();
-    const bool sudovda_installed = sudovda_appears_installed();
 
-    BackendType chosen = BackendType::NONE;
-    if (preference == "sudovda") {
-      chosen = sudovda_installed ? BackendType::SUDOVDA : BackendType::NONE;
-    } else if (preference == "luminalvgd") {
-      chosen = luminalvgd_installed ? BackendType::LUMINALVGD : BackendType::NONE;
-      if (!luminalvgd_installed) {
-        BOOST_LOG(warning) << "virtual_display_backend=luminalvgd but the LuminalVGD driver is not "
-                              "installed/reachable; per-client virtual displays are disabled.";
-      }
-    } else {  // auto (and the removed "mtt")
-      // Capture ladder (LuminalVGD DESIGN.md §2): the first-party driver is
-      // primary the moment it is installed; SudoVDA remains the fallback
-      // until it is retired.
-      chosen = luminalvgd_installed ? BackendType::LUMINALVGD
-             : sudovda_installed    ? BackendType::SUDOVDA
-                                    : BackendType::NONE;
-    }
+    const BackendType chosen = luminalvgd_installed ? BackendType::LUMINALVGD : BackendType::NONE;
 
     if (chosen == BackendType::LUMINALVGD) {
       BOOST_LOG(info) << "Virtual-display backend: LuminalVGD (first-party IddCx driver).";
-    } else if (chosen == BackendType::SUDOVDA) {
-      BOOST_LOG(info) << "Virtual-display backend: SudoVDA (legacy). Heads up: SudoVDA can hang "
-                         "on the latest Windows 11 release builds and on Windows 11 Insider "
-                         "Preview channels (WUDFHostProblem2 / HostTimeout). Install the "
-                         "LuminalVGD driver to use the first-party backend.";
     } else {
-      BOOST_LOG(warning) << "No virtual-display backend installed; per-client virtual displays will not work.";
+      BOOST_LOG(warning) << "The LuminalVGD driver is not installed/reachable; per-client "
+                            "virtual displays will not work. Install the LuminalVGD driver "
+                            "(drivers\\luminalvgd\\install.ps1 or the installer) to enable them.";
     }
 
     selected_backend().store(chosen, std::memory_order_release);

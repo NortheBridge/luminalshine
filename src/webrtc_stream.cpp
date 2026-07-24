@@ -285,7 +285,7 @@ namespace webrtc_stream {
         proc::initVDisplayDriver();
         if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
           BOOST_LOG(warning)
-            << "SudaVDA driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus)
+            << "Virtual display driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus)
             << "). Continuing with best-effort virtual display creation.";
         }
       }
