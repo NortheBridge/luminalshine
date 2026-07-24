@@ -147,7 +147,7 @@ jobs:
         # sign/install them in the coverage workflow.
         shell: pwsh
         env:
-          LUMINALVGD_VERSION: 'v0.1.0-alpha.1'
+          LUMINALVGD_VERSION: 'v0.1.0-alpha.2'
         run: |
           $ErrorActionPreference = 'Stop'
           $packageDir = Join-Path $PWD 'src_assets/windows/drivers/luminalvgd/driver-package'
