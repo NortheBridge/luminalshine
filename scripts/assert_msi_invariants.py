@@ -78,19 +78,19 @@ PINNED_COMPONENT_GUIDS = {
 # whatever bootstrapper feature it gated.
 REQUIRED_BOOTSTRAPPER_PROPERTIES = frozenset({
     "INSTALL_ROOT",
-    "INSTALL_SUDOVDA",
+    "INSTALL_LUMINALVGD",
     "REMOVEVIRTUALDISPLAYDRIVER",
     "SKIP_REMOVE_CONFLICTING_PRODUCTS",
 })
 
 # Feature-level Conditions that gate the virtual-display backend on
-# the bootstrapper-supplied INSTALL_SUDOVDA property.
+# the bootstrapper-supplied INSTALL_LUMINALVGD property.
 # The condition's Level value flips the feature between install (Level=1)
 # and uninstall (Level=0). Without these rows, the deferred install.ps1
 # custom actions could fire against files that were never staged. The
 # expression strings come from packaging/windows/wix/features.json.
 REQUIRED_FEATURE_CONDITIONS = {
-    "CM_C_sudovda": ("1", 'INSTALL_SUDOVDA = "1"'),
+    "CM_C_luminalvgd": ("1", 'INSTALL_LUMINALVGD = "1"'),
 }
 
 # InstallExecuteSequence-level gating for credential-destroying actions.
@@ -328,7 +328,7 @@ def check_feature_conditions(tables) -> list[str]:
 _OK_DUMP = """\
 ## TABLE: Property
 Property=UpgradeCode|Value={C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}
-Property=SecureCustomProperties|Value=INSTALL_ROOT;INSTALL_SUDOVDA;REMOVEVIRTUALDISPLAYDRIVER;SKIP_REMOVE_CONFLICTING_PRODUCTS
+Property=SecureCustomProperties|Value=INSTALL_ROOT;INSTALL_LUMINALVGD;REMOVEVIRTUALDISPLAYDRIVER;SKIP_REMOVE_CONFLICTING_PRODUCTS
 
 ## TABLE: ServiceInstall
 ServiceInstall=A|Name=LuminalShineService|Start=auto
@@ -344,7 +344,7 @@ Component=Env_Path|ComponentId={0D8C0E3E-6A7D-48E2-9A1C-0B1A6B7D8C90}|Directory_
 Component=Fw_Exceptions|ComponentId={2A7E0C83-2F3D-4C0C-9D5D-7C0B1A2E3F45}|Directory_=IR
 
 ## TABLE: Condition
-Feature_=CM_C_sudovda|Level=1|Condition=INSTALL_SUDOVDA = "1"
+Feature_=CM_C_luminalvgd|Level=1|Condition=INSTALL_LUMINALVGD = "1"
 
 ## TABLE: InstallExecuteSequence
 Action=SetResetAdminCredentials|Condition=REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND KEEPADMINCREDENTIALS<>"1"|Sequence=3700
@@ -403,11 +403,11 @@ def _run_selftest() -> int:
            any("Env_Path" in m and "missing" in m for m in msgs))
 
     # Case 7: bootstrapper property dropped from SecureCustomProperties → flagged.
-    no_install_sudovda = parse_dump(_OK_DUMP.replace(
-        "INSTALL_SUDOVDA;", ""))
-    msgs = check_bootstrapper_properties(no_install_sudovda)
+    no_install_luminalvgd = parse_dump(_OK_DUMP.replace(
+        "INSTALL_LUMINALVGD;", ""))
+    msgs = check_bootstrapper_properties(no_install_luminalvgd)
     expect("Missing bootstrapper-contract property must be flagged",
-           any("INSTALL_SUDOVDA" in m for m in msgs))
+           any("INSTALL_LUMINALVGD" in m for m in msgs))
 
     # Case 8: feature condition present and correct → no failure.
     msgs = check_feature_conditions(tables)
@@ -415,19 +415,19 @@ def _run_selftest() -> int:
 
     # Case 9: feature condition expression drift → flagged.
     drifted = parse_dump(_OK_DUMP.replace(
-        'Feature_=CM_C_sudovda|Level=1|Condition=INSTALL_SUDOVDA = "1"',
-        'Feature_=CM_C_sudovda|Level=0|Condition=INSTALL_SUDOVDA <> "1"'))
+        'Feature_=CM_C_luminalvgd|Level=1|Condition=INSTALL_LUMINALVGD = "1"',
+        'Feature_=CM_C_luminalvgd|Level=0|Condition=INSTALL_LUMINALVGD <> "1"'))
     msgs = check_feature_conditions(drifted)
     expect("Feature-condition drift must be flagged",
-           any("CM_C_sudovda" in m and "drift" in m for m in msgs))
+           any("CM_C_luminalvgd" in m and "drift" in m for m in msgs))
 
     # Case 10: feature condition entirely missing → flagged.
-    no_sudovda = parse_dump(_OK_DUMP.replace(
-        'Feature_=CM_C_sudovda|Level=1|Condition=INSTALL_SUDOVDA = "1"\n',
+    no_luminalvgd = parse_dump(_OK_DUMP.replace(
+        'Feature_=CM_C_luminalvgd|Level=1|Condition=INSTALL_LUMINALVGD = "1"\n',
         ""))
-    msgs = check_feature_conditions(no_sudovda)
+    msgs = check_feature_conditions(no_luminalvgd)
     expect("Missing pinned feature condition must be flagged",
-           any("CM_C_sudovda" in m and "missing" in m for m in msgs))
+           any("CM_C_luminalvgd" in m and "missing" in m for m in msgs))
 
     # Case 11: pinned ResetAdminCredentials gating present → no failure.
     msgs = check_custom_action_conditions(tables)
