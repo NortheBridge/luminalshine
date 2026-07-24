@@ -565,7 +565,7 @@ export function getConfigSelectOptions(
           label: translateOr(
             t,
             'config.virtual_display_backend_auto',
-            'Auto (recommended) — LuminalVGD when installed, else SudoVDA',
+            'Auto (recommended) — LuminalVGD',
           ),
           value: 'auto',
         },
@@ -576,14 +576,6 @@ export function getConfigSelectOptions(
             'LuminalVGD (first-party)',
           ),
           value: 'luminalvgd',
-        },
-        {
-          label: translateOr(
-            t,
-            'config.virtual_display_backend_sudovda',
-            'SudoVDA (legacy)',
-          ),
-          value: 'sudovda',
         },
       ];
       return ensureIncludesCurrentValue(options, ctx.currentValue);
