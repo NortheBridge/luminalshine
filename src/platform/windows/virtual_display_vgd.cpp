@@ -90,10 +90,17 @@ namespace VDISPLAY::vgd {
       }
       g_device = vgd_device_open();
       if (!g_device) {
+        // Win32 error 2/259: driver not installed (interface absent);
+        // error 5: the driver's SYSTEM/Administrators ACL refused this
+        // process — the 2026-07 streaming outage looked exactly like this.
+        BOOST_LOG(error) << "LuminalVGD control device open failed (Win32 error "
+                         << vgd_last_error() << ").";
         return DRIVER_STATUS::FAILED;
       }
       VgdCaps caps {};
-      if (vgd_handshake(g_device, &caps) != 0) {
+      if (const int hs = vgd_handshake(g_device, &caps); hs != 0) {
+        BOOST_LOG(error) << "LuminalVGD handshake failed: code " << hs
+                         << " (Win32 error " << vgd_last_error() << ").";
         vgd_device_close(g_device);
         g_device = nullptr;
         return DRIVER_STATUS::FAILED;
