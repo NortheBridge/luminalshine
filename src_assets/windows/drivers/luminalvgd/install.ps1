@@ -20,7 +20,12 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $packageDir = Join-Path $scriptDir 'driver-package'
 
 function Get-DevicesByHardwareId([string]$HardwareId) {
-    Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+    # Every caller targets Display-class root devnodes (LuminalVGD,
+    # SudoVDA), and -Class Display is what keeps this fast: each
+    # Get-PnpDeviceProperty round-trip costs ~0.8 s, so an unfiltered scan
+    # of every devnode ran minutes per call inside the MSI. Phantom
+    # (not-present) devnodes keep their class and still match.
+    Get-PnpDevice -Class Display -ErrorAction SilentlyContinue | Where-Object {
         $ids = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction SilentlyContinue).Data
         $ids -and (@($ids) -contains $HardwareId)
     }
@@ -122,7 +127,9 @@ function Install-LuminalVgd {
     }
 
     Write-Host "[LuminalVGD] Adding driver package..."
-    pnputil /add-driver $inf /install | Out-Null
+    # Stage only — no /install: the UpdateDriverForPlugAndPlayDevices
+    # force-bind below performs the one device install/start.
+    pnputil /add-driver $inf | Out-Null
     if ($LASTEXITCODE -notin 0, 3010, 259) { throw "[LuminalVGD] pnputil /add-driver failed ($LASTEXITCODE)" }
     if ($LASTEXITCODE -eq 3010) { Write-Warning "[LuminalVGD] Windows reports a reboot is required to finish the driver update." }
 
