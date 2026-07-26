@@ -962,9 +962,21 @@ namespace config {
     std::unordered_map<std::string, std::string> command_line_overrides;
 
     void reset_runtime_config_to_defaults() {
+      // The whole in-RAM credential record must survive a config apply:
+      // the conf file carries no credentials, so anything not preserved
+      // here is simply lost until the next reload_user_creds (= service
+      // restart). Losing password_kdf downgrades verification to legacy
+      // SHA-256 against an Argon2id hash — every login then rejects the
+      // valid admin password. Hot applies run on every stream start
+      // (per-app runtime overrides), so any new credential-record field
+      // added to sunshine_t MUST be preserved here alongside these.
       const auto preserved_username = sunshine.username;
       const auto preserved_password = sunshine.password;
       const auto preserved_salt = sunshine.salt;
+      const auto preserved_password_kdf = sunshine.password_kdf;
+      const auto preserved_argon2_m_cost_kib = sunshine.argon2_m_cost_kib;
+      const auto preserved_argon2_t_cost = sunshine.argon2_t_cost;
+      const auto preserved_argon2_parallel = sunshine.argon2_parallel;
       const auto preserved_config_file = sunshine.config_file;
       const auto preserved_cmd = sunshine.cmd;
 
@@ -980,6 +992,10 @@ namespace config {
       sunshine.username = preserved_username;
       sunshine.password = preserved_password;
       sunshine.salt = preserved_salt;
+      sunshine.password_kdf = preserved_password_kdf;
+      sunshine.argon2_m_cost_kib = preserved_argon2_m_cost_kib;
+      sunshine.argon2_t_cost = preserved_argon2_t_cost;
+      sunshine.argon2_parallel = preserved_argon2_parallel;
       sunshine.config_file = preserved_config_file;
       sunshine.cmd = preserved_cmd;
     }
