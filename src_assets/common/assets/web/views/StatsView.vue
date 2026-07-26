@@ -10,7 +10,9 @@
         </p>
       </div>
     </div>
-    <SessionHistoryCard />
+    <!-- Session View Only: the last 10 sessions, details opening as a
+         full-viewport slideout. -->
+    <SessionHistoryCard :history-limit="10" full-width-panel />
   </div>
 </template>
 

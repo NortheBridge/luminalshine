@@ -49,6 +49,7 @@ namespace session_mon {
   struct SessionMetadata {
     std::string  client_name;
     std::string  device;
+    std::string  client_uuid;  ///< Pairing UUID — lets the UI target /api/clients/disconnect.
     std::string  protocol;   ///< "RTSP", "RTP", "WebRTC"
     std::string  codec;      ///< "HEVC", "AV1", "H264"
     int          width                  = 0;

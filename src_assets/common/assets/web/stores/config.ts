@@ -57,6 +57,10 @@ export interface MetaInfo {
     av1_yuv444?: boolean;
     ref_frames_invalidation?: boolean;
   };
+  host_name?: string;
+  cpu_model?: string;
+  total_physical_memory?: number;
+  total_dedicated_vram?: number;
   virtual_display_backend?: string;
   virtual_display_backend_version?: string;
   virtual_display_driver_status?: number | string;

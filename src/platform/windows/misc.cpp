@@ -2305,6 +2305,49 @@ namespace platf {
     return result;
   }
 
+  std::string cpu_model() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(
+          HKEY_LOCAL_MACHINE,
+          L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+          0,
+          KEY_READ,
+          &key)
+        != ERROR_SUCCESS) {
+      return {};
+    }
+    wchar_t buf[256] {};
+    DWORD size = sizeof(buf) - sizeof(wchar_t);
+    DWORD type = 0;
+    std::string out;
+    if (RegQueryValueExW(
+          key,
+          L"ProcessorNameString",
+          nullptr,
+          &type,
+          reinterpret_cast<LPBYTE>(buf),
+          &size)
+          == ERROR_SUCCESS &&
+        type == REG_SZ) {
+      out = to_utf8(buf);
+      // Some firmware pads the marketing name with spaces.
+      const auto first = out.find_first_not_of(' ');
+      const auto last = out.find_last_not_of(' ');
+      out = (first == std::string::npos) ? std::string {} : out.substr(first, last - first + 1);
+    }
+    RegCloseKey(key);
+    return out;
+  }
+
+  std::uint64_t total_physical_memory_bytes() {
+    MEMORYSTATUSEX status {};
+    status.dwLength = sizeof(status);
+    if (!GlobalMemoryStatusEx(&status)) {
+      return 0;
+    }
+    return status.ullTotalPhys;
+  }
+
   bool has_nvidia_gpu() {
     constexpr std::uint32_t NVIDIA_VENDOR_ID = 0x10DE;
     for (const auto &gpu : enumerate_gpus()) {

@@ -31,12 +31,35 @@ interface Summary {
   };
 }
 
+const props = defineProps<{
+  /// Cap on ENDED sessions shown (active sessions always render).
+  /// The Dashboard shows 5; the stats-only view shows 10; omit for all.
+  historyLimit?: number;
+  /// Open the details panel as a full-viewport slideout (stats view).
+  fullWidthPanel?: boolean;
+}>();
+
 const sessions = ref<Summary[]>([]);
 const loading = ref(false);
 const monitorOffline = ref(false);
 
 const panelShow = ref(false);
 const panelSessionId = ref<string | null>(null);
+
+const displayedSessions = computed(() => {
+  if (props.historyLimit == null) return sessions.value;
+  const out: Summary[] = [];
+  let ended = 0;
+  for (const s of sessions.value) {
+    if (s.stream_ended_at == null) {
+      out.push(s);
+    } else if (ended < props.historyLimit) {
+      out.push(s);
+      ended++;
+    }
+  }
+  return out;
+});
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -150,7 +173,7 @@ function rowSubLabel(s: Summary): string {
     <NSpin v-else-if="loading && sessions.length === 0" />
     <ul v-else class="divide-y divide-light/5 dark:divide-dark/30">
       <li
-        v-for="s in sessions"
+        v-for="s in displayedSessions"
         :key="s.id"
         class="py-2.5 flex items-center gap-3 hover:bg-light/5 dark:hover:bg-dark/30
                rounded-md px-2 -mx-2 cursor-pointer transition-colors"
@@ -181,6 +204,7 @@ function rowSubLabel(s: Summary): string {
     <SessionDetailsPanel
       v-model:show="panelShow"
       :session-id="panelSessionId"
+      :full-width="fullWidthPanel"
       @session-deleted="onPanelDeleted"
     />
   </NCard>

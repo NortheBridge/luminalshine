@@ -188,4 +188,15 @@ namespace platf {
   std::vector<gpu_info_t> enumerate_gpus();
   bool has_nvidia_gpu();
   windows_version_info_t query_windows_version();
+
+  /**
+   * @brief Marketing name of the CPU (registry ProcessorNameString),
+   *        trimmed; empty string when the query fails.
+   */
+  std::string cpu_model();
+
+  /**
+   * @brief Total physical RAM in bytes (GlobalMemoryStatusEx); 0 on failure.
+   */
+  std::uint64_t total_physical_memory_bytes();
 }  // namespace platf
