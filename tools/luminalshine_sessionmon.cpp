@@ -225,12 +225,48 @@ namespace {
       }
     }
 
-    nlohmann::json to_json() const {
+    /// Serialize, optionally windowed to [from, to] (epoch seconds;
+    /// 0 = unbounded) and decimated to `step`-second buckets
+    /// (arithmetic mean per bucket, stamped with the bucket start).
+    /// Points are appended in time order, so the window is a
+    /// contiguous span.
+    nlohmann::json to_json(std::int64_t from, std::int64_t to, std::int64_t step) const {
       nlohmann::json out = nlohmann::json::array();
+      if (step < 1) {
+        step = 1;
+      }
+      std::int64_t bucket_start = 0;
+      double sum = 0.0;
+      int count = 0;
       for (const auto &p : points) {
-        out.push_back({p.ts, p.value});
+        if (from != 0 && p.ts < from) {
+          continue;
+        }
+        if (to != 0 && p.ts > to) {
+          break;
+        }
+        if (step == 1) {
+          out.push_back({p.ts, p.value});
+          continue;
+        }
+        const std::int64_t bucket = p.ts - (p.ts % step);
+        if (count > 0 && bucket != bucket_start) {
+          out.push_back({bucket_start, sum / count});
+          sum = 0.0;
+          count = 0;
+        }
+        bucket_start = bucket;
+        sum += p.value;
+        ++count;
+      }
+      if (count > 0) {
+        out.push_back({bucket_start, sum / count});
       }
       return out;
+    }
+
+    nlohmann::json to_json() const {
+      return to_json(0, 0, 1);
     }
   };
 
@@ -247,7 +283,7 @@ namespace {
     std::chrono::steady_clock::time_point last_flush  = std::chrono::steady_clock::now();
     std::map<std::string, Series>     series;
 
-    nlohmann::json to_json() const {
+    nlohmann::json to_json(std::int64_t from, std::int64_t to, std::int64_t step) const {
       nlohmann::json out;
       out["id"] = id;
       out["started_at"] = started_at_epoch;
@@ -259,10 +295,14 @@ namespace {
       out["metadata"] = metadata;
       nlohmann::json s = nlohmann::json::object();
       for (const auto &[name, series] : series) {
-        s[name] = series.to_json();
+        s[name] = series.to_json(from, to, step);
       }
       out["series"] = std::move(s);
       return out;
+    }
+
+    nlohmann::json to_json() const {
+      return to_json(0, 0, 1);
     }
   };
 
@@ -562,13 +602,60 @@ namespace {
     return http_response(200, "application/json", arr.dump());
   }
 
-  std::string handle_get_session(const std::string &id, bool as_attachment) {
+  /// Range parameters parsed off a query string. All optional;
+  /// zero/one means "full fidelity" (backwards compatible).
+  struct RangeParams {
+    std::int64_t from = 0;
+    std::int64_t to = 0;
+    std::int64_t step = 1;
+  };
+
+  RangeParams parse_range_params(std::string_view query) {
+    RangeParams out;
+    size_t pos = 0;
+    while (pos < query.size()) {
+      auto amp = query.find('&', pos);
+      if (amp == std::string_view::npos) {
+        amp = query.size();
+      }
+      const auto pair = query.substr(pos, amp - pos);
+      pos = amp + 1;
+      const auto eq = pair.find('=');
+      if (eq == std::string_view::npos) {
+        continue;
+      }
+      const auto key = pair.substr(0, eq);
+      std::int64_t value = 0;
+      bool numeric = eq + 1 < pair.size();
+      for (size_t i = eq + 1; i < pair.size(); ++i) {
+        const char c = pair[i];
+        if (c < '0' || c > '9') {
+          numeric = false;
+          break;
+        }
+        value = value * 10 + (c - '0');
+      }
+      if (!numeric) {
+        continue;  // malformed values are ignored, not errors
+      }
+      if (key == "from") {
+        out.from = value;
+      } else if (key == "to") {
+        out.to = value;
+      } else if (key == "step") {
+        out.step = value;
+      }
+    }
+    return out;
+  }
+
+  std::string handle_get_session(const std::string &id, bool as_attachment, const RangeParams &range = {}) {
     std::lock_guard<std::mutex> guard(g_store.mtx);
     auto it = g_store.sessions.find(id);
     if (it == g_store.sessions.end()) {
       return http_response(404, "application/json", "{\"error\":\"not found\"}");
     }
-    auto body = it->second.to_json().dump(2);
+    auto body = it->second.to_json(range.from, range.to, range.step).dump(2);
     std::string extra;
     if (as_attachment) {
       extra = "Content-Disposition: attachment; filename=\"luminalshine-session-" + id + ".json\"\r\n";
@@ -600,6 +687,15 @@ namespace {
   std::string route_request(std::string_view method, std::string_view path) {
     // Hand-rolled router — only a handful of routes so the
     // alternatives (regex / a routing library) would be overkill.
+    // Split any query string off the target first; range params apply
+    // to the session-detail GET only. Export always serves the full-
+    // fidelity ring — a downloaded archive must not be silently
+    // decimated by whatever range the panel happened to be viewing.
+    std::string_view query;
+    if (const auto q = path.find('?'); q != std::string_view::npos) {
+      query = path.substr(q + 1);
+      path = path.substr(0, q);
+    }
     if (method == "GET" && path == "/api/sessions") {
       return handle_list_sessions();
     }
@@ -615,7 +711,7 @@ namespace {
           rest.resize(rest.size() - export_suffix.size());
           return handle_get_session(rest, /*as_attachment=*/true);
         }
-        return handle_get_session(rest, /*as_attachment=*/false);
+        return handle_get_session(rest, /*as_attachment=*/false, parse_range_params(query));
       }
     }
     return http_response(404, "application/json", "{\"error\":\"no route\"}");

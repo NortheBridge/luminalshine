@@ -26,6 +26,7 @@ import uPlot, { type Options as UPlotOptions, type AlignedData } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { http } from '@/http';
 import { useAuthStore } from '@/stores/auth';
+import { useConfigStore } from '@/stores/config';
 
 type Series = number[];
 interface SessionPayload {
@@ -35,6 +36,7 @@ interface SessionPayload {
   metadata: {
     client_name?: string;
     device?: string;
+    client_uuid?: string;
     protocol?: string;
     codec?: string;
     resolution_w?: number;
@@ -54,7 +56,7 @@ interface SessionPayload {
   series: Record<string, Array<[number, number]>>;
 }
 
-const props = defineProps<{ show: boolean; sessionId: string | null }>();
+const props = defineProps<{ show: boolean; sessionId: string | null; fullWidth?: boolean }>();
 const emit = defineEmits<{
   (e: 'update:show', v: boolean): void;
   (e: 'session-deleted', id: string): void;
@@ -64,6 +66,43 @@ const dialog = useDialog();
 const message = useMessage();
 const auth = useAuthStore();
 const isStatsOnly = computed(() => auth.isStatsOnly());
+
+// Host-level identity (host name, CPU/RAM/VRAM, LuminalVGD driver,
+// LuminalShine version) comes from /api/metadata — allowlisted for the
+// stats role, so the Overview tab renders fully in Session View Only.
+const configStore = useConfigStore();
+onMounted(() => {
+  void configStore.fetchMetadata();
+});
+const hostMeta = computed(() => (configStore.metadata ?? {}) as Record<string, unknown>);
+
+// ----- Range selector ------------------------------------------------------
+// 'Full Session' serves the whole ring, decimated server-side to ≤ ~900
+// mean-buckets; the minute windows fetch the trailing window at full
+// 1 Hz fidelity (anchored to the end timestamp for ended sessions).
+type RangeKey = 'full' | '3m' | '5m' | '15m';
+const RANGES: { key: RangeKey; label: string; seconds: number | null }[] = [
+  { key: 'full', label: 'Full Session', seconds: null },
+  { key: '3m', label: '3 min', seconds: 180 },
+  { key: '5m', label: '5 min', seconds: 300 },
+  { key: '15m', label: '15 min', seconds: 900 },
+];
+const range = ref<RangeKey>('full');
+
+function rangeQuery(): string {
+  const spec = RANGES.find((r) => r.key === range.value);
+  if (!spec) return '';
+  const end = session.value?.stream_ended_at ?? Math.floor(Date.now() / 1000);
+  if (spec.seconds == null) {
+    const s = session.value;
+    if (!s) return ''; // first load: full fidelity; poll refines with a step
+    const dur = Math.max(1, end - s.started_at);
+    const step = Math.max(1, Math.ceil(dur / 900));
+    return step > 1 ? `?step=${step}` : '';
+  }
+  const from = Math.max(0, end - spec.seconds);
+  return `?from=${from}&to=${end}`;
+}
 
 const session = ref<SessionPayload | null>(null);
 const loading = ref(false);
@@ -79,19 +118,85 @@ const headerLine = computed(() => {
   return `${app} · ${client}`;
 });
 
+// Health classification over the trailing minute of connection events:
+// sustained client loss (>1/s average) or heavy IDR recovery (>0.2/s)
+// reads as a struggling stream. Null until any connection series has
+// data, so the pill never guesses.
+const streamHealth = computed<'healthy' | 'poor' | null>(() => {
+  const s = session.value;
+  if (!s) return null;
+  const rate = (key: string): number | null => {
+    const pts = s.series?.[key];
+    if (!pts || pts.length === 0) return null;
+    const tail = pts.slice(-60);
+    let sum = 0;
+    for (const [, v] of tail) sum += v;
+    return sum / tail.length;
+  };
+  const losses = rate('client_losses');
+  const idr = rate('idr_requests');
+  if (losses == null && idr == null) return null;
+  return (losses ?? 0) > 1 || (idr ?? 0) > 0.2 ? 'poor' : 'healthy';
+});
+
 const chips = computed(() => {
   const m = session.value?.metadata ?? {};
-  const out: { label: string; tone: 'info' | 'primary' | 'success' | 'warning' | 'default' }[] = [];
+  const out: {
+    label: string;
+    tone: 'info' | 'primary' | 'success' | 'warning' | 'error' | 'default';
+  }[] = [];
   if (m.protocol) out.push({ label: m.protocol, tone: 'info' });
   if (m.codec) out.push({ label: m.codec, tone: 'primary' });
   if (m.resolution_w && m.resolution_h) {
     const fps = m.fps ? `@${m.fps}` : '';
     out.push({ label: `${m.resolution_w}×${m.resolution_h}${fps}`, tone: 'default' });
   }
-  if (m.hdr) out.push({ label: 'HDR', tone: 'warning' });
+  if (m.hdr) out.push({ label: 'HDR10', tone: 'warning' });
   if (m.yuv444 === true || m.yuv444 === 'true') out.push({ label: 'YUV444', tone: 'success' });
+  if (streamHealth.value === 'healthy') out.push({ label: 'Healthy Stream', tone: 'success' });
+  if (streamHealth.value === 'poor') out.push({ label: 'Poor Stream', tone: 'error' });
   if (m.audio_channels) out.push({ label: `${m.audio_channels}ch`, tone: 'default' });
   return out;
+});
+
+// ----- Identity panel (Overview tab) ---------------------------------------
+function gib(bytes: unknown): string {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return (n / 1024 ** 3).toFixed(0) + ' GB';
+}
+
+const identityRows = computed(() => {
+  const m = session.value?.metadata ?? {};
+  const h = hostMeta.value;
+  const res =
+    m.resolution_w && m.resolution_h
+      ? `${m.resolution_w}×${m.resolution_h}` + (m.fps ? ` @ ${m.fps}` : '')
+      : '—';
+  const vgd =
+    [h['virtual_display_backend_version'], h['vgd_handshake']].filter(Boolean).join(' · ') || '—';
+  return [
+    { label: 'Host Name', value: (h['host_name'] as string) || '—' },
+    { label: 'Device Name', value: m.device || m.client_name || '—' },
+    { label: 'Stream Resolution', value: res },
+    { label: 'Direct-to-Encode Mode', value: m.codec || '—' },
+    {
+      label: 'Bitrate Encode',
+      value: avgBitrate.value != null ? `${avgBitrate.value.toFixed(1)} Mbps` : '—',
+    },
+    // Moonlight has no upstream decode-stats channel; shown for parity
+    // with the encode figure until a protocol extension lands.
+    { label: 'Bitrate Decode', value: '—' },
+    { label: 'Stream Duration', value: durationText.value || '—' },
+    { label: 'Running App', value: m.application || '—' },
+    { label: 'Audio Channels', value: m.audio_channels ? `${m.audio_channels}` : '—' },
+    { label: 'CPU Model', value: m.cpu_model || (h['cpu_model'] as string) || '—' },
+    { label: 'GPU Model', value: m.gpu_model || '—' },
+    { label: 'RAM', value: gib(h['total_physical_memory']) },
+    { label: 'VRAM', value: gib(h['total_dedicated_vram']) },
+    { label: 'LuminalVGD Driver', value: vgd },
+    { label: 'LuminalShine', value: m.luminalshine_version || '—' },
+  ];
 });
 
 const durationText = computed(() => {
@@ -121,9 +226,10 @@ async function loadSession() {
   loading.value = true;
   errorText.value = '';
   try {
-    const r = await http.get(`./api/sessions/${encodeURIComponent(props.sessionId)}`, {
-      validateStatus: () => true,
-    });
+    const r = await http.get(
+      `./api/sessions/${encodeURIComponent(props.sessionId)}${rangeQuery()}`,
+      { validateStatus: () => true },
+    );
     if (r.status === 503) {
       errorText.value = 'Session monitor service is offline.';
       session.value = null;
@@ -176,6 +282,14 @@ watch(
     }
   },
 );
+
+watch(range, () => {
+  // Re-fetch the new window immediately; ended sessions don't poll, so
+  // a one-shot reload is the only way their charts pick up the range.
+  if (props.show && props.sessionId) {
+    void loadSession();
+  }
+});
 
 onBeforeUnmount(() => {
   stopPolling();
@@ -403,7 +517,10 @@ async function disconnectSession() {
     negativeText: 'Cancel',
     onPositiveClick: async () => {
       const m = session.value!.metadata ?? {};
-      const clientUuid = (m.device || m.client_name || '').trim();
+      // client_uuid is the pairing UUID the disconnect endpoint expects;
+      // device/client_name are display strings kept only as a fallback
+      // for sessions recorded before the uuid landed in the metadata.
+      const clientUuid = (m.client_uuid || m.device || m.client_name || '').trim();
       try {
         const r = await http.post(
           './api/clients/disconnect',
@@ -469,7 +586,7 @@ function close() {
 <template>
   <NDrawer
     :show="show"
-    :width="640"
+    :width="fullWidth ? '100%' : 640"
     placement="right"
     :auto-focus="false"
     :close-on-esc="true"
@@ -556,12 +673,45 @@ function close() {
             </div>
           </div>
         </div>
+
+        <!-- Chart range selector -->
+        <div class="flex items-center gap-1 mt-3" role="group" aria-label="Chart time range">
+          <button
+            v-for="r in RANGES"
+            :key="r.key"
+            type="button"
+            class="px-2 py-0.5 rounded-md text-[11px] font-semibold border transition-colors"
+            :class="
+              range === r.key
+                ? 'bg-primary/20 text-primary border-primary/40'
+                : 'bg-light/5 text-light/60 border-light/10 hover:text-light/90'
+            "
+            @click="range = r.key"
+          >
+            {{ r.label }}
+          </button>
+        </div>
       </header>
 
       <!-- Body -->
       <div v-if="loading && !session" class="py-8 text-center opacity-60">Loading…</div>
       <div v-else-if="errorText" class="py-8 text-center text-danger">{{ errorText }}</div>
       <NTabs v-else-if="session" type="line" animated class="mt-2">
+        <NTabPane name="overview" tab="Overview">
+          <div
+            class="grid grid-cols-2 gap-x-6 gap-y-2 rounded-lg p-4 bg-light/5 dark:bg-dark/30
+                   border border-light/10 text-sm"
+          >
+            <template v-for="row in identityRows" :key="row.label">
+              <div class="text-[11px] uppercase tracking-wider opacity-60 self-center">
+                {{ row.label }}
+              </div>
+              <div class="font-mono text-xs self-center truncate" :title="String(row.value)">
+                {{ row.value }}
+              </div>
+            </template>
+          </div>
+        </NTabPane>
         <NTabPane name="stream" tab="Stream">
           <div class="space-y-4">
             <div v-for="spec in STREAM_CHARTS" :key="spec.id" class="chart-card">

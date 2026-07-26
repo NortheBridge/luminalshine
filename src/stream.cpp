@@ -2805,7 +2805,12 @@ namespace stream {
       if (config::stream.session_monitor) {
         session_mon::SessionMetadata md;
         md.client_name = launch_session.client_name;
-        md.device      = launch_session.client_name;   // best available — RTSP doesn't carry a separate "device" string
+        // Moonlight supplies a device string at launch; older clients
+        // send only the client name.
+        md.device      = launch_session.device_name.empty() ?
+                           launch_session.client_name :
+                           launch_session.device_name;
+        md.client_uuid = launch_session.client_uuid;
         md.protocol    = "RTSP";
         const int video_format = config.monitor.videoFormat;
         md.codec       = (video_format == 0) ? "H264" : (video_format == 1) ? "HEVC" : (video_format == 2) ? "AV1" : "?";
@@ -2817,9 +2822,19 @@ namespace stream {
         md.yuv444               = (config.monitor.chromaSamplingType == 1);
         md.audio_channels       = config.audio.channels;
         md.luminalshine_version = PROJECT_VERSION;
-        // application / cpu_model / gpu_model can come in later as
-        // metadata_update frames once the proc layer / platform
-        // helpers have resolved them.
+        if (launch_session.app_metadata) {
+          md.application = launch_session.app_metadata->name;
+        }
+#ifdef _WIN32
+        md.cpu_model = platf::cpu_model();
+        // The adapter the stream encodes on when pinned in config;
+        // otherwise the first hardware adapter.
+        if (!config::video.adapter_name.empty()) {
+          md.gpu_model = config::video.adapter_name;
+        } else if (const auto gpus = platf::enumerate_gpus(); !gpus.empty()) {
+          md.gpu_model = gpus.front().description;
+        }
+#endif
         session_mon::session_started(
           session_mon::make_id(launch_session.id),
           md

@@ -531,6 +531,7 @@ namespace session_mon {
     nlohmann::json m;
     m["client_name"]            = md.client_name;
     m["device"]                 = md.device;
+    m["client_uuid"]            = md.client_uuid;
     m["protocol"]               = md.protocol;
     m["codec"]                  = md.codec;
     m["resolution_w"]           = md.width;

@@ -2113,7 +2113,26 @@ namespace confighttp {
       return;
     }
     const std::string id = request->path_match[1];
-    forward_session_mon_response(response, session_mon::proxy::get("/api/sessions/" + id));
+    // Forward only the whitelisted numeric range params (from/to = epoch
+    // seconds, step = bucket seconds) so the panel's range selector can
+    // fetch a decimated window instead of re-downloading the full ring
+    // on every poll. Anything else in the query is dropped.
+    std::string upstream = "/api/sessions/" + id;
+    char sep = '?';
+    const auto query = request->parse_query_string();
+    for (const char *key : {"from", "to", "step"}) {
+      const auto it = query.find(key);
+      if (it == query.end() || it->second.empty() ||
+          it->second.find_first_not_of("0123456789") != std::string::npos) {
+        continue;
+      }
+      upstream += sep;
+      upstream += key;
+      upstream += '=';
+      upstream += it->second;
+      sep = '&';
+    }
+    forward_session_mon_response(response, session_mon::proxy::get(upstream));
   }
 
   /// GET /api/sessions/<id>/export.json — same content as
@@ -2435,6 +2454,30 @@ namespace confighttp {
       output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
       output_tree["virtual_display_driver_ready"] =
         proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK;
+      // Host identity for the Session Details panel: the LuminalShine
+      // host name (the configured sunshine_name, falling back to the
+      // machine hostname — same resolution nvhttp advertises), CPU
+      // model, total RAM, and aggregate dedicated VRAM (summed over
+      // hardware adapters — same denominator the session monitor's
+      // VRAM series uses).
+      output_tree["host_name"] = config::nvhttp.sunshine_name.empty() ?
+                                   platf::get_host_name() :
+                                   config::nvhttp.sunshine_name;
+      if (auto cpu = platf::cpu_model(); !cpu.empty()) {
+        output_tree["cpu_model"] = cpu;
+      }
+      if (const auto total_ram = platf::total_physical_memory_bytes(); total_ram > 0) {
+        output_tree["total_physical_memory"] = total_ram;
+      }
+      {
+        std::uint64_t total_vram = 0;
+        for (const auto &gpu : platf::enumerate_gpus()) {
+          total_vram += gpu.dedicated_video_memory;
+        }
+        if (total_vram > 0) {
+          output_tree["total_dedicated_vram"] = total_vram;
+        }
+      }
       const auto vdd_info = platf::diag::query_virtual_display_driver_info();
       if (vdd_info.version) {
         output_tree["virtual_display_backend_version"] = *vdd_info.version;

@@ -479,7 +479,9 @@
            LuminalShineSessionMonitor sidecar service via the
            main service's /api/sessions proxy. -->
       <div class="min-w-0">
-        <SessionHistoryCard />
+        <!-- Active sessions always show; historical entries cap at 5 —
+             the stats-only view carries the longer list. -->
+        <SessionHistoryCard :history-limit="5" />
       </div>
 
       <!-- Resources -->
