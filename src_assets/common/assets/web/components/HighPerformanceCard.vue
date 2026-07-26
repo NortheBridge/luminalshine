@@ -117,7 +117,7 @@ const HP_INTEL: Record<string, unknown> = {
 };
 
 const DEFAULTS: Record<string, unknown> = {
-  virtual_display_mode: 'disabled',
+  virtual_display_mode: 'per_client',
   virtual_display_layout: 'exclusive',
   dd_configuration_option: 'verify_only',
   dd_wa_virtual_double_refresh: true,

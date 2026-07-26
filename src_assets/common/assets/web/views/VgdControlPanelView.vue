@@ -40,8 +40,8 @@
           <div class="shrink-0 pt-0.5">
             <n-switch
               v-if="item.type === 'switch'"
-              :value="Boolean(config[item.key])"
-              @update:value="(v: boolean) => setOption(item.key, v)"
+              :value="boolFromConfig(item)"
+              @update:value="(v: boolean) => setBool(item, v)"
             />
             <n-select
               v-else-if="item.type === 'select'"
@@ -119,6 +119,21 @@ function setOption(key: string, value: unknown): void {
   config[key] = value;
 }
 
+// Some boolean options are stored as 'enabled'/'disabled' strings (matching
+// the config-file encoding the rest of the UI uses); Boolean() on those
+// strings is always true, so switches must honor the declared encoding.
+function boolFromConfig(item: PanelItem): boolean {
+  const value = config[item.key];
+  if (item.boolEncoding === 'string') {
+    return value === 'enabled';
+  }
+  return Boolean(value);
+}
+
+function setBool(item: PanelItem, v: boolean): void {
+  setOption(item.key, item.boolEncoding === 'string' ? (v ? 'enabled' : 'disabled') : v);
+}
+
 interface PanelItem {
   key: string;
   label: string;
@@ -127,6 +142,7 @@ interface PanelItem {
   options?: { label: string; value: string }[];
   suffix?: string;
   fallback?: string | number;
+  boolEncoding?: 'string';
   min?: number;
   max?: number;
 }
@@ -168,7 +184,7 @@ const groups = computed<PanelGroup[]>(() => [
           'Per client gives every client its own virtual monitor; shared reuses one.',
         ),
         type: 'select',
-        fallback: 'disabled',
+        fallback: 'per_client',
         options: [
           { label: tr('vgd.mode_disabled', 'Disabled'), value: 'disabled' },
           { label: tr('vgd.mode_per_client', 'Per client'), value: 'per_client' },
@@ -224,6 +240,7 @@ const groups = computed<PanelGroup[]>(() => [
           'Restore physical monitors as soon as the client disconnects instead of keeping the session paused.',
         ),
         type: 'switch',
+        boolEncoding: 'string',
       },
       {
         key: 'dd_paused_virtual_display_timeout_secs',

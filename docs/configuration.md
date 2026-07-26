@@ -1106,19 +1106,52 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### virtual_display_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Selects the virtual-display driver backend. Automatic uses the first-party LuminalVGD driver when it is installed.
+            Legacy values <code>sudovda</code> and <code>mtt</code> are recognized but map to automatic with a warning.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display_backend = luminalvgd
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>auto</td>
+        <td>Use the LuminalVGD driver when installed; otherwise no virtual display backend is available.</td>
+    </tr>
+    <tr>
+        <td>luminalvgd</td>
+        <td>Explicitly select the first-party LuminalVGD driver.</td>
+    </tr>
+</table>
+
 ### virtual_display_mode
 
 <table>
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Select which display Sunshine should prepare before streaming. When set to one of the virtual options, Sunshine will manage a Sudovda virtual display instead of relying on your physical monitor.
+            Select which display Sunshine should prepare before streaming. When set to one of the virtual options, Sunshine will manage a LuminalVGD virtual display instead of relying on your physical monitor.
         </td>
     </tr>
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            disabled
+            per_client
             @endcode</td>
     </tr>
     <tr>
@@ -1456,12 +1489,12 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">@code{}disabled@endcode</td>
+        <td colspan="2">@code{}enabled@endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            dd_config_revert_on_disconnect = enabled
+            dd_config_revert_on_disconnect = disabled
             @endcode</td>
     </tr>
 </table>
@@ -1594,12 +1627,12 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
     <tr>
         <td>Default</td>
-        <td colspan="2">@code{}false@endcode</td>
+        <td colspan="2">@code{}true@endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            dd_activate_virtual_display = true
+            dd_activate_virtual_display = false
             @endcode</td>
     </tr>
 </table>

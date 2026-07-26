@@ -1137,7 +1137,7 @@ function clearSnapshotHotkey(): void {
                       id="dd_config_revert_on_disconnect"
                       v-model="config.dd_config_revert_on_disconnect"
                       locale-prefix="config"
-                      default="false"
+                      :default="true"
                     />
                   </div>
                 </div>
