@@ -16,6 +16,24 @@ param(
     [switch]$Uninstall
 )
 $ErrorActionPreference = 'Continue'
+
+# 64-bit re-exec guard: the driver tooling this script depends on does
+# not work from a 32-bit host on 64-bit Windows — pnputil does not
+# resolve in WOW64 (no SysWOW64\pnputil.exe) and newdev's
+# UpdateDriverForPlugAndPlayDevices returns ERROR_IN_WOW64. If a caller
+# launched us in WOW64 (e.g. an installer resolving the 32-bit
+# interpreter), relaunch through Sysnative and forward the exit code.
+if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSystem) {
+    $native = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path $native) {
+        Write-Host "[LuminalVGD] 32-bit host detected; relaunching via 64-bit PowerShell."
+        $fwd = @()
+        if ($Uninstall) { $fwd += '-Uninstall' }
+        & $native -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @fwd
+        exit $LASTEXITCODE
+    }
+    Write-Warning "[LuminalVGD] 32-bit host and Sysnative unavailable; driver operations may fail."
+}
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $packageDir = Join-Path $scriptDir 'driver-package'
 
@@ -189,7 +207,14 @@ try {
     if ($Uninstall) {
         Remove-LuminalVgd
     } else {
-        Remove-SudoVda
+        # The sweep is best-effort by contract — its failure must never
+        # abort the driver install (a terminating error here previously
+        # killed the whole script before Install-LuminalVgd ran).
+        try {
+            Remove-SudoVda
+        } catch {
+            Write-Warning "[LuminalVGD] SudoVDA sweep failed (continuing): $($_.Exception.Message)"
+        }
         Install-LuminalVgd
     }
     exit 0
