@@ -61,6 +61,12 @@ export interface MetaInfo {
   virtual_display_backend_version?: string;
   virtual_display_driver_status?: number | string;
   virtual_display_driver_ready?: boolean;
+  vgd_installed?: boolean;
+  vgd_handshake?: string;
+  vgd_hdr10?: boolean;
+  vgd_driver_date?: string;
+  vgd_bundled_version?: string;
+  vgd_bundled_signature?: string;
   active_session_count?: number;
 }
 

@@ -197,6 +197,7 @@ list(PREPEND PLATFORM_LIBRARIES
         shlwapi
         shell32
         crypt32
+        wintrust
         bcrypt
         ncrypt
         synchronization.lib

@@ -11,11 +11,19 @@
 #include <SetupAPI.h>
 #include <cfgmgr32.h>
 #include <devguid.h>
+#include <wincrypt.h>
 #include <wingdi.h>
+#include <wintrust.h>
+
+#include <softpub.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cwchar>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
+#include <vector>
 
 #include <boost/log/trivial.hpp>
 
@@ -24,6 +32,8 @@
 
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "wintrust.lib")
 
 namespace platf::diag {
 
@@ -124,6 +134,156 @@ namespace platf::diag {
         return std::string(iso);
       }
       return std::nullopt;
+    }
+
+    /**
+     * Case-insensitive membership test against a REG_MULTI_SZ block (also
+     * accepts a plain REG_SZ, which walks as a one-element list).
+     */
+    bool multi_sz_contains(const wchar_t *multi, DWORD bytes, const wchar_t *needle) {
+      const wchar_t *p = multi;
+      const wchar_t *end = multi + bytes / sizeof(wchar_t);
+      while (p < end && *p != L'\0') {
+        if (_wcsicmp(p, needle) == 0) {
+          return true;
+        }
+        p += wcslen(p) + 1;
+      }
+      return false;
+    }
+
+    /**
+     * Directory of the running executable — the LuminalShine install root,
+     * where the bundled driver package lives. Independent of the process
+     * working directory.
+     */
+    std::optional<std::filesystem::path> executable_dir() {
+      wchar_t buf[MAX_PATH] {};
+      const DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
+      if (len == 0 || len >= _countof(buf)) {
+        return std::nullopt;
+      }
+      auto parent = std::filesystem::path(buf).parent_path();
+      if (parent.empty()) {
+        return std::nullopt;
+      }
+      return parent;
+    }
+
+    /**
+     * Extract "DriverVer = MM/DD/YYYY,x.y.z.w" from an INF (ASCII/UTF-8;
+     * the packaged LuminalVGD INF is stampinf output in that form). Fills
+     * the version and ISO-date fields of `out`; leaves them absent on any
+     * parse failure. First DriverVer line wins.
+     */
+    void parse_inf_driver_ver(const std::filesystem::path &inf_path, bundled_vgd_package_t &out) {
+      std::ifstream in(inf_path);
+      if (!in) {
+        return;
+      }
+      std::string line;
+      while (std::getline(in, line)) {
+        const auto semi = line.find(';');
+        if (semi != std::string::npos) {
+          line.resize(semi);
+        }
+        const auto pos = line.find_first_not_of(" \t");
+        if (pos == std::string::npos || _strnicmp(line.c_str() + pos, "DriverVer", 9) != 0) {
+          continue;
+        }
+        const auto eq = line.find('=', pos + 9);
+        if (eq == std::string::npos) {
+          continue;
+        }
+        int month = 0;
+        int day = 0;
+        int year = 0;
+        char ver[32] {};
+        if (std::sscanf(line.c_str() + eq + 1, " %d/%d/%d ,%31[0-9.]", &month, &day, &year, ver) == 4 &&
+            month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900) {
+          char iso[16] {};
+          std::snprintf(iso, sizeof(iso), "%04d-%02d-%02d", year, month, day);
+          out.date = std::string(iso);
+          out.version = std::string(ver);
+        }
+        return;
+      }
+    }
+
+    /**
+     * Simple display name of the embedded Authenticode signer certificate,
+     * or nullopt when the file has no embedded PKCS#7 signature.
+     */
+    std::optional<std::string> authenticode_signer(const std::filesystem::path &file) {
+      HCERTSTORE cert_store = nullptr;
+      HCRYPTMSG msg = nullptr;
+      std::optional<std::string> signer;
+      if (!CryptQueryObject(
+            CERT_QUERY_OBJECT_FILE,
+            file.c_str(),
+            CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+            CERT_QUERY_FORMAT_FLAG_BINARY,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            &cert_store,
+            &msg,
+            nullptr)) {
+        return std::nullopt;
+      }
+      DWORD info_size = 0;
+      if (CryptMsgGetParam(msg, CMSG_SIGNER_INFO_PARAM, 0, nullptr, &info_size) && info_size > 0) {
+        std::vector<BYTE> buf(info_size);
+        if (CryptMsgGetParam(msg, CMSG_SIGNER_INFO_PARAM, 0, buf.data(), &info_size)) {
+          const auto *signer_info = reinterpret_cast<const CMSG_SIGNER_INFO *>(buf.data());
+          CERT_INFO want {};
+          want.Issuer = signer_info->Issuer;
+          want.SerialNumber = signer_info->SerialNumber;
+          if (PCCERT_CONTEXT cert = CertFindCertificateInStore(
+                cert_store,
+                X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                0,
+                CERT_FIND_SUBJECT_CERT,
+                &want,
+                nullptr)) {
+            wchar_t name[256] {};
+            if (CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, name, _countof(name)) > 1) {
+              signer = platf::to_utf8(std::wstring(name));
+            }
+            CertFreeCertificateContext(cert);
+          }
+        }
+      }
+      CryptMsgClose(msg);
+      CertCloseStore(cert_store, 0);
+      return signer;
+    }
+
+    /**
+     * Offline Authenticode chain verification (no revocation, cached URL
+     * retrieval only — the metadata endpoint must never block on network).
+     */
+    bool authenticode_trusted(const std::filesystem::path &file) {
+      const std::wstring wpath = file.wstring();
+      WINTRUST_FILE_INFO file_info {};
+      file_info.cbStruct = sizeof(file_info);
+      file_info.pcwszFilePath = wpath.c_str();
+
+      WINTRUST_DATA wtd {};
+      wtd.cbStruct = sizeof(wtd);
+      wtd.dwUIChoice = WTD_UI_NONE;
+      wtd.fdwRevocationChecks = WTD_REVOKE_NONE;
+      wtd.dwUnionChoice = WTD_CHOICE_FILE;
+      wtd.pFile = &file_info;
+      wtd.dwStateAction = WTD_STATEACTION_VERIFY;
+      wtd.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+
+      GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+      const LONG status = WinVerifyTrust(nullptr, &action, &wtd);
+      wtd.dwStateAction = WTD_STATEACTION_CLOSE;
+      WinVerifyTrust(nullptr, &action, &wtd);
+      return status == ERROR_SUCCESS;
     }
 
     /**
@@ -353,50 +513,45 @@ namespace platf::diag {
     return out;
   }
 
-  std::optional<std::string> query_virtual_display_driver_version() {
-    // Service names match the driver INFs: LuminalVGD's UmdfService is
-    // "LuminalVGD" (first-party, preferred); legacy SudoVDA installs
-    // register as "SudoVDA" until the installer evicts them.
-    static const wchar_t *kKnownServices[] = {
-      L"LuminalVGD",
-      L"SudoVDA"
-    };
+  virtual_display_driver_info_t query_virtual_display_driver_info() {
+    // Match on the devnode hardware ID. SPDRP_SERVICE cannot work here: for
+    // a UMDF driver the devnode's associated service is always WUDFRd (the
+    // reflector) — the INF's UmdfService name never appears in it, so a
+    // service-name filter finds nothing (and never did for SudoVDA either).
+    constexpr const wchar_t *kHardwareId = L"root\\luminal_vgd";
 
+    virtual_display_driver_info_t out {};
     HDEVINFO dev_info = SetupDiGetClassDevsW(
       &GUID_DEVCLASS_DISPLAY,
       nullptr,
       nullptr,
       DIGCF_PRESENT);
     if (dev_info == INVALID_HANDLE_VALUE) {
-      return std::nullopt;
+      return out;
     }
 
-    std::optional<std::string> found;
     SP_DEVINFO_DATA dev_data {};
     dev_data.cbSize = sizeof(dev_data);
     for (DWORD index = 0; SetupDiEnumDeviceInfo(dev_info, index, &dev_data); ++index) {
-      // Read the Service value first — fast filter to avoid the registry
-      // open for every adapter.
       DWORD reg_data_type = 0;
-      wchar_t service_buf[64] {};
+      // REG_MULTI_SZ block; keep two trailing NULs spare so the walk below
+      // always terminates even on a truncated read.
+      wchar_t hwid_buf[512] {};
+      DWORD hwid_bytes = 0;
       if (!SetupDiGetDeviceRegistryPropertyW(
             dev_info,
             &dev_data,
-            SPDRP_SERVICE,
+            SPDRP_HARDWAREID,
             &reg_data_type,
-            reinterpret_cast<PBYTE>(service_buf),
-            sizeof(service_buf),
-            nullptr)) {
+            reinterpret_cast<PBYTE>(hwid_buf),
+            sizeof(hwid_buf) - 2 * sizeof(wchar_t),
+            &hwid_bytes)) {
         continue;
       }
-      bool matched = false;
-      for (auto known : kKnownServices) {
-        if (_wcsicmp(service_buf, known) == 0) {
-          matched = true;
-          break;
-        }
+      if (reg_data_type != REG_MULTI_SZ && reg_data_type != REG_SZ) {
+        continue;
       }
-      if (!matched) {
+      if (!multi_sz_contains(hwid_buf, hwid_bytes, kHardwareId)) {
         continue;
       }
 
@@ -410,16 +565,47 @@ namespace platf::diag {
       if (drv_key == INVALID_HANDLE_VALUE) {
         continue;
       }
-      if (auto v = read_reg_string(drv_key, L"DriverVersion")) {
-        found = std::move(*v);
-      }
+      out.version = read_reg_string(drv_key, L"DriverVersion");
+      out.date = read_reg_driver_date(drv_key);
       RegCloseKey(drv_key);
-      if (found) {
+      if (out.version) {
         break;
       }
     }
     SetupDiDestroyDeviceInfoList(dev_info);
-    return found;
+    return out;
+  }
+
+  std::optional<std::string> query_virtual_display_driver_version() {
+    return query_virtual_display_driver_info().version;
+  }
+
+  bundled_vgd_package_t query_bundled_vgd_package() {
+    bundled_vgd_package_t out {};
+    const auto exe_dir = executable_dir();
+    if (!exe_dir) {
+      return out;
+    }
+    std::error_code ec;
+    const auto pkg_dir = *exe_dir / L"drivers" / L"luminalvgd" / L"driver-package";
+    const auto inf_path = pkg_dir / L"luminalvgd.inf";
+    if (!std::filesystem::exists(inf_path, ec)) {
+      return out;
+    }
+    out.present = true;
+    parse_inf_driver_ver(inf_path, out);
+
+    const auto dll_path = pkg_dir / L"luminal_vgd_driver.dll";
+    if (std::filesystem::exists(dll_path, ec)) {
+      if (auto signer = authenticode_signer(dll_path)) {
+        out.signature = authenticode_trusted(dll_path) ?
+                          *signer :
+                          (*signer + " (unverified)");
+      } else {
+        out.signature = "Unsigned";
+      }
+    }
+    return out;
   }
 
 }  // namespace platf::diag
