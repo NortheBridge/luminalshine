@@ -715,7 +715,7 @@ namespace config {
     _CONVERT_(per_client);
     _CONVERT_(shared);
 #undef _CONVERT_
-    return video_t::virtual_display_mode_e::disabled;  // Default to primary display when unspecified
+    return video_t::virtual_display_mode_e::per_client;  // Unknown values land on the shipped default
   }
 
   video_t::virtual_display_layout_e virtual_display_layout_from_view(const ::std::string_view value) {
@@ -791,7 +791,7 @@ namespace config {
     {},  // adapter_name
     {},  // output_name
 
-    video_t::virtual_display_mode_e::disabled,  // virtual_display_mode
+    video_t::virtual_display_mode_e::per_client,  // virtual_display_mode
     video_t::virtual_display_layout_e::exclusive,  // virtual_display_layout
     "auto",  // virtual_display_backend
 
@@ -804,7 +804,7 @@ namespace config {
       video_t::dd_t::hdr_option_e::automatic,  // hdr_option
       video_t::dd_t::hdr_request_override_e::automatic,  // hdr_request_override
       3s,  // config_revert_delay
-      {},  // config_revert_on_disconnect
+      true,  // config_revert_on_disconnect
       0,  // paused_virtual_display_timeout_secs
       false,  // always_restore_from_golden
       0,  // snapshot_restore_hotkey
@@ -813,7 +813,7 @@ namespace config {
 #else
       0,  // snapshot_restore_hotkey_modifiers
 #endif
-      false,  // activate_virtual_display
+      true,  // activate_virtual_display
       {},  // snapshot_exclude_devices
       {},  // mode_remapping
       {false, true}  // wa
