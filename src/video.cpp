@@ -1536,7 +1536,12 @@ namespace video {
       display_names = std::move(old_display_names);
       return;
 #endif
-    } else if (display_names.empty()) {
+    } else if (display_names.empty() && !output_name.empty()) {
+      // Only seed a concrete configured name. Seeding the empty string
+      // made capture init bind "whatever output enumerates first" during
+      // topology churn — the amplifier behind the never-activated-
+      // virtual-display crash. An empty list retries via the callers'
+      // existing wait loops instead.
       display_names.emplace_back(output_name);
     }
 
