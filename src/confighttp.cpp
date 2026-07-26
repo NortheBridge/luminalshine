@@ -2435,8 +2435,22 @@ namespace confighttp {
       output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
       output_tree["virtual_display_driver_ready"] =
         proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK;
-      if (auto vdd_version = platf::diag::query_virtual_display_driver_version()) {
-        output_tree["virtual_display_backend_version"] = *vdd_version;
+      const auto vdd_info = platf::diag::query_virtual_display_driver_info();
+      if (vdd_info.version) {
+        output_tree["virtual_display_backend_version"] = *vdd_info.version;
+      }
+      if (vdd_info.date) {
+        output_tree["vgd_driver_date"] = *vdd_info.date;
+      }
+      // The driver package BUNDLED with this install (About/Troubleshooting
+      // pages): may differ from the installed driver while an update is
+      // pending. INF parse + offline Authenticode check, both local-only.
+      const auto bundled = platf::diag::query_bundled_vgd_package();
+      if (bundled.version) {
+        output_tree["vgd_bundled_version"] = *bundled.version;
+      }
+      if (bundled.signature) {
+        output_tree["vgd_bundled_signature"] = *bundled.signature;
       }
       // LuminalVGD detail for the vgd-about page: install presence, the
       // live handshake identity ("proto X.Y build N"), and the HDR10 cap.

@@ -85,14 +85,53 @@ namespace platf::diag {
   insider_info_t query_insider_channel();
 
   /**
-   * @brief Driver version string for the currently-installed virtual display
-   *        driver (SudoVDA), if any.
+   * @brief Identity of the currently-installed LuminalVGD virtual display
+   *        driver, read from its display-class registry entry.
+   */
+  struct virtual_display_driver_info_t {
+    std::optional<std::string> version;  ///< DriverVersion, e.g. "0.1.0.11"
+    std::optional<std::string> date;  ///< DriverDate as ISO 8601 (YYYY-MM-DD)
+  };
+
+  /**
+   * @brief Look up the installed LuminalVGD driver's registry identity.
    *
-   * Looks up the display-class registry entry whose Service value matches the
-   * known SudoVDA service name and returns its DriverVersion. Returns
-   * std::nullopt if no virtual display driver is installed or the lookup
-   * fails.
+   * Enumerates present display-class devices and matches on the hardware ID
+   * `root\\luminal_vgd`. Matching on SPDRP_SERVICE does NOT work: for a UMDF
+   * driver the devnode's associated service is always WUDFRd — the UMDF
+   * service name from the INF's Wdf section never appears there.
+   */
+  virtual_display_driver_info_t query_virtual_display_driver_info();
+
+  /**
+   * @brief DriverVersion of the installed virtual display driver, if any.
+   *
+   * Convenience wrapper over query_virtual_display_driver_info().
    */
   std::optional<std::string> query_virtual_display_driver_version();
+
+  /**
+   * @brief Identity of the LuminalVGD driver package BUNDLED with this
+   *        LuminalShine install (drivers\\luminalvgd\\driver-package next to
+   *        the executable) — which may differ from the installed driver
+   *        while an update is pending.
+   */
+  struct bundled_vgd_package_t {
+    bool present;  ///< The bundled package directory and INF exist.
+    std::optional<std::string> version;  ///< DriverVer version from the INF.
+    std::optional<std::string> date;  ///< DriverVer date as ISO 8601.
+    std::optional<std::string> signature;  ///< Authenticode signer of the
+                                           ///< driver DLL; " (unverified)" is
+                                           ///< appended when trust fails, and
+                                           ///< "Unsigned" reported when no
+                                           ///< signature is embedded.
+  };
+
+  /**
+   * @brief Inspect the bundled LuminalVGD driver package (INF DriverVer +
+   *        driver DLL Authenticode signer). All failures degrade to absent
+   *        fields; trust verification never touches the network.
+   */
+  bundled_vgd_package_t query_bundled_vgd_package();
 
 }  // namespace platf::diag

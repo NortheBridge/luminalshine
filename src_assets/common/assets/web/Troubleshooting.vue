@@ -98,32 +98,34 @@
               {{
                 translate(
                   'troubleshooting.luminalvgd_body',
-                  'Reserved for the upcoming LuminalVGD virtual display driver. Once the driver ships, this space will show its public signing information, the driver version, the LuminalShine release it shipped with, and its build time.',
+                  'The first-party virtual display driver LuminalShine streams to. "Driver version" is the driver installed on this system; "Shipped with LuminalShine" is the driver package bundled with this install — if the two differ, the next installer run updates the driver.',
                 )
               }}
             </p>
-            <div class="mt-2 flex flex-wrap items-center gap-1 text-xs opacity-60">
+            <div class="mt-2 flex flex-wrap items-center gap-1 text-xs">
               <span
                 class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
               >
-                {{ translate('troubleshooting.luminalvgd_driver_version', 'Driver version') }}: —
+                {{ translate('troubleshooting.luminalvgd_driver_version', 'Driver version') }}:
+                {{ vgdDriverVersionBadge }}
               </span>
               <span
                 class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
               >
                 {{
                   translate('troubleshooting.luminalvgd_shipped_with', 'Shipped with LuminalShine')
-                }}: —
+                }}: {{ vgdBundledVersionBadge }}
               </span>
               <span
                 class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
               >
-                {{ translate('troubleshooting.luminalvgd_built', 'Built') }}: —
+                {{ translate('troubleshooting.luminalvgd_built', 'Built') }}: {{ vgdBuiltBadge }}
               </span>
               <span
                 class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
               >
-                {{ translate('troubleshooting.signing_method', 'Signature') }}: —
+                {{ translate('troubleshooting.signing_method', 'Signature') }}:
+                {{ vgdSignatureBadge }}
               </span>
             </div>
           </div>
@@ -839,6 +841,20 @@ const signingVersionBadge = computed(() => {
   return commit ? `v${version} (${commit})` : `v${version}`;
 });
 const signingBuiltBadge = computed(() => store.metadata?.release_date || '');
+
+// LuminalVGD identity chips, from /api/metadata. "Driver version" reflects
+// the installed driver's registry identity; "Shipped with" and "Signature"
+// describe the driver package bundled with this LuminalShine install.
+const vgdDriverVersionBadge = computed(
+  () => store.metadata?.virtual_display_backend_version || '—',
+);
+const vgdBundledVersionBadge = computed(() => store.metadata?.vgd_bundled_version || '—');
+const vgdBuiltBadge = computed(() => store.metadata?.vgd_driver_date || '—');
+const vgdSignatureBadge = computed(() => store.metadata?.vgd_bundled_signature || '—');
+
+onMounted(() => {
+  void store.fetchMetadata();
+});
 
 const crashDump = ref<CrashDumpStatus | null>(null);
 const crashDumpAvailable = computed(() => isCrashDumpEligible(crashDump.value));
