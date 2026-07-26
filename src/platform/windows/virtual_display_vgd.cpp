@@ -422,7 +422,32 @@ namespace VDISPLAY::vgd {
       return std::nullopt;
     }
     if (g_sessions.size() == 1) {
-      const auto &s = g_sessions.begin()->second;
+      auto &s = g_sessions.begin()->second;
+      if (s.display_name.empty()) {
+        // The monitor may have activated after create()'s bounded poll
+        // gave up (activation completes at display-APPLY time); nothing
+        // else ever backfills the tracked name, so adopt it here.
+        auto names = luminal_display_names();
+        if (names.size() == 1) {
+          s.display_name = names.front();
+        }
+      }
+      if (s.display_name.empty()) {
+        // Never hand out the ring for a monitor the OS never activated:
+        // downstream capture init would bind an arbitrary mid-modeset
+        // physical output against this ring and spin a reinit storm
+        // whose overlapping NvEnc create/destroy cycles have corrupted
+        // the NVIDIA driver heap before (0xc0000374 fail-fast). Refuse
+        // here so platf::display falls back to WGC/DDA or the session
+        // fails cleanly.
+        BOOST_LOG(warning) << "LuminalVGD: sole session 0x" << std::hex << s.session_id << std::dec
+                           << " has no active GDI display (monitor never activated); "
+                           << "refusing ring capture.";
+        return std::nullopt;
+      }
+      if (!wanted.empty() && s.display_name != wanted) {
+        return std::nullopt;
+      }
       return RingTargetInfo {s.session_id, s.ring_slots};
     }
     for (const auto &[k, s] : g_sessions) {
