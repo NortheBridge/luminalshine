@@ -2683,15 +2683,31 @@ namespace stream {
           defer_stream_start_actions(std::move(deferred));
           BOOST_LOG(info) << "Stream-start actions deferred until user session is ready.";
         } else {
-          platf::frame_limiter_streaming_start(
-            session.config.monitor.framerate,
-            session.config.gen1_framegen_fix,
-            session.config.gen2_framegen_fix,
-            lossless_rtss_limit,
-            session.config.frame_generation_provider,
-            using_smooth_motion
-          );
-          platf::streaming_will_start();
+          // Off the ANNOUNCE thread: the RTSS/NVCP ladder (process launch
+          // under impersonation, DRS load/set/save) plus streaming_will_start's
+          // nvprefs pass can take 3-22 s, and it used to run inline here —
+          // the RTSP 200 OK, the client's ~10 s no-video deadline, and our
+          // own recv_ping timeout (counting since the video thread spawned)
+          // all waited on it. These actions tune game pacing, not
+          // capture/encode viability — the SYSTEM-deferral path above
+          // already runs the identical pair arbitrarily late with no
+          // completion gate — so schedule them and answer the client now.
+          // The liveness recheck mirrors apply_deferred_stream_start:
+          // a session stopped before the task runs must not re-apply
+          // overrides whose teardown-side restore may already be running.
+          task_pool.push([fps = session.config.monitor.framerate,
+                          gen1 = session.config.gen1_framegen_fix,
+                          gen2 = session.config.gen2_framegen_fix,
+                          lossless_rtss_limit,
+                          provider = session.config.frame_generation_provider,
+                          using_smooth_motion]() {
+            if (session::active_sessions.load(std::memory_order_acquire) == 0) {
+              BOOST_LOG(info) << "Skipping stream-start platform actions; session already stopped.";
+              return;
+            }
+            platf::frame_limiter_streaming_start(fps, gen1, gen2, lossless_rtss_limit, provider, using_smooth_motion);
+            platf::streaming_will_start();
+          });
         }
 #else
         platf::streaming_will_start();
