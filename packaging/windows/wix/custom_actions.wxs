@@ -79,7 +79,15 @@
            fire). Type-51 CA Value= attributes ARE formatted at execute
            time, so nested [SystemFolder] expansion works correctly:
            * SetPowerShell5AsPath: unconditional, anchors POWERSHELL_PATH
-             to the always-present Windows PowerShell 5.1 in System32.
+             to the always-present Windows PowerShell 5.1 in the NATIVE
+             (64-bit) system folder. [System64Folder], not [SystemFolder]:
+             in an x64 package [SystemFolder] is SysWOW64, and a 32-bit
+             host breaks the driver script — pnputil does not resolve in
+             WOW64 and UpdateDriverForPlugAndPlayDevices returns
+             ERROR_IN_WOW64 — which made every PS-5-only machine report
+             "LuminalVGD driver setup failed" on install/update/uninstall
+             while never actually touching the driver (field report,
+             2026-07-25).
            * SetPwsh7AsPowerShellPath: conditional on PWSH7_FOUND_PATH
              being non-empty, overrides POWERSHELL_PATH to the resolved
              pwsh.exe path. Scheduled After=SetPowerShell5AsPath so the
@@ -111,7 +119,7 @@
          first). -->
     <SetProperty Id="POWERSHELL_PATH"
                  Action="SetPowerShell5AsPath"
-                 Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
+                 Value="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
                  Sequence="execute"
                  After="RelocateLegacyInstallRoot"/>
     <SetProperty Id="POWERSHELL_PATH"
