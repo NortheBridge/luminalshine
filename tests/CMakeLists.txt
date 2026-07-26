@@ -117,6 +117,7 @@ set(INTEGRATION_TEST_FILES
     "docs/configuration.md"
     "src_assets/common/assets/web/public/assets/locale/en.json"
     "src_assets/common/assets/web/configs/tabs/General.vue"
+    "src_assets/common/assets/web/stores/config.ts"
     "src_assets/linux/misc/60-sunshine.rules"
 )
 

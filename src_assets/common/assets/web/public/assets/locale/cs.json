@@ -555,7 +555,7 @@
     "frame_limiter_enable": "Povolit omezovač rámce",
     "frame_limiter_provider": "Poskytovatel omezovače rámců",
     "lossless_scaling_path": "Spustitelný soubor Lossless Scaling",
-    "lossless_scaling_legacy_auto_detect_label": "Použijte starší bezeztrátovou automatickou detekci",
+    "lossless_scaling_legacy_auto_detect": "Použijte starší bezeztrátovou automatickou detekci",
     "lossless_scaling_legacy_auto_detect_desc": "Místo klávesové zkratky Lossless Scaling používá tok automatického použití založený na časovači. Nedoporučuje se, pokud metoda klávesových zkratek selže, protože detekce může být méně spolehlivá.",
     "rtss_frame_limit_type": "Typ limitu rámce RTSS",
     "rtss_install_path": "instalační cesta RTSS",
