@@ -489,6 +489,16 @@ namespace platf::dxgi {
       _undelivered_since.reset();
     }
 
+    // True when the live cursor state has moved past what the client
+    // last saw — shared by the wait loop below and the cursor-only
+    // redelivery branch.
+    const auto cursor_pending = [&]() {
+      return (int32_t) _cursor_alpha.topleft_x != _delivered_cursor_x ||
+             (int32_t) _cursor_alpha.topleft_y != _delivered_cursor_y ||
+             _cursor_alpha.visible != _delivered_cursor_visible ||
+             _cursor_shape_generation != _delivered_cursor_generation;
+    };
+
     // Claim the freshest published frame, honoring the caller's timeout.
     // There is no wake event — the section is pure shared memory — so poll at
     // 1 ms granularity; the base capture loop paces us to the client rate and
@@ -512,6 +522,21 @@ namespace platf::dxgi {
       if (std::chrono::steady_clock::now() >= deadline) {
         break;
       }
+      if (_cursor) {
+        // Wake on cursor motion, not just frames: the driver publishes
+        // nothing for cursor-only changes, so a wait that only watches
+        // the ring is cursor-blind for its whole timeout — at motion
+        // onset over an idle desktop that was a 200 ms + retry-cycle
+        // rubber-band before the first cursor update reached the
+        // encoder. DDA's AcquireNextFrame returns early on mouse
+        // updates; breaking out to the redelivery path below restores
+        // that latency model for the ring backend. The state read is a
+        // volatile header peek — negligible at this loop's 1 kHz.
+        sync_cursor();
+        if (cursor_pending()) {
+          break;
+        }
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (!claimed) {
@@ -520,12 +545,7 @@ namespace platf::dxgi {
       // the last frame with a fresh blend when the cursor state moved past
       // what the client last saw.
       if (_cursor && _last_frame && capture_format != DXGI_FORMAT_UNKNOWN) {
-        const bool cursor_changed =
-          (int32_t) _cursor_alpha.topleft_x != _delivered_cursor_x ||
-          (int32_t) _cursor_alpha.topleft_y != _delivered_cursor_y ||
-          _cursor_alpha.visible != _delivered_cursor_visible ||
-          _cursor_shape_generation != _delivered_cursor_generation;
-        if (cursor_changed) {
+        if (cursor_pending()) {
           std::shared_ptr<platf::img_t> img;
           if (!pull_free_image_cb(img)) {
             return capture_e::interrupted;
@@ -666,6 +686,11 @@ namespace platf::dxgi {
       if (_last_frame) {
         device_ctx->CopyResource(_last_frame.get(), slot->texture.get());
       }
+      // Re-pull the live cursor state: the entry-time sample can be a
+      // full wait window stale when the claim landed late in the
+      // caller's timeout. Reads only the cursor section — safe under
+      // the slot-mutex hold.
+      sync_cursor();
       if (cursor_visible && (_cursor_alpha.visible || _cursor_xor.visible)) {
         blend_cursor_into(*d3d_img);
       }
