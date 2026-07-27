@@ -1499,6 +1499,32 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### dd_paused_virtual_display_timeout_secs
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Optional grace delay in seconds before removing virtual displays while a session is paused and
+            revert-on-disconnect is disabled. A value of 0 keeps the virtual display alive until the session
+            is resumed or the app exits.
+            @warning{Removing a virtual display while a game is still running can cause crashes. This option
+            helps prevent returning to a stuck virtual screen after inactivity.}
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}0@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            dd_paused_virtual_display_timeout_secs = 300
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_always_restore_from_golden
 
 <table>
@@ -2183,6 +2209,33 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### tpm_binding
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When enabled, the saved admin username and password blob is encrypted with a non-exportable
+            RSA-2048 key sealed in the local TPM (Microsoft Platform Crypto Provider) before being written
+            to Windows Credential Manager. An attacker who acquires the credential bytes cannot decrypt
+            them without the original TPM. Silently does nothing on hosts without a TPM 2.0 chip.
+            Toggling this off rewrites the credential as plain on the next save; toggling it on rewrites
+            it sealed on the next save.
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}true@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            tpm_binding = false
+            @endcode</td>
+    </tr>
+</table>
+
 ### session_token_ttl_seconds
 
 <table>
@@ -2672,6 +2725,29 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### lossless_scaling_legacy_auto_detect
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Use the legacy timer-based auto-apply flow for Lossless Scaling instead of the hotkey method.
+            Not recommended unless the hotkey method fails, because detection can be less reliable.
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            lossless_scaling_legacy_auto_detect = true
+            @endcode</td>
+    </tr>
+</table>
+
 ### encoder
 
 <table>
@@ -2711,6 +2787,31 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>software</td>
         <td>Encoding occurs on the CPU</td>
+    </tr>
+</table>
+
+### session_monitor
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Push per-stream telemetry (encode latency, throughput, FPS, host CPU/RAM, connection-quality
+            events) to the LuminalShineSessionMonitor sidecar service. Powers the Session Details slide-out
+            on the Dashboard with live and historical charts. When disabled the streaming host emits no
+            session frames and the Dashboard's Session History card stays empty for future streams.
+            Existing recorded sessions are unaffected.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}true@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            session_monitor = false
+            @endcode</td>
     </tr>
 </table>
 
@@ -3016,40 +3117,6 @@ They appear in the Frame Limiter section of the settings UI.
     </tr>
 </table>
 
-### nvenc_vbv_increase
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Single-frame VBV/HRD percentage increase.
-            By default Sunshine uses single-frame VBV/HRD, which means any encoded video frame size is not expected to
-            exceed requested bitrate divided by requested frame rate. Relaxing this restriction can be beneficial and
-            act as low-latency variable bitrate, but may also lead to packet loss if the network doesn't have buffer
-            headroom to handle bitrate spikes. Maximum accepted value is 400, which corresponds to 5x increased
-            encoded video frame upper size limit.
-            @note{This option only applies when using NVENC [encoder](#encoder).}
-            @warning{Can lead to network packet loss.}
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            0
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Range</td>
-        <td colspan="2">0-400</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            nvenc_vbv_increase = 0
-            @endcode</td>
-    </tr>
-</table>
-
 ### nvenc_split_encode
 
 <table>
@@ -3082,6 +3149,40 @@ They appear in the Frame Limiter section of the settings UI.
         <td>Example</td>
         <td colspan="2">@code{}
             nvenc_split_encode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### nvenc_vbv_increase
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Single-frame VBV/HRD percentage increase.
+            By default Sunshine uses single-frame VBV/HRD, which means any encoded video frame size is not expected to
+            exceed requested bitrate divided by requested frame rate. Relaxing this restriction can be beneficial and
+            act as low-latency variable bitrate, but may also lead to packet loss if the network doesn't have buffer
+            headroom to handle bitrate spikes. Maximum accepted value is 400, which corresponds to 5x increased
+            encoded video frame upper size limit.
+            @note{This option only applies when using NVENC [encoder](#encoder).}
+            @warning{Can lead to network packet loss.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0-400</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_vbv_increase = 0
             @endcode</td>
     </tr>
 </table>
@@ -3556,6 +3657,43 @@ They appear in the Frame Limiter section of the settings UI.
     </tr>
 </table>
 
+### amd_split_encode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Controls AMF dual-VCN split-frame encoding. Splits each frame into two tiles and lets the AMF
+            driver dispatch them to separate hardware encoder instances on dual-VCN parts (RDNA 3 7900-series,
+            RDNA 4 9070-series), cutting encode latency under sustained 4K AV1 / HEVC load.
+            Auto enables it whenever the active GPU advertises 2 or more hardware encoder instances; enabled
+            forces it on (silently falls back to single-tile on single-VCN parts); disabled never uses it.
+            @note{This option only applies when using HEVC or AV1 with the amdvce [encoder](#encoder).
+            H.264 is not supported.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Possible Values</td>
+        <td colspan="2">@code{}
+            auto
+            enabled
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            amd_split_encode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## VideoToolbox Encoder
 
 ### vt_coder
@@ -3812,6 +3950,79 @@ They appear in the Frame Limiter section of the settings UI.
 <tr>
         <td>zerolatency</td>
         <td>good for fast encoding and low-latency streaming</td>
+    </tr>
+</table>
+
+## Steam Library Integration
+
+These options control the read-only Steam library scanner that surfaces installed Steam games (and
+optionally non-Steam shortcuts) in the Moonlight app list. They appear in the Steam Library Integration
+section of the settings UI.
+
+### steam_auto_sync
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Scan the local Steam install for every installed game and surface them in the Moonlight app
+            list under a dedicated Steam Games section. The scan is read-only and runs every 30 seconds in
+            the background so newly-installed games appear automatically. Generated entries live in a
+            separate steam_apps.json file so they cannot corrupt the hand-curated apps.json. Each game
+            launches via the steam://rungameid/&lt;appid&gt; URL protocol.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}steam_auto_sync = true@endcode</td>
+    </tr>
+</table>
+
+### steam_include_family_shared
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When auto-sync is on, also list games available via Steam Family Sharing in addition to games
+            owned outright. Family-shared games are detected from each game's appmanifest (a non-empty
+            SharedDepots block) and launch identically to owned games.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}true@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}steam_include_family_shared = false@endcode</td>
+    </tr>
+</table>
+
+### nonsteam_shortcuts_auto_sync
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Also scan every Steam user's "Add a Non-Steam Game" shortcuts (kept in each user's
+            shortcuts.vdf) and surface them in Moonlight after the Steam Games section. Each shortcut
+            launches via its stored Exe path with the StartDir as the working directory and any
+            LaunchOptions appended. Generated entries live in a separate nonsg_apps.json file.
+            Independent of the main Steam auto-sync toggle.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}false@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}nonsteam_shortcuts_auto_sync = true@endcode</td>
     </tr>
 </table>
 

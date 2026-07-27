@@ -40,6 +40,7 @@ protected:
       {"VideoToolbox Encoder", "vt"},
       {"VA-API Encoder", "vaapi"},
       {"Software Encoder", "sw"},
+      {"Steam Library Integration", "steamlibrary"},
       {"Playnite Integration", "playnite"}
     };
   }
@@ -652,7 +653,9 @@ TEST_F(ConfigConsistencyTest, AllConfigOptionsExistInAllFiles) {
   // Options that are internal/special and shouldn't be in UI/docs
   const std::set<std::string, std::less<>> internalOptions = {
     "flags",  // Internal config flags, not user-configurable
-    "rtss_disable_vsync_ullm"  // Legacy alias for frame_limiter_disable_vsync
+    "rtss_disable_vsync_ullm",  // Legacy alias for frame_limiter_disable_vsync
+    "dd_wa_hdr_toggle",  // Legacy HDR workaround, parsed only to consume the key
+    "dd_wa_hdr_toggle_delay"  // Legacy HDR workaround, parsed only to consume the key
   };
 
   std::vector<std::string> missingFromFiles;

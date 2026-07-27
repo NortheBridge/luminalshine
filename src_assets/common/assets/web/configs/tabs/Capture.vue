@@ -451,7 +451,7 @@ const shouldShowSoftware = computed(() => showAll() || props.currentTab === 'sw'
             <ConfigSwitchField
               id="lossless_scaling_legacy_auto_detect"
               v-model="losslessLegacyAutoDetect"
-              :label="$t('config.lossless_scaling_legacy_auto_detect_label')"
+              :label="$t('config.lossless_scaling_legacy_auto_detect')"
               :desc="$t('config.lossless_scaling_legacy_auto_detect_desc')"
               class="flex-1"
               size="small"

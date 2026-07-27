@@ -779,6 +779,17 @@ jobs:
         working-directory: build/tests
         run: ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml
 
+      - name: Config consistency gate
+        # Unlike the advisory run above, the config-consistency suite reads
+        # only repo files copied into build/tests at configure time — no
+        # display adapter, network, Playnite, or locale-set dependency — so
+        # it is reliable on the runner and gates the build. A failure here
+        # means a config option is inconsistent across src/config.cpp,
+        # stores/config.ts, docs/configuration.md, and en.json.
+        shell: msys2 {0}
+        working-directory: build/tests
+        run: ./test_sunshine.exe --gtest_color=yes --gtest_filter='ConfigConsistencyTest.*'
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
