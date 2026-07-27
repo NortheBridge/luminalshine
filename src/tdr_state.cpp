@@ -122,6 +122,8 @@ namespace tdr {
         return "virtual display enumerate";
       case source_t::query_display_config:
         return "QueryDisplayConfig";
+      case source_t::encoder_stall:
+        return "encoder stall";
     }
     return "unknown";
   }

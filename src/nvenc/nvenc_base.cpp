@@ -38,6 +38,7 @@
 
 // local includes
 #include "src/config.h"
+#include "src/tdr_state.h"
 #include "src/logging.h"
 #include "src/utility.h"
 
@@ -137,6 +138,19 @@ namespace {
 }  // namespace
 
 namespace nvenc {
+
+  namespace {
+    /// Process-wide count of destroy_encoder drain timeouts that leaked
+    /// NVENC-registered resources (see the warning at the increment
+    /// site). Exposed via drain_leak_count() so session teardown can
+    /// schedule a clean host restart before the bounded registered-
+    /// resource pool (~64 on consumer cards) exhausts.
+    std::atomic<std::uint64_t> g_drain_leak_count {0};
+  }  // namespace
+
+  std::uint64_t drain_leak_count() {
+    return g_drain_leak_count.load(std::memory_order_relaxed);
+  }
 
   nvenc_base::nvenc_base(NV_ENC_DEVICE_TYPE device_type):
       device_type(device_type) {
@@ -856,7 +870,6 @@ namespace nvenc {
         // NV_ENC_ERR_OUT_OF_MEMORY on the next encoder init, which
         // would otherwise look like an unrelated "can't probe encoder"
         // failure miles away from the root cause.
-        static std::atomic<uint64_t> g_drain_leak_count {0};
         const auto leaked = g_drain_leak_count.fetch_add(1, std::memory_order_relaxed) + 1;
         BOOST_LOG(warning) << "NvEnc: destroy_encoder async drain timed out after "
                            << kDrainMs << "ms (last_frame=" << encoder_state.last_encoded_frame_index
@@ -1042,6 +1055,15 @@ namespace nvenc {
                       << ". A long since_last_encode (>200ms) typically indicates GPU TDR is in progress; "
                          "the encoder will tear down and the D3D11 retry path (D3D11CreateDeviceWithRecovery) will pick up.";
       BOOST_LOG(error) << "NvEnc: frame " << frame_index << " encode wait timeout";
+      // Record the stall as a TDR-class event immediately: this is the
+      // earliest observable symptom of a GPU hang, and downstream holders
+      // of shared GPU allocations (the LuminalVGD ring reader) key their
+      // release-before-recovery behavior off tdr::event_count().
+      tdr::mark_event(
+        tdr::source_t::encoder_stall,
+        0,
+        "NvEnc encode-wait timeout, frame=" + std::to_string(frame_index)
+      );
       // The GPU may still complete this picture's encode later and write
       // into output_bitstream / read from the registered input texture.
       // Flag so destroy_encoder knows to drain the completion event before

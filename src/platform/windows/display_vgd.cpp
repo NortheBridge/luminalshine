@@ -36,6 +36,7 @@
 // local includes
 #include "src/logging.h"
 #include "src/platform/windows/display.h"
+#include "src/tdr_state.h"
 #include "src/platform/windows/display_vram.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_vgd.h"
@@ -191,6 +192,7 @@ namespace platf::dxgi {
     _session_id = target->session_id;
     _ring_slots = target->ring_slots;
     _display_name = display_name;
+    _tdr_marks_at_open = tdr::event_count();
     capture_format = DXGI_FORMAT_UNKNOWN;  // latched from the first claimed frame
 
     // Hardware-cursor plane: with a cursor-capable driver (build >= 4) the
@@ -417,6 +419,23 @@ namespace platf::dxgi {
   capture_e display_vgd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
     if (!_ring) {
       return capture_e::error;
+    }
+
+    // TDR blast-radius shrink: once any GPU-reset-class event is
+    // recorded (the encoder stall fires within ~100 ms of a hang), drop
+    // every shared GPU allocation this reader holds — the cached
+    // cross-process slot textures and the last-frame copy — and
+    // reinitialize. Fewer live shared allocations for VidMm to
+    // terminate while the driver stack recovers (a 0x10E_37 bugcheck in
+    // dxgmms2's pending-termination path took the whole machine down in
+    // the field); the factory re-opens the ring against a healthy
+    // device afterwards.
+    if (tdr::event_count() != _tdr_marks_at_open) {
+      BOOST_LOG(warning) << "LuminalVGD capture: GPU-reset event recorded; releasing shared ring "
+                            "textures and reinitializing for recovery.";
+      _slot_textures.clear();
+      _last_frame.reset();
+      return capture_e::reinit;
     }
 
     // Cursor-capable driver: frames arrive cursor-free; pull the live

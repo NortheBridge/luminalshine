@@ -606,6 +606,11 @@ namespace platf::dxgi {
     uint64_t _last_sequence = 0;
     std::string _display_name;
 
+    // TDR blast-radius shrink: tdr::event_count() snapshot taken at init.
+    // When it advances, snapshot() drops every shared GPU allocation this
+    // reader holds and reinitializes (see display_vgd.cpp).
+    std::uint64_t _tdr_marks_at_open = 0;
+
     // Broken-ring detection (see display_vgd.cpp): consecutive texture-open
     // failures, and how long a newer-than-delivered frame has sat unclaimed.
     int _open_failures = 0;

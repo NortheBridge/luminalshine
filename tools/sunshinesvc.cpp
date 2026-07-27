@@ -212,6 +212,33 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
     return;
   }
 
+  // Self-configure SCM crash recovery on every start (idempotent): a
+  // GPU-driver UMD fault inside the host process (nvwgf2umx access
+  // violations during TDR recovery took it down in the field,
+  // 2026-07-26) must self-heal without user action. Restart 5 s after
+  // each of the first three failures per day; best-effort — a failure
+  // to configure never blocks service start.
+  {
+    SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (scm) {
+      SC_HANDLE svc = OpenServiceA(scm, SERVICE_NAME, SERVICE_CHANGE_CONFIG);
+      if (svc) {
+        SC_ACTION actions[3] = {
+          {SC_ACTION_RESTART, 5000},
+          {SC_ACTION_RESTART, 5000},
+          {SC_ACTION_RESTART, 5000},
+        };
+        SERVICE_FAILURE_ACTIONSA failure_actions = {};
+        failure_actions.dwResetPeriod = 24 * 60 * 60;  // seconds
+        failure_actions.cActions = ARRAYSIZE(actions);
+        failure_actions.lpsaActions = actions;
+        ChangeServiceConfig2A(svc, SERVICE_CONFIG_FAILURE_ACTIONS, &failure_actions);
+        CloseServiceHandle(svc);
+      }
+      CloseServiceHandle(scm);
+    }
+  }
+
   // Tell SCM we're starting
   service_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
   service_status.dwServiceSpecificExitCode = 0;
