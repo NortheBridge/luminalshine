@@ -739,6 +739,13 @@ namespace nvhttp {
   };
 
   // uniqueID, session
+  //
+  // Mutated from three threads: the HTTPS and HTTP nvhttp server threads
+  // (both expose /pair on their own io_context) and the confighttp thread
+  // (nvhttp::pin() when the user submits the PIN form). Every access must
+  // hold map_id_sess_mutex — concurrent emplace/erase/rehash against a
+  // lookup corrupts the heap.
+  std::mutex map_id_sess_mutex;
   std::unordered_map<std::string, pair_session_t> map_id_sess;
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
@@ -1613,6 +1620,11 @@ namespace nvhttp {
 
     auto uniqID {get_arg(args, "uniqueid")};
 
+    // Held for the whole pairing phase: every branch below either inserts,
+    // looks up, or (via fail_pair) erases the session record, and the two
+    // server threads plus the Web UI's pin() run this concurrently.
+    std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
+
     args_t::const_iterator it;
     if (it = args.find("phrase"); it != std::end(args)) {
       if (it->second == "getservercert"sv) {
@@ -1673,6 +1685,7 @@ namespace nvhttp {
 
   bool pin(std::string pin, std::string name) {
     pt::ptree tree;
+    std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
     if (map_id_sess.empty()) {
       return false;
     }
@@ -1696,15 +1709,26 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = std::begin(map_id_sess)->second;
-    getservercert(sess, tree, pin);
+    // Take our own reference to the pending response and clear the stored
+    // one BEFORE running the pairing phase: getservercert() rejects an
+    // out-of-order call (e.g. a double-submitted PIN form, or a retry
+    // against a session left in a non-NONE phase) via fail_pair() ->
+    // remove_session(), which erases this very map entry and destroys
+    // `sess`. Everything below used to run on the freed node — a heap
+    // write-after-free plus a call through a dangling response pointer.
+    auto sess_it = std::begin(map_id_sess);
+    auto &sess = sess_it->second;
+    auto async_response = std::move(sess.async_insert_pin.response);
+    sess.async_insert_pin.response = std::decay_t<decltype(async_response.left())>();
     sess.client.name = name;
+
+    getservercert(sess, tree, pin);
+    // `sess` and `sess_it` may be dangling from here on — do not touch them.
 
     // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
 
-    auto &async_response = sess.async_insert_pin.response;
     if (async_response.has_left() && async_response.left()) {
       async_response.left()->write(data.str());
     } else if (async_response.has_right() && async_response.right()) {
@@ -1713,8 +1737,6 @@ namespace nvhttp {
       return false;
     }
 
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
     // response to the current request
     return true;
   }
