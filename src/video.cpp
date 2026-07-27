@@ -37,6 +37,7 @@ extern "C" {
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
 #include "sync.h"
+#include "tdr_state.h"
 #include "video.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
@@ -3668,6 +3669,18 @@ namespace video {
       encoder_probe_attempted.store(true, std::memory_order_release);
       BOOST_LOG(debug) << "Encoder probe skipped (cached success).";
       return 0;
+    }
+
+    // A dead display stack fails every encoder identically, and each
+    // candidate costs ~15 s of D3D11 backoff to re-prove it — ~66 s per
+    // probe pass, re-armed on every client attempt. Bail immediately with
+    // the real diagnosis instead of grinding through the list.
+    if (tdr::stack_down()) {
+      BOOST_LOG(error) << "Skipping encoder probe: the Windows display stack is down "
+                          "(display API unavailable process-wide). No encoder can be "
+                          "initialised until the host machine is rebooted."sv;
+      update_probe_cache(cache_key, false, false, false, false, false, false);
+      return -1;
     }
 
     if (!allow_encoder_probing()) {

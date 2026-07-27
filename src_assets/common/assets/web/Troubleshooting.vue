@@ -236,20 +236,61 @@
               {{
                 translate(
                   'troubleshooting.tdr_card_desc',
-                  'Tracks NVIDIA GPU TDR (Timeout Detection and Recovery) events and WDDM display-stack failures that LuminalShine detected. A TDR can end an active stream and momentarily wedge SudoVDA; the active session is refused while recovery is in progress so the client gets a quick failure instead of a frozen stream.',
+                  'Tracks GPU resets (TDR — Timeout Detection and Recovery) and Windows display-stack failures that LuminalShine detected. A GPU reset can end an active stream; new sessions are refused briefly while the driver recovers, so the client gets a quick failure instead of a frozen stream. Repeated detections of the same unresolved failure are grouped into one incident.',
                 )
               }}
             </p>
+            <div
+              v-if="tdrStackDown"
+              class="mt-3 rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs"
+            >
+              <div class="flex items-center gap-2 font-semibold text-error">
+                <i class="fas fa-circle-exclamation" />
+                {{
+                  translate('troubleshooting.tdr_stack_down_title', 'Display stack down — reboot required')
+                }}
+              </div>
+              <p class="mt-1 opacity-90">
+                {{
+                  translate(
+                    'troubleshooting.tdr_stack_down_body',
+                    "Windows' display API is unavailable for every program on this machine, so no display can be configured or captured. This happens when the graphics driver fails to recover from a GPU reset. Nothing LuminalShine (or any other application) can do will clear it — restart the host machine. Streaming will keep being refused until then.",
+                  )
+                }}
+              </p>
+            </div>
             <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
               <span
                 class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10"
               >
                 <i class="fas fa-bolt" />
-                {{ translate('troubleshooting.tdr_count_label', 'Events since process start') }}:
+                {{ translate('troubleshooting.tdr_count_label', 'Incidents since process start') }}:
                 <strong>{{ tdrCount }}</strong>
               </span>
               <span
-                v-if="tdrRecoveryRecent"
+                v-if="tdrIncidentDurationDisplay"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10"
+              >
+                <i class="fas fa-clock" />
+                {{ translate('troubleshooting.tdr_incident_duration', 'Latest incident lasted') }}:
+                <strong>{{ tdrIncidentDurationDisplay }}</strong>
+              </span>
+              <span
+                v-if="tdrIncident && tdrIncident.events > 1"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10"
+                :title="
+                  translate(
+                    'troubleshooting.tdr_detections_hint',
+                    'How many times the same unresolved failure was re-detected.',
+                  )
+                "
+              >
+                <i class="fas fa-repeat" />
+                {{ translate('troubleshooting.tdr_detections', 'Detections') }}:
+                <strong>{{ tdrIncident.events }}</strong>
+              </span>
+              <span
+                v-if="tdrRecoveryRecent && !tdrStackDown"
                 class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-warning/15 text-warning"
               >
                 <i class="fas fa-triangle-exclamation" />
@@ -887,10 +928,33 @@ type TdrLast = {
   hresult: number;
   detail: string;
 };
+type TdrIncident = {
+  started_at: number;
+  last_at: number;
+  duration_seconds: number;
+  events: number;
+  first_source: string;
+  source: string;
+  terminal: boolean;
+};
 const tdrCount = ref(0);
 const tdrRecoveryRecent = ref(false);
+const tdrStackDown = ref(false);
+const tdrIncident = ref<TdrIncident | null>(null);
 const tdrLast = ref<TdrLast | null>(null);
 const tdrRefreshing = ref(false);
+
+const tdrIncidentDurationDisplay = computed(() => {
+  const inc = tdrIncident.value;
+  if (!inc || inc.duration_seconds <= 0) return '';
+  const total = Math.round(inc.duration_seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+});
 
 const tdrLastAtDisplay = computed(() => {
   if (!tdrLast.value) return '';
@@ -915,6 +979,22 @@ async function refreshTdrHealth() {
     if (r.status >= 200 && r.status < 300) {
       tdrCount.value = typeof body.count === 'number' ? body.count : 0;
       tdrRecoveryRecent.value = body.recovery_recent === true;
+      tdrStackDown.value = body.stack_down === true;
+      const incident = body.incident as Partial<TdrIncident> | undefined;
+      if (incident && typeof incident.started_at === 'number') {
+        tdrIncident.value = {
+          started_at: incident.started_at,
+          last_at: typeof incident.last_at === 'number' ? incident.last_at : incident.started_at,
+          duration_seconds:
+            typeof incident.duration_seconds === 'number' ? incident.duration_seconds : 0,
+          events: typeof incident.events === 'number' ? incident.events : 0,
+          first_source: typeof incident.first_source === 'string' ? incident.first_source : '',
+          source: typeof incident.source === 'string' ? incident.source : '',
+          terminal: incident.terminal === true,
+        };
+      } else {
+        tdrIncident.value = null;
+      }
       const last = body.last as Partial<TdrLast> | undefined;
       if (last && typeof last.at === 'number' && typeof last.source === 'string') {
         tdrLast.value = {

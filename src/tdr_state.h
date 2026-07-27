@@ -42,6 +42,11 @@ namespace tdr {
     /// encode-wait timeout) — the earliest observable symptom of a GPU
     /// hang, minutes before the D3D11 retry ladder can exhaust.
     encoder_stall = 5,
+    /// The WDDM display stack is dead machine-wide: D3D11 device creation
+    /// fails AND QueryDisplayConfig reports the display API unavailable /
+    /// zero paths. Recovery is not possible from user mode — only a
+    /// reboot clears it. Terminal; see `stack_down()`.
+    display_stack_down = 6,
   };
 
   struct event_t {
@@ -49,6 +54,28 @@ namespace tdr {
     source_t source;
     long hresult;  ///< Native HRESULT or 0 if not applicable.
     std::string detail;  ///< Free-text context (call_site, attempt count, etc.).
+  };
+
+  /**
+   * @brief One failure incident: a cluster of events, not a raw count.
+   *
+   * A single GPU hang cascades through several detectors and, on a stack
+   * that never recovers, is re-detected on every client attempt. Counting
+   * detections told the user "39 TDR events" for what was one failure.
+   * Events within the incident window fold into the incident that is
+   * already open; the first event after a quiet window opens a new one.
+   */
+  struct incident_t {
+    std::chrono::system_clock::time_point started_at;
+    std::chrono::system_clock::time_point last_at;
+    std::uint64_t events {0};  ///< Detections folded into this incident.
+    source_t first_source;  ///< What detected it first (closest to the cause).
+    source_t last_source;
+    long hresult {0};
+    std::string detail;
+    /// The display stack was confirmed dead (D3D11 + QueryDisplayConfig
+    /// both failing). User-visible remedy is a reboot.
+    bool terminal {false};
   };
 
   /**
@@ -86,7 +113,52 @@ namespace tdr {
   std::optional<event_t> last_event();
 
   /// Total recorded events since process start.
+  ///
+  /// This is a raw detection count and is deliberately NOT what the Web UI
+  /// shows — it exists so in-process consumers can watch for "something
+  /// changed" edges (the LuminalVGD ring drops its shared textures when
+  /// this advances, and the per-session `gpu_resets` telemetry series is
+  /// its delta). Use `incident_count()` / `current_incident()` for
+  /// anything a human reads.
   std::uint64_t event_count();
+
+  /**
+   * @brief Record a confirmed machine-wide display-stack failure.
+   *
+   * Called when a D3D11 device creation failure is corroborated by
+   * QueryDisplayConfig reporting the display API unavailable or zero
+   * paths — i.e. the failure is below every user-mode component and no
+   * amount of retrying will fix it. Latches `stack_down()` until
+   * `note_stack_healthy()` observes the stack working again, so the
+   * retry ladders can stop instead of re-detecting the same corpse every
+   * ~33 seconds.
+   */
+  void mark_stack_down(long hresult, std::string detail);
+
+  /**
+   * @brief Whether the display stack is currently known to be dead.
+   *
+   * Latched by `mark_stack_down`, cleared by `note_stack_healthy`. Call
+   * sites use this to fail fast and loudly (with "reboot required")
+   * instead of burning the backoff ladder per encoder, per attempt.
+   */
+  bool stack_down();
+
+  /**
+   * @brief Report that the display stack was just observed working.
+   *
+   * Clears the terminal latch (a successful D3D11 device creation or a
+   * healthy QueryDisplayConfig proves the stack came back — e.g. the GPU
+   * driver recovered on its own, or the user reset it). Cheap and safe to
+   * call on every success path; it is a no-op when nothing is latched.
+   */
+  void note_stack_healthy();
+
+  /// The incident currently open (or the last one, if it has closed).
+  std::optional<incident_t> current_incident();
+
+  /// Number of distinct incidents since process start.
+  std::uint64_t incident_count();
 
   /// Human-readable label for `source_t` (used by logs and the Web UI).
   const char *source_label(source_t source);

@@ -23,6 +23,18 @@ namespace tdr {
     std::chrono::steady_clock::time_point g_last_log_at {};
     std::chrono::steady_clock::time_point g_last_notify_at {};
 
+    std::optional<incident_t> g_incident;
+    std::chrono::steady_clock::time_point g_incident_last_steady {};
+    std::uint64_t g_incident_count {0};
+    std::atomic<bool> g_stack_down {false};
+
+    // How long an incident stays open. A dead stack is re-detected on
+    // every client attempt (~33s apart in the 2026-07-27 field incident),
+    // and those detections are the same failure, not new ones. Comfortably
+    // longer than that cadence so a persistent wedge reads as one incident
+    // with a growing duration.
+    constexpr std::chrono::minutes kIncidentWindow {5};
+
     // Cooldowns. Each TDR-class failure cascades through several call
     // sites (encoder D3D11, DD test, virtual display enumerate, ...), all
     // firing within seconds of each other. The first event in a cluster
@@ -51,6 +63,28 @@ namespace tdr {
       std::lock_guard<std::mutex> lk(g_mutex);
       g_last = event;
       g_count.fetch_add(1, std::memory_order_relaxed);
+
+      // Fold into the open incident, or open a new one after a quiet
+      // window. `terminal` is sticky for the life of the incident.
+      const bool fold = g_incident.has_value()
+        && g_incident_last_steady != clock::time_point {}
+        && (now_steady - g_incident_last_steady) < kIncidentWindow;
+      if (!fold) {
+        incident_t fresh;
+        fresh.started_at = now_system;
+        fresh.first_source = source;
+        g_incident = std::move(fresh);
+        ++g_incident_count;
+      }
+      g_incident->last_at = now_system;
+      g_incident->last_source = source;
+      g_incident->hresult = hresult;
+      g_incident->detail = detail;
+      g_incident->events += 1;
+      if (source == source_t::display_stack_down) {
+        g_incident->terminal = true;
+      }
+      g_incident_last_steady = now_steady;
 
       if (g_last_log_at == clock::time_point {} || (now_steady - g_last_log_at) >= kLogCooldown) {
         g_last_log_at = now_steady;
@@ -112,6 +146,51 @@ namespace tdr {
     return g_count.load(std::memory_order_relaxed);
   }
 
+  void mark_stack_down(long hresult, std::string detail) {
+    const bool first = !g_stack_down.exchange(true, std::memory_order_release);
+    if (first) {
+      // Loud, once, with the actual remedy — not the generic TDR line.
+      BOOST_LOG(error) << "Display stack down: " << detail
+                       << " (hresult=0x" << std::hex << hresult << std::dec
+                       << "). Windows' display API is unavailable process-wide, "
+                       << "which no user-mode recovery can clear — the machine "
+                       << "must be rebooted. New sessions will be refused until "
+                       << "the display stack returns.";
+    }
+    // Still recorded as an event so the incident (and the ring/telemetry
+    // consumers watching event_count) see it; mark_event handles the
+    // rate-limited logging and the tray toast.
+    mark_event(source_t::display_stack_down, hresult, std::move(detail));
+  }
+
+  bool stack_down() {
+    return g_stack_down.load(std::memory_order_acquire);
+  }
+
+  void note_stack_healthy() {
+    if (!g_stack_down.exchange(false, std::memory_order_release)) {
+      return;  // nothing was latched — cheap no-op on the hot success path
+    }
+    BOOST_LOG(info) << "Display stack recovered: Windows is enumerating displays "
+                    << "and D3D11 device creation succeeds again. Resuming normal "
+                    << "session handling.";
+    std::lock_guard<std::mutex> lk(g_mutex);
+    if (g_incident) {
+      // Close the incident so a later failure reads as a new one.
+      g_incident_last_steady = std::chrono::steady_clock::time_point {};
+    }
+  }
+
+  std::optional<incident_t> current_incident() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    return g_incident;
+  }
+
+  std::uint64_t incident_count() {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    return g_incident_count;
+  }
+
   const char *source_label(source_t source) {
     switch (source) {
       case source_t::encoder_d3d11:
@@ -124,6 +203,8 @@ namespace tdr {
         return "QueryDisplayConfig";
       case source_t::encoder_stall:
         return "encoder stall";
+      case source_t::display_stack_down:
+        return "display stack down";
     }
     return "unknown";
   }
