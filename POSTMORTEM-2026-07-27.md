@@ -50,7 +50,7 @@ A separate, independent bug: `luminalshine.exe` dies silently (~10 abrupt termin
 
 At 11:00:22, ~8.6 min into a 4K240 HDR HEVC stream under heavy game load, the GPU stalled: NVENC encode-wait timeout, confirmed 200 ms later by the LuminalVGD ring's GPU-reset event. The same signature struck 7/26 17:04 (105 min into a 4K HDR DLSS-FG session, beta.4 + driver build 11) — that one **recovered in ~2 minutes**. Prior history: Halo → `watchdog.sys` bugchecks; the identical terminal wedge on **2026-05-17 under SudoVDA**, before LuminalVGD existed.
 
-Attribution: an NVIDIA (Blackwell) / Insider-WDDM-level fault is the strongest hypothesis, but is **not yet proven** — no kernel-side evidence (System event log `nvlddmkm` 4101, LiveKernelReports, minidumps) has been collected, and no log records the OS build or NVIDIA driver version. One caveat the verifiers insisted on: **in all three observed collapses (5/17, 7/26, 7/27) an IddCx virtual display was the exclusive active display**, so "active indirect display during TDR recovery" being part of the trigger cannot be excluded — that would still be an OS/NVIDIA bug, but it changes the mitigation calculus. Driver build 13 *specifically* is weakly implicated at most (n=1 each: build 11's TDR recovered, build 13's wedged; build 13 also ran ~17 h of healthy sessions first).
+Attribution: an NVIDIA (Blackwell) / Insider-WDDM-level fault is the strongest hypothesis, but is **not yet proven** — no kernel-side evidence (System event log `nvlddmkm` 4101, LiveKernelReports, minidumps) has been collected. The OS was Insider build **29617** as of 2026-07-24 (recorded in CLAUDE.md's control-ACL notes); the NVIDIA driver version is still unrecorded anywhere. One caveat the verifiers insisted on: **in all three observed collapses (5/17, 7/26, 7/27) an IddCx virtual display was the exclusive active display**, so "active indirect display during TDR recovery" being part of the trigger cannot be excluded — that would still be an OS/NVIDIA bug, but it changes the mitigation calculus. Driver build 13 *specifically* is weakly implicated at most (n=1 each: build 11's TDR recovered, build 13's wedged; build 13 also ran ~17 h of healthy sessions first).
 
 ### (b) Failed OS recovery → machine-wide WDDM wedge (why monitors are blank)
 
@@ -68,14 +68,15 @@ Post-11:00:41, in **two independent processes** (SYSTEM service + interactive-de
 
 ### Independent finding: the silent host-crash bug
 
-~10 abrupt `luminalshine.exe` terminations since 7/25 (some are installer/update kills; solid crash candidates: 7/25 12:59:30 mid-stream, 7/26 17:04:47 *during* TDR recovery, 7/27 04:00:46 idle, 10:41:08 mid-stream, 10:48:32 with dump). Two mid-stream deaths end with `Audio capture signaled buffer discontinuity`; two others are teardown/REVERT-adjacent. **Confirmed:** none of them killed the display stack. The 68 MB dump has not been analyzed — that is the single highest-value unopened piece of evidence, along with the Windows System event log.
+~10 abrupt `luminalshine.exe` terminations since 7/25 (some are installer/update kills; solid crash candidates: 7/25 12:59:30 mid-stream, 7/26 17:04:47 *during* TDR recovery, 7/27 04:00:46 idle, 10:41:08 mid-stream, 10:48:32 with dump). Two mid-stream deaths end with `Audio capture signaled buffer discontinuity`; two others are teardown/REVERT-adjacent. **Confirmed:** none of them killed the display stack. The 68 MB dump has not been analyzed — that is the single highest-value unopened piece of evidence, along with the Windows System event log. Note: luminalshine already tracks a known heap crash (task #33, `0xc0000374` when capture starts against a never-activated display with an empty device name, found 2026-07-25) — check whether the dump matches it before opening a new crash investigation.
 
 ### LuminalVGD driver: verdict
 
 Exonerated as cause of (a)/(b) — control plane flawless through the entire incident; identical wedge predates it (SudoVDA, 5/17). Real defects found:
 - **Watchdog contract lie:** handshake advertises `watchdog 3 s`, but `effective_lease_timeout()` floors USE_DEFAULT at `DEFAULT_LEASE_TIMEOUT_MS = 10_000` (`crates/luminal-vgd-core/src/session.rs:84-99`); measured orphan-unplug after the 10:41 crash was ~11 s.
 - **No surfaced/failed feedback** for CREATE_MONITOR; no recovery/reset IOCTL.
-- **Deployed build 13 diverges from `main`** (repo @ 71418b7 says the IddCx shell doesn't exist; the host runs it, with phase-2-planned caps bits set). The §3.3.6 ETW/WPP driver-side tracing is evidently not shipping — which is why we have zero driver-side evidence for the wedge window.
+- **Driver-side tracing existed but wasn't running.** ETW TraceLogging (provider `NortheBridge.LuminalVGD`, GUID in CLAUDE.md) has shipped since phase 2, but ETW is capture-on-demand — no `logman` session was active during the wedge window, so there is zero driver-side evidence for it. WPP/IFR (which would have given always-on in-flight recorder data, §3.3.6) remains an unwired tracked deviation.
+- *(Correction to the original analysis: the "deployed build 13 diverges from `main`" claim was an artifact of a two-week-stale analysis clone. `origin/main` at `9a9dd2d` contains the entire Windows-side line — phases 2/4/5/7, driver builds 2–13, released as v0.1.0-alpha.3.)*
 
 ---
 
@@ -102,9 +103,9 @@ Exonerated as cause of (a)/(b) — control plane flawless through the entire inc
 
 ### Driver build 14 (LuminalVGD repo)
 
-7. Reconcile the watchdog contract (advertise 10 s or honor 3 s; one line either way, plus doc).
+7. Reconcile the watchdog contract (advertise 10 s or honor 3 s; one line either way, plus doc) — confirmed still present on `main` @ `9a9dd2d`: `effective_lease_timeout()` floors USE_DEFAULT at `DEFAULT_LEASE_TIMEOUT_MS = 10_000`.
 8. CREATE_MONITOR surfaced/failed feedback (GET_STATUS per-session arrival flag) + host auto-DESTROY when nothing surfaces in its 5 s window; consider a DESTROY_ALL/RESET recovery IOCTL (PROTO_VERSION_MINOR bump).
-9. **Merge the Windows-side driver branch back into this repo** and ship §3.3.6 ETW TraceLogging + WPP IFR — the next wedge must not happen with zero driver-side evidence.
+9. **Close the observability gap**: wire WPP/IFR (§3.3.6, the tracked deviation) so the next wedge leaves always-on driver-side evidence; until then, keep a standing `logman` ETW session on `NortheBridge.LuminalVGD` running on the dev box during any stress/repro testing.
 
 ### Verification / follow-up
 
