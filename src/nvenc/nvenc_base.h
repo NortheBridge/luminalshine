@@ -201,4 +201,12 @@ namespace nvenc {
     } encoder_state;
   };
 
+  /**
+   * @brief Process-wide count of encoder-teardown drain timeouts that
+   *        leaked NVENC-registered resources. Non-zero means the bounded
+   *        per-process registration pool is shrinking; session teardown
+   *        uses this to schedule a clean host restart once idle.
+   */
+  std::uint64_t drain_leak_count();
+
 }  // namespace nvenc

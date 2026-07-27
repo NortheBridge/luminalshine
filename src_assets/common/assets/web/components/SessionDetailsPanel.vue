@@ -385,6 +385,7 @@ const CONNECTION_CHARTS: ChartSpec[] = [
       { key: 'client_losses',      label: 'Losses',     stroke: PAL.flare },
       { key: 'idr_requests',       label: 'IDR',        stroke: PAL.gold },
       { key: 'ref_invalidations',  label: 'Ref Inv.',   stroke: PAL.blue },
+      { key: 'gpu_resets',         label: 'GPU Reset',  stroke: PAL.violet },
     ] },
 ];
 

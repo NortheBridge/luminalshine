@@ -41,6 +41,7 @@ extern "C" {
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
+#include "nvenc/nvenc_base.h"
 #include "tdr_state.h"
 #include "thread_safe.h"
 #ifdef _WIN32
@@ -502,6 +503,10 @@ namespace stream {
       std::atomic<std::uint32_t> idr_requests {0};
       std::atomic<std::uint32_t> ref_invalidations {0};
       std::chrono::steady_clock::time_point last_flush {};
+      // tdr::event_count() watermark, video thread only — the flush
+      // emits the delta as the gpu_resets series so Session Details
+      // charts show exactly where a GPU reset hit the stream.
+      std::uint64_t tdr_marks_seen {0};
     } telemetry;
 
     safe::mail_raw_t::event_t<bool> shutdown_event;
@@ -1596,6 +1601,9 @@ namespace stream {
     const auto now = std::chrono::steady_clock::now();
     if (t.last_flush == std::chrono::steady_clock::time_point {}) {
       t.last_flush = now;
+      // Baseline the GPU-reset watermark so pre-session events don't
+      // spike the first emitted bucket.
+      t.tdr_marks_seen = tdr::event_count();
       return;
     }
     const auto elapsed = now - t.last_flush;
@@ -1624,6 +1632,9 @@ namespace stream {
     s["client_losses"] = losses / secs;
     s["idr_requests"] = idr / secs;
     s["ref_invalidations"] = ref_inv / secs;
+    const auto tdr_now = tdr::event_count();
+    s["gpu_resets"] = static_cast<double>(tdr_now - t.tdr_marks_seen);
+    t.tdr_marks_seen = tdr_now;
     session_mon::sample_now(session_mon::make_id(session->launch_session_id), s);
   }
 
@@ -2492,6 +2503,24 @@ namespace stream {
 #ifdef _WIN32
         display_helper_integration::clear_pending_apply();
         clear_deferred_stream_start_actions();
+        // A drain-timed-out encoder teardown leaked NVENC-registered
+        // resources (the pool is bounded, ~64 on consumer cards; the
+        // leak site logs the running total). Now that the host is idle,
+        // recycle the process cleanly so the pool never exhausts inside
+        // a future session. Delayed + re-checked so an immediate
+        // reconnect always wins over the restart.
+        if (const auto leaks = nvenc::drain_leak_count(); leaks > 0) {
+          BOOST_LOG(warning) << "NvEnc drain-leak events this process: " << leaks
+                             << "; scheduling a clean host restart now that no sessions remain.";
+          task_pool.pushDelayed([]() {
+            if (session::active_sessions.load(std::memory_order_acquire) > 0) {
+              BOOST_LOG(info) << "Skipping post-leak host restart; a new session is active.";
+              return;
+            }
+            BOOST_LOG(info) << "Restarting host to reclaim leaked NVENC registrations.";
+            platf::restart();
+          }, 15s);
+        }
 #endif
         // Only revert on disconnect when explicitly enabled by config.
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};

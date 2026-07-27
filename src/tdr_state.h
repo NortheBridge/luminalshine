@@ -38,6 +38,10 @@ namespace tdr {
     /// QueryDisplayConfig returned ERROR_NOT_SUPPORTED for several
     /// consecutive calls — the WDDM display API itself is wedged.
     query_display_config = 4,
+    /// The encoder's in-flight frame never signaled completion (NvEnc
+    /// encode-wait timeout) — the earliest observable symptom of a GPU
+    /// hang, minutes before the D3D11 retry ladder can exhaust.
+    encoder_stall = 5,
   };
 
   struct event_t {
