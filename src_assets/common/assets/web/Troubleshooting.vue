@@ -364,20 +364,42 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div class="min-w-0">
             <h2 class="text-base font-semibold text-dark dark:text-light">
-              {{ translate('troubleshooting.vdd_card_title', 'Virtual Display Driver') }}
+              {{ translate('troubleshooting.vdd_card_title', 'Virtual Display Driver (LuminalVGD)') }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
               {{
                 translate(
                   'troubleshooting.vdd_card_desc',
-                  'Manual recovery for the SudoVDA virtual display driver. Use "Restart Virtual Display Driver" to PnP-disable and re-enable the SudoVDA root device (same as right-click Disable / Enable in Device Manager, but run as SYSTEM and scoped to SudoVDA only — other devices are not touched). Active streaming sessions will be torn down. Use "Show Diagnostic" to copy SudoVDA status into a support ticket without opening Device Manager.',
+                  'Manual recovery for the LuminalVGD virtual display driver. "Restart Virtual Display Driver" destroys the tracked virtual monitors and reconnects to the driver, escalating to a device restart (same as Disable / Enable in Device Manager, scoped to LuminalVGD only) if the driver still does not respond. Active streaming sessions using a virtual display will end. Use "Show Diagnostic" to copy the driver status into a support ticket.',
                 )
               }}
             </p>
             <div v-if="vddDiag" class="mt-2 text-xs space-y-1">
               <div>
                 <span class="opacity-70"
-                  >{{ translate('troubleshooting.vdd_status', 'Status') }}:</span
+                  >{{ translate('troubleshooting.vdd_driver', 'Driver') }}:</span
+                >
+                <span class="ml-1">
+                  <template v-if="vddDiag.handshake_ok">
+                    {{ translate('troubleshooting.vdd_driver_ok', 'Responding') }}
+                    <span v-if="vddDiag.driver_version" class="font-mono"
+                      >({{ vddDiag.driver_version }})</span
+                    >
+                  </template>
+                  <template v-else-if="vddDiag.driver_reachable">
+                    {{ translate('troubleshooting.vdd_driver_no_handshake', 'Reachable, but handshake failed') }}
+                  </template>
+                  <template v-else>
+                    {{ translate('troubleshooting.vdd_driver_unreachable', 'Not reachable') }}
+                    <span v-if="vddDiag.last_error" class="font-mono"
+                      >(error {{ vddDiag.last_error }})</span
+                    >
+                  </template>
+                </span>
+              </div>
+              <div>
+                <span class="opacity-70"
+                  >{{ translate('troubleshooting.vdd_status', 'Device') }}:</span
                 >
                 <span class="ml-1">{{ vddDiag.status_string }}</span>
               </div>
@@ -1014,8 +1036,12 @@ async function refreshTdrHealth() {
   }
 }
 
-// Virtual Display Driver (SudoVDA) recovery card state.
+// Virtual Display Driver (LuminalVGD) recovery card state.
 type VddDiagnostic = {
+  driver_reachable: boolean;
+  handshake_ok: boolean;
+  driver_version: string;
+  last_error?: number;
   device_present: boolean;
   instance_id: string;
   hardware_ids: string;
@@ -1039,6 +1065,10 @@ async function refreshVddDiagnostic() {
     const body = (r.data || {}) as Partial<VddDiagnostic> & { status?: boolean };
     if (r.status >= 200 && r.status < 300 && body.status !== false) {
       vddDiag.value = {
+        driver_reachable: body.driver_reachable === true,
+        handshake_ok: body.handshake_ok === true,
+        driver_version: typeof body.driver_version === 'string' ? body.driver_version : '',
+        last_error: typeof body.last_error === 'number' ? body.last_error : undefined,
         device_present: body.device_present === true,
         instance_id: typeof body.instance_id === 'string' ? body.instance_id : '',
         hardware_ids: typeof body.hardware_ids === 'string' ? body.hardware_ids : '',
@@ -1061,8 +1091,17 @@ async function refreshVddDiagnostic() {
 
 function formatVddDiagnosticText(d: VddDiagnostic): string {
   const lines: string[] = [];
-  lines.push('SudoVDA Virtual Display Driver diagnostic');
-  lines.push('=========================================');
+  lines.push('LuminalVGD Virtual Display Driver diagnostic');
+  lines.push('============================================');
+  lines.push(
+    `Driver:          ${
+      d.handshake_ok
+        ? `responding${d.driver_version ? ` (${d.driver_version})` : ''}`
+        : d.driver_reachable
+          ? 'reachable, handshake failed'
+          : `not reachable${d.last_error ? ` (error ${d.last_error})` : ''}`
+    }`,
+  );
   lines.push(`Device present:  ${d.device_present ? 'yes' : 'no'}`);
   lines.push(`Status:          ${d.status_string}`);
   if (d.instance_id) lines.push(`Instance ID:     ${d.instance_id}`);
@@ -1071,7 +1110,7 @@ function formatVddDiagnosticText(d: VddDiagnostic): string {
   if (d.last_recovery_at) {
     const ts = new Date(d.last_recovery_at * 1000).toLocaleString();
     const levelLabel =
-      ['none', 'handle recycle', 'PnP restart'][d.last_recovery_level] ??
+      ['none', 'session reset', 'PnP restart'][d.last_recovery_level] ??
       String(d.last_recovery_level);
     lines.push(`Last recovery:   ${ts} (${levelLabel})`);
     if (d.last_recovery_message) {
@@ -1090,7 +1129,7 @@ async function showVddDiagnostic() {
       title: translate('troubleshooting.vdd_diag_error', 'Could not collect diagnostic'),
       content: translate(
         'troubleshooting.vdd_diag_error_body',
-        'The SudoVDA diagnostic endpoint did not return data. Check the LuminalShine log for details.',
+        'The virtual display diagnostic endpoint did not return data. Check the LuminalShine log for details.',
       ),
       positiveText: translate('troubleshooting.close', 'Close'),
     });
@@ -1098,7 +1137,7 @@ async function showVddDiagnostic() {
   }
   const text = formatVddDiagnosticText(d);
   dialog.info({
-    title: translate('troubleshooting.vdd_diag_title', 'SudoVDA Diagnostic'),
+    title: translate('troubleshooting.vdd_diag_title', 'LuminalVGD Diagnostic'),
     content: () =>
       h(
         'pre',
@@ -1417,7 +1456,7 @@ function confirmRestartVdd() {
     ),
     content: translate(
       'troubleshooting.vdd_restart_confirm_body',
-      'This PnP-disables and re-enables the SudoVDA virtual display device. Any active streaming session using a virtual display will be ended; the Moonlight client will need to reconnect. Other devices are not affected.',
+      'This destroys the tracked virtual monitors and reconnects to the LuminalVGD driver, restarting the device if needed. Any active streaming session using a virtual display will be ended; the Moonlight client will need to reconnect. Other devices are not affected.',
     ),
     positiveText: translate('troubleshooting.vdd_restart_yes', 'Restart driver'),
     negativeText: translate('troubleshooting.cancel', 'Cancel'),

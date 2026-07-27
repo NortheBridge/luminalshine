@@ -10,6 +10,7 @@
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 #include "src/platform/windows/sudovda_recovery.h"
+#include "src/platform/windows/vgd_recovery.h"
 #include "src/process.h"
 #include "src/rtsp.h"
 #include "src/state_storage.h"
@@ -90,6 +91,10 @@ namespace VDISPLAY {
     constexpr auto ENSURE_DISPLAY_RETENTION_TIMEOUT = std::chrono::minutes(3);
     constexpr std::wstring_view SUDOVDA_HARDWARE_ID = L"root\\sudomaker\\sudovda";
     constexpr std::wstring_view SUDOVDA_FRIENDLY_NAME_W = L"SudoMaker Virtual Display Adapter";
+    /// LuminalVGD's root-enumerated device (see the driver INF). The UMDF
+    /// service name is always WUDFRd, so the hardware ID is the only
+    /// reliable way to find this device node.
+    constexpr std::wstring_view LUMINAL_VGD_HARDWARE_ID = L"root\\luminal_vgd";
 
     std::atomic<bool> g_watchdog_feed_requested {false};
     std::atomic<bool> g_watchdog_stop_requested {false};
@@ -572,11 +577,19 @@ namespace VDISPLAY {
       return system_root + L"\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
     }
 
-    std::optional<std::wstring> find_sudovda_device_instance_id() {
+    /// Locate a display-class device node by hardware ID. `friendly_name`
+    /// is an optional secondary match (SudoVDA installs were seen in the
+    /// field with a rewritten hardware ID but an intact friendly name);
+    /// pass an empty view to match on the hardware ID alone.
+    std::optional<std::wstring> find_display_device_instance_id(
+      std::wstring_view hardware_id,
+      std::wstring_view friendly_name,
+      const char *what) {
       DevInfoHandle info(SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DIGCF_PRESENT));
       if (!info.valid()) {
         const DWORD err = GetLastError();
-        BOOST_LOG(warning) << "Failed to acquire display device info set for SudoVDA lookup (error=" << err << ")";
+        BOOST_LOG(warning) << "Failed to acquire display device info set for " << what
+                           << " lookup (error=" << err << ")";
         return std::nullopt;
       }
 
@@ -588,19 +601,20 @@ namespace VDISPLAY {
         if (!SetupDiEnumDeviceInfo(info.get(), index, &device_info)) {
           const DWORD err = GetLastError();
           if (err != ERROR_NO_MORE_ITEMS) {
-            BOOST_LOG(warning) << "SetupDiEnumDeviceInfo failed while scanning for SudoVDA (error=" << err << ")";
+            BOOST_LOG(warning) << "SetupDiEnumDeviceInfo failed while scanning for " << what
+                               << " (error=" << err << ")";
           }
           break;
         }
 
         bool matches = false;
         if (load_device_property_multi_sz(info.get(), device_info, SPDRP_HARDWAREID, hardware_ids)) {
-          matches = multi_sz_contains_ci(hardware_ids, SUDOVDA_HARDWARE_ID);
+          matches = multi_sz_contains_ci(hardware_ids, hardware_id);
         }
 
-        if (!matches) {
+        if (!matches && !friendly_name.empty()) {
           if (auto friendly = load_device_property_string(info.get(), device_info, SPDRP_FRIENDLYNAME)) {
-            matches = equals_ci(*friendly, SUDOVDA_FRIENDLY_NAME_W);
+            matches = equals_ci(*friendly, friendly_name);
           }
         }
 
@@ -614,6 +628,16 @@ namespace VDISPLAY {
       }
 
       return std::nullopt;
+    }
+
+    std::optional<std::wstring> find_sudovda_device_instance_id() {
+      return find_display_device_instance_id(SUDOVDA_HARDWARE_ID, SUDOVDA_FRIENDLY_NAME_W, "SudoVDA");
+    }
+
+    std::optional<std::wstring> find_luminal_vgd_device_instance_id() {
+      // Hardware ID only: the friendly name is user-visible and can be
+      // renamed, and there is exactly one root\luminal_vgd node.
+      return find_display_device_instance_id(LUMINAL_VGD_HARDWARE_ID, {}, "LuminalVGD");
     }
 
     /**
@@ -837,11 +861,23 @@ namespace VDISPLAY {
       return is_device_disabled(id);
     }
 
+    std::optional<std::wstring> luminal_vgd_instance_id() {
+      return find_luminal_vgd_device_instance_id();
+    }
+
+    bool device_pnp_restart(const std::wstring &id) {
+      return restart_sudovda_device(id);
+    }
+
+    bool device_is_disabled(const std::wstring &id) {
+      return is_device_disabled(id);
+    }
+
     bool sudovda_try_reenable(const std::wstring &id) {
       return try_reenable_disabled_device(id);
     }
 
-    std::string sudovda_collect_hardware_ids(const std::wstring &id) {
+    std::string device_collect_hardware_ids(const std::wstring &id) {
       DevInfoHandle dev_set(SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES));
       if (!dev_set.valid()) {
         return {};
@@ -865,6 +901,10 @@ namespace VDISPLAY {
         cursor += wcslen(cursor) + 1;
       }
       return joined;
+    }
+
+    std::string sudovda_collect_hardware_ids(const std::wstring &id) {
+      return device_collect_hardware_ids(id);
     }
   }  // namespace recovery_bridge
 
@@ -4170,18 +4210,19 @@ namespace VDISPLAY {
       // to recycle the driver. The reset itself is idempotent but the
       // close+open pair shouldn't race.
       //
-      // Escalate through the full recovery ladder: Level 1 (handle
-      // recycle) every time, Level 2 (PnP disable+enable) at most once
-      // per 5 minutes per the ladder's internal cooldown. When the WDDM
-      // stack is wedged after a TDR, Level 1 alone usually isn't enough
-      // — the user's 2026-05-17 incident exhausted three full Level-1
-      // cycles before the session aborted. Letting the ladder escalate
-      // is the actual fix.
-      const auto recovery = platf::sudovda::run_recovery_ladder(
-        platf::sudovda::recovery_level_t::pnp_restart,
-        /*force=*/false
-      );
-      BOOST_LOG(info) << "SudoVDA recovery ladder result: level="
+      // Recover against the driver that is actually installed. This used
+      // to call the SudoVDA ladder, which on a LuminalVGD host bailed on
+      // its first step ("device not present in PnP tree") every single
+      // time — so the automatic recovery path had never once run during
+      // the incidents it was written for.
+      //
+      // The PnP cycle is deliberately withheld here: this path fires from
+      // display enumeration, which can be several layers deep inside an
+      // unrelated caller, and yanking the device node out from under it
+      // is worse than reporting failure. The user-initiated restart in
+      // the Troubleshooting page still escalates that far.
+      const auto recovery = platf::vgd_recovery::manual_restart(/*allow_pnp_cycle=*/false);
+      BOOST_LOG(info) << "LuminalVGD recovery result: level="
                       << static_cast<int>(recovery.level)
                       << " success=" << (recovery.success ? "true" : "false")
                       << " — " << recovery.message;
@@ -4447,6 +4488,14 @@ namespace VDISPLAY {
     bool sudovda_is_disabled(const std::wstring &id);
     bool sudovda_try_reenable(const std::wstring &id);
     std::string sudovda_collect_hardware_ids(const std::wstring &id);
+
+    /// Same helpers pointed at the first-party driver's device node.
+    /// `device_pnp_restart` / `device_is_disabled` are hardware-agnostic
+    /// (they take an instance ID), so only the lookup differs.
+    std::optional<std::wstring> luminal_vgd_instance_id();
+    bool device_pnp_restart(const std::wstring &id);
+    bool device_is_disabled(const std::wstring &id);
+    std::string device_collect_hardware_ids(const std::wstring &id);
   }  // namespace recovery_bridge
 }  // namespace VDISPLAY
 
