@@ -2605,6 +2605,17 @@ namespace stream {
       // ERROR_NOT_SUPPORTED, which only surfaced as a generic 10s "Hang
       // detected" fatal. Refusing the start here means Moonlight gets an
       // immediate, intelligible failure instead of a frozen-stream window.
+      // Terminal first: a dead display stack is not "recovering" and the
+      // client retrying will never help. Say so plainly rather than
+      // implying it should try again in a moment.
+      if (tdr::stack_down()) {
+        BOOST_LOG(error)
+          << "Refusing to start new streaming session: the Windows display stack is down "
+          << "(display API unavailable process-wide). This cannot be recovered from "
+          << "software — the host machine must be rebooted.";
+        return -1;
+      }
+
       if (tdr::recovery_recent()) {
         const auto last = tdr::last_event();
         BOOST_LOG(warning)
@@ -2623,18 +2634,31 @@ namespace stream {
       // (DXGI_ERROR_UNSUPPORTED) and friends on a wedged one.
       const HRESULT probe_hr = platf::dxgi::D3D11ProbeDeviceHealth();
       if (FAILED(probe_hr)) {
-        BOOST_LOG(warning)
-          << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
-          << std::hex << probe_hr << std::dec
-          << "). The GPU driver appears mid-recovery; the client should retry shortly.";
-        // Record so the Troubleshooting card reflects it the way a
-        // post-TDR event would, even though the encoder/QDC paths
-        // didn't fire it from inside an active stream.
-        tdr::mark_event(
-          tdr::source_t::dd_test_d3d11,
-          static_cast<long>(probe_hr),
-          "Pre-flight D3D11 health check failed at session start"
-        );
+        // Only escalate to a recorded failure when the display API
+        // corroborates it. Recording unconditionally made this probe
+        // self-feeding: its own event satisfied recovery_recent() above,
+        // so the next session was refused before the probe even ran, and
+        // the "events" counter climbed once per client attempt for as
+        // long as the machine stayed broken.
+        LONG qdc_status = ERROR_SUCCESS;
+        UINT32 qdc_paths = 0;
+        const bool display_api_ok =
+          platf::dxgi::display_config_api_healthy(&qdc_status, &qdc_paths);
+        if (!display_api_ok) {
+          std::string detail = "Pre-flight D3D11 health check failed at session start; "
+                               "QueryDisplayConfig unavailable (status ";
+          detail += std::to_string(qdc_status);
+          detail += ", ";
+          detail += std::to_string(qdc_paths);
+          detail += " paths)";
+          tdr::mark_stack_down(static_cast<long>(probe_hr), std::move(detail));
+        } else {
+          BOOST_LOG(warning)
+            << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
+            << std::hex << probe_hr << std::dec
+            << "), though the display stack itself is healthy (" << qdc_paths
+            << " active paths). The GPU driver may be mid-recovery; the client should retry shortly.";
+        }
         return -1;
       }
 #endif

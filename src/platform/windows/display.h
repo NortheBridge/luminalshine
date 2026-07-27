@@ -98,6 +98,21 @@ namespace platf::dxgi {
    */
   HRESULT D3D11ProbeDeviceHealth() noexcept;
 
+  /**
+   * @brief Is Windows' display-configuration API alive and seeing displays?
+   *
+   * The cross-check that tells a recoverable device failure apart from a
+   * dead WDDM stack. A D3D11 failure alone proves nothing about which one
+   * you have; pairing it with this does. When the stack is dead,
+   * QueryDisplayConfig fails machine-wide (typically ERROR_NOT_SUPPORTED,
+   * 50) or enumerates zero paths, in every process, until reboot.
+   *
+   * @param error_out Receives the raw Win32 status, or nullptr.
+   * @param path_count_out Receives the active path count, or nullptr.
+   * @return true when the API answered and at least one path exists.
+   */
+  bool display_config_api_healthy(LONG *error_out, UINT32 *path_count_out) noexcept;
+
   using factory1_t = util::safe_ptr<IDXGIFactory1, Release<IDXGIFactory1>>;
   using dxgi_t = util::safe_ptr<IDXGIDevice, Release<IDXGIDevice>>;
 

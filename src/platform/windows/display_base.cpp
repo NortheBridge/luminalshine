@@ -426,13 +426,52 @@ namespace platf::dxgi {
   }
 #endif
 
+  // Is Windows' display-configuration API answering, and does it see any
+  // display paths? A dead WDDM stack fails this even though every
+  // user-mode component is healthy: QueryDisplayConfig returns
+  // ERROR_NOT_SUPPORTED (or enumerates zero paths) machine-wide, in every
+  // process, until reboot.
+  //
+  // This is the cross-check that separates "the adapter is resetting,
+  // retrying will work" from "the stack is gone, retrying is pointless" —
+  // the distinction the 2026-07-27 incident spent 96 minutes failing to
+  // make. Deliberately self-contained (raw Win32, no retries): the
+  // libdisplaydevice wrapper already retries internally and discards the
+  // error code, which is exactly the information needed here.
+  bool display_config_api_healthy(LONG *error_out, UINT32 *path_count_out) noexcept {
+    UINT32 path_count = 0;
+    UINT32 mode_count = 0;
+    const LONG status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
+    if (error_out) {
+      *error_out = status;
+    }
+    if (path_count_out) {
+      *path_count_out = path_count;
+    }
+    if (status != ERROR_SUCCESS) {
+      return false;
+    }
+    // The API answered but nothing is attached: on this machine that only
+    // happens when the stack is wedged (a headless server would not be
+    // running a streaming host with a virtual display attached).
+    return path_count > 0;
+  }
+
   // Wrapper around D3D11CreateDevice with bounded exponential-backoff
-  // retry for the post-TDR transient failure window. Retries only on
+  // retry for the post-TDR transient failure window. Retries on
   // DXGI_ERROR_UNSUPPORTED (0x887A0004) and DXGI_ERROR_DEVICE_REMOVED
-  // (0x887A0005) — the two HRESULTs the kernel returns while a NVENC /
-  // GPU TDR recovery is in flight. Other failures (E_FAIL, E_INVALIDARG,
-  // E_OUTOFMEMORY) are surfaced immediately because they mean the call
-  // itself is wrong, not that the GPU is in a transient bad state.
+  // (0x887A0005) — both are observed while a NVENC / GPU TDR recovery is
+  // in flight. Other failures (E_FAIL, E_INVALIDARG, E_OUTOFMEMORY) are
+  // surfaced immediately because they mean the call itself is wrong, not
+  // that the GPU is in a transient bad state.
+  //
+  // Note what these HRESULTs do NOT mean on their own: DXGI_ERROR_UNSUPPORTED
+  // is a capability/environment error, not a TDR signal. Treating it as
+  // proof of a GPU reset is what produced "39 TDR events" for a single
+  // failure in the field. Retrying briefly on it is still right (it does
+  // appear transiently during a real reset), but the classification of
+  // what happened is decided after the ladder, by asking the display API
+  // whether the stack is alive at all.
   //
   // Backoff schedule: 1s, 2s, 4s, 8s — capped at 4 retries (~15s total).
   // Empirically this matches NVIDIA Game Ready driver TDR recovery on
@@ -466,6 +505,21 @@ namespace platf::dxgi {
     using namespace std::chrono_literals;
     constexpr std::chrono::milliseconds backoff_schedule[] = {1000ms, 2000ms, 4000ms, 8000ms};
     constexpr int max_attempts = sizeof(backoff_schedule) / sizeof(backoff_schedule[0]) + 1;
+
+    // Already known dead: skip the ladder entirely. Otherwise every
+    // encoder candidate burns the full ~15s of sleeps re-proving it, which
+    // is how one failure became a ~66s-per-encoder loop with no exit.
+    if (tdr::stack_down()) {
+      LONG qdc_status = ERROR_SUCCESS;
+      if (!display_config_api_healthy(&qdc_status, nullptr)) {
+        BOOST_LOG(warning) << "D3D11CreateDevice (" << (call_site ? call_site : "unknown")
+                           << "): skipped — display stack is down (QueryDisplayConfig "
+                           << "status " << qdc_status << "). A reboot is required.";
+        return DXGI_ERROR_UNSUPPORTED;
+      }
+      // The stack came back while we were latched; fall through and let
+      // the normal path re-prove it (note_stack_healthy fires on success).
+    }
 
     HRESULT status = E_FAIL;
     for (int attempt = 1; attempt <= max_attempts; ++attempt) {
@@ -507,6 +561,9 @@ namespace platf::dxgi {
         feature_level,
         context);
       if (SUCCEEDED(status)) {
+        // Proof the stack is alive — clears any latched terminal state so
+        // a recovered machine resumes without needing a restart.
+        tdr::note_stack_healthy();
         if (attempt > 1) {
           BOOST_LOG(info) << "D3D11CreateDevice (" << (call_site ? call_site : "unknown")
                           << "): recovered after " << attempt << " attempts (status 0x"
@@ -523,21 +580,52 @@ namespace platf::dxgi {
         // E_INVALIDARG, etc.) or we've exhausted the backoff schedule.
         // Caller logs the final HRESULT.
         if (is_transient) {
-          // We retried for the full window and the GPU never came back —
-          // record the TDR escalation so the high-signal log line, tray
-          // toast, and session-start gate fire from one place. The
-          // call_site string ("encoder" / "DD test") drives which tdr
-          // source category we record under so the Web UI can show the
-          // user which subsystem detected it.
-          const auto src = (call_site != nullptr && std::string_view(call_site) == "encoder")
-            ? tdr::source_t::encoder_d3d11
-            : tdr::source_t::dd_test_d3d11;
+          // We retried for the full window and device creation never came
+          // back. WHY it failed decides what we tell the user, so ask the
+          // display API before naming a cause: if QueryDisplayConfig is
+          // also unavailable (or sees zero paths), the whole WDDM stack is
+          // dead and no retry ladder will ever succeed — that is terminal
+          // and needs a reboot, not another cycle. If the display API is
+          // healthy, this is a device-level problem: a genuine reset when
+          // the device was removed, otherwise an environment/capability
+          // failure that was never a TDR at all.
+          const char *const site = call_site ? call_site : "unknown";
+          LONG qdc_status = ERROR_SUCCESS;
+          UINT32 qdc_paths = 0;
+          const bool display_api_ok = display_config_api_healthy(&qdc_status, &qdc_paths);
+
           std::string detail = "D3D11CreateDevice exhausted ";
           detail += std::to_string(max_attempts);
           detail += " retries (";
-          detail += (call_site ? call_site : "unknown");
+          detail += site;
           detail += " call site)";
-          tdr::mark_event(src, static_cast<long>(status), std::move(detail));
+
+          if (!display_api_ok) {
+            detail += "; QueryDisplayConfig unavailable (status ";
+            detail += std::to_string(qdc_status);
+            detail += ", ";
+            detail += std::to_string(qdc_paths);
+            detail += " paths)";
+            tdr::mark_stack_down(static_cast<long>(status), std::move(detail));
+          } else if (status == DXGI_ERROR_DEVICE_REMOVED) {
+            // Display API alive + device removed: a real GPU reset.
+            const auto src = (std::string_view(site) == "encoder")
+              ? tdr::source_t::encoder_d3d11
+              : tdr::source_t::dd_test_d3d11;
+            tdr::mark_event(src, static_cast<long>(status), std::move(detail));
+          } else {
+            // Display API alive, device merely unsupported: this is an
+            // environment/capability failure (wrong adapter, driver not
+            // ready, no supported feature level). Log it plainly and do
+            // NOT record a TDR — a false GPU-reset verdict here refuses
+            // sessions for 30s and forces the capture ring to reinit.
+            BOOST_LOG(error) << "D3D11CreateDevice (" << site << "): failed with 0x"
+                             << util::hex(status).to_string_view()
+                             << " after " << max_attempts
+                             << " attempts, but the display stack is healthy ("
+                             << qdc_paths << " active paths). Treating as a device/"
+                             << "capability error, not a GPU reset.";
+          }
         }
         return status;
       }

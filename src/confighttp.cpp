@@ -656,7 +656,13 @@ namespace confighttp {
    *        the "GPU / Display Stack Health" card in the Troubleshooting
    *        view.
    *
-   * @api_examples{/api/health/tdr| GET| {"count":1,"recovery_recent":false,"last":{"at":1715990443,"source":"encoder D3D11","hresult":2289565700,"detail":"..."}}}
+   * `count` is the number of distinct incidents, not the number of times
+   * a failure was re-detected — a stack that stays broken is one incident
+   * with a growing duration, not one per client retry. `detections` keeps
+   * the raw count for support bundles. `stack_down` means the display API
+   * itself is unavailable process-wide: terminal, reboot required.
+   *
+   * @api_examples{/api/health/tdr| GET| {"count":1,"detections":22,"recovery_recent":false,"stack_down":true,"incident":{"started_at":1715990443,"last_at":1715993901,"duration_seconds":3458,"events":22,"first_source":"encoder stall","source":"display stack down","terminal":true},"last":{"at":1715990443,"source":"encoder D3D11","hresult":2289565700,"detail":"..."}}}
    */
   void getTdrHealth(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -664,8 +670,29 @@ namespace confighttp {
     }
     nlohmann::json out;
     out["status"] = true;
-    out["count"] = tdr::event_count();
+    out["count"] = tdr::incident_count();
+    out["detections"] = tdr::event_count();
     out["recovery_recent"] = tdr::recovery_recent();
+    out["stack_down"] = tdr::stack_down();
+    if (auto inc = tdr::current_incident(); inc) {
+      const auto started = std::chrono::duration_cast<std::chrono::seconds>(
+        inc->started_at.time_since_epoch()
+      ).count();
+      const auto last_at = std::chrono::duration_cast<std::chrono::seconds>(
+        inc->last_at.time_since_epoch()
+      ).count();
+      nlohmann::json incident;
+      incident["started_at"] = started;
+      incident["last_at"] = last_at;
+      incident["duration_seconds"] = last_at - started;
+      incident["events"] = inc->events;
+      incident["first_source"] = tdr::source_label(inc->first_source);
+      incident["source"] = tdr::source_label(inc->last_source);
+      incident["hresult"] = inc->hresult;
+      incident["detail"] = inc->detail;
+      incident["terminal"] = inc->terminal;
+      out["incident"] = std::move(incident);
+    }
     if (auto ev = tdr::last_event(); ev) {
       const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
         ev->at.time_since_epoch()
