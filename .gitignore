@@ -72,3 +72,11 @@ test_sunshine.log
 # LuminalVGD signed driver-package: packaging input dropped in from a
 # LuminalVGD release (or a local signed build) - never committed.
 src_assets/windows/drivers/luminalvgd/driver-package/
+
+# Runtime state written into the working directory when the test binary
+# (or a dev run) is launched from the repo root. Contains session tokens
+# and credential material - never committed.
+luminalshine_state.json
+luminalshine_state.json.bak
+sunshine_state.json
+sunshine_state.json.bak
