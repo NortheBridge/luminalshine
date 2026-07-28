@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -162,5 +163,24 @@ namespace tdr {
 
   /// Human-readable label for `source_t` (used by logs and the Web UI).
   const char *source_label(source_t source);
+
+  /**
+   * @brief Install a process-wide observer invoked after every `mark_event`.
+   *
+   * The hook runs on the thread that called `mark_event`, after the
+   * internal lock has been released (it is never invoked under the lock,
+   * so hook implementations may call back into `tdr::` accessors freely).
+   *
+   * IMPORTANT: the hook MUST NOT block. `mark_event` is called from
+   * time-critical paths — e.g. the NvEnc encode loop detecting an encoder
+   * stall — so the hook should do the cheapest possible dispatch (a
+   * rate-limit check, a task-pool push) and post the actual work to a
+   * worker thread. Exceptions thrown by the hook are swallowed.
+   *
+   * Replaces any previously-installed hook; pass `nullptr` to remove.
+   * Intended for a single consumer wired up at process init (currently the
+   * TDR topology lifeboat, src/platform/windows/tdr_lifeboat.h).
+   */
+  void set_event_hook(std::function<void(source_t)> hook);
 
 }  // namespace tdr
