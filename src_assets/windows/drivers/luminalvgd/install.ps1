@@ -49,7 +49,12 @@ $etwSessionName = 'LuminalVGD'
 $etwProviderGuid = '{c501990d-df12-5581-60a8-f55d593d7f7c}'
 # Stable session identity for the AutoLogger registration itself.
 $etwSessionGuid = '{b7e5e8ab-6a7c-4e64-9f9e-4d1a2c50c5a1}'
-$etwLogDir = Join-Path $env:ProgramData 'LuminalShine\config\etw'
+# Deliberately OUTSIDE ProgramData\LuminalShine\config: that directory
+# carries a protected DACL + System-integrity no-write-up label, which
+# breaks directory creation from a manual elevated (non-SYSTEM) run of
+# this script. The kernel logger and the bundle exporter both run as
+# SYSTEM and can use either location; this one works for everyone.
+$etwLogDir = Join-Path $env:ProgramData 'LuminalShine\etw'
 $etwLogFile = Join-Path $etwLogDir 'luminalvgd.etl'
 
 function Install-VgdAutologger {
@@ -64,6 +69,13 @@ function Install-VgdAutologger {
     New-ItemProperty -Path $key -Name 'MaxFileSize' -Value 8 -PropertyType DWord -Force | Out-Null
     New-ItemProperty -Path $key -Name 'BufferSize' -Value 16 -PropertyType DWord -Force | Out-Null
     New-ItemProperty -Path $key -Name 'FlushTimer' -Value 5 -PropertyType DWord -Force | Out-Null
+    # CRITICAL: rotate per boot. The wedge this trace exists to diagnose
+    # is cleared BY REBOOTING, and without FileMax the AutoLogger
+    # overwrites the file at that very reboot — destroying the incident
+    # boot's Tdr* breadcrumbs before the user can export a bundle. With
+    # FileMax, ETW keeps per-boot instances (sequence-numbered) and the
+    # bundle exporter globs the whole directory.
+    New-ItemProperty -Path $key -Name 'FileMax' -Value 3 -PropertyType DWord -Force | Out-Null
     $prov = Join-Path $key $etwProviderGuid
     New-Item -Path $prov -Force | Out-Null
     New-ItemProperty -Path $prov -Name 'Enabled' -Value 1 -PropertyType DWord -Force | Out-Null
@@ -72,23 +84,28 @@ function Install-VgdAutologger {
     New-ItemProperty -Path $prov -Name 'MatchAnyKeyword' -Value ([Int64]-1) -PropertyType QWord -Force | Out-Null
 
     # The AutoLogger only starts at the NEXT boot; cover the current boot
-    # with an identical live session unless one is already running.
+    # with an equivalent live session unless one is already running. A
+    # distinct file name keeps it clear of the AutoLogger's rotation set.
+    # -ft 5 matches the AutoLogger's FlushTimer: without it, buffers only
+    # reach disk when full (16 KB) or at clean close — a hard power cut
+    # mid-wedge would lose every buffered event of this boot.
     logman query $etwSessionName -ets *> $null
     if ($LASTEXITCODE -ne 0) {
-        logman create trace $etwSessionName -ets -o $etwLogFile -f bincirc -max 8 -bs 16 -p $etwProviderGuid 0xffffffffffffffff 0x5 *> $null
+        $liveFile = Join-Path $etwLogDir 'luminalvgd-live.etl'
+        logman create trace $etwSessionName -ets -o $liveFile -f bincirc -max 8 -bs 16 -ft 5 -p $etwProviderGuid 0xffffffffffffffff 0x5 *> $null
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "[LuminalVGD] ETW trace session started ($etwLogFile)."
+            Write-Host "[LuminalVGD] ETW trace session started ($liveFile)."
         } else {
             Write-Warning "[LuminalVGD] Could not start the live ETW session (logman exit $LASTEXITCODE); boot-time AutoLogger is registered."
         }
     }
-    Write-Host "[LuminalVGD] ETW AutoLogger registered (circular 8 MB, provider $etwProviderGuid)."
+    Write-Host "[LuminalVGD] ETW AutoLogger registered (circular 8 MB x3 boots, provider $etwProviderGuid)."
 }
 
 function Remove-VgdAutologger {
     logman stop $etwSessionName -ets *> $null
     Remove-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$etwSessionName" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item -Path $etwLogFile -Force -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -Path $etwLogDir -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "[LuminalVGD] ETW AutoLogger removed."
 }
 
