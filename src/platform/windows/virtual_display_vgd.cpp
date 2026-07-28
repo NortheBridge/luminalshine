@@ -7,6 +7,7 @@
 
 #include "src/platform/windows/vgd_devnode.h"
 
+#include "src/config.h"
 #include "src/logging.h"
 
 #include <algorithm>
@@ -300,6 +301,21 @@ namespace VDISPLAY::vgd {
     req.hdr = hdr ? 1 : 0;
     if (enable_hdr && !hdr) {
       BOOST_LOG(info) << "LuminalVGD: client requested HDR but the installed driver lacks HDR10 caps; creating SDR monitor.";
+    }
+    if (hdr) {
+      // EDID peak luminance from config (proto 0.4 additive field). 0 on
+      // the wire means "driver default (993 nits)"; a slider value of 0
+      // is sent as 1 so it clamps to the CTA floor (~51 nits) instead of
+      // silently meaning "default". Pre-0.4 drivers (build ≤14) ignore
+      // the tail bytes entirely.
+      const int nits = config::video.vgd_hdr_peak_nits;
+      req.max_nits = static_cast<uint32_t>(std::max(nits, 1));
+      if (g_caps && g_caps->proto_minor < 4 && nits != 800) {
+        BOOST_LOG(info) << "LuminalVGD: vgd_hdr_peak_nits=" << nits
+                        << " requires driver build 15+ (proto 0.4); the installed driver ("
+                        << "proto " << g_caps->proto_major << '.' << g_caps->proto_minor
+                        << ") uses its built-in 993 nits.";
+      }
     }
     req.flags = 0;
     req.mode_count = 1;

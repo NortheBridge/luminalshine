@@ -134,6 +134,12 @@ namespace config {
     /// without a config migration.
     std::string virtual_display_backend;
 
+    /// HDR peak brightness (nits) advertised by the LuminalVGD virtual
+    /// display's EDID (CTA-861.3 max luminance). 0–1000, default 800.
+    /// Applied at monitor creation; requires driver build 15+ (older
+    /// drivers ignore it and advertise the built-in 993).
+    int vgd_hdr_peak_nits;
+
     struct dd_t {
       struct workarounds_t {
         bool dummy_plug_hdr10;  ///< Force 30 Hz and HDR for physical dummy plugs (requires VSYNC override).

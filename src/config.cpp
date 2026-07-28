@@ -794,6 +794,7 @@ namespace config {
     video_t::virtual_display_mode_e::per_client,  // virtual_display_mode
     video_t::virtual_display_layout_e::exclusive,  // virtual_display_layout
     "auto",  // virtual_display_backend
+    800,  // vgd_hdr_peak_nits
 
     {
       video_t::dd_t::config_option_e::verify_only,  // configuration_option
@@ -1566,6 +1567,7 @@ namespace config {
     generic_f(vars, "virtual_display_mode", video.virtual_display_mode, virtual_display_mode_from_view);
     generic_f(vars, "virtual_display_layout", video.virtual_display_layout, virtual_display_layout_from_view);
     string_f(vars, "virtual_display_backend", video.virtual_display_backend);
+    int_between_f(vars, "vgd_hdr_peak_nits", video.vgd_hdr_peak_nits, {0, 1000});
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -2361,6 +2363,7 @@ namespace config {
       const auto prev_dd_snapshot_exclude_devices = video.dd.snapshot_exclude_devices;
       const auto prev_dd_dummy_plug = video.dd.wa.dummy_plug_hdr10;
       const auto prev_dd_virtual_double_refresh = video.dd.wa.virtual_double_refresh;
+      const auto prev_vgd_hdr_peak_nits = video.vgd_hdr_peak_nits;
 
       auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
       for (const auto &[name, value] : command_line_overrides) {
@@ -2408,7 +2411,12 @@ namespace config {
                                      (prev_dd_activate_virtual_display != video.dd.activate_virtual_display) ||
                                      (prev_dd_snapshot_exclude_devices != video.dd.snapshot_exclude_devices) ||
                                      (prev_dd_dummy_plug != video.dd.wa.dummy_plug_hdr10) ||
-                                     (prev_dd_virtual_double_refresh != video.dd.wa.virtual_double_refresh);
+                                     (prev_dd_virtual_double_refresh != video.dd.wa.virtual_double_refresh) ||
+                                     // Nits is baked into the virtual display's EDID at
+                                     // creation — reverting cached display state makes an
+                                     // idle-time slider change take effect on the next
+                                     // session instead of whenever the display recycles.
+                                     (prev_vgd_hdr_peak_nits != video.vgd_hdr_peak_nits);
 
       // If any DD settings changed and there are no active sessions, revert to clear cached state
       if (dd_config_changed && rtsp_stream::session_count() == 0 && runtime_overrides.empty()) {

@@ -1802,6 +1802,36 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### vgd_hdr_peak_nits
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            HDR peak brightness (nits) advertised by the LuminalVGD virtual display's EDID.<br>
+            Windows and HDR-aware games read this as the display's peak luminance; it also feeds the HDR10 metadata sent to Moonlight clients.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}800@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vgd_hdr_peak_nits = 1000
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Notes</td>
+        <td colspan="2">
+            Range 0–1000; values from 790 up correspond to the "HDR" zone on the Control Panel slider.<br>
+            The EDID encodes luminance on a coarse logarithmic scale (~2% steps): 800 encodes exactly, 1000 encodes as 993, and values below 51 clamp to the encodable floor.<br>
+            Applies when the virtual display is created (the next streaming session). Requires LuminalVGD driver build 15+; older drivers ignore it and use 993.
+        </td>
+    </tr>
+</table>
+
 ### max_bitrate
 
 <table>
