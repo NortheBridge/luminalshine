@@ -43,6 +43,10 @@
   #include <KnownFolders.h>
   #include <ShlObj.h>
   #include <windows.h>
+  // ETW session control (ControlTraceW flush for the LuminalVGD trace);
+  // wmistr.h must precede evntrace.h.
+  #include <wmistr.h>
+  #include <evntrace.h>
 
   // boost
   #include <boost/crc.hpp>
@@ -1120,6 +1124,33 @@ namespace confighttp {
       std::optional<std::filesystem::file_time_type> mtime;
       if (read_file_if_exists(p, data, &mtime)) {
         entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
+      }
+    } catch (...) {}
+
+    // LuminalVGD driver ETW trace. The installer registers a small circular
+    // AutoLogger ("LuminalVGD") on the driver's TraceLogging provider so
+    // Tdr* duck-out breadcrumbs survive to the next incident analysis —
+    // without it every failed-TDR-recovery postmortem has ended at "no
+    // trace session was recording" (2026-07-27, 2026-07-28). Flush the
+    // live session first so the on-disk circular file carries the newest
+    // events; both steps are best-effort (no session / no file → skip).
+    try {
+      struct etw_control_props_t {
+        EVENT_TRACE_PROPERTIES props;
+        wchar_t name_buf[64];
+      };
+      etw_control_props_t ctl {};
+      ctl.props.Wnode.BufferSize = sizeof(ctl);
+      ctl.props.LoggerNameOffset = offsetof(etw_control_props_t, name_buf);
+      // Failure is fine: the AutoLogger may not be registered (portable
+      // installs) or the session may not be running this boot.
+      (void) ControlTraceW(0, L"LuminalVGD", &ctl.props, EVENT_TRACE_CONTROL_FLUSH);
+
+      std::filesystem::path etl = platf::appdata() / "etw" / "luminalvgd.etl";
+      std::string data;
+      std::optional<std::filesystem::file_time_type> mtime;
+      if (read_file_if_exists(etl, data, &mtime)) {
+        entries.push_back(ZipDataEntry {"luminalvgd-etw.etl", std::move(data), mtime});
       }
     } catch (...) {}
 

@@ -37,6 +37,61 @@ if (-not [Environment]::Is64BitProcess -and [Environment]::Is64BitOperatingSyste
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $packageDir = Join-Path $scriptDir 'driver-package'
 
+# --- LuminalVGD ETW persistence ---------------------------------------------
+# The driver traces through TraceLogging provider "NortheBridge.LuminalVGD",
+# but TraceLogging events are LOST unless a session is recording when they
+# fire — every failed-TDR-recovery postmortem so far (2026-07-27, 2026-07-28)
+# ended at "no trace was capturing, duck-out behavior unverifiable". A small
+# circular AutoLogger records from boot; an identical live (-ets) session
+# covers the current boot. ~8 MB circular file, negligible overhead. The
+# crash-bundle exporter flushes and bundles the file as luminalvgd-etw.etl.
+$etwSessionName = 'LuminalVGD'
+$etwProviderGuid = '{c501990d-df12-5581-60a8-f55d593d7f7c}'
+# Stable session identity for the AutoLogger registration itself.
+$etwSessionGuid = '{b7e5e8ab-6a7c-4e64-9f9e-4d1a2c50c5a1}'
+$etwLogDir = Join-Path $env:ProgramData 'LuminalShine\config\etw'
+$etwLogFile = Join-Path $etwLogDir 'luminalvgd.etl'
+
+function Install-VgdAutologger {
+    New-Item -ItemType Directory -Force -Path $etwLogDir | Out-Null
+    $key = "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$etwSessionName"
+    New-Item -Path $key -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'GUID' -Value $etwSessionGuid -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'Start' -Value 1 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'FileName' -Value $etwLogFile -PropertyType String -Force | Out-Null
+    # 0x2 = EVENT_TRACE_FILE_MODE_CIRCULAR
+    New-ItemProperty -Path $key -Name 'LogFileMode' -Value 2 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'MaxFileSize' -Value 8 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'BufferSize' -Value 16 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $key -Name 'FlushTimer' -Value 5 -PropertyType DWord -Force | Out-Null
+    $prov = Join-Path $key $etwProviderGuid
+    New-Item -Path $prov -Force | Out-Null
+    New-ItemProperty -Path $prov -Name 'Enabled' -Value 1 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $prov -Name 'EnableLevel' -Value 5 -PropertyType DWord -Force | Out-Null
+    # All keyword bits: -1 as Int64 carries the 0xFFFFFFFFFFFFFFFF pattern.
+    New-ItemProperty -Path $prov -Name 'MatchAnyKeyword' -Value ([Int64]-1) -PropertyType QWord -Force | Out-Null
+
+    # The AutoLogger only starts at the NEXT boot; cover the current boot
+    # with an identical live session unless one is already running.
+    logman query $etwSessionName -ets *> $null
+    if ($LASTEXITCODE -ne 0) {
+        logman create trace $etwSessionName -ets -o $etwLogFile -f bincirc -max 8 -bs 16 -p $etwProviderGuid 0xffffffffffffffff 0x5 *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[LuminalVGD] ETW trace session started ($etwLogFile)."
+        } else {
+            Write-Warning "[LuminalVGD] Could not start the live ETW session (logman exit $LASTEXITCODE); boot-time AutoLogger is registered."
+        }
+    }
+    Write-Host "[LuminalVGD] ETW AutoLogger registered (circular 8 MB, provider $etwProviderGuid)."
+}
+
+function Remove-VgdAutologger {
+    logman stop $etwSessionName -ets *> $null
+    Remove-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$etwSessionName" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-Item -Path $etwLogFile -Force -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "[LuminalVGD] ETW AutoLogger removed."
+}
+
 function Get-DevicesByHardwareId([string]$HardwareId) {
     # Every caller targets Display-class root devnodes (LuminalVGD,
     # SudoVDA), and -Class Display is what keeps this fast: each
@@ -205,6 +260,11 @@ public static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr hwndParent, 
 
 try {
     if ($Uninstall) {
+        try {
+            Remove-VgdAutologger
+        } catch {
+            Write-Warning "[LuminalVGD] ETW AutoLogger removal failed (continuing): $($_.Exception.Message)"
+        }
         Remove-LuminalVgd
     } else {
         # The sweep is best-effort by contract — its failure must never
@@ -216,6 +276,13 @@ try {
             Write-Warning "[LuminalVGD] SudoVDA sweep failed (continuing): $($_.Exception.Message)"
         }
         Install-LuminalVgd
+        # Best-effort by contract, like the sweep: diagnostics must never
+        # fail the driver install.
+        try {
+            Install-VgdAutologger
+        } catch {
+            Write-Warning "[LuminalVGD] ETW AutoLogger setup failed (continuing): $($_.Exception.Message)"
+        }
     }
     exit 0
 } catch {
