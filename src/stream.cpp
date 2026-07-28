@@ -637,6 +637,34 @@ namespace stream {
     deferred_stream_start_state().reset();
   }
 
+#ifdef _WIN32
+  // Post-drain-leak host restart, deferred while the display stack is
+  // down. Restarting into a wedged WDDM stack cannot reclaim anything —
+  // the 2026-07-28 incident restarted at 07:01:04 into a dead stack and
+  // the fresh process spent 5.4 minutes walking every encoder family
+  // through D3D retry ladders (web UI unreachable throughout) before
+  // idling against the same wedge. The leak only matters for the NEXT
+  // encoder init, which cannot succeed until the stack is back anyway,
+  // so the restart waits for tdr::note_stack_healthy() to clear the
+  // latch (or for the user's reboot, which recycles the process better
+  // than we can).
+  static void leak_reclaim_restart_tick() {
+    if (session::active_sessions.load(std::memory_order_acquire) > 0) {
+      BOOST_LOG(info) << "Skipping post-leak host restart; a new session is active.";
+      return;
+    }
+    if (tdr::stack_down()) {
+      BOOST_LOG(warning) << "Deferring post-leak host restart: the display stack is down "
+                            "machine-wide (reboot required) and a fresh process could not "
+                            "probe encoders anyway. Re-checking in 60s.";
+      task_pool.pushDelayed(&leak_reclaim_restart_tick, 60s);
+      return;
+    }
+    BOOST_LOG(info) << "Restarting host to reclaim leaked NVENC registrations.";
+    platf::restart();
+  }
+#endif
+
   bool apply_deferred_stream_start_actions_if_ready() {
     {
       std::lock_guard<std::mutex> lock(deferred_stream_start_mutex());
@@ -2512,14 +2540,7 @@ namespace stream {
         if (const auto leaks = nvenc::drain_leak_count(); leaks > 0) {
           BOOST_LOG(warning) << "NvEnc drain-leak events this process: " << leaks
                              << "; scheduling a clean host restart now that no sessions remain.";
-          task_pool.pushDelayed([]() {
-            if (session::active_sessions.load(std::memory_order_acquire) > 0) {
-              BOOST_LOG(info) << "Skipping post-leak host restart; a new session is active.";
-              return;
-            }
-            BOOST_LOG(info) << "Restarting host to reclaim leaked NVENC registrations.";
-            platf::restart();
-          }, 15s);
+          task_pool.pushDelayed(&leak_reclaim_restart_tick, 15s);
         }
 #endif
         // Only revert on disconnect when explicitly enabled by config.
