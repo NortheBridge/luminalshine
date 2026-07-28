@@ -234,13 +234,30 @@ namespace system_tray {
 
     // Wait for the shell to be initialized before registering the tray icon.
     // This ensures the tray icon works reliably after a logoff/logon cycle.
+    //
+    // Must observe shutdown: when Explorer is dead, GetShellWindow() stays
+    // null indefinitely and a shutdown-blind wait here pins end_tray()'s
+    // join until the 10 s force-shutdown watchdog crashes the process. On
+    // 2026-07-28 Explorer had died of FATAL_MEMORY_EXHAUSTION at 06:42;
+    // the 07:08 process hung in exactly this loop during service stop and
+    // self-crashed via the watchdog (WER dump luminalshine.exe.18576.dmp,
+    // tray thread parked in SleepEx at this line).
     while (GetShellWindow() == nullptr) {
+      if (tray_shutdown_requested.load()) {
+        return 0;
+      }
       Sleep(1000);
     }
 
     auto wait_for_default_desktop = []() {
       constexpr int attempts = 60;
       for (int attempt = 0; attempt < attempts; ++attempt) {
+        // Same shutdown-observability contract as the shell-window wait
+        // above: this loop can hold the thread for up to 60 s, far past
+        // the 10 s shutdown watchdog.
+        if (tray_shutdown_requested.load()) {
+          return false;
+        }
         HDESK desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_ENUMERATE);
         if (desktop != nullptr) {
           auto close_desktop = util::fail_guard([desktop]() {
@@ -262,6 +279,9 @@ namespace system_tray {
       return false;
     };
 
+    if (tray_shutdown_requested.load()) {
+      return 0;
+    }
     if (!wait_for_default_desktop()) {
       BOOST_LOG(warning) << "Timed out waiting for interactive desktop; system tray may not appear"sv;
     } else {
