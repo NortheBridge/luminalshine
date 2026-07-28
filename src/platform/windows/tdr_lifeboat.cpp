@@ -32,6 +32,7 @@
 #include "src/display_helper_builder.h"
 #include "src/globals.h"
 #include "src/logging.h"
+#include "src/platform/windows/display.h"
 #include "src/platform/windows/display_helper_integration.h"
 #include "src/platform/windows/virtual_display.h"
 
@@ -192,6 +193,15 @@ namespace tdr_lifeboat {
 
   void init() {
     tdr::set_event_hook(&on_tdr_event);
+    // Self-heal probe for the stack-down latch (see tdr::stack_down): a
+    // full QueryDisplayConfig succeeding with ≥1 active path proves the
+    // stack came back, without needing a D3D11 attempt — which the
+    // latch's own gates prevent from ever running while latched.
+    tdr::set_stack_recheck([]() {
+      LONG status = ERROR_SUCCESS;
+      UINT32 paths = 0;
+      return platf::dxgi::display_config_api_healthy(&status, &paths);
+    });
     BOOST_LOG(info) << "TDR topology lifeboat armed: on a detected GPU hang, a physical display is activated"
                     << " alongside the virtual display (best-effort, at most once per "
                     << std::chrono::duration_cast<std::chrono::minutes>(ATTEMPT_COOLDOWN).count()

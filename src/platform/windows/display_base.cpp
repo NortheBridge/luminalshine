@@ -439,22 +439,88 @@ namespace platf::dxgi {
   // libdisplaydevice wrapper already retries internally and discards the
   // error code, which is exactly the information needed here.
   bool display_config_api_healthy(LONG *error_out, UINT32 *path_count_out) noexcept {
-    UINT32 path_count = 0;
-    UINT32 mode_count = 0;
-    const LONG status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
+    // GetDisplayConfigBufferSizes alone is NOT a health check. During the
+    // 2026-07-28 machine-wide wedge it answered ERROR_SUCCESS with a stale
+    // count of 1 path for the entire incident — 21 consecutive checks
+    // across two processes — while QueryDisplayConfig itself (the call
+    // every other display consumer makes) failed ERROR_NOT_SUPPORTED
+    // everywhere. That false "healthy" verdict kept mark_stack_down from
+    // ever latching, so "reboot required" never reached the user. Only a
+    // successful full QueryDisplayConfig proves the stack is answering.
+    //
+    // QueryDisplayConfig is called directly with the fixed capacities —
+    // deliberately NOT preceded by a GetDisplayConfigBufferSizes sizing
+    // call, whose result both races topology changes (the classifier runs
+    // exactly when displays detach/reattach) and is untrustworthy per the
+    // incident above. Fixed stack buffers keep this allocation-free: it
+    // runs on failure paths, possibly under memory pressure (Explorer
+    // died of FATAL_MEMORY_EXHAUSTION during the same incident).
+    // ERROR_INSUFFICIENT_BUFFER (a real machine with >64 active paths)
+    // counts as HEALTHY — the API parsed the topology and answered; only
+    // the verdict's path count is unknown.
+    constexpr UINT32 kMaxPaths = 64;
+    constexpr UINT32 kMaxModes = 128;
+    DISPLAYCONFIG_PATH_INFO paths[kMaxPaths];
+    DISPLAYCONFIG_MODE_INFO modes[kMaxModes];
+    UINT32 path_count = kMaxPaths;
+    UINT32 mode_count = kMaxModes;
+    const LONG status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths, &mode_count, modes, nullptr);
+    const bool api_answered = (status == ERROR_SUCCESS || status == ERROR_INSUFFICIENT_BUFFER);
+    const UINT32 reported_paths = (status == ERROR_SUCCESS) ? path_count : (status == ERROR_INSUFFICIENT_BUFFER ? kMaxPaths : 0);
     if (error_out) {
       *error_out = status;
     }
     if (path_count_out) {
-      *path_count_out = path_count;
+      *path_count_out = reported_paths;
     }
-    if (status != ERROR_SUCCESS) {
+    if (!api_answered) {
       return false;
     }
     // The API answered but nothing is attached: on this machine that only
     // happens when the stack is wedged (a headless server would not be
     // running a streaming host with a virtual display attached).
-    return path_count > 0;
+    return reported_paths > 0;
+  }
+
+  bool display_stack_confirmed_down(LONG *error_out, UINT32 *path_count_out) noexcept {
+    // Gate for the TERMINAL tdr::mark_stack_down verdict. A single
+    // unhealthy read is NOT enough evidence to tell the user to reboot:
+    // QueryDisplayConfig has documented transient failure windows — cold
+    // boot, post-resume, and post-TDR settle return ERROR_GEN_FAILURE
+    // "for several seconds" (see main.cpp startup wait), and a SYSTEM /
+    // session-0 caller can see ERROR_ACCESS_DENIED around session
+    // transitions. Latching terminally on those refuses sessions on a
+    // healthy machine with advice ("reboot required") that a reboot then
+    // appears to confirm.
+    //
+    // Confirmation therefore requires the observed machine-wide wedge
+    // signature — ERROR_NOT_SUPPORTED, seen in every incident of this
+    // class (2026-05-17, 07-26, 07-27, 07-28) — on two reads separated
+    // by a settle delay. Anything else (GEN_FAILURE, ACCESS_DENIED,
+    // zero paths on a healthy API, buffer races) is indeterminate: the
+    // caller reports the failure without latching, and the existing
+    // retry machinery re-asks.
+    LONG status = ERROR_SUCCESS;
+    UINT32 qdc_paths = 0;
+    const bool healthy = display_config_api_healthy(&status, &qdc_paths);
+    if (error_out) {
+      *error_out = status;
+    }
+    if (path_count_out) {
+      *path_count_out = qdc_paths;
+    }
+    if (healthy || status != ERROR_NOT_SUPPORTED) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    const bool still_healthy = display_config_api_healthy(&status, &qdc_paths);
+    if (error_out) {
+      *error_out = status;
+    }
+    if (path_count_out) {
+      *path_count_out = qdc_paths;
+    }
+    return !still_healthy && status == ERROR_NOT_SUPPORTED;
   }
 
   // Wrapper around D3D11CreateDevice with bounded exponential-backoff
@@ -592,7 +658,12 @@ namespace platf::dxgi {
           const char *const site = call_site ? call_site : "unknown";
           LONG qdc_status = ERROR_SUCCESS;
           UINT32 qdc_paths = 0;
-          const bool display_api_ok = display_config_api_healthy(&qdc_status, &qdc_paths);
+          // Terminal verdicts demand the confirmed wedge signature (two
+          // ERROR_NOT_SUPPORTED reads, settle delay between) — a single
+          // unhealthy read also fires in benign transient windows (boot /
+          // resume / post-TDR settle) and would latch "reboot required"
+          // on a healthy machine with no in-process escape.
+          const bool confirmed_down = display_stack_confirmed_down(&qdc_status, &qdc_paths);
 
           std::string detail = "D3D11CreateDevice exhausted ";
           detail += std::to_string(max_attempts);
@@ -600,20 +671,21 @@ namespace platf::dxgi {
           detail += site;
           detail += " call site)";
 
-          if (!display_api_ok) {
+          if (confirmed_down) {
             detail += "; QueryDisplayConfig unavailable (status ";
             detail += std::to_string(qdc_status);
             detail += ", ";
             detail += std::to_string(qdc_paths);
-            detail += " paths)";
+            detail += " paths, confirmed twice)";
             tdr::mark_stack_down(static_cast<long>(status), std::move(detail));
           } else if (status == DXGI_ERROR_DEVICE_REMOVED) {
-            // Display API alive + device removed: a real GPU reset.
+            // Device removed without a confirmed-dead display API: a real
+            // GPU reset (the API may still blip transiently mid-reset).
             const auto src = (std::string_view(site) == "encoder")
               ? tdr::source_t::encoder_d3d11
               : tdr::source_t::dd_test_d3d11;
             tdr::mark_event(src, static_cast<long>(status), std::move(detail));
-          } else {
+          } else if (qdc_status == ERROR_SUCCESS && qdc_paths > 0) {
             // Display API alive, device merely unsupported: this is an
             // environment/capability failure (wrong adapter, driver not
             // ready, no supported feature level). Log it plainly and do
@@ -625,6 +697,18 @@ namespace platf::dxgi {
                              << " attempts, but the display stack is healthy ("
                              << qdc_paths << " active paths). Treating as a device/"
                              << "capability error, not a GPU reset.";
+          } else {
+            // Indeterminate: QDC failed, but not with the confirmed wedge
+            // signature (transient settle window, session context, or a
+            // topology in flux). Do not latch a terminal verdict and do
+            // not invent a TDR — report honestly and let the existing
+            // retry machinery re-ask.
+            BOOST_LOG(error) << "D3D11CreateDevice (" << site << "): failed with 0x"
+                             << util::hex(status).to_string_view()
+                             << " after " << max_attempts
+                             << " attempts; display stack state indeterminate "
+                             << "(QueryDisplayConfig status " << qdc_status << ", "
+                             << qdc_paths << " paths). Not recording a terminal verdict.";
           }
         }
         return status;

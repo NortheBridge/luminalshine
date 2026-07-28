@@ -2642,22 +2642,33 @@ namespace stream {
         // long as the machine stayed broken.
         LONG qdc_status = ERROR_SUCCESS;
         UINT32 qdc_paths = 0;
-        const bool display_api_ok =
-          platf::dxgi::display_config_api_healthy(&qdc_status, &qdc_paths);
-        if (!display_api_ok) {
+        // Terminal verdicts demand the confirmed wedge signature (two
+        // ERROR_NOT_SUPPORTED reads, ~2 s apart) — a single unhealthy
+        // read also fires in benign boot/resume/post-TDR settle windows
+        // and would latch "reboot required" on a healthy machine.
+        const bool confirmed_down =
+          platf::dxgi::display_stack_confirmed_down(&qdc_status, &qdc_paths);
+        if (confirmed_down) {
           std::string detail = "Pre-flight D3D11 health check failed at session start; "
                                "QueryDisplayConfig unavailable (status ";
           detail += std::to_string(qdc_status);
           detail += ", ";
           detail += std::to_string(qdc_paths);
-          detail += " paths)";
+          detail += " paths, confirmed twice)";
           tdr::mark_stack_down(static_cast<long>(probe_hr), std::move(detail));
-        } else {
+        } else if (qdc_status == ERROR_SUCCESS && qdc_paths > 0) {
           BOOST_LOG(warning)
             << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
             << std::hex << probe_hr << std::dec
             << "), though the display stack itself is healthy (" << qdc_paths
             << " active paths). The GPU driver may be mid-recovery; the client should retry shortly.";
+        } else {
+          BOOST_LOG(warning)
+            << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
+            << std::hex << probe_hr << std::dec
+            << ") and the display stack state is indeterminate (QueryDisplayConfig status "
+            << qdc_status << ", " << qdc_paths
+            << " paths). Not recording a terminal verdict; the client should retry shortly.";
         }
         return -1;
       }
