@@ -743,7 +743,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
-  auto startup_probe = [&shutdown_event]() {
+  auto startup_probe = [&shutdown_event](bool allow_deferral) {
     if (video::has_attempted_encoder_probe()) {
       BOOST_LOG(debug) << "Startup encoder probe skipped; probe already attempted.";
       return;
@@ -754,7 +754,7 @@ int main(int argc, char *argv[]) {
     }
 
 #ifdef _WIN32
-    if (!platf::is_default_input_desktop_active()) {
+    if (allow_deferral && !platf::is_default_input_desktop_active()) {
       BOOST_LOG(info) << "Startup encoder probe deferred until the interactive desktop is ready.";
       return;
     }
@@ -815,7 +815,44 @@ int main(int argc, char *argv[]) {
 #endif
   };
 
-  startup_probe();
+  startup_probe(true);
+
+#ifdef _WIN32
+  // The deferred path above previously NEVER retried. A service started
+  // before logon — i.e. every boot — sat advertising H.264-only/SDR/4:2:0
+  // in serverinfo (active_hevc_mode/active_av1_mode stay 0 until a probe
+  // runs), so Moonlight clients warned "HEVC is unavailable", "HDR is
+  // unavailable", "YUV 4:4:4 is unavailable" at stream start, and the
+  // first launch paid the entire probe cost mid-launch (2026-07-28
+  // report, macOS clients hit hardest). Retry every 10 s until the
+  // desktop is ready; after ~2 min force one attempt anyway — a host
+  // parked at the lock screen can still probe encoder capabilities, and
+  // a failed attempt is cheap (the probe cache never trusts negatives
+  // and session prep re-probes).
+  if (!video::has_attempted_encoder_probe()) {
+    static std::function<void(bool)> s_probe_fn;
+    static std::function<void()> s_probe_retry_tick;
+    static int s_probe_retries = 0;
+    constexpr int kMaxDeferredProbeRetries = 12;
+    s_probe_fn = startup_probe;
+    s_probe_retry_tick = []() {
+      if (video::has_attempted_encoder_probe()) {
+        return;
+      }
+      ++s_probe_retries;
+      const bool force = s_probe_retries >= kMaxDeferredProbeRetries;
+      if (force) {
+        BOOST_LOG(info) << "Startup encoder probe still deferred after " << s_probe_retries
+                        << " checks; attempting it now regardless of desktop state.";
+      }
+      s_probe_fn(!force);
+      if (!video::has_attempted_encoder_probe() && !force) {
+        task_pool.pushDelayed(s_probe_retry_tick, 10s);
+      }
+    };
+    task_pool.pushDelayed(s_probe_retry_tick, 10s);
+  }
+#endif
 
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
