@@ -365,8 +365,30 @@ namespace VDISPLAY::vgd {
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    BOOST_LOG(warning) << "LuminalVGD monitor created but no new display surfaced within 5 s.";
-    return result;
+
+    // Nothing surfaced: Windows accepted CREATE_MONITOR but never
+    // enumerated the display — the signature of a dead display stack.
+    // Returning "success" here used to leave the driver session alive
+    // with no display behind it; each client retry then stacked another
+    // zombie ("no tracked session matches display (2 sessions)" in the
+    // 2026-07-27 incident), and the driver's watchdog couldn't reap them
+    // because our ping thread kept the leases fed. Destroy what we
+    // created and report failure so the caller can fall back cleanly.
+    BOOST_LOG(error) << "LuminalVGD monitor created but no new display surfaced within 5 s; "
+                        "destroying the orphaned driver session (session 0x"
+                     << std::hex << req.session_id << std::dec
+                     << "). If this repeats, the Windows display stack is likely down — "
+                        "check Troubleshooting.";
+    {
+      std::lock_guard relock(g_mutex);
+      if (auto it = g_sessions.find(key_of(guid)); it != g_sessions.end()) {
+        if (g_device) {
+          vgd_destroy_monitor(g_device, it->second.session_id);
+        }
+        g_sessions.erase(it);
+      }
+    }
+    return std::nullopt;
   }
 
   bool remove_virtual_display(const GUID &guid) {
