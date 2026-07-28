@@ -12,6 +12,7 @@
 
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/platform/windows/vgd_devnode.h"
 #include "src/platform/windows/virtual_display.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 
@@ -50,12 +51,41 @@ namespace VDISPLAY {
 
     const std::string preference = config::video.virtual_display_backend;
     if (preference == "mtt" || preference == "sudovda") {
-      BOOST_LOG(warning) << "virtual_display_backend=" << preference
-                         << " is no longer supported (LuminalVGD is the only backend); "
-                            "falling back to auto selection.";
+      // Once per process: while selection stays unlatched (fresh install,
+      // driver start in flight) this function re-runs on every backend
+      // query, and the warning would repeat each time.
+      static std::atomic<bool> warned_once {false};
+      if (!warned_once.exchange(true)) {
+        BOOST_LOG(warning) << "virtual_display_backend=" << preference
+                           << " is no longer supported (LuminalVGD is the only backend); "
+                              "falling back to auto selection.";
+      }
     }
 
+    // Service-owned devnode: adopt a present root\luminal_vgd device or
+    // create the software device (fresh MSI installs stage the driver
+    // package only), then heal a stale binding after an upgrade — the
+    // no-reboot driver switchover. One-shot; failures degrade to the
+    // driver simply appearing not installed. MUST run before the
+    // reachability probe below or fresh installs always select NONE.
+    platf::vgd_devnode::startup_ensure_and_heal();
+
     const bool luminalvgd_installed = vgd::driver_appears_installed();
+
+    if (!luminalvgd_installed && platf::vgd_devnode::device_expected()) {
+      // A devnode exists (adopted or just created) but the control
+      // interface is not up yet — a fresh install's driver start can
+      // outlive our waits. Do NOT latch NONE: leave selection
+      // uninitialized so the next backend query re-probes (the probe is
+      // a cheap open/close). Latching here permanently disabled virtual
+      // displays whenever driver start lost the race (review finding).
+      static std::atomic<bool> logged_once {false};
+      if (!logged_once.exchange(true)) {
+        BOOST_LOG(info) << "LuminalVGD device present/created but its control interface is "
+                           "not up yet; backend selection will retry on the next query.";
+      }
+      return BackendType::NONE;
+    }
 
     const BackendType chosen = luminalvgd_installed ? BackendType::LUMINALVGD : BackendType::NONE;
 

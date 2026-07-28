@@ -46,6 +46,7 @@
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/playnite_integration.h"
   #include "src/platform/windows/rtss_integration.h"
+  #include "src/platform/windows/vgd_devnode.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/platform/windows/virtual_display_cleanup.h"
 #endif
@@ -880,6 +881,11 @@ int main(int argc, char *argv[]) {
   // The legacy SudoVDA watchdog thread also lives in static storage.
   // Ensure it is joined before CRT on-exit handlers destroy the thread object.
   VDISPLAY::closeVDisplayDevice();
+
+  // Bounded join of the background driver-rebind worker (if any) — a
+  // detached worker racing static destruction is UB the crash handler
+  // would report as a spurious shutdown crash.
+  platf::vgd_devnode::shutdown_join();
 #endif
 
   // Join any in-flight update-check worker threads before tearing down the task pool and logging.

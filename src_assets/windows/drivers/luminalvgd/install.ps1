@@ -217,61 +217,79 @@ function Install-LuminalVgd {
     }
 
     Write-Host "[LuminalVGD] Adding driver package..."
-    # Stage only — no /install: the UpdateDriverForPlugAndPlayDevices
-    # force-bind below performs the one device install/start.
+    # Stage the package. The devnode is SERVICE-OWNED as of 26.08.0-beta.7:
+    # LuminalShineService adopts a present devnode or creates a software
+    # device (SwDeviceCreate) at startup and rebinds the newest staged
+    # driver itself — the no-reboot switchover. This script no longer
+    # creates devnodes; it only stages, and migrates stuck legacy nodes.
     pnputil /add-driver $inf | Out-Null
     if ($LASTEXITCODE -notin 0, 3010, 259) { throw "[LuminalVGD] pnputil /add-driver failed ($LASTEXITCODE)" }
-    if ($LASTEXITCODE -eq 3010) { Write-Warning "[LuminalVGD] Windows reports a reboot is required to finish the driver update." }
+    if ($LASTEXITCODE -eq 3010) { Write-Host "[LuminalVGD] Staged with a pending file operation; the service-side rebind resolves it without a reboot." }
 
-    $existing = @(Get-DevicesByHardwareId 'root\luminal_vgd')
+    # PRESENT devnodes only. Phantoms — including the service-owned SWD
+    # device, which is a phantom whenever the service is stopped, i.e. on
+    # EVERY beta.7+ upgrade — are deliberately left alone:
+    # UpdateDriverForPlugAndPlayDevices only operates on present devices
+    # (binding a phantom just fails), and removing the phantom would wipe
+    # the driver's persisted identity/pool state under its device key.
+    # The service re-arrives the phantom at startup and heals the driver
+    # binding in place, losslessly.
+    $existing = @(Get-DevicesByHardwareId 'root\luminal_vgd' | Where-Object { $_.Present })
     if ($existing.Count -eq 0) {
-        Write-Host "[LuminalVGD] Creating root\luminal_vgd devnode..."
-        Add-Type -Namespace LuminalVgd -Name DevNode -MemberDefinition @'
-[DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-public static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid ClassGuid, IntPtr hwndParent);
-[DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-public static extern bool SetupDiCreateDeviceInfoW(IntPtr DeviceInfoSet, string DeviceName, ref Guid ClassGuid, string DeviceDescription, IntPtr hwndParent, int CreationFlags, ref SP_DEVINFO_DATA DeviceInfoData);
-[DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-public static extern bool SetupDiSetDeviceRegistryPropertyW(IntPtr DeviceInfoSet, ref SP_DEVINFO_DATA DeviceInfoData, int Property, byte[] PropertyBuffer, int PropertyBufferSize);
-[DllImport("setupapi.dll", SetLastError = true)]
-public static extern bool SetupDiCallClassInstaller(int InstallFunction, IntPtr DeviceInfoSet, ref SP_DEVINFO_DATA DeviceInfoData);
-[DllImport("setupapi.dll", SetLastError = true)]
-public static extern bool SetupDiDestroyDeviceInfoList(IntPtr DeviceInfoSet);
-[StructLayout(LayoutKind.Sequential)]
-public struct SP_DEVINFO_DATA { public int cbSize; public Guid ClassGuid; public int DevInst; public IntPtr Reserved; }
-'@
-        $displayClass = [Guid]'4d36e968-e325-11ce-bfc1-08002be10318'
-        $data = New-Object LuminalVgd.DevNode+SP_DEVINFO_DATA
-        $data.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($data)
-        $set = [LuminalVgd.DevNode]::SetupDiCreateDeviceInfoList([ref]$displayClass, [IntPtr]::Zero)
-        if ($set -eq [IntPtr]::Zero -or $set -eq [IntPtr]::new(-1)) { throw "[LuminalVGD] SetupDiCreateDeviceInfoList failed" }
-        try {
-            if (-not [LuminalVgd.DevNode]::SetupDiCreateDeviceInfoW($set, 'Display', [ref]$displayClass, 'Luminal Video Graphics Display', [IntPtr]::Zero, 0x1, [ref]$data)) {
-                throw "[LuminalVGD] SetupDiCreateDeviceInfo failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-            }
-            $hwid = [Text.Encoding]::Unicode.GetBytes("root\luminal_vgd`0`0")
-            if (-not [LuminalVgd.DevNode]::SetupDiSetDeviceRegistryPropertyW($set, [ref]$data, 0x1, $hwid, $hwid.Length)) {
-                throw "[LuminalVGD] SetupDiSetDeviceRegistryProperty failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-            }
-            if (-not [LuminalVgd.DevNode]::SetupDiCallClassInstaller(0x19, $set, [ref]$data)) {
-                throw "[LuminalVGD] SetupDiCallClassInstaller(DIF_REGISTERDEVICE) failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-            }
-        } finally {
-            [void][LuminalVgd.DevNode]::SetupDiDestroyDeviceInfoList($set)
-        }
+        Write-Host "[LuminalVGD] Driver staged. The LuminalShine service creates (or re-arrives) the device at startup."
+        Write-Host "[LuminalVGD] Driver install complete."
+        return
     }
 
-    Write-Host "[LuminalVGD] Binding driver to root\luminal_vgd..."
+    # No-downgrade guard, mirroring the service-side heal: only rebind
+    # when the bundled INF version is strictly newer than the driver the
+    # devnode currently runs. Without this, an MSI repair/upgrade on a
+    # dev box force-downgraded a script-installed newer build.
+    $infVer = $null
+    if ((Get-Content $inf -Raw) -match 'DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)') {
+        try { $infVer = [Version]$Matches[1] } catch {}
+    }
+    $installedVer = $null
+    $rawVer = (Get-PnpDeviceProperty -InstanceId $existing[0].InstanceId -KeyName 'DEVPKEY_Device_DriverVersion' -ErrorAction SilentlyContinue).Data
+    if ($rawVer) {
+        try { $installedVer = [Version]$rawVer } catch {}
+    }
+    if ($infVer -and $installedVer -and $installedVer -ge $infVer) {
+        Write-Host "[LuminalVGD] Installed driver $installedVer is the same as or newer than the bundled $infVer; leaving the binding untouched."
+        Write-Host "[LuminalVGD] Driver install complete."
+        return
+    }
+
+    # Legacy persistent devnode (created by pre-beta.7 installers or the
+    # LuminalVGD dev script) running an older driver: attempt the
+    # in-place force-bind exactly as before. The MSI has the service
+    # stopped here, so the device is idle and the update usually succeeds
+    # without a reboot flag.
+    Write-Host "[LuminalVGD] Binding driver to existing root\luminal_vgd devnode..."
     Add-Type -Namespace LuminalVgd -Name NewDev -MemberDefinition @'
 [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]
 public static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr hwndParent, string HardwareId, string FullInfPath, uint InstallFlags, out bool bRebootRequired);
 '@
     $reboot = $false
     $infFull = (Resolve-Path $inf).Path
-    if (-not [LuminalVgd.NewDev]::UpdateDriverForPlugAndPlayDevicesW([IntPtr]::Zero, 'root\luminal_vgd', $infFull, 0x1, [ref]$reboot)) {
-        throw "[LuminalVGD] UpdateDriverForPlugAndPlayDevices failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+    $bound = [LuminalVgd.NewDev]::UpdateDriverForPlugAndPlayDevicesW([IntPtr]::Zero, 'root\luminal_vgd', $infFull, 0x1, [ref]$reboot)
+    if (-not $bound -or $reboot) {
+        # The in-place update could not fully take (device busy / files in
+        # use). Instead of leaving the OLD driver running until a reboot,
+        # remove the devnode: the service recreates it as a software
+        # device at next start, and a brand-new device instance re-ranks
+        # drivers from scratch — the newest staged package wins, no
+        # reboot. This is how SudoVDA-era installers stayed reboot-free.
+        if (-not $bound) {
+            Write-Warning "[LuminalVGD] In-place bind failed ($([Runtime.InteropServices.Marshal]::GetLastWin32Error())); migrating the devnode to service ownership."
+        } else {
+            Write-Host "[LuminalVGD] In-place bind wants a reboot; migrating the devnode to service ownership instead."
+        }
+        foreach ($dev in $existing) {
+            Write-Host "[LuminalVGD] Removing devnode $($dev.InstanceId) (service recreates it at startup)."
+            pnputil /remove-device $dev.InstanceId | Out-Null
+        }
     }
-    if ($reboot) { Write-Warning "[LuminalVGD] Windows reports a reboot is required." }
     Write-Host "[LuminalVGD] Driver install complete."
 }
 
