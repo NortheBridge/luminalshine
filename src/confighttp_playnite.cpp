@@ -43,6 +43,10 @@
   #include <KnownFolders.h>
   #include <ShlObj.h>
   #include <windows.h>
+  // ETW session control (ControlTraceW flush for the LuminalVGD trace);
+  // wmistr.h must precede evntrace.h.
+  #include <wmistr.h>
+  #include <evntrace.h>
 
   // boost
   #include <boost/crc.hpp>
@@ -1120,6 +1124,45 @@ namespace confighttp {
       std::optional<std::filesystem::file_time_type> mtime;
       if (read_file_if_exists(p, data, &mtime)) {
         entries.push_back(ZipDataEntry {p.filename().string(), std::move(data), mtime});
+      }
+    } catch (...) {}
+
+    // LuminalVGD driver ETW traces. The installer registers a small
+    // circular AutoLogger ("LuminalVGD") on the driver's TraceLogging
+    // provider so Tdr* duck-out breadcrumbs survive to the next incident
+    // analysis — without it every failed-TDR-recovery postmortem has
+    // ended at "no trace session was recording" (2026-07-27, 2026-07-28).
+    // The AutoLogger rotates per boot (FileMax) because the wedge is
+    // cleared BY rebooting — the previous boot's file IS the evidence —
+    // so bundle every file in the directory, not one fixed name. Flush
+    // the live session first so on-disk files carry the newest events;
+    // everything is best-effort (no session / no dir → skip).
+    try {
+      struct etw_control_props_t {
+        EVENT_TRACE_PROPERTIES props;
+        wchar_t name_buf[64];
+      };
+      etw_control_props_t ctl {};
+      ctl.props.Wnode.BufferSize = sizeof(ctl);
+      ctl.props.LoggerNameOffset = offsetof(etw_control_props_t, name_buf);
+      // Failure is fine: the AutoLogger may not be registered (portable
+      // installs) or the session may not be running this boot.
+      (void) ControlTraceW(0, L"LuminalVGD", &ctl.props, EVENT_TRACE_CONTROL_FLUSH);
+
+      // Sibling of appdata() (…\LuminalShine\etw), NOT inside the
+      // hardened config directory — see drivers/luminalvgd/install.ps1.
+      const std::filesystem::path etw_dir = platf::appdata().parent_path() / "etw";
+      std::error_code ec;
+      for (std::filesystem::directory_iterator it(etw_dir, ec); !ec && it != std::filesystem::directory_iterator(); ++it) {
+        std::error_code file_ec;
+        if (!it->is_regular_file(file_ec)) {
+          continue;
+        }
+        std::string data;
+        std::optional<std::filesystem::file_time_type> mtime;
+        if (read_file_if_exists(it->path(), data, &mtime)) {
+          entries.push_back(ZipDataEntry {it->path().filename().string(), std::move(data), mtime});
+        }
       }
     } catch (...) {}
 
