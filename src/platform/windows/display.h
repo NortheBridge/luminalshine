@@ -107,9 +107,15 @@ namespace platf::dxgi {
    * QueryDisplayConfig fails machine-wide (typically ERROR_NOT_SUPPORTED,
    * 50) or enumerates zero paths, in every process, until reboot.
    *
+   * Healthy means a FULL QueryDisplayConfig succeeded with at least one
+   * active path. GetDisplayConfigBufferSizes success is deliberately not
+   * enough: in the 2026-07-28 wedge it kept returning a stale count of 1
+   * while QueryDisplayConfig failed ERROR_NOT_SUPPORTED for 15 minutes.
+   *
    * @param error_out Receives the raw Win32 status, or nullptr.
-   * @param path_count_out Receives the active path count, or nullptr.
-   * @return true when the API answered and at least one path exists.
+   * @param path_count_out Receives the active path count (0 unless the
+   *                       full query succeeded), or nullptr.
+   * @return true when QueryDisplayConfig succeeded and ≥1 path exists.
    */
   bool display_config_api_healthy(LONG *error_out, UINT32 *path_count_out) noexcept;
 

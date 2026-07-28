@@ -439,14 +439,50 @@ namespace platf::dxgi {
   // libdisplaydevice wrapper already retries internally and discards the
   // error code, which is exactly the information needed here.
   bool display_config_api_healthy(LONG *error_out, UINT32 *path_count_out) noexcept {
+    // GetDisplayConfigBufferSizes alone is NOT a health check. During the
+    // 2026-07-28 machine-wide wedge it answered ERROR_SUCCESS with a stale
+    // count of 1 path for the entire incident — 21 consecutive checks
+    // across two processes — while QueryDisplayConfig itself (the call
+    // every other display consumer makes) failed ERROR_NOT_SUPPORTED
+    // everywhere. That false "healthy" verdict kept mark_stack_down from
+    // ever latching, so "reboot required" never reached the user. Only a
+    // successful full QueryDisplayConfig proves the stack is answering.
+    //
+    // Fixed stack buffers keep this allocation-free: it runs on failure
+    // paths, possibly under memory pressure (Explorer died of
+    // FATAL_MEMORY_EXHAUSTION during the same incident). 64 paths / 128
+    // modes is far beyond any real topology; a machine that exceeds it
+    // reads as unhealthy, which only costs a spurious re-check.
+    constexpr UINT32 kMaxPaths = 64;
+    constexpr UINT32 kMaxModes = 128;
+    DISPLAYCONFIG_PATH_INFO paths[kMaxPaths];
+    DISPLAYCONFIG_MODE_INFO modes[kMaxModes];
     UINT32 path_count = 0;
     UINT32 mode_count = 0;
-    const LONG status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
+    LONG status = ERROR_SUCCESS;
+    // QueryDisplayConfig invalidates the counts when the topology changes
+    // between the two calls (ERROR_INSUFFICIENT_BUFFER) — re-read once.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      path_count = 0;
+      mode_count = 0;
+      status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count);
+      if (status != ERROR_SUCCESS) {
+        break;
+      }
+      if (path_count > kMaxPaths || mode_count > kMaxModes) {
+        status = ERROR_INSUFFICIENT_BUFFER;
+        break;
+      }
+      status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths, &mode_count, modes, nullptr);
+      if (status != ERROR_INSUFFICIENT_BUFFER) {
+        break;
+      }
+    }
     if (error_out) {
       *error_out = status;
     }
     if (path_count_out) {
-      *path_count_out = path_count;
+      *path_count_out = (status == ERROR_SUCCESS) ? path_count : 0;
     }
     if (status != ERROR_SUCCESS) {
       return false;
