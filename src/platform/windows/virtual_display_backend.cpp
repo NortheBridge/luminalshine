@@ -12,6 +12,7 @@
 
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/platform/windows/vgd_devnode.h"
 #include "src/platform/windows/virtual_display.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 
@@ -54,6 +55,14 @@ namespace VDISPLAY {
                          << " is no longer supported (LuminalVGD is the only backend); "
                             "falling back to auto selection.";
     }
+
+    // Service-owned devnode: adopt a present root\luminal_vgd device or
+    // create the software device (fresh MSI installs stage the driver
+    // package only), then heal a stale binding after an upgrade — the
+    // no-reboot driver switchover. One-shot; failures degrade to the
+    // driver simply appearing not installed. MUST run before the
+    // reachability probe below or fresh installs always select NONE.
+    platf::vgd_devnode::startup_ensure_and_heal();
 
     const bool luminalvgd_installed = vgd::driver_appears_installed();
 

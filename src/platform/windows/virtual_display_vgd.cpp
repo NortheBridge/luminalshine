@@ -432,6 +432,14 @@ namespace VDISPLAY::vgd {
            std::to_string(g_caps->driver_build);
   }
 
+  std::optional<uint32_t> driver_build() {
+    std::lock_guard lk(g_mutex);
+    if (open_locked() != DRIVER_STATUS::OK || !g_caps) {
+      return std::nullopt;
+    }
+    return g_caps->driver_build;
+  }
+
   bool driver_supports_hdr() {
     std::lock_guard lk(g_mutex);
     return g_caps && (g_caps->caps & VGD_CAP_HDR10);

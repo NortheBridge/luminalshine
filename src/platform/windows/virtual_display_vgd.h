@@ -58,6 +58,11 @@ namespace VDISPLAY::vgd {
   /// diagnostics/web UI.
   std::optional<std::string> driver_version_string();
 
+  /// The raw `driver_build` from the handshake caps (the same <n> as in
+  /// driver_version_string), for version-mismatch checks. Opens the
+  /// control device when needed.
+  std::optional<uint32_t> driver_build();
+
   /// What the ring-consuming capture backend needs to map a session's
   /// frame ring (see display_vgd.cpp).
   struct RingTargetInfo {
