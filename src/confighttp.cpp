@@ -62,6 +62,7 @@
   #include "amf/amf_caps.h"
   #include "platform/windows/render_stack_detect.h"
   #include "platform/windows/sudovda_recovery.h"
+  #include "platform/windows/vgd_recovery.h"
 #endif
 #include "cred_store/cred_store.h"
 #include "entry_handler.h"
@@ -709,16 +710,17 @@ namespace confighttp {
 
 #ifdef _WIN32
   /**
-   * @brief Manually restart the SudoVDA virtual display driver via the
-   *        PnP disable+enable cycle. Used as a recovery escape hatch
-   *        when the auto-ladder hasn't yet fired and the user knows or
-   *        suspects the virtual display is wedged.
+   * @brief Manually restart the LuminalVGD virtual display driver: destroy
+   *        the tracked monitor sessions and recycle the control handle,
+   *        escalating to a PnP disable+enable of `root\luminal_vgd` if the
+   *        driver still doesn't answer. A recovery escape hatch for when
+   *        the virtual display is wedged.
    *
    * Authenticated. POST so it can't be triggered by accidental
    * navigation. Body is ignored. Response includes the recovery level
    * that ran and a human-readable message suitable for support tickets.
    *
-   * @api_examples{/api/state/vdd-restart| POST| {"status":true,"level":2,"message":"PnP disable+enable completed; user handle recycled.","instance_id":"ROOT\\SUDOMAKER\\SUDOVDA\\0000"}}
+   * @api_examples{/api/state/vdd-restart| POST| {"status":true,"level":1,"message":"Virtual display sessions were destroyed and the driver connection was re-established.","instance_id":"ROOT\\LUMINAL_VGD\\0000"}}
    */
   void restartVirtualDisplayDriver(resp_https_t response, req_https_t request) {
     if (!check_content_type(response, request, "application/json")) {
@@ -729,7 +731,11 @@ namespace confighttp {
     }
     print_req(request);
 
-    const auto result = platf::sudovda::manual_restart();
+    // Logged server-side: in every log from the field this endpoint had
+    // never once been invoked, and there was no way to tell whether that
+    // meant "nobody clicked" or "the click never arrived".
+    BOOST_LOG(info) << "Virtual display driver restart requested from the Web UI.";
+    const auto result = platf::vgd_recovery::manual_restart();
 
     nlohmann::json out;
     out["status"] = result.success;
@@ -750,7 +756,7 @@ namespace confighttp {
    *
    * Authenticated. GET so the Vue view can refresh it freely.
    *
-   * @api_examples{/api/state/vdd-diagnostic| GET| {"status":true,"device_present":true,"instance_id":"ROOT\\SUDOMAKER\\SUDOVDA\\0000","hardware_ids":"root\\sudomaker\\sudovda","status_string":"Healthy (DN_STARTED)","problem_code":0}}
+   * @api_examples{/api/state/vdd-diagnostic| GET| {"status":true,"driver_reachable":true,"handshake_ok":true,"driver_version":"proto 0.3 build 13","device_present":true,"instance_id":"ROOT\\LUMINAL_VGD\\0000","hardware_ids":"root\\luminal_vgd","status_string":"Healthy (DN_STARTED, driver handshake OK)","problem_code":0}}
    */
   void getVirtualDisplayDiagnostic(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) {
@@ -758,20 +764,26 @@ namespace confighttp {
     }
     print_req(request);
 
-    const auto diag = platf::sudovda::collect_diagnostic();
+    const auto diag = platf::vgd_recovery::collect_diagnostic();
 
     nlohmann::json out;
     out["status"] = true;
+    // Driver-side truth: whether the control device answers is what
+    // actually decides if virtual displays work. The old card reported
+    // only PnP presence — of a device this product no longer installs.
+    out["driver_reachable"] = diag.driver_reachable;
+    out["handshake_ok"] = diag.handshake_ok;
+    out["driver_version"] = diag.driver_version;
+    if (diag.last_error) {
+      out["last_error"] = static_cast<std::uint64_t>(diag.last_error);
+    }
     out["device_present"] = diag.device_present;
     out["instance_id"] = diag.instance_id;
     out["hardware_ids"] = diag.hardware_ids;
     out["status_string"] = diag.status_string;
-    out["problem_code"] = diag.problem_code;
+    out["problem_code"] = static_cast<std::uint64_t>(diag.problem_code);
     if (diag.last_recovery_at) {
-      const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
-        diag.last_recovery_at->time_since_epoch()
-      ).count();
-      out["last_recovery_at"] = secs;
+      out["last_recovery_at"] = diag.last_recovery_at;
     }
     out["last_recovery_level"] = static_cast<int>(diag.last_recovery_level);
     out["last_recovery_message"] = diag.last_recovery_message;
