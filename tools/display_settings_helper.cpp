@@ -35,6 +35,7 @@
 
 // third-party (libdisplaydevice)
   #include "src/logging.h"
+  #include "src/platform/windows/display_helper_wedge_escalation.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
   #include "src/platform/windows/ipc/pipes.h"
 
@@ -2091,6 +2092,16 @@ namespace {
 
   constexpr std::chrono::milliseconds kApplyDisconnectGrace {5000};
 
+  // Orphan lifetime bound (POSTMORTEM-2026-07-27, helper blocker #6): once the
+  // service has connected at least once and then gone away, the helper must not
+  // linger forever waiting for a reconnect (previously it could persist
+  // indefinitely — e.g. with a pending restore that a machine-wide WDDM wedge
+  // makes impossible to complete). After this long without a control
+  // connection, the helper exits; the logon-time LuminalShineDisplayRestore
+  // scheduled task (armed before every APPLY, deleted only after a confirmed
+  // restore) remains the durable fallback for restoring displays afterwards.
+  constexpr std::chrono::minutes kOrphanLifetimeBound {5};
+
   class DisplayDeviceLogBridge {
   public:
     DisplayDeviceLogBridge() = default;
@@ -2393,6 +2404,14 @@ namespace {
     static constexpr size_t kGoldenFallbackCompletionThreshold = 3;
     std::atomic<size_t> restore_backoff_index {0};
     std::atomic<long long> restore_next_allowed_ms {0};
+    // Wedge escalation (POSTMORTEM-2026-07-27, helper blocker #6): tracks
+    // consecutive display-enumeration failures so a machine-wide WDDM wedge is
+    // loudly escalated once instead of silently rejecting restore snapshots
+    // every poll cycle for hours. Only touched from the restore polling thread;
+    // successive polling threads are serialized by std::jthread joins. State is
+    // deliberately kept across restore requests so a still-wedged machine stays
+    // in the quiet hold state rather than re-spamming rejection warnings.
+    display_helper_integration::WedgeEscalation wedge_escalation;
     static constexpr std::array<std::chrono::seconds, 8> kRestoreBackoffProfile {
       std::chrono::seconds(0),
       std::chrono::seconds(1),
@@ -2533,6 +2552,50 @@ namespace {
       );
       if (delay.count() > 0) {
         BOOST_LOG(info) << "Restore polling: scheduling next attempt in " << delay.count() << "s.";
+      }
+    }
+
+    /**
+     * @brief Cheap machine-wide display-stack health probe.
+     *
+     * A Minimal-detail enumeration is a single QueryDisplayConfig pass; on a
+     * wedged WDDM stack (postmortem: QDC -> ERROR_NOT_SUPPORTED) it yields zero
+     * devices. Any healthy machine with a display attached yields at least one.
+     * @return Number of display devices currently enumerable (0 == stack dead).
+     */
+    std::size_t probe_display_device_count() const {
+      try {
+        return controller.enum_all_device_ids().size();
+      } catch (...) {
+        return 0;
+      }
+    }
+
+    /// Emit the loud, unmistakable machine-wide display-stack failure line.
+    /// Rate-limited by the wedge escalator (at most once per relog_interval).
+    void log_wedge_escalation() const {
+      const auto now = std::chrono::steady_clock::now();
+      const auto failing_secs = std::chrono::duration_cast<std::chrono::seconds>(wedge_escalation.failing_for(now)).count();
+      const auto relog_minutes = std::chrono::duration_cast<std::chrono::minutes>(wedge_escalation.config().relog_interval).count();
+      BOOST_LOG(fatal) << "DISPLAY STACK UNAVAILABLE MACHINE-WIDE: display enumeration has returned zero devices for "
+                       << wedge_escalation.consecutive_failures() << " consecutive checks over " << failing_secs
+                       << "s. Display restore CANNOT proceed while the WDDM display stack is down; holding the pending"
+                          " restore and watching for display arrival instead of re-evaluating snapshots every cycle."
+                          " First try Win+Ctrl+Shift+B to restart the Windows graphics stack (free); if displays do not"
+                          " return, this machine must be REBOOTED. (This message repeats at most every "
+                       << relog_minutes << " minutes while the condition persists.)";
+    }
+
+    /// Feed one enumeration health sample into the wedge escalator after a
+    /// failed restore attempt, emitting the loud escalation log when warranted.
+    void note_restore_failure_for_wedge_escalation() {
+      using Action = display_helper_integration::WedgeEscalation::Action;
+      const auto action = wedge_escalation.on_enumeration_result(
+        probe_display_device_count() > 0,
+        std::chrono::steady_clock::now()
+      );
+      if (action == Action::Escalate || action == Action::Relog) {
+        log_wedge_escalation();
       }
     }
 
@@ -3619,6 +3682,7 @@ namespace {
           return;
         }
         self->reset_restore_backoff();
+        self->wedge_escalation.reset();
         self->retry_revert_on_topology.store(false, std::memory_order_release);
         self->exit_after_revert.store(false, std::memory_order_release);
         run_restore_cleanup("initial attempt");
@@ -3654,6 +3718,7 @@ namespace {
       }
 
       if (initial_attempted && !initial_success) {
+        self->note_restore_failure_for_wedge_escalation();
         self->register_restore_failure();
       }
 
@@ -3683,8 +3748,47 @@ namespace {
         if (cancelled()) {
           break;
         }
+
+        // Wedge escalation hold path (POSTMORTEM-2026-07-27, helper blocker #6):
+        // once display enumeration has started failing, stop re-evaluating (and
+        // rejecting) restore snapshots every cycle. Instead, cheaply re-probe
+        // enumeration — woken early by WM_DISPLAYCHANGE / device-arrival via the
+        // event pump's message loop — and only fall through to a real restore
+        // attempt when enumeration transitions from failing back to succeeding.
+        if (self->wedge_escalation.engaged()) {
+          using WedgeAction = display_helper_integration::WedgeEscalation::Action;
+          const auto device_count = self->probe_display_device_count();
+          const auto wedge_action = self->wedge_escalation.on_enumeration_result(
+            device_count > 0,
+            std::chrono::steady_clock::now()
+          );
+          if (wedge_action == WedgeAction::Escalate || wedge_action == WedgeAction::Relog) {
+            self->log_wedge_escalation();
+            continue;
+          }
+          if (wedge_action == WedgeAction::Hold) {
+            continue;
+          }
+          if (wedge_action == WedgeAction::RetryNow) {
+            BOOST_LOG(info) << "Display enumeration recovered (" << device_count
+                            << " device(s) visible after display-stack outage); re-attempting held restore now.";
+            self->reset_restore_backoff();
+            triggered = true;  // force a restore attempt this cycle
+          }
+          // WedgeAction::Proceed: streak reset by a healthy probe, or failure
+          // streak still below the escalation threshold — normal flow resumes.
+        }
+
         if (!triggered) {
           if (window_expired) {
+            if (self->wedge_escalation.engaged()) {
+              // Do not abandon the poll loop while enumeration is failing: the
+              // wedge escalator must keep observing so it can escalate loudly,
+              // re-log while the condition persists, and retry on recovery.
+              BOOST_LOG(debug) << "Restore polling: window exhausted while display enumeration is unhealthy;"
+                                  " continuing to monitor for display-stack recovery.";
+              continue;
+            }
             const char *window_label = (active_window_kind == RestoreWindow::Primary) ? "primary" : "event";
             BOOST_LOG(info) << "Restore polling: " << window_label
                             << " window exhausted; pausing attempts until next event.";
@@ -3734,6 +3838,7 @@ namespace {
             return;
           }
           self->reset_restore_backoff();
+          self->wedge_escalation.reset();
           self->retry_revert_on_topology.store(false, std::memory_order_release);
           self->exit_after_revert.store(false, std::memory_order_release);
           run_restore_cleanup("polling attempt");
@@ -3768,6 +3873,7 @@ namespace {
           return;
         }
 
+        self->note_restore_failure_for_wedge_escalation();
         self->register_restore_failure();
 
         const auto post_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -5261,6 +5367,9 @@ int main(int argc, char *argv[]) {
   state.running_flag = &running;
   auto last_connect_wait_log = std::chrono::steady_clock::time_point::min();
   constexpr auto kReconnectLogInterval = std::chrono::hours(1);
+  // Set while disconnected after having had at least one client connection;
+  // used to enforce kOrphanLifetimeBound.
+  auto orphaned_since = std::chrono::steady_clock::time_point::min();
 
   // Outer service loop: keep accepting new client sessions while running
   while (running.load(std::memory_order_acquire)) {
@@ -5289,8 +5398,27 @@ int main(int argc, char *argv[]) {
         BOOST_LOG(info) << "Waiting for Sunshine to connect to display helper IPC...";
         last_connect_wait_log = now;
       }
+      // Orphan lifetime bound: only applies after the service has connected at
+      // least once (epoch != 0) and the pipe was then lost. Startup behaviour —
+      // waiting indefinitely for the first connection — is unchanged.
+      if (state.current_connection_epoch() != 0) {
+        if (orphaned_since == std::chrono::steady_clock::time_point::min()) {
+          orphaned_since = now;
+        } else if (now - orphaned_since >= kOrphanLifetimeBound) {
+          const bool restore_pending = state.restore_requested.load(std::memory_order_acquire);
+          BOOST_LOG(warning) << "Display helper orphaned: no control connection for "
+                             << std::chrono::duration_cast<std::chrono::minutes>(kOrphanLifetimeBound).count()
+                             << " minutes after losing the service pipe"
+                             << (restore_pending ? " and the pending display restore could not complete" : "")
+                             << "; exiting instead of persisting indefinitely."
+                             << (restore_pending ? " The logon-time restore scheduled task remains armed to retry the restore." : "");
+          running.store(false, std::memory_order_release);
+          break;
+        }
+      }
       continue;
     }
+    orphaned_since = std::chrono::steady_clock::time_point::min();
 
     const auto connection_epoch = state.begin_connection_epoch();
     // Do not cancel restore polling merely because Sunshine connected. Stream start
