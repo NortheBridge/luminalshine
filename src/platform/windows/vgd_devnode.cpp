@@ -100,6 +100,15 @@ namespace platf::vgd_devnode {
     /// still in flight.
     std::atomic<bool> g_device_expected {false};
 
+    /// Rebind-worker coordination. The worker is a real (joinable)
+    /// thread, not detached: a detached worker racing process exit runs
+    /// into destructed statics (vgd g_mutex/g_sessions, Boost.Log) — UB
+    /// that the crash handler would then report as a spurious shutdown
+    /// crash. shutdown_join() bounds the wait instead.
+    std::atomic<bool> g_rebind_in_flight {false};
+    std::atomic<bool> g_stop_requested {false};
+    std::thread g_rebind_thread;
+
     // SwDeviceCreate/SwDeviceClose are bound dynamically: MinGW toolchains
     // ship no import library (or header) for them. The exports live in
     // cfgmgr32.dll (already loaded — CM_* is used below), with the
@@ -448,6 +457,15 @@ namespace platf::vgd_devnode {
     /// the startup thread before the web UI exists — a wedged PnP stack
     /// must not take the whole service down with it.
     void rebind_worker(std::array<std::uint32_t, 4> bundled) {
+      struct flight_guard_t {
+        ~flight_guard_t() {
+          g_rebind_in_flight.store(false, std::memory_order_release);
+        }
+      } flight_guard;
+
+      if (g_stop_requested.load(std::memory_order_acquire)) {
+        return;
+      }
       if (VDISPLAY::vgd::tracked_session_count() > 0) {
         // A client connected between the startup decision and this
         // worker running. Do not yank the device mid-session; the next
@@ -472,6 +490,11 @@ namespace platf::vgd_devnode {
           BOOST_LOG(warning) << "LuminalVGD devnode: in-place rebind still requires a reboot; "
                              << "falling back to devnode recreate.";
         }
+      }
+      if (g_stop_requested.load(std::memory_order_acquire)) {
+        BOOST_LOG(warning) << "LuminalVGD devnode: rebind interrupted by shutdown; the update "
+                              "completes at the next service start.";
+        return;
       }
       if (!rebound) {
         rebound = rebind_via_recreate();
@@ -548,7 +571,8 @@ namespace platf::vgd_devnode {
       BOOST_LOG(warning) << "LuminalVGD devnode: installed driver " << *installed_str
                          << " is older than the bundled " << *bundled_pkg.version
                          << " — rebinding to the new driver without a reboot (background).";
-      std::thread(&rebind_worker, *bundled).detach();
+      g_rebind_in_flight.store(true, std::memory_order_release);
+      g_rebind_thread = std::thread(&rebind_worker, *bundled);
     }
 
     void ensure_and_heal_once() {
@@ -610,6 +634,35 @@ namespace platf::vgd_devnode {
 
   bool device_expected() {
     return g_device_expected.load(std::memory_order_acquire);
+  }
+
+  bool rebind_in_flight() {
+    return g_rebind_in_flight.load(std::memory_order_acquire);
+  }
+
+  void shutdown_join() {
+    g_stop_requested.store(true, std::memory_order_release);
+    if (!g_rebind_thread.joinable()) {
+      return;
+    }
+    // Bounded: std::thread has no timed join, so poll the in-flight flag
+    // (cleared by the worker's scope guard just before it returns). 2 s
+    // keeps us well inside the 10 s force-shutdown watchdog. A worker
+    // parked inside the unbounded UpdateDriver call is detached with a
+    // warning — the residual exposure is only that one blocking API
+    // slice, and the update completes at the next service start.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (g_rebind_in_flight.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!g_rebind_in_flight.load(std::memory_order_acquire)) {
+      g_rebind_thread.join();
+      return;
+    }
+    BOOST_LOG(warning) << "LuminalVGD devnode: shutting down with the driver rebind still in "
+                          "flight; detaching the worker. The update completes at the next "
+                          "service start.";
+    g_rebind_thread.detach();
   }
 
   void startup_ensure_and_heal() {

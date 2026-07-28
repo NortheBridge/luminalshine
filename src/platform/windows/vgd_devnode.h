@@ -65,4 +65,21 @@ namespace platf::vgd_devnode {
    */
   void startup_ensure_and_heal();
 
+  /// A background driver rebind is currently running. Virtual-display
+  /// creation refuses while true (a session started mid-rebind would
+  /// have its device yanked by the recreate fallback); the client
+  /// retries seconds later against the new driver.
+  bool rebind_in_flight();
+
+  /**
+   * @brief Bounded shutdown coordination for the rebind worker.
+   *
+   * Call from main's teardown path. Signals the worker to stop at its
+   * next phase boundary and joins it, waiting at most ~2 s (well inside
+   * the 10 s force-shutdown watchdog); a worker parked inside the
+   * unbounded UpdateDriver call is detached with a warning instead of
+   * letting a detached thread race static destruction into UB.
+   */
+  void shutdown_join();
+
 }  // namespace platf::vgd_devnode

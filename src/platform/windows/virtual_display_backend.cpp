@@ -51,9 +51,15 @@ namespace VDISPLAY {
 
     const std::string preference = config::video.virtual_display_backend;
     if (preference == "mtt" || preference == "sudovda") {
-      BOOST_LOG(warning) << "virtual_display_backend=" << preference
-                         << " is no longer supported (LuminalVGD is the only backend); "
-                            "falling back to auto selection.";
+      // Once per process: while selection stays unlatched (fresh install,
+      // driver start in flight) this function re-runs on every backend
+      // query, and the warning would repeat each time.
+      static std::atomic<bool> warned_once {false};
+      if (!warned_once.exchange(true)) {
+        BOOST_LOG(warning) << "virtual_display_backend=" << preference
+                           << " is no longer supported (LuminalVGD is the only backend); "
+                              "falling back to auto selection.";
+      }
     }
 
     // Service-owned devnode: adopt a present root\luminal_vgd device or

@@ -5,6 +5,8 @@
 
 #include "src/platform/windows/virtual_display_vgd.h"
 
+#include "src/platform/windows/vgd_devnode.h"
+
 #include "src/logging.h"
 
 #include <algorithm>
@@ -243,6 +245,16 @@ namespace VDISPLAY::vgd {
     bool framegen_refresh_active,
     bool enable_hdr
   ) {
+    if (platf::vgd_devnode::rebind_in_flight()) {
+      // A background driver rebind is replacing the devnode right now; a
+      // session created into it would be yanked by the recreate fallback
+      // seconds later. Fail fast — the caller's virtual_display_failed
+      // fallback handles this session, and the next attempt lands on the
+      // new driver.
+      BOOST_LOG(warning) << "Virtual display creation refused: a LuminalVGD driver rebind "
+                            "is in progress; retry shortly.";
+      return std::nullopt;
+    }
     const auto before = luminal_display_names();
 
     // Create under the lock; poll for the display WITHOUT it (the ping
