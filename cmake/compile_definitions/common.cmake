@@ -145,6 +145,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/state_storage.h"
         "${CMAKE_SOURCE_DIR}/src/tdr_state.cpp"
         "${CMAKE_SOURCE_DIR}/src/tdr_state.h"
+        "${CMAKE_SOURCE_DIR}/src/crash_handler.cpp"
+        "${CMAKE_SOURCE_DIR}/src/crash_handler.h"
         "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.cpp"
         "${CMAKE_SOURCE_DIR}/src/amf/amf_caps.h"
         "${CMAKE_SOURCE_DIR}/src/cred_store/cred_store.h"

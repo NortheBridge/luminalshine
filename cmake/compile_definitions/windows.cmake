@@ -185,6 +185,7 @@ list(PREPEND PLATFORM_LIBRARIES
         avrt
         d3d11
         D3DCompiler
+        dbghelp
         dwmapi
         dxgi
         iphlpapi

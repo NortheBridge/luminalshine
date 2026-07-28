@@ -17,6 +17,7 @@
 
 // local includes
 #include "confighttp.h"
+#include "crash_handler.h"
 #include "cred_store/integrity_key.h"
 #include "entry_handler.h"
 #include "globals.h"
@@ -159,6 +160,11 @@ int main(int argc, char *argv[]) {
   // the heap (observed as 0xC0000374 in ucrtbase!_free_base, masking the real
   // fault). Use only teardown-safe primitives: direct stderr writes and
   // OutputDebugString, no Boost.Log and no heap allocation of our own.
+  //
+  // This minimal handler only covers the window before logging is up
+  // (config::parse and friends). Once logging is initialised,
+  // crash_handler::init() below replaces it with the full version that
+  // also logs through Boost.Log and captures a minidump.
   std::set_terminate([]() {
     auto emit = [](const char *msg, const char *detail) noexcept {
       std::fputs(msg, stderr);
@@ -247,6 +253,14 @@ int main(int argc, char *argv[]) {
   if (!log_deinit_guard) {
     BOOST_LOG(error) << "Logging failed to initialize"sv;
   }
+
+  // Install the top-level crash handler as soon as logging is up so any
+  // crash from here on self-documents: a fatal log line naming the fault
+  // and a minidump in <appdata>/crashdumps/. Motivated by the ~10 silent
+  // luminalshine.exe terminations documented in POSTMORTEM-2026-07-27.md,
+  // which left no in-log trace at all. Supersedes the minimal pre-logging
+  // std::terminate handler installed above.
+  crash_handler::init();
 
 #ifdef _WIN32
   const auto app_user_model_id_status =
