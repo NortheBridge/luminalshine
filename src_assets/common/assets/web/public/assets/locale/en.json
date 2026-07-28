@@ -339,6 +339,8 @@
     "virtual_display_status_state_version_incompatible": "Driver version mismatch",
     "virtual_display_status_state_watchdog_failed": "Driver watchdog failed",
     "virtual_display_status_recheck": "Re-check driver",
+    "vgd_hdr_peak_nits": "HDR peak brightness (nits)",
+    "vgd_hdr_peak_nits_desc": "Peak luminance the virtual display advertises to Windows and HDR-aware games, and the ceiling reported in HDR10 metadata to Moonlight clients. 790–1000 is the HDR zone; 800 is the default. Applies when the virtual display is created (the next streaming session) and requires LuminalVGD driver build 15 or newer.",
     "virtual_display_backend": "Virtual display driver",
     "virtual_display_backend_desc": "Selects which virtual display driver LuminalShine talks to when creating per-client virtual monitors. LuminalVGD (the first-party driver) is the only supported backend; Auto selects it when installed. If the driver is missing, run \"Reconfigure LuminalShine\" from the Start Menu (or relaunch the LuminalShine installer) to install it.",
     "virtual_display_backend_auto": "Auto (recommended) — LuminalVGD",

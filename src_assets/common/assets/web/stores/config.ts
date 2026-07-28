@@ -175,6 +175,7 @@ const defaultGroups = [
       },
       dd_wa_virtual_double_refresh: true,
       dd_wa_dummy_plug_hdr10: false,
+      vgd_hdr_peak_nits: 800,
       max_bitrate: 0,
       minimum_fps_target: 20,
       lossless_scaling_path: '',

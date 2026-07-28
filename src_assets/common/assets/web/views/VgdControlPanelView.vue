@@ -64,6 +64,32 @@
             >
               <template v-if="item.suffix" #suffix>{{ item.suffix }}</template>
             </n-input-number>
+            <div v-else-if="item.type === 'slider'" class="w-56 sm:w-72">
+              <n-slider
+                :value="toNumber(config[item.key], Number(item.fallback ?? 0))"
+                :min="item.min ?? 0"
+                :max="item.max ?? 100"
+                :step="1"
+                :marks="item.marks"
+                @update:value="(v: number) => setOption(item.key, v)"
+              />
+              <div class="mt-1 flex items-center justify-end gap-2 text-xs opacity-80">
+                <span>
+                  {{ toNumber(config[item.key], Number(item.fallback ?? 0)) }}
+                  {{ item.suffix }}
+                </span>
+                <n-tag
+                  v-if="
+                    item.hdrZoneFrom !== undefined &&
+                    toNumber(config[item.key], Number(item.fallback ?? 0)) >= item.hdrZoneFrom
+                  "
+                  size="small"
+                  type="warning"
+                >
+                  HDR
+                </n-tag>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -87,7 +113,7 @@
 import { computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { storeToRefs } from 'pinia';
-import { NAlert, NSwitch, NSelect, NInputNumber } from 'naive-ui';
+import { NAlert, NSwitch, NSelect, NInputNumber, NSlider, NTag } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
 
 const { t } = useI18n();
@@ -138,13 +164,17 @@ interface PanelItem {
   key: string;
   label: string;
   hint: string;
-  type: 'switch' | 'select' | 'number';
+  type: 'switch' | 'select' | 'number' | 'slider';
   options?: { label: string; value: string }[];
   suffix?: string;
   fallback?: string | number;
   boolEncoding?: 'string';
   min?: number;
   max?: number;
+  /// Slider tick labels ({value: label}).
+  marks?: Record<number, string>;
+  /// Values >= this render the "HDR" tag next to the readout.
+  hdrZoneFrom?: number;
 }
 
 interface PanelGroup {
@@ -273,6 +303,31 @@ const groups = computed<PanelGroup[]>(() => [
     footnote: tr(
       'vgd.modes_footnote',
       'The virtual display advertises the client-native mode automatically (up to four exact modes per monitor, millihertz-precise refresh, HDR10 when the client and driver support it).',
+    ),
+  },
+  {
+    title: tr('vgd.group_hdr', 'HDR'),
+    icon: 'fas fa-sun',
+    items: [
+      {
+        key: 'vgd_hdr_peak_nits',
+        label: tr('config.vgd_hdr_peak_nits', 'HDR peak brightness (nits)'),
+        hint: tr(
+          'vgd.hdr_peak_nits_hint',
+          'Peak luminance the virtual display advertises to Windows and HDR-aware games. Saves automatically; applies to the next streaming session.',
+        ),
+        type: 'slider',
+        fallback: 800,
+        min: 0,
+        max: 1000,
+        suffix: 'nits',
+        hdrZoneFrom: 790,
+        marks: { 790: 'HDR', 1000: '1000' },
+      },
+    ],
+    footnote: tr(
+      'vgd.hdr_footnote',
+      'Requires LuminalVGD driver build 15 or newer (older drivers use their built-in 993 nits). The EDID stores brightness on a ~2% logarithmic scale — 800 encodes exactly; 1000 encodes as 993.',
     ),
   },
 ]);
