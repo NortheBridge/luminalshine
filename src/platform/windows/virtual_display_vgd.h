@@ -54,6 +54,11 @@ namespace VDISPLAY::vgd {
   bool remove_all_virtual_displays();
   bool is_guid_tracked(const GUID &guid);
 
+  /// Number of currently tracked monitor sessions (0 when idle). Cheap;
+  /// used by the devnode rebind worker to refuse yanking the device out
+  /// from under a session that started concurrently.
+  size_t tracked_session_count();
+
   /// "proto <maj>.<min> build <n>" from the driver handshake, for
   /// diagnostics/web UI.
   std::optional<std::string> driver_version_string();

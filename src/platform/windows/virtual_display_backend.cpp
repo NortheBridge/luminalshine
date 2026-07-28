@@ -66,6 +66,21 @@ namespace VDISPLAY {
 
     const bool luminalvgd_installed = vgd::driver_appears_installed();
 
+    if (!luminalvgd_installed && platf::vgd_devnode::device_expected()) {
+      // A devnode exists (adopted or just created) but the control
+      // interface is not up yet — a fresh install's driver start can
+      // outlive our waits. Do NOT latch NONE: leave selection
+      // uninitialized so the next backend query re-probes (the probe is
+      // a cheap open/close). Latching here permanently disabled virtual
+      // displays whenever driver start lost the race (review finding).
+      static std::atomic<bool> logged_once {false};
+      if (!logged_once.exchange(true)) {
+        BOOST_LOG(info) << "LuminalVGD device present/created but its control interface is "
+                           "not up yet; backend selection will retry on the next query.";
+      }
+      return BackendType::NONE;
+    }
+
     const BackendType chosen = luminalvgd_installed ? BackendType::LUMINALVGD : BackendType::NONE;
 
     if (chosen == BackendType::LUMINALVGD) {

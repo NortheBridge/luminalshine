@@ -440,6 +440,11 @@ namespace VDISPLAY::vgd {
     return g_caps->driver_build;
   }
 
+  size_t tracked_session_count() {
+    std::lock_guard lk(g_mutex);
+    return g_sessions.size();
+  }
+
   bool driver_supports_hdr() {
     std::lock_guard lk(g_mutex);
     return g_caps && (g_caps->caps & VGD_CAP_HDR10);

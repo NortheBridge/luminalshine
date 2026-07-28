@@ -226,17 +226,45 @@ function Install-LuminalVgd {
     if ($LASTEXITCODE -notin 0, 3010, 259) { throw "[LuminalVGD] pnputil /add-driver failed ($LASTEXITCODE)" }
     if ($LASTEXITCODE -eq 3010) { Write-Host "[LuminalVGD] Staged with a pending file operation; the service-side rebind resolves it without a reboot." }
 
-    $existing = @(Get-DevicesByHardwareId 'root\luminal_vgd')
+    # PRESENT devnodes only. Phantoms — including the service-owned SWD
+    # device, which is a phantom whenever the service is stopped, i.e. on
+    # EVERY beta.7+ upgrade — are deliberately left alone:
+    # UpdateDriverForPlugAndPlayDevices only operates on present devices
+    # (binding a phantom just fails), and removing the phantom would wipe
+    # the driver's persisted identity/pool state under its device key.
+    # The service re-arrives the phantom at startup and heals the driver
+    # binding in place, losslessly.
+    $existing = @(Get-DevicesByHardwareId 'root\luminal_vgd' | Where-Object { $_.Present })
     if ($existing.Count -eq 0) {
-        Write-Host "[LuminalVGD] Driver staged. The LuminalShine service creates the device at startup."
+        Write-Host "[LuminalVGD] Driver staged. The LuminalShine service creates (or re-arrives) the device at startup."
+        Write-Host "[LuminalVGD] Driver install complete."
+        return
+    }
+
+    # No-downgrade guard, mirroring the service-side heal: only rebind
+    # when the bundled INF version is strictly newer than the driver the
+    # devnode currently runs. Without this, an MSI repair/upgrade on a
+    # dev box force-downgraded a script-installed newer build.
+    $infVer = $null
+    if ((Get-Content $inf -Raw) -match 'DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)') {
+        try { $infVer = [Version]$Matches[1] } catch {}
+    }
+    $installedVer = $null
+    $rawVer = (Get-PnpDeviceProperty -InstanceId $existing[0].InstanceId -KeyName 'DEVPKEY_Device_DriverVersion' -ErrorAction SilentlyContinue).Data
+    if ($rawVer) {
+        try { $installedVer = [Version]$rawVer } catch {}
+    }
+    if ($infVer -and $installedVer -and $installedVer -ge $infVer) {
+        Write-Host "[LuminalVGD] Installed driver $installedVer is the same as or newer than the bundled $infVer; leaving the binding untouched."
         Write-Host "[LuminalVGD] Driver install complete."
         return
     }
 
     # Legacy persistent devnode (created by pre-beta.7 installers or the
-    # LuminalVGD dev script): attempt the in-place force-bind exactly as
-    # before. The MSI has the service stopped here, so the device is idle
-    # and the update usually succeeds without a reboot flag.
+    # LuminalVGD dev script) running an older driver: attempt the
+    # in-place force-bind exactly as before. The MSI has the service
+    # stopped here, so the device is idle and the update usually succeeds
+    # without a reboot flag.
     Write-Host "[LuminalVGD] Binding driver to existing root\luminal_vgd devnode..."
     Add-Type -Namespace LuminalVgd -Name NewDev -MemberDefinition @'
 [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]

@@ -44,6 +44,17 @@ namespace platf::vgd_devnode {
   std::optional<std::uint32_t> bundled_driver_build();
 
   /**
+   * @brief A `root\luminal_vgd` devnode was adopted or created this
+   *        process — the driver is expected to become reachable.
+   *
+   * Backend selection uses this to avoid LATCHING BackendType::NONE
+   * while a driver start is still in flight (fresh installs, cold
+   * DriverStore): while true and the control interface is not up yet,
+   * selection stays uninitialized and re-probes on the next query.
+   */
+  bool device_expected();
+
+  /**
    * @brief One-shot startup hook: make sure a `root\luminal_vgd` device
    *        exists (adopt or create), then heal a stale driver binding.
    *

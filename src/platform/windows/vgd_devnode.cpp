@@ -2,6 +2,25 @@
  * @file src/platform/windows/vgd_devnode.cpp
  * @brief Service-owned LuminalVGD devnode + no-reboot driver switchover
  *        (see vgd_devnode.h for the design).
+ *
+ * Review-hardened (2026-07-28 adversarial pass):
+ *  - The device rebind runs on a detached worker, never on the startup
+ *    thread — UpdateDriverForPlugAndPlayDevices is synchronous and
+ *    unbounded, and first backend selection happens before the web UI
+ *    exists.
+ *  - The version check reads the devnode's registry DriverVersion (full
+ *    4-field tuple compare) instead of the control-device handshake, so
+ *    an idle service never holds the control handle open — a held handle
+ *    would veto device stops and reintroduce reboot-required updates for
+ *    the running-service (dev sign/test) flow.
+ *  - Software-device creation is attempted only when the driver package
+ *    is actually STAGED in the DriverStore; a bundled-but-unstaged
+ *    package (portable zip, never installed) must not burn a 20 s
+ *    device-start wait on every service start.
+ *  - When a device exists but its control interface is not up yet,
+ *    backend selection is deliberately NOT latched (device_expected()) —
+ *    a slow driver start must not disable virtual displays for the
+ *    process lifetime.
  */
 // platform includes
 #include <winsock2.h>
@@ -38,11 +57,14 @@ typedef struct _SW_DEVICE_CREATE_INFO {
 } SW_DEVICE_CREATE_INFO;
 
 // standard includes
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -53,6 +75,7 @@ typedef struct _SW_DEVICE_CREATE_INFO {
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/vgd_devnode.h"
 #include "src/platform/windows/virtual_display_vgd.h"
+#include "src/tdr_state.h"
 
 namespace platf::vgd_devnode {
 
@@ -68,29 +91,39 @@ namespace platf::vgd_devnode {
 
     /// The software device the service owns for its lifetime (default
     /// SWDeviceLifetimeHandle: the device disappears when the process
-    /// dies, and re-arrives at the next service start). Never closed
-    /// explicitly — closing it yanks the virtual display machinery.
+    /// dies, and re-arrives at the next service start). Closed only by
+    /// the rebind worker, immediately before recreating.
     HSWDEVICE g_sw_device = nullptr;
 
+    /// True once a devnode was adopted or created this process — backend
+    /// selection uses it to avoid latching NONE while a driver start is
+    /// still in flight.
+    std::atomic<bool> g_device_expected {false};
+
     // SwDeviceCreate/SwDeviceClose are bound dynamically: MinGW toolchains
-    // do not reliably ship an import library for swdevice.dll, and a load
-    // failure must degrade to "device not created" rather than a missing-
-    // DLL process death.
-    // The DEVPROPERTY array parameter is typed void* here: we always pass
-    // nullptr/0, and MinGW's devpropdef availability varies.
+    // ship no import library (or header) for them. The exports live in
+    // cfgmgr32.dll (already loaded — CM_* is used below), with the
+    // api-ms-win-devices-swdevice-l1-1-0 apiset as the documented
+    // alternate name. Both functions must resolve or neither is used —
+    // the create-timeout path relies on SwDeviceClose's documented
+    // guarantee that no callback fires after it returns.
     using SwDeviceCreate_t = HRESULT(WINAPI *)(PCWSTR, PCWSTR, const SW_DEVICE_CREATE_INFO *, ULONG, const void *, SW_DEVICE_CREATE_CALLBACK, PVOID, PHSWDEVICE);
     using SwDeviceClose_t = VOID(WINAPI *)(HSWDEVICE);
 
     struct swdevice_api_t {
       SwDeviceCreate_t create {nullptr};
       SwDeviceClose_t close {nullptr};
+
+      bool usable() const {
+        return create && close;
+      }
     };
 
     const swdevice_api_t &swdevice_api() {
       static const swdevice_api_t api = []() {
         swdevice_api_t out {};
-        HMODULE mod = LoadLibraryW(L"swdevice.dll");
-        if (!mod) {
+        HMODULE mod = LoadLibraryW(L"cfgmgr32.dll");
+        if (!mod || !GetProcAddress(mod, "SwDeviceCreate")) {
           mod = LoadLibraryW(L"api-ms-win-devices-swdevice-l1-1-0.dll");
         }
         if (mod) {
@@ -163,6 +196,31 @@ namespace platf::vgd_devnode {
       return std::nullopt;
     }
 
+    /// Is the LuminalVGD driver package actually staged in the
+    /// DriverStore? A bundled-but-unstaged package (portable zip, no
+    /// installer ever ran) must NOT trigger software-device creation:
+    /// with SWDeviceCapabilitiesDriverRequired the device would never
+    /// start and every service start would burn the full started-wait.
+    bool driver_store_has_package() {
+      wchar_t win_dir[MAX_PATH] = {};
+      if (GetSystemWindowsDirectoryW(win_dir, _countof(win_dir)) == 0) {
+        return false;
+      }
+      const std::filesystem::path repo = std::filesystem::path(win_dir) / L"System32" / L"DriverStore" / L"FileRepository";
+      std::error_code ec;
+      for (std::filesystem::directory_iterator it(repo, ec); !ec && it != std::filesystem::directory_iterator(); ++it) {
+        std::error_code dir_ec;
+        if (!it->is_directory(dir_ec)) {
+          continue;
+        }
+        const auto name = it->path().filename().wstring();
+        if (_wcsnicmp(name.c_str(), L"luminalvgd.inf_", 15) == 0) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     bool device_started(const std::wstring &instance) {
       DEVINST dev_inst = 0;
       if (CM_Locate_DevNodeW(&dev_inst, const_cast<DEVINSTID_W>(instance.c_str()), CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS) {
@@ -211,16 +269,14 @@ namespace platf::vgd_devnode {
     /// the device instance id on success.
     std::optional<std::wstring> create_software_device() {
       const auto &api = swdevice_api();
-      if (!api.create) {
-        BOOST_LOG(warning) << "LuminalVGD devnode: SwDeviceCreate is unavailable on this system.";
+      if (!api.usable()) {
+        BOOST_LOG(warning) << "LuminalVGD devnode: the software-device API is unavailable on this system.";
         return std::nullopt;
       }
       if (g_sw_device) {
         // A previous create in this process is still alive; close it so
         // the re-create below starts clean (rebind path).
-        if (api.close) {
-          api.close(g_sw_device);
-        }
+        api.close(g_sw_device);
         g_sw_device = nullptr;
       }
 
@@ -248,7 +304,10 @@ namespace platf::vgd_devnode {
 
       // 15 s: driver matching + UMDF host start on a cold DriverStore can
       // take several seconds; the callback fires once the device instance
-      // exists (driver start continues asynchronously after that).
+      // exists (driver start continues asynchronously after that). The
+      // timeout path is safe: SwDeviceClose documents that no callback
+      // fires after it returns, and ctx is still in scope at that point
+      // (api.usable() above guarantees close resolved).
       const DWORD wait = WaitForSingleObject(ctx.event, 15000);
       HRESULT create_result = E_PENDING;
       std::wstring instance;
@@ -261,9 +320,7 @@ namespace platf::vgd_devnode {
         BOOST_LOG(error) << "LuminalVGD devnode: software device creation did not complete "
                          << "(wait=" << wait << ", result=0x" << std::hex << create_result
                          << std::dec << ").";
-        if (api.close) {
-          api.close(device);
-        }
+        api.close(device);
         return std::nullopt;
       }
 
@@ -332,12 +389,23 @@ namespace platf::vgd_devnode {
       return out;
     }
 
-    /// Full rebind: remove the devnode and recreate it as a software
-    /// device — a brand-new device instance runs full driver ranking, so
-    /// the newest staged package always wins. Also migrates legacy
-    /// persistent (installer-created) devnodes to service ownership.
+    /// Full rebind: close our software-device handle FIRST (a live
+    /// SWDeviceLifetimeHandle pins the device across a PnP remove),
+    /// remove EVERY matching devnode (present or phantom — a dev box can
+    /// have both a legacy persistent node and our SWD phantom), then
+    /// recreate — a brand-new device instance runs full driver ranking,
+    /// so the newest staged package always wins.
     bool rebind_via_recreate() {
-      if (auto stale = find_device_instance(false); stale) {
+      const auto &api = swdevice_api();
+      if (g_sw_device && api.usable()) {
+        api.close(g_sw_device);
+        g_sw_device = nullptr;
+      }
+      for (int i = 0; i < 4; ++i) {
+        auto stale = find_device_instance(false);
+        if (!stale) {
+          break;
+        }
         BOOST_LOG(info) << "LuminalVGD devnode: removing " << platf::to_utf8(*stale)
                         << " for a clean rebind.";
         if (!uninstall_device_instance(*stale)) {
@@ -351,41 +419,52 @@ namespace platf::vgd_devnode {
       return wait_device_started(*created, std::chrono::milliseconds(20000));
     }
 
-    void heal_version_mismatch() {
-      const auto bundled = bundled_driver_build();
-      if (!bundled) {
-        return;  // portable install without a bundled package — nothing to compare
+    /// "x.y.z.w" -> {x,y,z,w}. DriverVer versions are four numeric fields.
+    std::optional<std::array<std::uint32_t, 4>> parse_version_tuple(const std::string &version) {
+      std::array<std::uint32_t, 4> out {};
+      std::istringstream in(version);
+      for (int i = 0; i < 4; ++i) {
+        std::uint32_t field = 0;
+        if (!(in >> field)) {
+          return std::nullopt;
+        }
+        out[i] = field;
+        if (i < 3) {
+          char dot = 0;
+          if (!(in >> dot) || dot != '.') {
+            return std::nullopt;
+          }
+        }
       }
-      const auto running = VDISPLAY::vgd::driver_build();
-      if (!running) {
-        return;  // no handshake — diagnostics elsewhere cover this
-      }
-      if (*running == *bundled) {
+      return out;
+    }
+
+    std::string tuple_to_string(const std::array<std::uint32_t, 4> &v) {
+      return std::to_string(v[0]) + '.' + std::to_string(v[1]) + '.' + std::to_string(v[2]) + '.' + std::to_string(v[3]);
+    }
+
+    /// The rebind itself, on a detached worker: UpdateDriver is
+    /// synchronous with no timeout, and first backend selection runs on
+    /// the startup thread before the web UI exists — a wedged PnP stack
+    /// must not take the whole service down with it.
+    void rebind_worker(std::array<std::uint32_t, 4> bundled) {
+      if (VDISPLAY::vgd::tracked_session_count() > 0) {
+        // A client connected between the startup decision and this
+        // worker running. Do not yank the device mid-session; the next
+        // service restart repeats the heal.
+        BOOST_LOG(warning) << "LuminalVGD devnode: skipping the driver rebind — a virtual "
+                              "display session started first. The update completes at the "
+                              "next service restart.";
         return;
       }
-      if (*running > *bundled) {
-        // Dev box running a newer script-installed build than the MSI
-        // bundle. Never downgrade it automatically.
-        BOOST_LOG(info) << "LuminalVGD devnode: running driver build " << *running
-                        << " is newer than the bundled build " << *bundled
-                        << "; leaving it in place.";
-        return;
-      }
-
-      BOOST_LOG(warning) << "LuminalVGD devnode: running driver build " << *running
-                         << " is older than the bundled build " << *bundled
-                         << " — rebinding to the new driver without a reboot.";
-
-      // Quiesce: no sessions exist this early in startup, but be thorough —
-      // the device stop must not be vetoed by our own handles.
+      // Quiesce our own holds so the device stop cannot be vetoed by us.
       VDISPLAY::vgd::remove_all_virtual_displays();
       VDISPLAY::vgd::close_device();
 
       bool rebound = false;
       if (const auto inf = bundled_inf_path(); inf) {
-        // Preferred: in-place update against the now-idle device. This is
-        // the same call the MSI makes, but from here nothing holds the
-        // device open, so the stop is not vetoed and no reboot is flagged.
+        // Preferred: in-place update against the now-idle device — same
+        // call the MSI makes, but nothing holds the device open here.
         const auto res = update_driver_in_place(*inf);
         if (res.ok && !res.reboot_required) {
           rebound = true;
@@ -404,33 +483,91 @@ namespace platf::vgd_devnode {
         return;
       }
 
-      const auto now_running = VDISPLAY::vgd::driver_build();
-      if (now_running && *now_running == *bundled) {
-        BOOST_LOG(info) << "LuminalVGD devnode: driver switched to build " << *now_running
+      // The device restarts asynchronously after either rebind flavor —
+      // give it a bounded window before judging the outcome.
+      if (auto instance = find_device_instance(true); instance) {
+        wait_device_started(*instance, std::chrono::milliseconds(10000));
+      }
+
+      const auto installed = platf::diag::query_virtual_display_driver_info().version;
+      const auto installed_tuple = installed ? parse_version_tuple(*installed) : std::nullopt;
+      if (installed_tuple && *installed_tuple == bundled) {
+        BOOST_LOG(info) << "LuminalVGD devnode: driver switched to " << *installed
                         << " without a reboot.";
+        // One handshake proves the new driver actually runs, then the
+        // handle is dropped — an idle service must not pin the device.
+        if (VDISPLAY::vgd::driver_ready()) {
+          if (auto v = VDISPLAY::vgd::driver_version_string(); v) {
+            BOOST_LOG(info) << "LuminalVGD devnode: post-rebind handshake OK (" << *v << ").";
+          }
+        }
+        VDISPLAY::vgd::close_device();
       } else {
-        BOOST_LOG(warning) << "LuminalVGD devnode: rebind completed but the driver reports build "
-                           << (now_running ? std::to_string(*now_running) : std::string("<no handshake>"))
-                           << " instead of the bundled " << *bundled
+        BOOST_LOG(warning) << "LuminalVGD devnode: rebind completed but the installed driver "
+                           << "reports " << (installed ? *installed : std::string("<unknown>"))
+                           << " instead of the bundled " << tuple_to_string(bundled)
                            << ". A reboot may still be required.";
       }
+    }
+
+    void heal_version_mismatch() {
+      const auto bundled_pkg = platf::diag::query_bundled_vgd_package();
+      if (!bundled_pkg.present || !bundled_pkg.version) {
+        return;  // portable install without a bundled package — nothing to compare
+      }
+      const auto bundled = parse_version_tuple(*bundled_pkg.version);
+      const auto installed_str = platf::diag::query_virtual_display_driver_info().version;
+      const auto installed = installed_str ? parse_version_tuple(*installed_str) : std::nullopt;
+      if (!bundled || !installed) {
+        return;
+      }
+      if (*installed == *bundled) {
+        return;
+      }
+      if (*installed > *bundled) {
+        // Dev box running a newer script-installed build than the MSI
+        // bundle. Never downgrade it automatically. Full-tuple compare,
+        // so a future versioning-scheme change stays honest as long as
+        // the leading fields grow.
+        BOOST_LOG(info) << "LuminalVGD devnode: installed driver " << *installed_str
+                        << " is newer than the bundled " << *bundled_pkg.version
+                        << "; leaving it in place.";
+        return;
+      }
+      if (tdr::stack_down()) {
+        // A driver install against a wedged WDDM stack can hang
+        // indefinitely; the wedge needs a reboot anyway, which also
+        // completes the update the boring way.
+        BOOST_LOG(warning) << "LuminalVGD devnode: bundled driver " << *bundled_pkg.version
+                           << " is newer than installed " << *installed_str
+                           << ", but the display stack is down — deferring the rebind "
+                           << "to the post-reboot start.";
+        return;
+      }
+
+      BOOST_LOG(warning) << "LuminalVGD devnode: installed driver " << *installed_str
+                         << " is older than the bundled " << *bundled_pkg.version
+                         << " — rebinding to the new driver without a reboot (background).";
+      std::thread(&rebind_worker, *bundled).detach();
     }
 
     void ensure_and_heal_once() {
       // 1. Make sure a device exists at all.
       auto present = find_device_instance(true);
       if (present) {
+        g_device_expected.store(true, std::memory_order_release);
         BOOST_LOG(debug) << "LuminalVGD devnode: adopting present device "
                          << platf::to_utf8(*present) << ".";
       } else {
-        // No present devnode. Fresh MSI installs stage the driver package
-        // only; the phantom of our own previous software device (if any)
-        // re-arrives under the same instance id.
-        const bool package_staged = bundled_driver_build().has_value() || platf::diag::query_virtual_display_driver_info().version.has_value();
-        if (!package_staged) {
-          // Nothing bundled and no installed driver either — behave as
-          // before this module existed (backend selection reports the
-          // driver missing).
+        if (!driver_store_has_package()) {
+          // Nothing staged in the DriverStore: creating a DriverRequired
+          // software device could never start it. Portable users run the
+          // install script once, exactly as before this module existed.
+          if (bundled_driver_build()) {
+            BOOST_LOG(warning) << "LuminalVGD devnode: a driver package is bundled but not "
+                                  "staged in the DriverStore; run drivers\\luminalvgd\\"
+                                  "install.ps1 (or the installer) once to stage it.";
+          }
           return;
         }
         auto created = create_software_device();
@@ -439,9 +576,12 @@ namespace platf::vgd_devnode {
                            << "creation failed; virtual displays will be unavailable.";
           return;
         }
+        g_device_expected.store(true, std::memory_order_release);
         if (!wait_device_started(*created, std::chrono::milliseconds(20000))) {
+          // Not fatal: backend selection sees device_expected() and
+          // keeps re-probing instead of latching NONE.
           BOOST_LOG(warning) << "LuminalVGD devnode: device created but not started yet; "
-                             << "continuing (the driver may finish starting shortly).";
+                             << "backend selection will keep probing for it.";
         }
       }
 
@@ -466,6 +606,10 @@ namespace platf::vgd_devnode {
     } catch (...) {
       return std::nullopt;
     }
+  }
+
+  bool device_expected() {
+    return g_device_expected.load(std::memory_order_acquire);
   }
 
   void startup_ensure_and_heal() {
