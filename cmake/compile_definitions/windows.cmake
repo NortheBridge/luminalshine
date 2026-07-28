@@ -150,6 +150,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_vgd.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_recovery.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_recovery.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/tdr_lifeboat.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/tdr_lifeboat.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda-ioctl.h"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frame_limiter.h"

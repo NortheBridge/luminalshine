@@ -44,6 +44,10 @@ namespace tdr {
     // a fresh incident.
     constexpr std::chrono::seconds kLogCooldown {30};
     constexpr std::chrono::minutes kNotifyCooldown {2};
+
+    // Observer installed via set_event_hook(). Guarded by g_mutex; copied
+    // out and invoked only after the lock is released (see mark_event).
+    std::function<void(source_t)> g_event_hook;
   }  // namespace
 
   void mark_event(source_t source, long hresult, std::string detail) {
@@ -59,8 +63,10 @@ namespace tdr {
 
     bool should_log = false;
     bool should_notify = false;
+    std::function<void(source_t)> hook_copy;
     {
       std::lock_guard<std::mutex> lk(g_mutex);
+      hook_copy = g_event_hook;
       g_last = event;
       g_count.fetch_add(1, std::memory_order_relaxed);
 
@@ -126,6 +132,18 @@ namespace tdr {
 #else
     (void) should_notify;
 #endif
+
+    // Invoked strictly after g_mutex is released so a hook may call back
+    // into tdr:: accessors. The hook contract (tdr_state.h) requires it to
+    // be non-blocking — we are on the caller's thread, which can be a
+    // time-critical path such as the NvEnc encode loop.
+    if (hook_copy) {
+      try {
+        hook_copy(source);
+      } catch (...) {
+        // A misbehaving observer must never break event recording.
+      }
+    }
   }
 
   bool recovery_recent(std::chrono::seconds within) {
@@ -189,6 +207,11 @@ namespace tdr {
   std::uint64_t incident_count() {
     std::lock_guard<std::mutex> lk(g_mutex);
     return g_incident_count;
+  }
+
+  void set_event_hook(std::function<void(source_t)> hook) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_event_hook = std::move(hook);
   }
 
   const char *source_label(source_t source) {

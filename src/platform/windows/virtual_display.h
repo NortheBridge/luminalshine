@@ -19,6 +19,10 @@
 #include <ddk/d4drvif.h>
 #include <sudovda/sudovda.h>
 
+namespace display_device {
+  struct EnumeratedDevice;
+}  // namespace display_device
+
 namespace VDISPLAY {
   inline constexpr const char *SUDOVDA_VIRTUAL_DISPLAY_SELECTION = "sunshine:sudovda_virtual_display";
 
@@ -110,6 +114,15 @@ namespace VDISPLAY {
   /// SudoVDA "SMKD1CE", LuminalVGD "NBF5001") belongs to a known
   /// virtual-display driver.
   bool is_virtual_display_hardware_id(const std::string &hardware_id);
+
+  /// Backend-agnostic check whether an enumerated display device belongs to
+  /// a known virtual-display driver (LuminalVGD, SudoVDA). Works for
+  /// inactive devices too — it matches on the monitor device path /
+  /// hardware id / friendly name, not on the active display name. Thin
+  /// public wrapper over the internal classifier that
+  /// has_active_physical_display() uses; exported for the TDR topology
+  /// lifeboat (src/platform/windows/tdr_lifeboat.cpp).
+  bool is_virtual_display_enumerated_device(const display_device::EnumeratedDevice &device);
 
   std::vector<std::wstring> matchDisplay(std::wstring sMatch);
 

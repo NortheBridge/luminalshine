@@ -30,6 +30,7 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/windows/tdr_lifeboat.h"
 #include "utf_utils.h"
 
 // Must be the last included file
@@ -1695,6 +1696,13 @@ namespace platf {
     if (audio_ctrl.init() == 0) {
       audio_ctrl.reset_default_device_no_wait();
     }
+
+    // Arm the TDR topology lifeboat: from here on, a detected GPU hang
+    // best-effort activates a physical display alongside the virtual one so
+    // Windows' TDR recovery always has a hardware-backed output
+    // (POSTMORTEM-2026-07-27). Wired here (Windows platf::init) rather than
+    // in main.cpp so cross-platform init stays untouched.
+    tdr_lifeboat::init();
 
     return co_init;
   }

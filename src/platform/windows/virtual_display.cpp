@@ -4797,6 +4797,14 @@ bool VDISPLAY::has_active_physical_display() {
   return false;
 }
 
+bool VDISPLAY::is_virtual_display_enumerated_device(const display_device::EnumeratedDevice &device) {
+  // Thin public wrapper over the internal (anonymous-namespace) classifier
+  // so out-of-file consumers — currently the TDR topology lifeboat — can
+  // share the exact same virtual-vs-physical decision that
+  // has_active_physical_display() uses.
+  return is_virtual_display_device(device);
+}
+
 bool VDISPLAY::should_auto_enable_virtual_display() {
   if (!isSudaVDADriverInstalled()) {
     BOOST_LOG(warning) << "Suda VDA driver not installed, not enabling virtual display.";
