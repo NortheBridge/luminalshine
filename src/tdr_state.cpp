@@ -48,6 +48,12 @@ namespace tdr {
     // Observer installed via set_event_hook(). Guarded by g_mutex; copied
     // out and invoked only after the lock is released (see mark_event).
     std::function<void(source_t)> g_event_hook;
+
+    // Platform probe installed via set_stack_recheck(). Guarded by
+    // g_mutex; copied out and invoked lock-free (see stack_down).
+    std::function<bool()> g_stack_recheck;
+    std::atomic<std::int64_t> g_last_recheck_ms {0};
+    constexpr std::chrono::seconds kStackRecheckEvery {5};
   }  // namespace
 
   void mark_event(source_t source, long hresult, std::string detail) {
@@ -182,7 +188,48 @@ namespace tdr {
   }
 
   bool stack_down() {
-    return g_stack_down.load(std::memory_order_acquire);
+    if (!g_stack_down.load(std::memory_order_acquire)) {
+      return false;
+    }
+    // A latched process must be able to DISCOVER recovery on its own: the
+    // gates guarded by this function refuse sessions and encoder probes,
+    // so the D3D11 success path that calls note_stack_healthy() can never
+    // run while latched (2026-07-28 review finding — without this, a
+    // false latch is a permanent healthy-machine denial of service).
+    // Re-verify through the platform probe at most once per
+    // kStackRecheckEvery and self-clear on a healthy read. Unlatched
+    // callers still pay only the single atomic load above.
+    std::function<bool()> probe;
+    {
+      std::lock_guard<std::mutex> lk(g_mutex);
+      probe = g_stack_recheck;
+    }
+    if (!probe) {
+      return true;
+    }
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+    auto last = g_last_recheck_ms.load(std::memory_order_relaxed);
+    const auto interval_ms = std::chrono::duration_cast<std::chrono::milliseconds>(kStackRecheckEvery).count();
+    if (now_ms - last < interval_ms) {
+      return true;
+    }
+    if (!g_last_recheck_ms.compare_exchange_strong(last, now_ms, std::memory_order_relaxed)) {
+      // Another thread won the slot and is re-checking right now.
+      return true;
+    }
+    bool healthy = false;
+    try {
+      healthy = probe();
+    } catch (...) {
+      // A failing probe is an unhealthy read; stay latched.
+    }
+    if (healthy) {
+      note_stack_healthy();
+      return false;
+    }
+    return true;
   }
 
   void note_stack_healthy() {
@@ -212,6 +259,11 @@ namespace tdr {
   void set_event_hook(std::function<void(source_t)> hook) {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_event_hook = std::move(hook);
+  }
+
+  void set_stack_recheck(std::function<bool()> probe) {
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_stack_recheck = std::move(probe);
   }
 
   const char *source_label(source_t source) {

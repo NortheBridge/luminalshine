@@ -637,6 +637,46 @@ namespace stream {
     deferred_stream_start_state().reset();
   }
 
+#ifdef _WIN32
+  // Post-drain-leak host restart, deferred while the display stack is
+  // down. Restarting into a wedged WDDM stack cannot reclaim anything —
+  // the 2026-07-28 incident restarted at 07:01:04 into a dead stack and
+  // the fresh process spent 5.4 minutes walking every encoder family
+  // through D3D retry ladders (web UI unreachable throughout) before
+  // idling against the same wedge. The leak only matters for the NEXT
+  // encoder init, which cannot succeed until the stack is back anyway,
+  // so the restart waits for tdr::note_stack_healthy() to clear the
+  // latch (or for the user's reboot, which recycles the process better
+  // than we can).
+  static void leak_reclaim_restart_tick() {
+    if (session::active_sessions.load(std::memory_order_acquire) > 0) {
+      // A later RTSP session end re-arms the schedule, so a plain return
+      // is safe here.
+      BOOST_LOG(info) << "Skipping post-leak host restart; a new session is active.";
+      return;
+    }
+    if (webrtc_stream::has_active_sessions()) {
+      // WebRTC sessions live outside session::active_sessions, and their
+      // teardown never re-arms this schedule (it is armed only on the
+      // RTSP last-session-end path) — so a skip here must RESCHEDULE,
+      // not return, or the reclaim is lost. Restarting through an active
+      // WebRTC stream would kill it mid-session.
+      BOOST_LOG(info) << "Deferring post-leak host restart; a WebRTC session is active. Re-checking in 60s.";
+      task_pool.pushDelayed(&leak_reclaim_restart_tick, 60s);
+      return;
+    }
+    if (tdr::stack_down()) {
+      BOOST_LOG(warning) << "Deferring post-leak host restart: the display stack is down "
+                            "machine-wide (reboot required) and a fresh process could not "
+                            "probe encoders anyway. Re-checking in 60s.";
+      task_pool.pushDelayed(&leak_reclaim_restart_tick, 60s);
+      return;
+    }
+    BOOST_LOG(info) << "Restarting host to reclaim leaked NVENC registrations.";
+    platf::restart();
+  }
+#endif
+
   bool apply_deferred_stream_start_actions_if_ready() {
     {
       std::lock_guard<std::mutex> lock(deferred_stream_start_mutex());
@@ -2512,14 +2552,7 @@ namespace stream {
         if (const auto leaks = nvenc::drain_leak_count(); leaks > 0) {
           BOOST_LOG(warning) << "NvEnc drain-leak events this process: " << leaks
                              << "; scheduling a clean host restart now that no sessions remain.";
-          task_pool.pushDelayed([]() {
-            if (session::active_sessions.load(std::memory_order_acquire) > 0) {
-              BOOST_LOG(info) << "Skipping post-leak host restart; a new session is active.";
-              return;
-            }
-            BOOST_LOG(info) << "Restarting host to reclaim leaked NVENC registrations.";
-            platf::restart();
-          }, 15s);
+          task_pool.pushDelayed(&leak_reclaim_restart_tick, 15s);
         }
 #endif
         // Only revert on disconnect when explicitly enabled by config.
@@ -2642,22 +2675,33 @@ namespace stream {
         // long as the machine stayed broken.
         LONG qdc_status = ERROR_SUCCESS;
         UINT32 qdc_paths = 0;
-        const bool display_api_ok =
-          platf::dxgi::display_config_api_healthy(&qdc_status, &qdc_paths);
-        if (!display_api_ok) {
+        // Terminal verdicts demand the confirmed wedge signature (two
+        // ERROR_NOT_SUPPORTED reads, ~2 s apart) — a single unhealthy
+        // read also fires in benign boot/resume/post-TDR settle windows
+        // and would latch "reboot required" on a healthy machine.
+        const bool confirmed_down =
+          platf::dxgi::display_stack_confirmed_down(&qdc_status, &qdc_paths);
+        if (confirmed_down) {
           std::string detail = "Pre-flight D3D11 health check failed at session start; "
                                "QueryDisplayConfig unavailable (status ";
           detail += std::to_string(qdc_status);
           detail += ", ";
           detail += std::to_string(qdc_paths);
-          detail += " paths)";
+          detail += " paths, confirmed twice)";
           tdr::mark_stack_down(static_cast<long>(probe_hr), std::move(detail));
-        } else {
+        } else if (qdc_status == ERROR_SUCCESS && qdc_paths > 0) {
           BOOST_LOG(warning)
             << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
             << std::hex << probe_hr << std::dec
             << "), though the display stack itself is healthy (" << qdc_paths
             << " active paths). The GPU driver may be mid-recovery; the client should retry shortly.";
+        } else {
+          BOOST_LOG(warning)
+            << "Refusing to start new streaming session: pre-flight D3D11 health check failed (hresult=0x"
+            << std::hex << probe_hr << std::dec
+            << ") and the display stack state is indeterminate (QueryDisplayConfig status "
+            << qdc_status << ", " << qdc_paths
+            << " paths). Not recording a terminal verdict; the client should retry shortly.";
         }
         return -1;
       }

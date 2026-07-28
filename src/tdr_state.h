@@ -142,8 +142,29 @@ namespace tdr {
    * Latched by `mark_stack_down`, cleared by `note_stack_healthy`. Call
    * sites use this to fail fast and loudly (with "reboot required")
    * instead of burning the backoff ladder per encoder, per attempt.
+   *
+   * Self-healing: while latched, this re-verifies through the platform
+   * probe installed via `set_stack_recheck` (rate-limited, at most once
+   * per few seconds across all callers) and clears the latch on a
+   * healthy read. Required because the gates guarded by this function
+   * prevent the D3D11 success path — `note_stack_healthy`'s other
+   * trigger — from ever running while latched. Unlatched callers pay a
+   * single atomic load.
    */
   bool stack_down();
+
+  /**
+   * @brief Install the platform probe `stack_down` uses to re-verify a
+   *        latched verdict (and self-clear on recovery).
+   *
+   * The probe returns true when the display stack is verified healthy
+   * (on Windows: a full QueryDisplayConfig succeeding with ≥1 active
+   * path). Must be cheap (~ms) and callable from any thread; exceptions
+   * are swallowed and read as "still unhealthy". Installed once from
+   * platform init; pass nullptr to remove (the latch then only clears
+   * via note_stack_healthy from a D3D11 success).
+   */
+  void set_stack_recheck(std::function<bool()> probe);
 
   /**
    * @brief Report that the display stack was just observed working.
