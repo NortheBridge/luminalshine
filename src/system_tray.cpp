@@ -242,6 +242,13 @@ namespace system_tray {
     // the 07:08 process hung in exactly this loop during service stop and
     // self-crashed via the watchdog (WER dump luminalshine.exe.18576.dmp,
     // tray thread parked in SleepEx at this line).
+    //
+    // Known residual (accepted): this covers the DEAD-shell case. A shell
+    // that is alive but HUNG passes GetShellWindow() and can then stall
+    // inside Shell_NotifyIcon (documented ~4 s SendMessageTimeout per
+    // call, a few calls per tray_init attempt) — those waits live in
+    // third-party/tray and remain shutdown-blind; the force-shutdown
+    // watchdog is the backstop for that path.
     while (GetShellWindow() == nullptr) {
       if (tray_shutdown_requested.load()) {
         return 0;
@@ -283,6 +290,12 @@ namespace system_tray {
       return 0;
     }
     if (!wait_for_default_desktop()) {
+      // false means either the 60 s timeout elapsed or shutdown was
+      // requested mid-wait — do not log a misleading timeout warning
+      // for the latter (it would pollute the next incident's evidence).
+      if (tray_shutdown_requested.load()) {
+        return 0;
+      }
       BOOST_LOG(warning) << "Timed out waiting for interactive desktop; system tray may not appear"sv;
     } else {
       BOOST_LOG(debug) << "Interactive desktop ready for tray initialization"sv;
