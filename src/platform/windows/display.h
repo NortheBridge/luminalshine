@@ -119,6 +119,25 @@ namespace platf::dxgi {
    */
   bool display_config_api_healthy(LONG *error_out, UINT32 *path_count_out) noexcept;
 
+  /**
+   * @brief Confirmed machine-wide display-stack death — the gate for the
+   *        TERMINAL tdr::mark_stack_down verdict.
+   *
+   * A single unhealthy read is not enough evidence to tell the user to
+   * reboot: QueryDisplayConfig fails transiently at boot / resume /
+   * post-TDR settle (ERROR_GEN_FAILURE) and in session-context edge
+   * cases (ERROR_ACCESS_DENIED). This returns true only for the observed
+   * wedge signature — ERROR_NOT_SUPPORTED on two reads separated by a
+   * ~2 s settle delay (every incident of this class: 2026-05-17, 07-26,
+   * 07-27, 07-28). Anything else is indeterminate: report, don't latch.
+   * Blocks up to ~2 s when the first read carries the signature.
+   *
+   * @param error_out Receives the last raw Win32 status, or nullptr.
+   * @param path_count_out Receives the last path count, or nullptr.
+   * @return true only for the confirmed, reboot-only wedge signature.
+   */
+  bool display_stack_confirmed_down(LONG *error_out, UINT32 *path_count_out) noexcept;
+
   using factory1_t = util::safe_ptr<IDXGIFactory1, Release<IDXGIFactory1>>;
   using dxgi_t = util::safe_ptr<IDXGIDevice, Release<IDXGIDevice>>;
 
