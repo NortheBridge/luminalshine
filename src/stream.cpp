@@ -650,7 +650,19 @@ namespace stream {
   // than we can).
   static void leak_reclaim_restart_tick() {
     if (session::active_sessions.load(std::memory_order_acquire) > 0) {
+      // A later RTSP session end re-arms the schedule, so a plain return
+      // is safe here.
       BOOST_LOG(info) << "Skipping post-leak host restart; a new session is active.";
+      return;
+    }
+    if (webrtc_stream::has_active_sessions()) {
+      // WebRTC sessions live outside session::active_sessions, and their
+      // teardown never re-arms this schedule (it is armed only on the
+      // RTSP last-session-end path) — so a skip here must RESCHEDULE,
+      // not return, or the reclaim is lost. Restarting through an active
+      // WebRTC stream would kill it mid-session.
+      BOOST_LOG(info) << "Deferring post-leak host restart; a WebRTC session is active. Re-checking in 60s.";
+      task_pool.pushDelayed(&leak_reclaim_restart_tick, 60s);
       return;
     }
     if (tdr::stack_down()) {
