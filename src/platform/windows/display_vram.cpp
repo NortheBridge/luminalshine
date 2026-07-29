@@ -25,7 +25,6 @@ extern "C" {
 #include "src/nvenc/nvenc_d3d11_native.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
-#include "src/platform/windows/render_stack_detect.h"
 #include "src/video.h"
 #include "utf_utils.h"
 
@@ -46,6 +45,45 @@ static void free_frame(AVFrame *frame) {
 using frame_t = util::safe_ptr<AVFrame, free_frame>;
 
 namespace platf::dxgi {
+
+  namespace {
+    /// Read a Windows TDR tuning value from
+    /// HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers, falling back
+    /// to the documented Microsoft default when the value is absent (the
+    /// usual case — Windows ships these unset and applies the defaults
+    /// internally). Cached: both keys only take effect on reboot, so a
+    /// mid-run re-read could not observe a change that had taken effect.
+    std::uint32_t tdr_registry_seconds(const wchar_t *value_name, std::uint32_t default_seconds) {
+      DWORD data = 0;
+      DWORD size = sizeof(data);
+      const auto status = RegGetValueW(
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+        value_name,
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &data,
+        &size
+      );
+      if (status != ERROR_SUCCESS) {
+        return default_seconds;
+      }
+      return static_cast<std::uint32_t>(data);
+    }
+
+    /// Seconds Windows lets a GPU packet run before declaring a timeout.
+    std::uint32_t os_tdr_delay_seconds() {
+      static const std::uint32_t cached = tdr_registry_seconds(L"TdrDelay", 2);
+      return cached;
+    }
+
+    /// Additional seconds Windows allows for the driver to unwind after
+    /// that timeout before abandoning it.
+    std::uint32_t os_tdr_ddi_delay_seconds() {
+      static const std::uint32_t cached = tdr_registry_seconds(L"TdrDdiDelay", 5);
+      return cached;
+    }
+  }  // namespace
 
   template<class T>
   buf_t make_buffer(device_t::pointer device, const T &t) {
@@ -1110,37 +1148,36 @@ namespace platf::dxgi {
 
       auto nvenc_colorspace = nvenc::nvenc_colorspace_from_sunshine_colorspace(colorspace);
 
-      // Render-stack-aware per-session timeout. Take ONE snapshot here
-      // (encoder init = session start), not per frame: snapshot() walks
-      // every accessible process for module matches and costs ~10ms,
-      // and the foreground render workload doesn't reclassify in the
-      // sub-second timescale the encode-wait gate cares about. If the
-      // detection reports DLSS Frame Generation or DLAA loaded in the
-      // foreground process, the GPU's queued render + frame-gen work
-      // regularly exceeds the 100ms default at 4K HDR — keeping the
-      // default would misclassify legitimately-slow frames as TDR-class
-      // and start tearing the encoder down (which prior PRs in the
-      // series harden, but is best avoided in the first place).
+      // OS-anchored per-session encode-wait deadline.
       //
-      // Bump to 250ms when DLSS-FG or DLAA is detected. Plain DLSS
-      // (no FG) does not currently trigger the bump because its
-      // per-frame overhead stays well under 100ms even at 4K. If a
-      // future user-report indicates otherwise, add `has_dlss` to the
-      // condition below.
+      // This used to be a render-stack-aware bump: snapshot the foreground
+      // processes once and, if DLSS-FG or DLAA was loaded, set the timeout
+      // to 250ms instead of the 100ms default. Field forensics retired that
+      // design on three counts. (1) It never fired — the snapshot happens
+      // at encoder init, and a game launched by hand inside an already
+      // running desktop stream does not exist yet at that moment, so the
+      // log line it emits has zero occurrences across every log ever
+      // written on the reference machine. (2) It gated on the wrong
+      // feature: the observed stalls were plain 4K HDR 10-bit encodes with
+      // frame generation switched OFF, so even perfect detection would not
+      // have applied it. (3) It was an unconditional ASSIGNMENT, not a
+      // raise, so against an OS-scale base it would have been a large
+      // DOWNGRADE applied to exactly the workload needing the most room.
       //
-      // The bump is one-way: don't downgrade mid-session if a later
-      // snapshot lost the flag (jitter > value).
+      // The replacement needs no detection at all. The wait is dominated by
+      // queueing, not by encode: the NVENC input texture is also the
+      // colour-conversion render target (init_output below), so the encode
+      // packet carries a cross-engine fence on a 3D draw sitting behind the
+      // game's render work. That scales with game load rather than encoder
+      // throughput, which is why no per-GPU number is correct. Anchor to
+      // the OS instead: Windows does not consider a GPU hung until
+      // TdrDelay, and does not abandon the driver unwind until
+      // TdrDdiDelay after that.
       auto encoder_cfg = config::video.nv;
-      const auto rs = platf::render_stack::snapshot();
-      if (rs.any_match && (rs.has_dlss_fg || rs.has_dlaa)) {
-        encoder_cfg.encode_wait_timeout_ms = 250;
-        BOOST_LOG(info) << "NvEnc: render-stack detection found "
-                        << (rs.has_dlss_fg ? "DLSS-FG " : "")
-                        << (rs.has_dlaa ? "DLAA " : "")
-                        << "in a foreground process; raising encode-wait timeout "
-                        << "from 100ms to " << encoder_cfg.encode_wait_timeout_ms
-                        << "ms for this session.";
-      }
+      encoder_cfg.encode_wait_timeout_ms = nvenc::encode_wait_deadline_from_tdr(
+        os_tdr_delay_seconds(),
+        os_tdr_ddi_delay_seconds()
+      );
 
       if (!nvenc_d3d->create_encoder(encoder_cfg, client_config, nvenc_colorspace, buffer_format)) {
         return false;

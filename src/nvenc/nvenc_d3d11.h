@@ -39,6 +39,20 @@ namespace nvenc {
     bool wait_for_async_event(uint32_t timeout_ms) override;
     void reset_async_event() override;
 
+    /**
+     * @brief SEH-guarded ID3D11Device::GetDeviceRemovedReason — the
+     *        corroboration source for nvenc_base::device_lost.
+     *
+     * Shared by both D3D11 subclasses, which each own their own device
+     * pointer privately. SEH-guarded because the call is made precisely
+     * when the graphics stack is suspect, and a faulting device can take
+     * the query itself down; an access violation there must read as
+     * "device is gone", not crash the encode thread.
+     *
+     * @return true only on a positive removal/reset verdict.
+     */
+    static bool d3d_device_lost(ID3D11Device *dev, std::uint32_t &out_reason);
+
   private:
     HMODULE dll = nullptr;
     uint32_t function_list_api_version = 0;

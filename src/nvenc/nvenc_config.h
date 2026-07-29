@@ -60,18 +60,75 @@ namespace nvenc {
     // Add filler data to encoded frames to stay at target bitrate, mainly for testing
     bool insert_filler_data = false;
 
-    // Per-frame ceiling for the encode-async-completion wait inside
-    // encode_frame's WaitForSingleObject. Default 100 ms is the
-    // historical tuning that's safe for RTX 20/30-era workloads.
-    // Render-stack-aware callers bump this to 250 ms when the
-    // foreground process has DLSS-FG or DLAA loaded (see
-    // src/platform/windows/display_vram.cpp::init_encoder), where the
-    // GPU's queued render + frame-gen work routinely exceeds the
-    // 100 ms budget at 4K HDR and would otherwise classify a
-    // legitimately-slow frame as a TDR-class event. See the team's
-    // own comment near evaluate_and_tip in src/video.cpp for the
-    // documented worst case (Frame-Gen + DLAA + AV1 NVENC at 4K).
-    uint32_t encode_wait_timeout_ms = 100;
+    // HARD deadline for the encode-async-completion wait in encode_frame:
+    // the point at which we abandon the frame. NOT a GPU-health verdict —
+    // see nvenc_base.cpp's wait loop, which only reports a TDR when the
+    // device itself corroborates it.
+    //
+    // The old value was 100 ms, sized to bound the ENCODE. That was the
+    // wrong quantity. The encode is a small minority of this wait: the
+    // NVENC input texture doubles as the colour-conversion render target
+    // (display_vram.cpp init_output), so the encode packet carries a
+    // cross-engine fence on a 3D draw queued behind the game's render
+    // work. The wait therefore tracks GAME GPU load, not encoder
+    // throughput, and no per-GPU tuning can fix that — a field capture on
+    // an RTX 5080 (the fastest supported part) showed p99 frame latency of
+    // 271 ms and a legitimate max of 3.9 s with zero GPU resets, while the
+    // worst PURE encode on the SLOWEST supported part (Pascal, 2160p,
+    // 10-bit, P6, full-res two-pass) is only ~55-60 ms.
+    //
+    // So the default is anchored to the OS instead of to any GPU:
+    // TdrDelay (2 s) + TdrDdiDelay (5 s) = the full documented span from
+    // Windows starting to count a stalled packet to abandoning the driver
+    // unwind. Past that a real fault is visible via GetDeviceRemovedReason
+    // and waiting longer yields nothing. Windows-side callers recompute
+    // this from the machine's actual registry values via
+    // encode_wait_deadline_from_tdr().
+    uint32_t encode_wait_timeout_ms = 7000;
+
+    // Polling granularity for that wait. The wait is sliced so the encode
+    // thread observes shutdown (and re-checks device health) at this
+    // cadence instead of blocking for the whole deadline. Costs nothing on
+    // healthy frames — the completion event returns immediately on signal,
+    // so a normal frame is still a single syscall.
+    uint32_t encode_wait_poll_slice_ms = 100;
+
+    // Soft telemetry threshold. A wait longer than this logs once and is
+    // counted; it NEVER escalates and never ends a session. Rare on fast
+    // hardware, progressively more common on slower parts — which is the
+    // diagnostic gradient we want out of a universal build.
+    uint32_t encode_stall_warn_ms = 500;
   };
+
+  /**
+   * @brief Derive the hard encode-wait deadline from Windows' own TDR
+   *        constants: (TdrDelay + TdrDdiDelay) seconds, clamped.
+   *
+   * Lower clamp 3000 ms keeps the deadline above the largest legitimate
+   * wait observed in the field even if someone sets TdrDelay=1. Upper
+   * clamp 10000 ms exists because TdrLevel=0 or the TdrDelay=60 that
+   * overclocking/compute guides recommend (and some OEM images ship) must
+   * not turn into a minute-long encode-thread block. 10 s is still safe
+   * against the client: moonlight-common-c has no mid-stream video
+   * deadline (FIRST_FRAME_TIMEOUT_SEC is gated on the first-frame latches).
+   *
+   * Pure and constexpr so the clamping is unit-testable without a GPU.
+   */
+  constexpr uint32_t encode_wait_deadline_from_tdr(uint32_t tdr_delay_s, uint32_t tdr_ddi_delay_s) {
+    // Floor sits ABOVE the largest legitimate wait measured in the field
+    // (3913 ms on an RTX 5080 with zero GPU resets). A lower floor would
+    // let a machine with a small TdrDelay abandon a frame that was merely
+    // slow — the original bug in a new guise.
+    constexpr uint64_t floor_ms = 5000;
+    constexpr uint64_t ceiling_ms = 10000;
+    const uint64_t sum_ms = (static_cast<uint64_t>(tdr_delay_s) + static_cast<uint64_t>(tdr_ddi_delay_s)) * 1000ull;
+    if (sum_ms < floor_ms) {
+      return static_cast<uint32_t>(floor_ms);
+    }
+    if (sum_ms > ceiling_ms) {
+      return static_cast<uint32_t>(ceiling_ms);
+    }
+    return static_cast<uint32_t>(sum_ms);
+  }
 
 }  // namespace nvenc
