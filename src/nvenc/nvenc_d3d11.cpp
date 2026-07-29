@@ -108,6 +108,41 @@ namespace nvenc {
     return WaitForSingleObject(async_event_handle, timeout_ms) == WAIT_OBJECT_0;
   }
 
+namespace {
+  // SEH-isolated GetDeviceRemovedReason. Kept in its own function with no
+  // unwindable objects — a function containing __try/__except may not have
+  // locals requiring destruction. Same split as display_vgd.cpp's
+  // seh_acquire_sync.
+  #if defined(_MSC_VER) || defined(__clang__)
+  HRESULT seh_device_removed_reason(ID3D11Device *dev) noexcept {
+    __try {
+      return dev->GetDeviceRemovedReason();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      // Faulting inside the query is itself conclusive: the device is gone.
+      return DXGI_ERROR_DEVICE_REMOVED;
+    }
+  }
+  #else
+  HRESULT seh_device_removed_reason(ID3D11Device *dev) noexcept {
+    return dev->GetDeviceRemovedReason();
+  }
+  #endif
+}  // namespace
+
+  bool nvenc_d3d11::d3d_device_lost(ID3D11Device *dev, std::uint32_t &out_reason) {
+    out_reason = 0;
+    if (!dev) {
+      // No device to ask — "no opinion", which must not corroborate.
+      return false;
+    }
+    const HRESULT reason = seh_device_removed_reason(dev);
+    if (reason == S_OK) {
+      return false;
+    }
+    out_reason = static_cast<std::uint32_t>(reason);
+    return true;
+  }
+
   void nvenc_d3d11::reset_async_event() {
     if (async_event_handle) {
       // ResetEvent is a no-op when the event is already unsignaled (the

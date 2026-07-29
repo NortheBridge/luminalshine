@@ -20,7 +20,9 @@
 #include <algorithm>
 #include <atomic>
 #include <format>
+#include <mutex>
 #include <optional>
+#include <vector>
 
 // Make sure we check backwards compatibility when bumping the Video Codec SDK version
 // Things to look out for:
@@ -146,6 +148,15 @@ namespace nvenc {
     /// schedule a clean host restart before the bounded registered-
     /// resource pool (~64 on consumer cards) exhausts.
     std::atomic<std::uint64_t> g_drain_leak_count {0};
+
+    /// Repeated-stall circuit breaker state. Process-wide: a wedged GPU
+    /// affects every session, and a per-encoder counter would reset on the
+    /// teardown/rebuild that a stall itself provokes. Guarded by a plain
+    /// mutex — this is touched only on the (rare) full-deadline path.
+    constexpr int kBreakerStallThreshold = 3;
+    constexpr auto kBreakerWindow = std::chrono::seconds(60);
+    std::mutex g_stall_breaker_mutex;
+    std::vector<std::chrono::steady_clock::time_point> g_recent_hard_stalls;
   }  // namespace
 
   std::uint64_t drain_leak_count() {
@@ -185,15 +196,18 @@ namespace nvenc {
     encoder_params.buffer_format = buffer_format;
     encoder_params.rfi = true;
 
-    // Cache the per-session encode-wait timeout. Read once here; the
-    // per-frame wait below in encode_frame consults the cached value
-    // every frame instead of the global config so it cannot race a
-    // settings change mid-session, and so the timeout reflects whatever
-    // render-stack-aware tuning the caller applied at session start
-    // (e.g. 250 ms for DLSS-FG + AV1 + 4K HDR vs the 100 ms baseline).
-    // Clamp to >=10 ms so a misconfigured 0 doesn't busy-loop the
-    // encoder thread on every frame.
-    encoder_state.encode_wait_timeout_ms = std::max<uint32_t>(10, config.encode_wait_timeout_ms);
+    // Cache the per-session encode-wait parameters. Read once here; the
+    // per-frame wait below in encode_frame consults the cached values
+    // every frame instead of the global config so they cannot race a
+    // settings change mid-session, and so they reflect whatever
+    // OS-anchored deadline the caller derived at session start (see
+    // encode_wait_deadline_from_tdr). Clamp to >=10 ms so a misconfigured
+    // 0 doesn't busy-loop the encoder thread on every frame.
+    encoder_state.encode_wait_poll_slice_ms = std::max<uint32_t>(10, config.encode_wait_poll_slice_ms);
+    encoder_state.encode_wait_timeout_ms =
+      std::max(encoder_state.encode_wait_poll_slice_ms, config.encode_wait_timeout_ms);
+    encoder_state.encode_stall_warn_ms = config.encode_stall_warn_ms;
+    encoder_state.warned_slow_encode_wait = false;
 
     selected_api_version = 0;
 
@@ -843,8 +857,9 @@ namespace nvenc {
     // heap validator several minutes later in an unrelated allocation.
     //
     // Bounded at 2500ms because Windows TDR detection itself is ~2s
-    // (TdrDelay default) and TdrDdiDelay-driven recovery extends to ~7s.
-    // 2500ms unblocks before the kernel has finished a real TDR recovery
+    // (TdrDelay default) and the full detect+unwind span reaches ~7s
+    // (TdrDelay 2s + TdrDdiDelay 5s — the 7s figure is the SUM, not
+    // TdrDdiDelay alone). 2500ms unblocks before the kernel has finished a real TDR recovery
     // — but waiting longer would back up subsequent teardowns on the
     // shared serialized teardown worker (encoder_teardown_queue in
     // video.cpp), which runs sessions one at a time off the encode
@@ -854,8 +869,8 @@ namespace nvenc {
     // exit reclaims the leak; a session reinit does not.
     if (encoder && async_event_handle && encoder_state.has_pending_async) {
       // 2500 because Windows TDR detection itself is ~2s (TdrDelay default)
-      // and TdrDdiDelay-driven recovery extends to ~7s. 2500 unblocks
-      // before the kernel has finished a real TDR recovery — but waiting
+      // and the full detect+unwind span reaches ~7s (TdrDelay + TdrDdiDelay).
+      // 2500 unblocks before the kernel has finished a real TDR recovery — but waiting
       // longer would back up subsequent teardowns on the shared serialized
       // teardown worker (encoder_teardown_queue in video.cpp). See the
       // leak path below.
@@ -1025,7 +1040,7 @@ namespace nvenc {
     lock_bitstream.outputBitstream = output_bitstream;
     lock_bitstream.doNotWait = async_event_handle ? 1 : 0;
 
-    if (async_event_handle && !wait_for_async_event(encoder_state.encode_wait_timeout_ms)) {
+    if (async_event_handle && !wait_for_encode_completion()) {
       // Capture diagnostic context on the timeout. The previous one-line
       // log gave no signal about whether this was a transient bubble or
       // the start of a TDR — and the line printed two lines before the
@@ -1052,18 +1067,65 @@ namespace nvenc {
                       << " resolution=" << encoder_params.width << "x" << encoder_params.height
                       << " buffer_format=" << static_cast<int>(encoder_params.buffer_format)
                       << " force_idr=" << (force_idr ? "true" : "false")
-                      << ". A long since_last_encode (>200ms) typically indicates GPU TDR is in progress; "
-                         "the encoder will tear down and the D3D11 retry path (D3D11CreateDeviceWithRecovery) will pick up.";
+                      << ". The wait ran the full " << encoder_state.encode_wait_timeout_ms
+                      << " ms deadline; whether this is a GPU fault is decided by the device, not by elapsed time.";
       BOOST_LOG(error) << "NvEnc: frame " << frame_index << " encode wait timeout";
-      // Record the stall as a TDR-class event immediately: this is the
-      // earliest observable symptom of a GPU hang, and downstream holders
-      // of shared GPU allocations (the LuminalVGD ring reader) key their
-      // release-before-recovery behavior off tdr::event_count().
-      tdr::mark_event(
-        tdr::source_t::encoder_stall,
-        0,
-        "NvEnc encode-wait timeout, frame=" + std::to_string(frame_index)
-      );
+
+      // CORROBORATION GATE. Elapsed wait time is neither necessary nor
+      // sufficient evidence of a GPU hang, so it may not by itself produce
+      // a TDR verdict — that verdict is expensive (it terminates the live
+      // session, makes the LuminalVGD ring reader drop every shared
+      // texture, refuses reconnects for ~30 s and triggers a lifeboat
+      // topology write). Five field escalations were examined and all five
+      // were false: stalls of 100-105 ms, hresult=0x0, gpu_resets=0 in
+      // telemetry, and not one nvlddmkm/dxgkrnl/4101 event in the System
+      // log. Only the device's own GetDeviceRemovedReason may promote a
+      // stall, with a repeated-stall circuit breaker as the fallback for
+      // backends that cannot answer (or a machine with TdrLevel=0, where
+      // the device never reports removal because the OS never resets it).
+      std::uint32_t removed_reason = 0;
+      const bool corroborated = device_lost(removed_reason);
+      const bool breaker_tripped = note_hard_stall_and_check_breaker();
+
+      if (corroborated || breaker_tripped) {
+        if (corroborated) {
+          BOOST_LOG(error) << "NvEnc: treating the stall as a GPU fault — the device reports removal [0x"sv
+                           << util::hex(removed_reason).to_string_view() << "]."sv;
+        } else {
+          BOOST_LOG(error) << "NvEnc: treating the stall as a GPU fault — repeated hard stalls tripped "
+                              "the circuit breaker (the device itself reported no fault).";
+        }
+        tdr::mark_event(
+          tdr::source_t::encoder_stall,
+          removed_reason,
+          "NvEnc encode-wait timeout, frame=" + std::to_string(frame_index) +
+            (corroborated ? " (device removed)" : " (repeated stalls)")
+        );
+      } else {
+        // Not a GPU fault. The empty return below still fails this encode,
+        // and video.cpp treats a failed encode as fatal for the session
+        // (encode_nvenc -> -1 -> the encode thread returns / raises
+        // shutdown). That teardown is deliberate and load-bearing: it runs
+        // destroy_encoder, whose async drain resolves the deferred unmap of
+        // pending_mapped_resource. Letting the session limp on with a
+        // still-mapped resource would leak NVENC mappings and expose the
+        // stale-completion-signal hazard reset_async_event exists to
+        // prevent.
+        //
+        // What this branch changes is the BLAST RADIUS, not the session:
+        // no tdr::mark_event means no machine-wide "WDDM stack failure"
+        // verdict, so the LuminalVGD ring reader keeps its shared textures,
+        // reconnects are not refused for ~30 s, the topology lifeboat does
+        // not fire, and the drain-leak counter does not march toward a host
+        // restart. Combined with the OS-anchored deadline this path should
+        // now be nearly unreachable — every observed false escalation
+        // stalled 100-105 ms against what is now a >= 3 s deadline.
+        BOOST_LOG(warning) << "NvEnc: the device reports no fault, so frame " << frame_index
+                           << " was a slow frame rather than a GPU reset. Failing this encode "
+                              "(the session restarts) but NOT recording a GPU-reset event. "
+                              "Windows does not consider a GPU hung until TdrDelay, and no "
+                              "device-removed code was returned.";
+      }
       // The GPU may still complete this picture's encode later and write
       // into output_bitstream / read from the registered input texture.
       // Flag so destroy_encoder knows to drain the completion event before
@@ -1174,6 +1236,52 @@ namespace nvenc {
       }
     }
 
+    return true;
+  }
+
+  bool nvenc_base::wait_for_encode_completion() {
+    const auto slice = std::max<uint32_t>(10, encoder_state.encode_wait_poll_slice_ms);
+    const auto deadline_ms = std::max(slice, encoder_state.encode_wait_timeout_ms);
+    const auto started = std::chrono::steady_clock::now();
+
+    while (true) {
+      if (wait_for_async_event(slice)) {
+        return true;
+      }
+
+      const auto waited_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
+      );
+
+      // Soft threshold: telemetry only, once per session. Never escalates
+      // and never ends the stream — a slow frame is a slow frame.
+      if (!encoder_state.warned_slow_encode_wait && waited_ms >= encoder_state.encode_stall_warn_ms) {
+        encoder_state.warned_slow_encode_wait = true;
+        BOOST_LOG(warning) << "NvEnc: an encode has been waiting " << waited_ms
+                           << " ms (soft threshold " << encoder_state.encode_stall_warn_ms
+                           << " ms). This is reported once per session and is not treated as a fault; "
+                              "it usually means the GPU is saturated by the foreground game.";
+      }
+
+      if (waited_ms >= deadline_ms) {
+        return false;
+      }
+    }
+  }
+
+  bool nvenc_base::note_hard_stall_and_check_breaker() {
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard lk(g_stall_breaker_mutex);
+    std::erase_if(g_recent_hard_stalls, [&](const auto &t) {
+      return now - t > kBreakerWindow;
+    });
+    g_recent_hard_stalls.push_back(now);
+    if (static_cast<int>(g_recent_hard_stalls.size()) < kBreakerStallThreshold) {
+      return false;
+    }
+    // Tripped: clear so the next escalation needs a fresh run of stalls
+    // rather than firing on every subsequent frame.
+    g_recent_hard_stalls.clear();
     return true;
   }
 

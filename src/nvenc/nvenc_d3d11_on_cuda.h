@@ -34,6 +34,10 @@ namespace nvenc {
 
     bool synchronize_input_buffer() override;
 
+    bool device_lost(std::uint32_t &out_reason) override {
+      return d3d_device_lost(d3d_device, out_reason);
+    }
+
     bool cuda_succeeded(CUresult result);
 
     bool cuda_failed(CUresult result);

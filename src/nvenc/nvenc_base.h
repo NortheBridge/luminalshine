@@ -126,7 +126,57 @@ namespace nvenc {
     virtual void reset_async_event() {
     }
 
+    /**
+     * @brief Authoritative device-loss check — the corroboration gate for
+     *        the encode-wait timeout.
+     *
+     * An elapsed encode wait is neither necessary nor sufficient evidence
+     * of a GPU hang: a healthy but deeply-queued GPU can legitimately take
+     * seconds, and a real TDR surfaces as device-removed regardless of how
+     * long we waited. Only the device's own verdict may promote a stall to
+     * a TDR-class event, so the timeout path consults this before calling
+     * tdr::mark_event.
+     *
+     * Default is "no opinion", which never corroborates — a backend that
+     * cannot ask its device must not be able to declare the GPU dead.
+     *
+     * @param out_reason Receives the platform failure code when available
+     *                   (HRESULT bits on Windows), 0 otherwise.
+     * @return true only when the device positively reports removal/reset.
+     */
+    virtual bool device_lost(std::uint32_t &out_reason) {
+      out_reason = 0;
+      return false;
+    }
+
     bool nvenc_failed(NVENCSTATUS status);
+
+    /**
+     * @brief Wait for the async completion event, sliced.
+     *
+     * Polls `wait_for_async_event` in `encode_wait_poll_slice_ms` slices
+     * up to the `encode_wait_timeout_ms` deadline, logging once per
+     * session when a wait crosses `encode_stall_warn_ms`. Slicing is what
+     * lets the deadline be OS-scale (seconds) without the encode thread
+     * becoming unresponsive for that long, and it costs nothing on a
+     * healthy frame — the event returns immediately on signal, so a normal
+     * frame is still one syscall.
+     *
+     * @return true when the encode completed, false when the deadline
+     *         elapsed (the caller then applies the corroboration gate).
+     */
+    bool wait_for_encode_completion();
+
+    /**
+     * @brief Record a hard (full-deadline) stall and report whether the
+     *        repeated-stall circuit breaker has tripped.
+     *
+     * Process-wide, since a wedged GPU affects every session. Exists so a
+     * genuinely hung device still escalates on backends that cannot answer
+     * `device_lost` — and on machines with TdrLevel=0, where the OS never
+     * resets the GPU so the device never reports removal at all.
+     */
+    bool note_hard_stall_and_check_breaker();
 
     const NV_ENC_DEVICE_TYPE device_type;
 
@@ -179,12 +229,18 @@ namespace nvenc {
       // the event signal, so there's no in-flight work to wait for and the
       // drain would just stall for the full timeout on every shutdown).
       bool has_pending_async = false;
-      // Cached at create_encoder time from nvenc_config.encode_wait_timeout_ms.
-      // Per-session immutable: deliberately NOT re-snapshotted mid-stream
-      // because the foreground render workload doesn't reclassify in <1s
-      // and re-evaluating each frame would just add jitter while paying
-      // ~10ms per snapshot for nothing.
-      uint32_t encode_wait_timeout_ms = 100;
+      // Cached at create_encoder time from the matching nvenc_config
+      // fields. Per-session immutable: these are derived from the machine's
+      // OS configuration (see encode_wait_deadline_from_tdr), which only
+      // changes on reboot, so re-reading mid-session could not observe a
+      // different value anyway.
+      uint32_t encode_wait_timeout_ms = 7000;
+      uint32_t encode_wait_poll_slice_ms = 100;
+      uint32_t encode_stall_warn_ms = 500;
+      // Set once per session the first time a wait crosses the soft
+      // threshold, so the warning is one line per session rather than one
+      // per slow frame on a chronically-loaded machine.
+      bool warned_slow_encode_wait = false;
       // Set whenever nvEncMapInputResource succeeds; cleared when the
       // matching nvEncUnmapInputResource succeeds. On the encode-wait
       // timeout path encode_frame deliberately does NOT unmap (the GPU
