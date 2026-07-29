@@ -115,7 +115,20 @@ namespace crypto {
 
   creds_t gen_creds(const std::string_view &cn, std::uint32_t key_bits);
 
-  std::string_view signature(const x509_t &x);
+  /**
+   * @brief Borrowed view of a certificate's ASN.1 signature bytes.
+   *
+   * Takes a NON-OWNING raw pointer deliberately. A `const x509_t &`
+   * parameter silently accepted a raw `X509 *` argument by materialising an
+   * *owning* temporary through `util::uniq_ptr`'s converting constructor,
+   * which then freed a certificate the caller still owned — a use-after-free
+   * on the client-identity path in nvhttp. Keep this signature raw.
+   *
+   * The returned view aliases memory inside `x` and is invalidated when `x`
+   * is freed, so `x` must outlive every use of the result. Returns an empty
+   * view for a null or unsigned certificate.
+   */
+  std::string_view signature(const X509 *x);
 
   std::string rand(std::size_t bytes);
   std::string rand_alphabet(std::size_t bytes, const std::string_view &alphabet = std::string_view {"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!%&()=-"});

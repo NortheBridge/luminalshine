@@ -545,8 +545,21 @@ namespace util {
     uniq_ptr(const uniq_ptr &other) noexcept = delete;
     uniq_ptr &operator=(const uniq_ptr &other) noexcept = delete;
 
+    /**
+     * Adopting constructor — takes ownership of `p` and will free it.
+     *
+     * `explicit` on purpose. While this conversion was implicit, any call of
+     * the form `f(owner.get())` where `f` took a `const uniq_ptr &` compiled
+     * into a silent ownership transfer: the argument materialised a temporary
+     * that adopted the raw pointer and released it at the end of the full
+     * expression, so the reference was over-released while the real owner
+     * still believed it held one. That is the defect behind the nvhttp
+     * client-identity use-after-free — see crypto::signature()'s header
+     * comment. Taking ownership is now something a caller says out loud, and
+     * there is deliberately no adopting `operator=`: use reset().
+     */
     template<class V>
-    uniq_ptr(V *p) noexcept:
+    explicit uniq_ptr(V *p) noexcept:
         _p {p} {
       static_assert(std::is_same_v<element_type, void> || std::is_same_v<element_type, V> || std::is_base_of_v<element_type, V>, "element_type must be base class of V");
     }
@@ -585,6 +598,13 @@ namespace util {
     }
 
     void reset(pointer p = pointer()) {
+      // Self-reset is a no-op, not a free-then-dangle. `reset(get())` reads as
+      // "I still own this", but without this guard it destroyed the object and
+      // stored the freed pointer, double-freeing at scope exit.
+      if (_p == p) {
+        return;
+      }
+
       if (_p) {
         _deleter(_p);
       }
