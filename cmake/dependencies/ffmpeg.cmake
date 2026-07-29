@@ -50,8 +50,9 @@ if(NOT DEFINED FFMPEG_PREPARED_BINARIES)
     # at a tagged commit. Avoids the GitHub `/releases/latest/download/` redirect,
     # which intermittently returns HTTP 404 for this repo. Bump when build-deps
     # publishes a newer release that ships the assets we need (Windows-AMD64-ffmpeg.tar.gz).
-    set(FFMPEG_FALLBACK_RELEASE_TAG "v2026.425.130933"
-        CACHE STRING "Pinned LizardByte/build-deps release tag used when no submodule tag is found")
+    # Deliberately NOT a cache variable: a cached value would pin old build dirs to
+    # the old release forever, silently ignoring in-file bumps of this fallback.
+    set(FFMPEG_FALLBACK_RELEASE_TAG "v2026.724.203728")
     if(FFMPEG_RELEASE_TAG)
         set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/download/${FFMPEG_RELEASE_TAG}")
         set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-${FFMPEG_RELEASE_TAG}")
@@ -62,8 +63,23 @@ if(NOT DEFINED FFMPEG_PREPARED_BINARIES)
         message(STATUS "Using FFmpeg from pinned build-deps release: ${FFMPEG_FALLBACK_RELEASE_TAG}")
     endif()
 
-    # Set extraction directory and prepared binaries path
-    set(FFMPEG_EXTRACT_DIR "${FFMPEG_DOWNLOAD_DIR}")
+    # Remove superseded per-tag dirs (archives + extractions) and the legacy
+    # unversioned extraction so tag bumps don't accrete ~70 MB per version in
+    # long-lived build dirs.
+    file(GLOB _ffmpeg_stale_dirs "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-*")
+    list(REMOVE_ITEM _ffmpeg_stale_dirs "${FFMPEG_VERSION_DIR}")
+    list(APPEND _ffmpeg_stale_dirs "${FFMPEG_DOWNLOAD_DIR}/ffmpeg")
+    foreach(_ffmpeg_stale_dir IN LISTS _ffmpeg_stale_dirs)
+        if(IS_DIRECTORY "${_ffmpeg_stale_dir}")
+            message(STATUS "Removing superseded FFmpeg dir ${_ffmpeg_stale_dir}")
+            file(REMOVE_RECURSE "${_ffmpeg_stale_dir}")
+        endif()
+    endforeach()
+
+    # Set extraction directory and prepared binaries path. Extraction goes into the
+    # per-tag dir so a tag bump invalidates the libavcodec.a existence guard below —
+    # extracting into an unversioned dir would silently keep the old binaries forever.
+    set(FFMPEG_EXTRACT_DIR "${FFMPEG_VERSION_DIR}")
     set(FFMPEG_PREPARED_BINARIES "${FFMPEG_EXTRACT_DIR}/ffmpeg")
 
     # Set the archive filename based on architecture

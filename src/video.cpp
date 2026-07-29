@@ -2279,6 +2279,7 @@ namespace video {
 
       if (auto status = avcodec_open2(ctx.get(), codec, &options)) {
         char err_str[AV_ERROR_MAX_STRING_SIZE] {0};
+        av_dict_free(&options);
 
         if (!video_format.fallback_options.empty() && retries == 0) {
           BOOST_LOG(info)
@@ -2295,6 +2296,25 @@ namespace video {
           return nullptr;
         }
       }
+
+      // avcodec_open2() leaves entries it did not recognize in the dictionary.
+      // Options can silently become no-ops when an FFmpeg bump renames or drops
+      // them, so surface any leftovers instead of dropping them on the floor.
+      if (av_dict_count(options) > 0) {
+        std::string ignored_options;
+        const AVDictionaryEntry *entry = nullptr;
+        while ((entry = av_dict_iterate(options, entry))) {
+          if (!ignored_options.empty()) {
+            ignored_options += ", ";
+          }
+          ignored_options += entry->key;
+        }
+        BOOST_LOG(warning)
+          << "Encoder ["sv << video_format.name
+          << "] ignored unknown options (dropped or renamed in this FFmpeg build): "sv
+          << ignored_options;
+      }
+      av_dict_free(&options);
 
       // Successfully opened the codec
       break;

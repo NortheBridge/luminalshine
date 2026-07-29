@@ -66,6 +66,7 @@ namespace nvenc::api {
       case make_api_version(12U, 1U):
       case make_api_version(12U, 2U):
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return true;
 
       default:
@@ -95,6 +96,7 @@ namespace nvenc::api {
 
   inline std::vector<uint32_t> h264_api_candidates() {
     return filter_to_compiled({
+      make_api_version(13U, 1U),
       make_api_version(13U, 0U),
       make_api_version(12U, 2U),
       make_api_version(12U, 1U),
@@ -113,6 +115,7 @@ namespace nvenc::api {
 
       case 2:
         return filter_to_compiled({
+          make_api_version(13U, 1U),
           make_api_version(13U, 0U),
           make_api_version(12U, 2U),
           make_api_version(12U, 1U),
@@ -128,6 +131,7 @@ namespace nvenc::api {
       case make_api_version(12U, 1U):
       case make_api_version(12U, 2U):
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return true;
 
       default:
@@ -140,6 +144,7 @@ namespace nvenc::api {
       case make_api_version(12U, 1U):
       case make_api_version(12U, 2U):
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return true;
 
       default:
@@ -170,6 +175,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 6U, true);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 7U, true);
 
       default:
@@ -188,6 +194,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 8U, true);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 9U, true);
 
       default:
@@ -204,6 +211,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 4U, true);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 5U, true);
 
       default:
@@ -220,6 +228,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 1U, true);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 2U, true);
 
       default:
@@ -234,6 +243,7 @@ namespace nvenc::api {
   constexpr uint32_t event_params_version(uint32_t api_version) {
     switch (api_version) {
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 2U);
 
       default:
@@ -256,6 +266,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 6U, true);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 7U, true);
 
       default:
@@ -276,6 +287,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 1U, true);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 2U, true);
 
       default:
@@ -294,6 +306,7 @@ namespace nvenc::api {
         return make_struct_version(api_version, 4U);
 
       case make_api_version(13U, 0U):
+      case make_api_version(13U, 1U):
         return make_struct_version(api_version, 5U);
 
       default:
