@@ -127,6 +127,12 @@
                 {{ translate('troubleshooting.signing_method', 'Signature') }}:
                 {{ vgdSignatureBadge }}
               </span>
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-md bg-dark/5 dark:bg-light/10 font-mono"
+              >
+                {{ translate('troubleshooting.luminalvgd_capture_backend', 'Capture backend') }}:
+                {{ vgdCaptureBadge }}
+              </span>
             </div>
           </div>
         </div>
@@ -914,6 +920,21 @@ const vgdDriverVersionBadge = computed(
 const vgdBundledVersionBadge = computed(() => store.metadata?.vgd_bundled_version || '—');
 const vgdBuiltBadge = computed(() => store.metadata?.vgd_driver_date || '—');
 const vgdSignatureBadge = computed(() => store.metadata?.vgd_bundled_signature || '—');
+// Which capture backend the most recent display open landed on (VGD ring vs
+// WGC vs DDA) — the field truth for "is this stream actually on the ring".
+// The note is last-writer-wins for the process lifetime, so qualify stale
+// records with their age instead of presenting them as current.
+const vgdCaptureBadge = computed(() => {
+  const kind = store.metadata?.capture_backend_active;
+  if (!kind) return '—';
+  const label = kind === 'vgd-ring' ? 'VGD ring' : kind.toUpperCase();
+  const display = store.metadata?.capture_backend_display;
+  const base = display ? `${label} (${display})` : label;
+  const age = store.metadata?.capture_backend_age_seconds;
+  if (typeof age !== 'number' || age < 300) return base;
+  const ageLabel = age < 3600 ? `${Math.round(age / 60)} min ago` : `${Math.round(age / 3600)} h ago`;
+  return `${base}, ${ageLabel}`;
+});
 
 onMounted(() => {
   void store.fetchMetadata();

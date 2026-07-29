@@ -60,10 +60,6 @@ extern "C" {
   #include <libavutil/hwcontext_d3d11va.h>
 }
 
-namespace proc {
-  extern VDISPLAY::DRIVER_STATUS vDisplayDriverStatus;
-  void initVDisplayDriver();
-}  // namespace proc
 #endif
 
 using namespace std::literals;

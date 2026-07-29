@@ -18,6 +18,23 @@
       }}
     </n-alert>
 
+    <n-alert v-if="showTransition" type="info" :show-icon="true">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <span class="min-w-0">
+          {{
+            tr(
+              'vgd.transition_prompt',
+              'The host is not using the LuminalVGD backend (WGC fallback capture). It transitions automatically once the driver is available — or force an attempt now.',
+            )
+          }}
+        </span>
+        <n-button size="small" type="primary" :loading="transitionPending" @click="forceTransition">
+          {{ tr('vgd.transition_now', 'Transition to VGD now') }}
+        </n-button>
+      </div>
+      <p v-if="transitionResult" class="text-xs opacity-70 mt-1">{{ transitionResult }}</p>
+    </n-alert>
+
     <section
       v-for="group in groups"
       :key="group.title"
@@ -110,11 +127,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { storeToRefs } from 'pinia';
-import { NAlert, NSwitch, NSelect, NInputNumber, NSlider, NTag } from 'naive-ui';
+import { NAlert, NButton, NSwitch, NSelect, NInputNumber, NSlider, NTag } from 'naive-ui';
 import { useConfigStore } from '@/stores/config';
+import { http } from '@/http';
 
 const { t } = useI18n();
 
@@ -135,6 +153,58 @@ const driverReady = computed(() => {
   const md = (metadata.value || {}) as { vgd_installed?: boolean };
   return Boolean(md.vgd_installed);
 });
+
+// WGC->VGD transition affordance: shown while the backend is anything but
+// LuminalVGD. The button kicks /api/state/vgd-transition (the same attempt
+// the periodic watcher runs: devnode ensure -> backend re-selection ->
+// driver-status init); the result lands in the LuminalShine log with the
+// "LuminalShine has transitioned LuminalVGD into VGD Mode" sentence.
+const showTransition = computed(() => {
+  const md = (metadata.value || {}) as { virtual_display_backend?: string };
+  return Boolean(md.virtual_display_backend) && md.virtual_display_backend !== 'luminalvgd';
+});
+const transitionPending = ref(false);
+const transitionResult = ref('');
+
+async function forceTransition(): Promise<void> {
+  transitionPending.value = true;
+  transitionResult.value = '';
+  try {
+    const r = await http.post('./api/state/vgd-transition', {}, { validateStatus: () => true });
+    const body = (r.data || {}) as { status?: boolean; result?: string };
+    const result = typeof body.result === 'string' ? body.result : '';
+    if (r.status >= 200 && r.status < 300 && body.status === true) {
+      transitionResult.value =
+        result === 'already_vgd'
+          ? tr('vgd.transition_already', 'Already on the LuminalVGD backend.')
+          : tr(
+              'vgd.transition_started',
+              'Transition attempt started — this panel refreshes as it completes.',
+            );
+    } else {
+      const reasons: Record<string, string> = {
+        busy: tr('vgd.transition_busy', 'A transition or driver rebind is already in progress.'),
+        stack_down: tr(
+          'vgd.transition_stack_down',
+          'The display stack is down (reboot required); transition deferred.',
+        ),
+        shutting_down: tr('vgd.transition_shutdown', 'The service is shutting down.'),
+      };
+      transitionResult.value =
+        reasons[result] ??
+        `${tr('vgd.transition_failed', 'Could not start a transition attempt')} (${result || `HTTP ${r.status}`}).`;
+    }
+  } catch (e: unknown) {
+    transitionResult.value = e instanceof Error ? e.message : 'Request failed';
+  } finally {
+    transitionPending.value = false;
+    // The attempt runs in the background; refresh the metadata snapshot a
+    // few times so a successful flip updates this panel unprompted.
+    [3000, 10000, 30000].forEach((delay) => {
+      setTimeout(() => void store.fetchMetadata(), delay);
+    });
+  }
+}
 
 function toNumber(value: unknown, fallback: number): number {
   const n = Number(value);

@@ -234,6 +234,14 @@ namespace nvhttp {
       bool allow_display_changes,
       std::optional<std::string> &pending_output_override
     ) {
+      // A new launch/resume owns virtual-display state from here on: any
+      // fallback monitor armed by an EARLIER failed launch must never fire
+      // into this session's stream. At FUNCTION entry (not inside
+      // apply_virtual_display_request) so the resume early-returns —
+      // reused display, revert-on-disconnect off — supersede too
+      // (re-verify finding: the /resume path bypassed the lambda).
+      VDISPLAY::supersede_fallback_monitors();
+
       std::optional<std::string> app_output_override;
       if (launch_session->output_name_override && !launch_session->output_name_override->empty()) {
         app_output_override = boost::algorithm::trim_copy(*launch_session->output_name_override);
@@ -378,7 +386,7 @@ namespace nvhttp {
         if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
           proc::initVDisplayDriver();
           if (proc::vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
-            BOOST_LOG(warning) << "Virtual display driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus) << "). Continuing with best-effort virtual display creation.";
+            BOOST_LOG(warning) << "Virtual display driver unavailable (status=" << static_cast<int>(proc::vDisplayDriverStatus.load()) << "). Continuing with best-effort virtual display creation.";
           }
         }
         if (!config::video.adapter_name.empty()) {
@@ -569,6 +577,7 @@ namespace nvhttp {
           recovery_params.client_uid = display_uuid_source;
           recovery_params.client_name = client_label;
           recovery_params.hdr_profile = launch_session->hdr_profile;
+          recovery_params.enable_hdr = launch_session->enable_hdr;
           recovery_params.display_name = display_info->display_name;
           recovery_params.monitor_device_path = display_info->monitor_device_path;
           if (display_info->device_id && !display_info->device_id->empty()) {
@@ -693,6 +702,112 @@ namespace nvhttp {
           launch_session->virtual_display_device_id.clear();
           launch_session->virtual_display_ready_since.reset();
           BOOST_LOG(warning) << "Virtual display creation failed.";
+
+          // Task #61 Tier 2: the stream proceeds on a fallback display
+          // (WGC/DDA capture). Arm the fallback monitor so the live
+          // session moves onto the virtual display once the LuminalVGD
+          // driver becomes available (driver installed/staged after
+          // service start, or creation raced the background rebind).
+          VDISPLAY::VirtualDisplayRecoveryParams fallback_params;
+          fallback_params.guid = virtual_display_guid;
+          fallback_params.width = vd_width;
+          fallback_params.height = vd_height;
+          fallback_params.fps = vd_fps;
+          fallback_params.base_fps_millihz = base_vd_fps_millihz;
+          fallback_params.framegen_refresh_active = framegen_refresh_active;
+          fallback_params.client_uid = display_uuid_source;
+          fallback_params.client_name = client_label;
+          fallback_params.hdr_profile = launch_session->hdr_profile;
+          fallback_params.enable_hdr = launch_session->enable_hdr;
+          fallback_params.max_attempts = 3;
+
+          // Same "was previously active" gate as the recovery monitor
+          // (scheduled by /launch before RTSP SETUP, so sessions are 0 at
+          // schedule time), plus a never-became-active grace: a launch
+          // the client abandons must not leave a monitor that creates a
+          // zombie display hours later when the driver appears.
+          auto fb_session_was_active = std::make_shared<std::atomic<bool>>(false);
+          const auto fb_armed_at = std::chrono::steady_clock::now();
+          auto fb_session_shutting_down = [fb_session_was_active, fb_armed_at]() {
+            const bool active_now = stream::session::active_sessions.load(std::memory_order_acquire) > 0
+                                    || webrtc_stream::has_active_sessions();
+            if (active_now) {
+              fb_session_was_active->store(true, std::memory_order_release);
+              return false;
+            }
+            if (fb_session_was_active->load(std::memory_order_acquire)) {
+              return true;  // was active, has since ended
+            }
+            return std::chrono::steady_clock::now() - fb_armed_at > std::chrono::minutes(5);
+          };
+          fallback_params.should_abort = fb_session_shutting_down;
+
+          auto fallback_session = std::make_shared<rtsp_stream::launch_session_t>(
+            display_helper_integration::helpers::make_display_request_session_snapshot(*launch_session)
+          );
+          // The APPLY builder refuses while the snapshot says creation
+          // failed — rewrite it to the state the session will have once
+          // the display exists (device_id arrives in the callback).
+          fallback_session->virtual_display = true;
+          fallback_session->virtual_display_failed = false;
+          fallback_params.on_recovery_success = [fallback_session, fb_session_shutting_down](const VDISPLAY::VirtualDisplayCreationResult &result) {
+            if (fb_session_shutting_down()) {
+              BOOST_LOG(info) << "VGD fallback: skipping post-creation APPLY because no streaming sessions remain.";
+              return;
+            }
+
+            if (result.device_id && !result.device_id->empty()) {
+              fallback_session->virtual_display_device_id = *result.device_id;
+              config::set_runtime_output_name_override(fallback_session->virtual_display_device_id);
+            }
+            fallback_session->virtual_display_ready_since = result.ready_since;
+
+            constexpr int kMaxApplyAttempts = 5;
+            bool applied = false;
+            for (int attempt = 1; attempt <= kMaxApplyAttempts; ++attempt) {
+              if (fb_session_shutting_down()) {
+                BOOST_LOG(info) << "VGD fallback: aborting APPLY retries because no streaming sessions remain.";
+                return;
+              }
+
+              (void) display_helper_integration::disarm_pending_restore();
+
+              auto request = display_helper_integration::helpers::build_request_from_session(config::video, *fallback_session);
+              if (!request) {
+                BOOST_LOG(warning) << "VGD fallback: failed to build display helper request after creation (attempt "
+                                   << attempt << "/" << kMaxApplyAttempts << ").";
+                std::this_thread::sleep_for(std::chrono::milliseconds(250 + (attempt - 1) * 250));
+                continue;
+              }
+
+              if (display_helper_integration::apply(*request)) {
+                BOOST_LOG(info) << "VGD fallback: applied session display configuration onto the new virtual display.";
+                applied = true;
+                break;
+              }
+
+              BOOST_LOG(warning) << "VGD fallback: display helper apply failed (attempt "
+                                 << attempt << "/" << kMaxApplyAttempts << ").";
+              std::this_thread::sleep_for(std::chrono::milliseconds(250 + (attempt - 1) * 250));
+            }
+
+            // Final session-state check before raising switch_display —
+            // a reinit queued onto a destructing capture pipeline wedges
+            // the videoThread join (same race the recovery monitor
+            // guards against).
+            if (fb_session_shutting_down()) {
+              BOOST_LOG(info) << "VGD fallback: skipping switch_display raise because no streaming sessions remain.";
+              return;
+            }
+
+            if (mail::man) {
+              mail::man->event<int>(mail::switch_display)->raise(-1);
+            }
+            BOOST_LOG(info) << "VGD fallback: requested capture reinit to move the stream onto the virtual display"
+                            << (applied ? "." : " (apply did not succeed).");
+          };
+
+          VDISPLAY::schedule_virtual_display_fallback_monitor(fallback_params);
         }
       };
 

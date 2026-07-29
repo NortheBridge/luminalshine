@@ -65,6 +65,24 @@ namespace platf::vgd_devnode {
    */
   void startup_ensure_and_heal();
 
+  /**
+   * @brief Re-attempt the devnode ensure (adopt-or-create + heal) after a
+   *        startup attempt that produced no device.
+   *
+   * The startup hook is one-shot, so a driver package STAGED AFTER the
+   * service started (installer ran while the service was up) used to be
+   * invisible until the next service restart. The forced WGC->VGD
+   * transition watcher calls this before re-running backend selection.
+   *
+   * No-op (returns true) when a device is already expected; refuses
+   * (returns false) while a rebind is in flight, during shutdown, or
+   * while the display stack is down. BLOCKING — SwDeviceCreate plus the
+   * device-started wait can take ~35 s; call from a worker thread, never
+   * from the task pool. Returns true when a device is present/expected
+   * after the call.
+   */
+  bool ensure_retry();
+
   /// A background driver rebind is currently running. Virtual-display
   /// creation refuses while true (a session started mid-rebind would
   /// have its device yanked by the recreate fallback); the client

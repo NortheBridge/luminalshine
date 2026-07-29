@@ -152,6 +152,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_recovery.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_devnode.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_devnode.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_transition.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_transition.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/tdr_lifeboat.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/tdr_lifeboat.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda-ioctl.h"

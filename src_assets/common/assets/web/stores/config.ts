@@ -71,6 +71,9 @@ export interface MetaInfo {
   vgd_driver_date?: string;
   vgd_bundled_version?: string;
   vgd_bundled_signature?: string;
+  capture_backend_active?: string;
+  capture_backend_display?: string;
+  capture_backend_age_seconds?: number;
   active_session_count?: number;
 }
 

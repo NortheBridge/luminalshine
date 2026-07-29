@@ -36,6 +36,14 @@ namespace VDISPLAY {
   /// Idempotent: calling more than once returns the already-chosen backend.
   BackendType select_backend();
 
+  /// Re-run selection when the current result is NONE — the escape hatch
+  /// from a latched NONE (driver installed/staged AFTER the first query,
+  /// which select_backend() alone can never see). One-directional: it can
+  /// only promote NONE -> LUMINALVGD; an already-selected LUMINALVGD is
+  /// returned unchanged, so no caller can lose a working backend to a
+  /// transient probe failure. Returns the (possibly new) active backend.
+  BackendType reselect_if_none();
+
   /// Returns the active backend without re-running selection. Returns NONE
   /// before `select_backend()` has been called.
   BackendType active_backend();
