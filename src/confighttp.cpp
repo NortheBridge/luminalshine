@@ -63,6 +63,7 @@
   #include "platform/windows/render_stack_detect.h"
   #include "platform/windows/sudovda_recovery.h"
   #include "platform/windows/vgd_recovery.h"
+  #include "platform/windows/vgd_transition.h"
 #endif
 #include "cred_store/cred_store.h"
 #include "entry_handler.h"
@@ -744,6 +745,38 @@ namespace confighttp {
     if (!result.instance_id.empty()) {
       out["instance_id"] = result.instance_id;
     }
+    send_response(response, out);
+  }
+
+  /**
+   * @brief Force a WGC->VGD transition attempt now (task #61): re-attempt
+   *        the devnode ensure, re-run backend selection, and initialize
+   *        the driver status — the same sequence the periodic transition
+   *        watcher runs, kicked on demand from the VGD Control Panel.
+   *
+   * Authenticated. POST so it can't be triggered by accidental
+   * navigation. Body is ignored. The attempt runs on a background worker;
+   * the response reports only whether one was started ("started"), or why
+   * not ("already_vgd", "busy", "stack_down", "shutting_down").
+   *
+   * @api_examples{/api/state/vgd-transition| POST| {"status":true,"result":"started"}}
+   */
+  void forceVgdTransition(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    print_req(request);
+
+    BOOST_LOG(info) << "WGC->VGD transition requested from the Web UI.";
+    const auto status = platf::vgd_transition::kick_now();
+
+    nlohmann::json out;
+    out["status"] = status == platf::vgd_transition::kick_status::started ||
+                    status == platf::vgd_transition::kick_status::already_vgd;
+    out["result"] = platf::vgd_transition::kick_status_name(status);
     send_response(response, out);
   }
 
@@ -2490,7 +2523,7 @@ namespace confighttp {
         }
       }
       output_tree["virtual_display_backend"] = VDISPLAY::active_backend_name();
-      output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus);
+      output_tree["virtual_display_driver_status"] = static_cast<int>(proc::vDisplayDriverStatus.load());
       output_tree["virtual_display_driver_ready"] =
         proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK;
       // Host identity for the Session Details panel: the LuminalShine
@@ -2545,6 +2578,15 @@ namespace confighttp {
           output_tree["vgd_handshake"] = *handshake;
         }
         output_tree["vgd_hdr10"] = VDISPLAY::vgd::driver_supports_hdr();
+      }
+      // Which capture backend the most recent display open landed on
+      // (VGD ring vs WGC vs DDA) — Troubleshooting truth for "is this
+      // stream actually on the ring", recorded by platf::display().
+      const auto capture = platf::vgd_transition::last_capture_note();
+      if (capture.sequence != 0) {
+        output_tree["capture_backend_active"] = capture.kind;
+        output_tree["capture_backend_display"] = capture.display;
+        output_tree["capture_backend_age_seconds"] = capture.age_ms / 1000;
       }
     } catch (...) {
       // Non-fatal; the UI gracefully falls back to "unknown" status.
@@ -4418,6 +4460,7 @@ namespace confighttp {
     register_api_route("^/api/health/crashdump/dismiss$", "POST", postCrashDumpDismiss);
     register_api_route("^/api/state/vdd-restart$", "POST", restartVirtualDisplayDriver);
     register_api_route("^/api/state/vdd-diagnostic$", "GET", getVirtualDisplayDiagnostic);
+    register_api_route("^/api/state/vgd-transition$", "POST", forceVgdTransition);
     register_api_route("^/api/health/render-stack$", "GET", getRenderStack);
     register_api_route("^/api/health/amd-encoder$", "GET", getAmdEncoderCaps);
 #endif

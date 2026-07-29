@@ -31,6 +31,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/tdr_lifeboat.h"
+#include "src/platform/windows/vgd_transition.h"
 #include "utf_utils.h"
 
 // Must be the last included file
@@ -1703,6 +1704,11 @@ namespace platf {
     // (POSTMORTEM-2026-07-27). Wired here (Windows platf::init) rather than
     // in main.cpp so cross-platform init stays untouched.
     tdr_lifeboat::init();
+
+    // Arm the forced WGC->VGD transition watcher (task #61): a host stuck
+    // in WGC fallback transitions onto the LuminalVGD backend once the
+    // driver becomes available, without a service restart.
+    vgd_transition::init();
 
     return co_init;
   }

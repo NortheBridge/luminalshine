@@ -61,6 +61,10 @@ namespace VDISPLAY {
     uint32_t fps;
     uint32_t base_fps_millihz = 0;
     bool framegen_refresh_active = false;
+    /// Recreate the monitor with the session's negotiated dynamic range —
+    /// without this an HDR session's display came back SDR and churned
+    /// format-change reinits.
+    bool enable_hdr = false;
     std::string client_uid;
     std::string client_name;
     std::optional<std::string> hdr_profile;
@@ -99,6 +103,36 @@ namespace VDISPLAY {
   bool removeVirtualDisplay(const GUID &guid);
   bool removeAllVirtualDisplays();
   void schedule_virtual_display_recovery_monitor(const VirtualDisplayRecoveryParams &params);
+
+  /// Watch a session whose virtual-display creation FAILED (it is
+  /// streaming a physical display over WGC/DDA fallback) and move it onto
+  /// the VGD backend once the LuminalVGD driver becomes available: polls
+  /// driver reachability, then runs the same recreate + APPLY +
+  /// switch_display sequence the recovery monitor uses, confirming the
+  /// capture reinit before logging the WGC->VGD transition sentence.
+  /// Armed from the creation-failure branches (nvhttp / webrtc_stream);
+  /// unlike the recovery flavor no present-active display is required at
+  /// schedule time — the display never existed.
+  void schedule_virtual_display_fallback_monitor(const VirtualDisplayRecoveryParams &params);
+
+  /// Invalidate every armed fallback monitor. Called at the top of each
+  /// launch's virtual-display processing (nvhttp / webrtc) so a stale
+  /// monitor from an earlier abandoned/failed launch can never fire into
+  /// a NEWER session's stream — only the most recent launch's monitor
+  /// survives (review finding: the session gate is process-global, so an
+  /// unrelated live session kept abandoned monitors alive indefinitely).
+  void supersede_fallback_monitors();
+
+  /// Process-teardown signal for ALL detached monitor threads (recovery +
+  /// fallback): sets the sticky shutting-down flag and aborts the monitor
+  /// registry. Call from main's teardown BEFORE closeVDisplayDevice() —
+  /// closeVDisplayDevice() itself cannot set the sticky flag because it
+  /// is also invoked mid-run (watchdog-failure path), and on the
+  /// LuminalVGD backend its early-return skipped the flag entirely
+  /// (review finding: monitors logged through destroyed Boost.Log sinks
+  /// at CRT exit).
+  void notify_shutdown();
+
   bool is_virtual_display_guid_tracked(const GUID &guid);
 
   std::optional<std::string> resolveVirtualDisplayDeviceId(const std::wstring &display_name);

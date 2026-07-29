@@ -108,6 +108,14 @@ namespace platf::vgd_devnode {
     std::atomic<bool> g_rebind_in_flight {false};
     std::atomic<bool> g_stop_requested {false};
     std::thread g_rebind_thread;
+    /// Guards g_rebind_thread the OBJECT (join/assign/detach) — the worker
+    /// body itself is coordinated by the atomics above. Needed once
+    /// ensure_retry() made the heal callable after startup: reaping a
+    /// finished worker must not race shutdown_join().
+    std::mutex g_rebind_thread_mutex;
+    /// Serializes the ensure body between the one-shot startup hook and
+    /// ensure_retry() (transition watcher worker).
+    std::mutex g_ensure_mutex;
 
     // SwDeviceCreate/SwDeviceClose are bound dynamically: MinGW toolchains
     // ship no import library (or header) for them. The exports live in
@@ -534,6 +542,20 @@ namespace platf::vgd_devnode {
     }
 
     void heal_version_mismatch() {
+      if (g_rebind_in_flight.load(std::memory_order_acquire)) {
+        return;  // a rebind is already running
+      }
+      {
+        std::lock_guard lk(g_rebind_thread_mutex);
+        if (g_rebind_thread.joinable() && !g_rebind_in_flight.load(std::memory_order_acquire)) {
+          // A previous rebind worker finished (in-flight flag cleared by
+          // its scope guard) but was never joined — assigning a new thread
+          // over a joinable one is std::terminate. Reap it first; only
+          // reachable via ensure_retry(), the startup path runs at most
+          // once.
+          g_rebind_thread.join();
+        }
+      }
       const auto bundled_pkg = platf::diag::query_bundled_vgd_package();
       if (!bundled_pkg.present || !bundled_pkg.version) {
         return;  // portable install without a bundled package — nothing to compare
@@ -571,6 +593,12 @@ namespace platf::vgd_devnode {
       BOOST_LOG(warning) << "LuminalVGD devnode: installed driver " << *installed_str
                          << " is older than the bundled " << *bundled_pkg.version
                          << " — rebinding to the new driver without a reboot (background).";
+      std::lock_guard lk(g_rebind_thread_mutex);
+      if (g_stop_requested.load(std::memory_order_acquire)) {
+        // shutdown_join() already ran (or is running) — a worker spawned
+        // now would never be joined and would race static destruction.
+        return;
+      }
       g_rebind_in_flight.store(true, std::memory_order_release);
       g_rebind_thread = std::thread(&rebind_worker, *bundled);
     }
@@ -587,7 +615,10 @@ namespace platf::vgd_devnode {
           // Nothing staged in the DriverStore: creating a DriverRequired
           // software device could never start it. Portable users run the
           // install script once, exactly as before this module existed.
-          if (bundled_driver_build()) {
+          // Once per process: ensure_retry() re-runs this body
+          // periodically while unstaged, and the warning would repeat.
+          static std::atomic<bool> warned_unstaged {false};
+          if (bundled_driver_build() && !warned_unstaged.exchange(true)) {
             BOOST_LOG(warning) << "LuminalVGD devnode: a driver package is bundled but not "
                                   "staged in the DriverStore; run drivers\\luminalvgd\\"
                                   "install.ps1 (or the installer) once to stage it.";
@@ -642,6 +673,7 @@ namespace platf::vgd_devnode {
 
   void shutdown_join() {
     g_stop_requested.store(true, std::memory_order_release);
+    std::lock_guard tlk(g_rebind_thread_mutex);
     if (!g_rebind_thread.joinable()) {
       return;
     }
@@ -669,11 +701,39 @@ namespace platf::vgd_devnode {
     static std::once_flag once;
     std::call_once(once, []() {
       try {
+        std::lock_guard lk(g_ensure_mutex);
         ensure_and_heal_once();
       } catch (...) {
         BOOST_LOG(error) << "LuminalVGD devnode: startup ensure/heal threw; continuing without it.";
       }
     });
+  }
+
+  bool ensure_retry() {
+    if (g_stop_requested.load(std::memory_order_acquire)) {
+      return false;
+    }
+    if (device_expected()) {
+      return true;  // a devnode already exists; selection keeps probing it
+    }
+    if (rebind_in_flight()) {
+      return false;
+    }
+    if (tdr::stack_down()) {
+      // PnP work against a wedged WDDM stack can hang indefinitely; the
+      // wedge needs a reboot anyway, which re-runs the startup ensure.
+      return false;
+    }
+    std::lock_guard lk(g_ensure_mutex);
+    if (device_expected()) {
+      return true;  // raced with the startup hook
+    }
+    try {
+      ensure_and_heal_once();
+    } catch (...) {
+      BOOST_LOG(error) << "LuminalVGD devnode: ensure retry threw; will try again later.";
+    }
+    return device_expected();
   }
 
 }  // namespace platf::vgd_devnode

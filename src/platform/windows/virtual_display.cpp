@@ -1,12 +1,15 @@
 #include "virtual_display.h"
 
 #include "src/config.h"
+#include "src/display_device.h"
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/display_helper_coordinator.h"
 #include "src/platform/windows/ipc/display_settings_client.h"
 #include "src/platform/windows/misc.h"
+#include "src/platform/windows/vgd_devnode.h"
+#include "src/platform/windows/vgd_transition.h"
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 #include "src/platform/windows/sudovda_recovery.h"
@@ -2375,6 +2378,13 @@ namespace VDISPLAY {
     // The monitor checks this before any logging/work so it bails out cleanly during shutdown.
     std::atomic<bool> g_recovery_monitors_shutting_down {false};
 
+    // Fallback-monitor supersession: each launch's virtual-display
+    // processing bumps this; a fallback monitor whose recorded generation
+    // is no longer current aborts. Prevents monitors from earlier
+    // abandoned/failed launches from firing into a later session's stream
+    // (the per-guid abort registry only covers SAME-guid re-arming).
+    std::atomic<std::uint64_t> g_fallback_monitor_generation {0};
+
     std::shared_ptr<std::atomic_bool> reset_recovery_monitor_abort_flag(const uuid_util::uuid_t &guid_uuid) {
       std::lock_guard<std::mutex> lock(g_virtual_display_recovery_abort_mutex);
       auto &entry = g_virtual_display_recovery_abort[guid_uuid];
@@ -2588,7 +2598,7 @@ namespace VDISPLAY {
       proc::vDisplayDriverStatus = openVDisplayDevice();
       if (proc::vDisplayDriverStatus != DRIVER_STATUS::OK) {
         BOOST_LOG(warning) << "Virtual display recovery: failed to reopen driver (status="
-                           << static_cast<int>(proc::vDisplayDriverStatus) << ") for "
+                           << static_cast<int>(proc::vDisplayDriverStatus.load()) << ") for "
                            << state.describe_target();
         return false;
       }
@@ -2613,7 +2623,8 @@ namespace VDISPLAY {
         state.params.fps,
         state.params.guid,
         state.params.base_fps_millihz,
-        state.params.framegen_refresh_active
+        state.params.framegen_refresh_active,
+        state.params.enable_hdr
       );
       if (!recreation) {
         BOOST_LOG(warning) << "Virtual display recovery: createVirtualDisplay failed for " << state.describe_target();
@@ -2895,6 +2906,215 @@ namespace VDISPLAY {
                      << " (max_attempts=" << params.max_attempts << ").";
     std::thread monitor_thread([state = std::move(state)]() mutable {
       run_virtual_display_recovery_monitor(std::move(state));
+    });
+    monitor_thread.detach();
+  }
+
+  namespace {
+    /// Fallback flavor of the monitor loop (task #61 Tier 2): the session
+    /// is live on WGC/DDA fallback because creation failed; wait for the
+    /// driver to become usable, then run the proven recreate + APPLY +
+    /// switch_display sequence and confirm the capture reinit actually
+    /// landed before logging the transition sentence.
+    void run_virtual_display_fallback_monitor(RecoveryMonitorState state, std::uint64_t my_generation) {
+      constexpr auto kPollInterval = std::chrono::seconds(10);
+      constexpr auto kPostAttemptBackoff = std::chrono::seconds(30);
+      constexpr auto kCaptureConfirmBudget = std::chrono::seconds(15);
+      unsigned int attempts = 0;
+
+      const auto superseded = [my_generation]() {
+        return g_fallback_monitor_generation.load(std::memory_order_acquire) != my_generation;
+      };
+
+      while (true) {
+        if (g_recovery_monitors_shutting_down.load(std::memory_order_acquire)) {
+          return;
+        }
+        if (superseded()) {
+          BOOST_LOG(debug) << "VGD fallback monitor: superseded by a newer launch; exiting for "
+                           << state.describe_target();
+          return;
+        }
+        if (monitor_should_abort(state)) {
+          BOOST_LOG(debug) << "VGD fallback monitor: aborting for " << state.describe_target();
+          return;
+        }
+
+        // Driver usable = display stack alive (checked FIRST — device
+        // opens against a wedged WDDM stack can hang indefinitely), no
+        // rebind mid-flight (creation would be refused and the recreate
+        // fallback would yank the new display), the control device
+        // answers, and backend selection has promoted to LuminalVGD (the
+        // transition watcher / any lazy query heals the latch; this poll
+        // just observes it).
+        const bool driver_usable = !tdr::stack_down() &&
+                                   !platf::vgd_devnode::rebind_in_flight() &&
+                                   vgd::driver_appears_installed() &&
+                                   is_luminalvgd_active();
+        if (!driver_usable) {
+          std::this_thread::sleep_for(kPollInterval);
+          continue;
+        }
+
+        // The launch path guarantees a fed lease watchdog before any
+        // monitor session exists (initVDisplayDriver starts the ping
+        // thread); mirror that here — attempt_virtual_display_recovery
+        // only RESTARTS an existing ping thread.
+        if (proc::vDisplayDriverStatus != DRIVER_STATUS::OK) {
+          proc::initVDisplayDriver();
+          if (proc::vDisplayDriverStatus != DRIVER_STATUS::OK) {
+            std::this_thread::sleep_for(kPollInterval);
+            continue;
+          }
+        }
+
+        const auto pre_note = platf::vgd_transition::last_capture_note();
+        ++attempts;
+        if (superseded()) {
+          return;
+        }
+        if (attempt_virtual_display_recovery(state)) {
+          // on_recovery_success has run: output override retargeted,
+          // display config applied, switch_display(-1) raised. Confirm
+          // the capture reinit before claiming victory — nothing else in
+          // the process records which capture backend a stream is on.
+          // Confirmation = a capture open AGAINST THE NEW DISPLAY (by
+          // name), whatever the capture kind: with capture=wgc or a
+          // software encoder the virtual display is legitimately captured
+          // via WGC, and a kind-only check could also be satisfied by an
+          // unrelated open (encoder probe, second session).
+          bool confirmed = false;
+          std::string landed_kind;
+          const auto deadline = std::chrono::steady_clock::now() + kCaptureConfirmBudget;
+          while (std::chrono::steady_clock::now() < deadline) {
+            if (g_recovery_monitors_shutting_down.load(std::memory_order_acquire) ||
+                monitor_should_abort(state)) {
+              return;
+            }
+            // The VGD create path returns device_id only — the GDI
+            // display name exists only after the APPLY attaches the
+            // monitor to the desktop (which has happened by now, inside
+            // on_recovery_success). Resolve it lazily each pass:
+            // map_output_name turns the device id into "\\.\DISPLAYn"
+            // once the display is attached, and returns the input
+            // unchanged while it is not.
+            if ((!state.normalized_display_name || state.normalized_display_name->empty()) &&
+                state.current_device_id && !state.current_device_id->empty()) {
+              const auto mapped = display_device::map_output_name(*state.current_device_id);
+              if (!mapped.empty() && mapped != *state.current_device_id) {
+                state.normalized_display_name = normalize_display_name(mapped);
+              }
+            }
+            const auto note = platf::vgd_transition::last_capture_note();
+            if (note.sequence > pre_note.sequence) {
+              landed_kind = note.kind;
+              const bool display_known = state.normalized_display_name &&
+                                         !state.normalized_display_name->empty();
+              const bool display_matches = display_known &&
+                                           normalize_display_name(note.display) == *state.normalized_display_name;
+              // Without a resolvable display name, fall back to the ring
+              // kind as the (weaker) success signal.
+              if (display_matches ||
+                  (!display_known && note.kind == platf::vgd_transition::kCaptureKindVgdRing)) {
+                confirmed = true;
+                break;
+              }
+              // A post-raise open landed elsewhere — reinits can cascade
+              // (modeset settle), keep waiting until the budget runs out.
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+          }
+          if (confirmed) {
+            BOOST_LOG(info) << "LuminalShine has transitioned LuminalVGD into VGD Mode "
+                               "(live session retargeted onto the virtual display mid-stream; "
+                               "capture backend: "
+                            << landed_kind << ").";
+            // Parity with launch-created displays: arm the disappearance
+            // recovery monitor for the display this transition created,
+            // so a later driver hiccup mid-session still recreates it.
+            VirtualDisplayRecoveryParams recovery = state.params;
+            recovery.display_name = state.current_display_name;
+            recovery.device_id = state.current_device_id;
+            recovery.monitor_device_path = state.current_monitor_device_path;
+            const GUID recovery_guid = state.params.guid;
+            recovery.should_abort = [recovery_guid]() {
+              // Qualified: the anonymous namespace's uuid_t overload
+              // shadows the GUID one for unqualified lookup.
+              return !VDISPLAY::is_virtual_display_guid_tracked(recovery_guid);
+            };
+            schedule_virtual_display_recovery_monitor(recovery);
+          } else {
+            BOOST_LOG(warning) << "VGD fallback monitor: virtual display created and capture "
+                                  "reinit requested, but "
+                               << (landed_kind.empty() ?
+                                     "no capture re-open was observed" :
+                                     "the observed capture open ('" + landed_kind + "') did not target the new display")
+                               << " within 15 s for " << state.describe_target()
+                               << "; the stream may still be on fallback capture.";
+          }
+          return;
+        }
+
+        if (attempts >= state.params.max_attempts) {
+          BOOST_LOG(warning) << "VGD fallback monitor: giving up after " << attempts
+                             << " attempts for " << state.describe_target()
+                             << "; the session stays on fallback capture (a new launch will "
+                                "retry virtual display creation normally).";
+          return;
+        }
+        std::this_thread::sleep_for(kPostAttemptBackoff);
+      }
+    }
+  }  // namespace
+
+  void supersede_fallback_monitors() {
+    g_fallback_monitor_generation.fetch_add(1, std::memory_order_acq_rel);
+  }
+
+  void notify_shutdown() {
+    g_recovery_monitors_shutting_down.store(true, std::memory_order_release);
+    abort_all_recovery_monitors();
+  }
+
+  void schedule_virtual_display_fallback_monitor(const VirtualDisplayRecoveryParams &params) {
+    if (params.max_attempts == 0) {
+      return;
+    }
+
+    RecoveryMonitorState initial_state(params);
+    if (monitor_should_abort(initial_state)) {
+      BOOST_LOG(debug) << "VGD fallback monitor skipped for " << initial_state.describe_target()
+                       << ": already aborted before scheduling.";
+      return;
+    }
+
+    // Same abort registry as the recovery flavor: if a later launch
+    // successfully creates a display for this GUID and arms a recovery
+    // monitor, reset_recovery_monitor_abort_flag aborts this fallback
+    // monitor — the two never run concurrently for one GUID.
+    const auto guid_uuid = guid_to_uuid(params.guid);
+    const auto abort_flag = reset_recovery_monitor_abort_flag(guid_uuid);
+    VirtualDisplayRecoveryParams wrapped = params;
+    const auto external_abort = params.should_abort;
+    wrapped.should_abort = [abort_flag, external_abort]() {
+      if (abort_flag->load(std::memory_order_acquire)) {
+        return true;
+      }
+      return external_abort ? external_abort() : false;
+    };
+
+    // Becoming the CURRENT generation also supersedes every older
+    // fallback monitor, whatever guid it was armed under.
+    const auto my_generation =
+      g_fallback_monitor_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+
+    RecoveryMonitorState state(wrapped);
+    BOOST_LOG(info) << "VGD fallback monitor armed for " << state.describe_target()
+                    << ": virtual display creation failed, streaming a fallback display; the "
+                       "session transitions onto the virtual display when the LuminalVGD "
+                       "driver becomes available.";
+    std::thread monitor_thread([state = std::move(state), my_generation]() mutable {
+      run_virtual_display_fallback_monitor(std::move(state), my_generation);
     });
     monitor_thread.detach();
   }
@@ -4906,7 +5126,7 @@ VDISPLAY::ensure_display_result VDISPLAY::ensure_display() {
   if (proc::vDisplayDriverStatus != DRIVER_STATUS::OK) {
     proc::initVDisplayDriver();
     if (proc::vDisplayDriverStatus != DRIVER_STATUS::OK) {
-      BOOST_LOG(warning) << "Virtual display driver unavailable for display ensure (status=" << static_cast<int>(proc::vDisplayDriverStatus) << "). Continuing with best-effort ensure.";
+      BOOST_LOG(warning) << "Virtual display driver unavailable for display ensure (status=" << static_cast<int>(proc::vDisplayDriverStatus.load()) << "). Continuing with best-effort ensure.";
     }
   }
 

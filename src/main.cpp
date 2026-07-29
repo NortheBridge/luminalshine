@@ -47,6 +47,7 @@
   #include "src/platform/windows/playnite_integration.h"
   #include "src/platform/windows/rtss_integration.h"
   #include "src/platform/windows/vgd_devnode.h"
+  #include "src/platform/windows/vgd_transition.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/platform/windows/virtual_display_cleanup.h"
 #endif
@@ -915,9 +916,21 @@ int main(int argc, char *argv[]) {
   // watchdog thread is still unwinding.
   display_helper_integration::stop_watchdog();
 
+  // Stop the detached recovery/fallback monitor threads BEFORE closing the
+  // device: closeVDisplayDevice() cannot set the sticky shutting-down flag
+  // itself (it also runs mid-process on watchdog failure), and on the
+  // LuminalVGD backend its early-return used to skip the flag entirely —
+  // a monitor waking during CRT exit then logged through destroyed
+  // Boost.Log sinks (heap fast-fail).
+  VDISPLAY::notify_shutdown();
+
   // The legacy SudoVDA watchdog thread also lives in static storage.
   // Ensure it is joined before CRT on-exit handlers destroy the thread object.
   VDISPLAY::closeVDisplayDevice();
+
+  // Bounded join of the WGC->VGD transition worker BEFORE the devnode
+  // worker below — a transition attempt may be inside a devnode ensure.
+  platf::vgd_transition::shutdown_join();
 
   // Bounded join of the background driver-rebind worker (if any) — a
   // detached worker racing static destruction is UB the crash handler

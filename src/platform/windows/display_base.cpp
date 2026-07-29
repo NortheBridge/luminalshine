@@ -38,6 +38,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "src/display_device.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/windows/vgd_transition.h"
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/tdr_state.h"
 #include "src/video.h"
@@ -1855,6 +1856,7 @@ namespace platf {
       // failing the stream.
       if (!user_requested_ddx && !wgc_requested && (vgd_requested || VDISPLAY::is_luminalvgd_active())) {
         if (auto disp = dxgi::display_vgd_vram_t::create(config, display_name)) {
+          vgd_transition::note_capture_backend(vgd_transition::kCaptureKindVgdRing, display_name);
           return disp;
         }
         if (vgd_requested) {
@@ -1865,24 +1867,32 @@ namespace platf {
       if (prefer_wgc_backend) {
         auto disp = dxgi::display_wgc_ipc_vram_t::create(config, display_name);
         if (disp || wgc_requested) {
+          if (disp) {
+            vgd_transition::note_capture_backend(vgd_transition::kCaptureKindWgc, display_name);
+          }
           return disp;
         }
       }
 
       auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
       if (!disp->init(config, display_name)) {
+        vgd_transition::note_capture_backend(vgd_transition::kCaptureKindDda, display_name);
         return disp;
       }
     } else if (hwdevice_type == mem_type_e::system) {
       if (prefer_wgc_backend) {
         auto disp = dxgi::display_wgc_ipc_ram_t::create(config, display_name);
         if (disp || wgc_requested) {
+          if (disp) {
+            vgd_transition::note_capture_backend(vgd_transition::kCaptureKindWgc, display_name);
+          }
           return disp;
         }
       }
 
       auto disp = std::make_shared<dxgi::display_ddup_ram_t>();
       if (!disp->init(config, display_name)) {
+        vgd_transition::note_capture_backend(vgd_transition::kCaptureKindDda, display_name);
         return disp;
       }
     }
