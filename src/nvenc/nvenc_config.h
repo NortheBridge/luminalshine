@@ -115,7 +115,11 @@ namespace nvenc {
    * Pure and constexpr so the clamping is unit-testable without a GPU.
    */
   constexpr uint32_t encode_wait_deadline_from_tdr(uint32_t tdr_delay_s, uint32_t tdr_ddi_delay_s) {
-    constexpr uint64_t floor_ms = 3000;
+    // Floor sits ABOVE the largest legitimate wait measured in the field
+    // (3913 ms on an RTX 5080 with zero GPU resets). A lower floor would
+    // let a machine with a small TdrDelay abandon a frame that was merely
+    // slow — the original bug in a new guise.
+    constexpr uint64_t floor_ms = 5000;
     constexpr uint64_t ceiling_ms = 10000;
     const uint64_t sum_ms = (static_cast<uint64_t>(tdr_delay_s) + static_cast<uint64_t>(tdr_ddi_delay_s)) * 1000ull;
     if (sum_ms < floor_ms) {

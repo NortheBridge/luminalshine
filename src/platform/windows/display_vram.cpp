@@ -25,7 +25,6 @@ extern "C" {
 #include "src/nvenc/nvenc_d3d11_native.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
-#include "src/nvenc/nvenc_config.h"
 #include "src/video.h"
 #include "utf_utils.h"
 

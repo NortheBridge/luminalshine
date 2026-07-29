@@ -25,6 +25,7 @@
 #include "logging.h"
 #include "main.h"
 #include "nvhttp.h"
+#include "nvenc/nvenc_base.h"
 #include "process.h"
 #include "rtsp.h"
 #include "session_monitor_client.h"
@@ -909,6 +910,9 @@ int main(int argc, char *argv[]) {
   // logging through Boost.Log after the sinks are torn down during CRT exit.
   stream::notify_shutdown();
   webrtc_stream::notify_shutdown();
+  // An encode stalled against the OS-scale wait deadline must abandon it
+  // now rather than hold teardown until the force-shutdown watchdog fires.
+  nvenc::notify_shutdown();
 
 #ifdef _WIN32
   // Full process shutdown cannot leave the paused-session watchdog running.

@@ -151,21 +151,37 @@ namespace nvenc {
 
     bool nvenc_failed(NVENCSTATUS status);
 
+    /// Outcome of the sliced encode-completion wait.
+    enum class encode_wait_result {
+      completed,  ///< The GPU signalled; the bitstream is ready.
+      device_lost,  ///< The device reported removal mid-wait — a real fault, detected within one slice.
+      aborted,  ///< Process teardown asked us to stop waiting.
+      timed_out,  ///< The full deadline elapsed with no verdict from the device.
+    };
+
     /**
-     * @brief Wait for the async completion event, sliced.
+     * @brief Wait for the async completion event, sliced, doing real work
+     *        per slice.
      *
-     * Polls `wait_for_async_event` in `encode_wait_poll_slice_ms` slices
-     * up to the `encode_wait_timeout_ms` deadline, logging once per
-     * session when a wait crosses `encode_stall_warn_ms`. Slicing is what
-     * lets the deadline be OS-scale (seconds) without the encode thread
-     * becoming unresponsive for that long, and it costs nothing on a
-     * healthy frame — the event returns immediately on signal, so a normal
-     * frame is still one syscall.
+     * Slicing is what lets the deadline be OS-scale (seconds) without the
+     * encode thread becoming unresponsive for that long — but only because
+     * each slice boundary is a decision point:
      *
-     * @return true when the encode completed, false when the deadline
-     *         elapsed (the caller then applies the corroboration gate).
+     *  - the device is re-asked whether it has been lost, so a GENUINE
+     *    fault is caught within one slice (~100 ms) rather than after the
+     *    whole deadline. That preserves the TDR lifeboat's reaction window
+     *    and gets the LuminalVGD ring reader releasing shared textures
+     *    promptly, which is the behaviour the pre-change 100 ms timeout
+     *    accidentally provided and which must not be lost;
+     *  - process teardown is observed, so a stall cannot hold shutdown past
+     *    the force-shutdown watchdog.
+     *
+     * Costs nothing on a healthy frame: the event returns immediately on
+     * signal, so a normal frame is still one syscall and no device query.
+     *
+     * @param out_reason Receives the device failure code on `device_lost`.
      */
-    bool wait_for_encode_completion();
+    encode_wait_result wait_for_encode_completion(std::uint32_t &out_reason);
 
     /**
      * @brief Record a hard (full-deadline) stall and report whether the
@@ -264,5 +280,15 @@ namespace nvenc {
    *        uses this to schedule a clean host restart once idle.
    */
   std::uint64_t drain_leak_count();
+
+  /**
+   * @brief Tell in-flight encode waits to stop waiting.
+   *
+   * Called from main's teardown, alongside the other notify_shutdown
+   * hooks. Without it an encode stalled against the OS-scale deadline
+   * would hold shutdown for seconds and could outlast the 10 s
+   * force-shutdown watchdog.
+   */
+  void notify_shutdown();
 
 }  // namespace nvenc

@@ -136,11 +136,21 @@ namespace {
       return false;
     }
     const HRESULT reason = seh_device_removed_reason(dev);
-    if (reason == S_OK) {
-      return false;
+    // Whitelist the documented device-loss codes rather than treating any
+    // non-S_OK as loss. GetDeviceRemovedReason can return other HRESULTs
+    // (DXGI_ERROR_INVALID_CALL among them); treating those as a dead GPU
+    // would manufacture exactly the false escalation this gate exists to
+    // prevent. Anything unrecognised is "no opinion".
+    switch (reason) {
+      case DXGI_ERROR_DEVICE_REMOVED:
+      case DXGI_ERROR_DEVICE_HUNG:
+      case DXGI_ERROR_DEVICE_RESET:
+      case DXGI_ERROR_DRIVER_INTERNAL_ERROR:
+        out_reason = static_cast<std::uint32_t>(reason);
+        return true;
+      default:
+        return false;
     }
-    out_reason = static_cast<std::uint32_t>(reason);
-    return true;
   }
 
   void nvenc_d3d11::reset_async_event() {

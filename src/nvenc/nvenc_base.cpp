@@ -22,6 +22,7 @@
 #include <format>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <vector>
 
 // Make sure we check backwards compatibility when bumping the Video Codec SDK version
@@ -157,7 +158,16 @@ namespace nvenc {
     constexpr auto kBreakerWindow = std::chrono::seconds(60);
     std::mutex g_stall_breaker_mutex;
     std::vector<std::chrono::steady_clock::time_point> g_recent_hard_stalls;
+
+    /// Set by nvenc::notify_shutdown() from main's teardown so an encode
+    /// stalled against the OS-scale deadline abandons the wait promptly
+    /// instead of racing the force-shutdown watchdog.
+    std::atomic<bool> g_shutdown_requested {false};
   }  // namespace
+
+  void notify_shutdown() {
+    g_shutdown_requested.store(true, std::memory_order_release);
+  }
 
   std::uint64_t drain_leak_count() {
     return g_drain_leak_count.load(std::memory_order_relaxed);
@@ -195,19 +205,6 @@ namespace nvenc {
     encoder_params.height = client_config.height;
     encoder_params.buffer_format = buffer_format;
     encoder_params.rfi = true;
-
-    // Cache the per-session encode-wait parameters. Read once here; the
-    // per-frame wait below in encode_frame consults the cached values
-    // every frame instead of the global config so they cannot race a
-    // settings change mid-session, and so they reflect whatever
-    // OS-anchored deadline the caller derived at session start (see
-    // encode_wait_deadline_from_tdr). Clamp to >=10 ms so a misconfigured
-    // 0 doesn't busy-loop the encoder thread on every frame.
-    encoder_state.encode_wait_poll_slice_ms = std::max<uint32_t>(10, config.encode_wait_poll_slice_ms);
-    encoder_state.encode_wait_timeout_ms =
-      std::max(encoder_state.encode_wait_poll_slice_ms, config.encode_wait_timeout_ms);
-    encoder_state.encode_stall_warn_ms = config.encode_stall_warn_ms;
-    encoder_state.warned_slow_encode_wait = false;
 
     selected_api_version = 0;
 
@@ -838,7 +835,32 @@ namespace nvenc {
                       << quality_preset_string_from_guid(init_params.presetGUID) << extra;
     }
 
+    // Fresh per-session state. NOTE the ordering: this wipes the whole
+    // struct back to its in-class defaults, so anything derived from
+    // `config` MUST be applied AFTER it. An earlier revision cached the
+    // encode-wait parameters near the top of this function and had them
+    // silently erased here, which made the OS-anchored deadline dead code
+    // (review finding) — the same trap that defeated the old 250 ms
+    // render-stack bump.
     encoder_state = {};
+
+    // Cache the per-session encode-wait parameters. The per-frame wait
+    // consults these cached values rather than the global config so they
+    // cannot race a settings change mid-session, and so they reflect the
+    // OS-anchored deadline the caller derived at session start (see
+    // encode_wait_deadline_from_tdr). Clamp the slice to >=10 ms so a
+    // misconfigured 0 cannot busy-loop the encode thread, and keep the
+    // deadline at least one slice long so the loop always waits once.
+    encoder_state.encode_wait_poll_slice_ms = std::max<uint32_t>(10, config.encode_wait_poll_slice_ms);
+    encoder_state.encode_wait_timeout_ms =
+      std::max(encoder_state.encode_wait_poll_slice_ms, config.encode_wait_timeout_ms);
+    encoder_state.encode_stall_warn_ms = config.encode_stall_warn_ms;
+
+    BOOST_LOG(info) << "NvEnc: encode-wait deadline " << encoder_state.encode_wait_timeout_ms
+                    << " ms (polled every " << encoder_state.encode_wait_poll_slice_ms
+                    << " ms, soft warning at " << encoder_state.encode_stall_warn_ms
+                    << " ms); a GPU-reset verdict additionally requires the device to report removal.";
+
     fail_guard.disable();
     return true;
   }
@@ -1040,7 +1062,11 @@ namespace nvenc {
     lock_bitstream.outputBitstream = output_bitstream;
     lock_bitstream.doNotWait = async_event_handle ? 1 : 0;
 
-    if (async_event_handle && !wait_for_encode_completion()) {
+    std::uint32_t wait_removed_reason = 0;
+    const auto wait_result = async_event_handle ?
+                               wait_for_encode_completion(wait_removed_reason) :
+                               encode_wait_result::completed;
+    if (wait_result != encode_wait_result::completed) {
       // Capture diagnostic context on the timeout. The previous one-line
       // log gave no signal about whether this was a transient bubble or
       // the start of a TDR — and the line printed two lines before the
@@ -1083,9 +1109,25 @@ namespace nvenc {
       // stall, with a repeated-stall circuit breaker as the fallback for
       // backends that cannot answer (or a machine with TdrLevel=0, where
       // the device never reports removal because the OS never resets it).
-      std::uint32_t removed_reason = 0;
-      const bool corroborated = device_lost(removed_reason);
-      const bool breaker_tripped = note_hard_stall_and_check_breaker();
+      // Shutdown: not a fault at all. Say nothing, escalate nothing — the
+      // process is going away and the teardown path handles the rest.
+      if (wait_result == encode_wait_result::aborted) {
+        BOOST_LOG(info) << "NvEnc: abandoning the wait for frame " << frame_index
+                        << " because the host is shutting down.";
+        encoder_state.has_pending_async = true;
+        return {};
+      }
+
+      std::uint32_t removed_reason = wait_removed_reason;
+      // device_lost was already observed mid-wait for the fast path; only
+      // re-ask when the deadline elapsed without a verdict.
+      const bool corroborated = wait_result == encode_wait_result::device_lost ||
+                                device_lost(removed_reason);
+      // Only charge the breaker for UNCORROBORATED stalls. A corroborated
+      // fault already escalates on its own, and counting it here would let
+      // real faults push the breaker toward tripping on later benign
+      // stalls (review finding).
+      const bool breaker_tripped = !corroborated && note_hard_stall_and_check_breaker();
 
       if (corroborated || breaker_tripped) {
         if (corroborated) {
@@ -1239,19 +1281,37 @@ namespace nvenc {
     return true;
   }
 
-  bool nvenc_base::wait_for_encode_completion() {
+  nvenc_base::encode_wait_result nvenc_base::wait_for_encode_completion(std::uint32_t &out_reason) {
+    out_reason = 0;
     const auto slice = std::max<uint32_t>(10, encoder_state.encode_wait_poll_slice_ms);
     const auto deadline_ms = std::max(slice, encoder_state.encode_wait_timeout_ms);
     const auto started = std::chrono::steady_clock::now();
 
     while (true) {
+      const auto slice_started = std::chrono::steady_clock::now();
       if (wait_for_async_event(slice)) {
-        return true;
+        return encode_wait_result::completed;
       }
 
+      const auto now = std::chrono::steady_clock::now();
       const auto waited_ms = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count()
       );
+
+      // Real faults are caught HERE, within one slice — not after the full
+      // deadline. This is what keeps the TDR lifeboat's reaction window and
+      // the ring reader's release-before-recovery behaviour as prompt as
+      // the old 100 ms timeout made them, while still being patient with a
+      // merely-slow frame.
+      if (device_lost(out_reason)) {
+        return encode_wait_result::device_lost;
+      }
+
+      // Teardown must not wait out an OS-scale deadline: the force-shutdown
+      // watchdog would fire first.
+      if (g_shutdown_requested.load(std::memory_order_acquire)) {
+        return encode_wait_result::aborted;
+      }
 
       // Soft threshold: telemetry only, once per session. Never escalates
       // and never ends the stream — a slow frame is a slow frame.
@@ -1264,7 +1324,17 @@ namespace nvenc {
       }
 
       if (waited_ms >= deadline_ms) {
-        return false;
+        return encode_wait_result::timed_out;
+      }
+
+      // Defensive: if the wait returned false WITHOUT consuming its slice
+      // (a broken/closed event handle makes WaitForSingleObject fail
+      // immediately), this loop would spin the encode thread at 100% for
+      // the whole deadline. Sleep out the remainder of the slice instead.
+      const auto slice_elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - slice_started);
+      if (slice_elapsed < std::chrono::milliseconds(slice) / 2) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(slice) - slice_elapsed);
       }
     }
   }

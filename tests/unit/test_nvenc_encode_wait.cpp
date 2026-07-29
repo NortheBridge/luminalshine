@@ -33,13 +33,20 @@ namespace {
   }
 
   TEST(NvencEncodeWaitDeadline, NeverDropsBelowTheObservedLegitimateMax) {
-    // The floor exists because a machine with TdrDelay=1 must still not
-    // produce a deadline under the largest legitimate wait seen in the
-    // field (3.9 s on an RTX 5080 with zero GPU resets). 3000 ms is the
-    // floor; anything summing below it clamps up.
-    EXPECT_EQ(nvenc::encode_wait_deadline_from_tdr(1, 1), 3000u);
-    EXPECT_EQ(nvenc::encode_wait_deadline_from_tdr(0, 0), 3000u);
-    EXPECT_EQ(nvenc::encode_wait_deadline_from_tdr(1, 2), 3000u);
+    // The floor must sit ABOVE the largest legitimate wait seen in the
+    // field (3913 ms on an RTX 5080 with zero GPU resets), or a machine
+    // with a small TdrDelay would abandon merely-slow frames — the
+    // original bug in a new guise. Hence 5000, not 3000.
+    EXPECT_EQ(nvenc::encode_wait_deadline_from_tdr(1, 1), 5000u);
+    EXPECT_EQ(nvenc::encode_wait_deadline_from_tdr(0, 0), 5000u);
+    EXPECT_EQ(nvenc::encode_wait_deadline_from_tdr(1, 2), 5000u);
+    // The specific regression this guards: 3913 ms was legitimate, so no
+    // derivable deadline may land at or below it.
+    for (std::uint32_t d = 0; d <= 6; ++d) {
+      for (std::uint32_t ddi = 0; ddi <= 6; ++ddi) {
+        EXPECT_GT(nvenc::encode_wait_deadline_from_tdr(d, ddi), 3913u);
+      }
+    }
   }
 
   TEST(NvencEncodeWaitDeadline, CapsPathologicalRegistryValues) {
@@ -65,13 +72,13 @@ namespace {
   }
 
   TEST(NvencEncodeWaitDeadline, AlwaysLandsInsideTheDocumentedEnvelope) {
-    // Whatever the registry says, the result must stay within [3 s, 10 s]:
+    // Whatever the registry says, the result must stay within [5 s, 10 s]:
     // above the legitimate-wait tail, below the point where blocking the
     // encode thread becomes its own failure mode.
     for (std::uint32_t d = 0; d <= 120; d += 7) {
       for (std::uint32_t ddi = 0; ddi <= 120; ddi += 11) {
         const auto ms = nvenc::encode_wait_deadline_from_tdr(d, ddi);
-        EXPECT_GE(ms, 3000u);
+        EXPECT_GE(ms, 5000u);
         EXPECT_LE(ms, 10000u);
       }
     }
