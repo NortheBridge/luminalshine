@@ -354,7 +354,7 @@ namespace egl {
     }
 
     // native_display.left() equals native_display.right()
-    display_t display = eglGetPlatformDisplay(egl_platform, native_display_p, nullptr);
+    display_t display {eglGetPlatformDisplay(egl_platform, native_display_p, nullptr)};
 
     if (fail()) {
       BOOST_LOG(error) << "Couldn't open EGL display: ["sv << util::hex(eglGetError()).to_string_view() << ']';

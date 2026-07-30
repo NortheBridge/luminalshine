@@ -1180,7 +1180,13 @@ namespace nvhttp {
       return {};
     }
 
-    auto client_cert_signature = crypto::signature(const_cast<X509 *>(client_cert.get()));
+    // Both signatures below are BORROWED views into their certificate's ASN.1
+    // data, so each certificate must stay alive for as long as its view is
+    // read. `client_cert` is owned by the caller and `stored_x509` by this
+    // scope, which is exactly why crypto::signature() takes a raw pointer:
+    // passing one to a `const x509_t &` parameter used to build an owning
+    // temporary that freed the certificate out from under us.
+    auto client_cert_signature = crypto::signature(client_cert.get());
 
     client_t &client = client_root;
     for (auto &named_cert : client.named_devices) {
@@ -1554,7 +1560,7 @@ namespace nvhttp {
     cipher.decrypt(challenge, decrypted);
 
     auto x509 = crypto::x509(conf_intern.servercert);
-    auto sign = crypto::signature(x509);
+    auto sign = crypto::signature(x509.get());
     auto serversecret = crypto::rand(16);
 
     decrypted.insert(std::end(decrypted), std::begin(sign), std::end(sign));
@@ -1631,7 +1637,7 @@ namespace nvhttp {
       fail_pair(sess, tree, "Invalid client certificate");
       return;
     }
-    auto x509_sign = crypto::signature(x509);
+    auto x509_sign = crypto::signature(x509.get());
 
     std::string data;
     data.reserve(sess.serverchallenge.size() + x509_sign.size() + secret.size());

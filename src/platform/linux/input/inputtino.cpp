@@ -22,7 +22,7 @@ using namespace std::literals;
 namespace platf {
 
   input_t input() {
-    return {new input_raw_t()};
+    return input_t {new input_raw_t()};
   }
 
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input) {

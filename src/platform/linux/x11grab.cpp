@@ -840,7 +840,7 @@ namespace platf {
     void cursor_t::capture(egl::cursor_t &img) {
       auto display = (xdisplay_t::pointer) ctx.get();
 
-      xcursor_t xcursor = fix::GetCursorImage(display);
+      xcursor_t xcursor {fix::GetCursorImage(display)};
 
       if (img.serial != xcursor->cursor_serial) {
         auto buf_size = xcursor->width * xcursor->height * sizeof(int);
@@ -869,7 +869,7 @@ namespace platf {
     }
 
     xdisplay_t make_display() {
-      return OpenDisplay(nullptr);
+      return xdisplay_t {OpenDisplay(nullptr)};
     }
 
     void freeDisplay(_XDisplay *xdisplay) {

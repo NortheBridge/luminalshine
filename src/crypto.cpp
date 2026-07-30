@@ -331,7 +331,10 @@ namespace crypto {
     }
 
     ecb_t::ecb_t(const aes_t &key, bool padding):
-        cipher_t {EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_new(), key, padding} {
+        // Adoption is spelled out now that util::uniq_ptr's converting
+        // constructor is explicit; the contexts are freshly allocated here and
+        // owned by the cipher from this point on.
+        cipher_t {cipher_ctx_t {EVP_CIPHER_CTX_new()}, cipher_ctx_t {EVP_CIPHER_CTX_new()}, key, padding} {
     }
 
     cbc_t::cbc_t(const aes_t &key, bool padding):
@@ -538,11 +541,19 @@ namespace crypto {
     return {mem_ptr->data, mem_ptr->length};
   }
 
-  std::string_view signature(const x509_t &x) {
-    // X509_ALGOR *_ = nullptr;
+  std::string_view signature(const X509 *x) {
+    // Borrowing, never owning — see the header for why this must not take
+    // `const x509_t &`.
+    if (!x) {
+      return {};
+    }
 
     const ASN1_BIT_STRING *asn1 = nullptr;
-    X509_get0_signature(&asn1, nullptr, x.get());
+    X509_get0_signature(&asn1, nullptr, x);
+
+    if (!asn1 || !asn1->data || asn1->length <= 0) {
+      return {};
+    }
 
     return {(const char *) asn1->data, (std::size_t) asn1->length};
   }

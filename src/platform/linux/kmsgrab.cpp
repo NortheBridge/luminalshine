@@ -250,7 +250,7 @@ namespace platf {
         this->plane.reset();
 
         for (; plane_p != end; ++plane_p) {
-          plane_t plane = drmModeGetPlane(fd, *plane_p);
+          plane_t plane {drmModeGetPlane(fd, *plane_p)};
           if (!plane) {
             BOOST_LOG(error) << "Couldn't get drm plane ["sv << (end - plane_p) << "]: "sv << strerror(errno);
             continue;
@@ -371,15 +371,15 @@ namespace platf {
       }
 
       crtc_t crtc(std::uint32_t id) {
-        return drmModeGetCrtc(fd.el, id);
+        return crtc_t {drmModeGetCrtc(fd.el, id)};
       }
 
       encoder_t encoder(std::uint32_t id) {
-        return drmModeGetEncoder(fd.el, id);
+        return encoder_t {drmModeGetEncoder(fd.el, id)};
       }
 
       res_t res() {
-        return drmModeGetResources(fd.el);
+        return res_t {drmModeGetResources(fd.el)};
       }
 
       bool is_nvidia() {
@@ -433,7 +433,7 @@ namespace platf {
       }
 
       connector_interal_t connector(std::uint32_t id) {
-        return drmModeGetConnector(fd.el, id);
+        return connector_interal_t {drmModeGetConnector(fd.el, id)};
       }
 
       std::vector<connector_t> monitors(conn_type_count_t &conn_type_count) {
@@ -482,7 +482,7 @@ namespace platf {
       }
 
       std::vector<std::pair<prop_t, std::uint64_t>> props(std::uint32_t id, std::uint32_t type) {
-        obj_prop_t obj_prop = drmModeObjectGetProperties(fd.el, id, type);
+        obj_prop_t obj_prop {drmModeObjectGetProperties(fd.el, id, type)};
         if (!obj_prop) {
           return {};
         }
@@ -510,7 +510,7 @@ namespace platf {
       }
 
       plane_t operator[](std::uint32_t index) {
-        return drmModeGetPlane(fd.el, plane_res->planes[index]);
+        return plane_t {drmModeGetPlane(fd.el, plane_res->planes[index])};
       }
 
       std::uint32_t count() {
@@ -802,7 +802,7 @@ namespace platf {
           return false;
         }
 
-        prop_blob_t hdr_metadata_blob = drmModeGetPropertyBlob(card.fd.el, *hdr_metadata_blob_id);
+        prop_blob_t hdr_metadata_blob {drmModeGetPropertyBlob(card.fd.el, *hdr_metadata_blob_id)};
         if (hdr_metadata_blob == nullptr) {
           BOOST_LOG(error) << "Unable to get HDR metadata blob: "sv << strerror(errno);
           return false;
@@ -849,7 +849,7 @@ namespace platf {
           return false;
         }
 
-        prop_blob_t hdr_metadata_blob = drmModeGetPropertyBlob(card.fd.el, *hdr_metadata_blob_id);
+        prop_blob_t hdr_metadata_blob {drmModeGetPropertyBlob(card.fd.el, *hdr_metadata_blob_id)};
         if (hdr_metadata_blob == nullptr) {
           BOOST_LOG(error) << "Unable to get HDR metadata blob: "sv << strerror(errno);
           return false;
@@ -877,7 +877,7 @@ namespace platf {
           return;
         }
 
-        plane_t plane = drmModeGetPlane(card.fd.el, cursor_plane_id);
+        plane_t plane {drmModeGetPlane(card.fd.el, cursor_plane_id)};
 
         std::optional<std::int32_t> prop_crtc_x;
         std::optional<std::int32_t> prop_crtc_y;
@@ -1063,7 +1063,7 @@ namespace platf {
           }
         }
 
-        plane_t plane = drmModeGetPlane(card.fd.el, plane_id);
+        plane_t plane {drmModeGetPlane(card.fd.el, plane_id)};
         frame_timestamp = std::chrono::steady_clock::now();
 
         auto fb = card.fb(plane.get());
