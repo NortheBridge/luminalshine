@@ -4717,6 +4717,30 @@ namespace {
     }
   }
 
+  /**
+   * @brief Startup check for a session snapshot, deleting it only when it is provably stale.
+   *
+   * Every rejection reason below is computed by comparing the snapshot against a
+   * live device enumeration, so a machine that cannot enumerate at all rejects
+   * every snapshot it owns. That is not a hypothetical: on 2026-07-29 at
+   * 20:22:25 QueryDisplayConfig began returning ERROR_NOT_SUPPORTED machine-wide,
+   * the loader logged "no valid devices available" at 20:22:28.074 because the
+   * enumeration was empty rather than because the devices were gone, and this
+   * function deleted display_session_current.json 3 ms later — before restore
+   * polling had started, so nothing was ever restored from it.
+   *
+   * Deleting is therefore gated on the display stack actually being readable.
+   * When it is not, the snapshot is preserved untouched and reported invalid for
+   * this attempt only: a later helper run re-evaluates it against a working
+   * enumeration. The probe cannot manufacture a false "alive" verdict — any
+   * machine with a display attached enumerates at least one device, active or
+   * inactive — and it only ever suppresses a delete, so it can neither refuse a
+   * session nor block a restore.
+   *
+   * @param state Helper state owning the display controller and the probe.
+   * @param path Snapshot file to validate.
+   * @return true only if the snapshot loaded and survived filtering.
+   */
   bool validate_session_snapshot(ServiceState &state, const std::filesystem::path &path) {
     std::error_code ec;
     if (!std::filesystem::exists(path, ec) || ec) {
@@ -4727,12 +4751,25 @@ namespace {
       if (!loaded->snapshot.m_topology.empty() && !loaded->snapshot.m_modes.empty()) {
         return true;
       }
-      BOOST_LOG(warning) << "Existing session snapshot collapsed after applying current exclusion/device filters; removing path="
+      BOOST_LOG(warning) << "Existing session snapshot collapsed after applying current exclusion/device filters: "
                          << path.string();
     } else {
-      BOOST_LOG(warning) << "Existing session snapshot is invalid or filtered out; removing path=" << path.string();
+      BOOST_LOG(warning) << "Existing session snapshot is invalid or filtered out: " << path.string();
     }
 
+    // Only a readable display stack can distinguish "these devices are gone"
+    // from "we cannot see any device right now".
+    if (state.probe_display_device_count() == 0) {
+      BOOST_LOG(warning) << "PRESERVING session snapshot '" << path.string()
+                         << "': display enumeration returned zero devices, so the rejection above cannot be"
+                            " trusted to mean the snapshot is stale. The display stack appears to be down"
+                            " machine-wide; this snapshot is the only record of the pre-session layout and"
+                            " will be re-evaluated once enumeration works again.";
+      return false;
+    }
+
+    BOOST_LOG(warning) << "Removing session snapshot '" << path.string()
+                       << "': rejected against a working display enumeration.";
     {
       std::error_code ec_rm;
       std::filesystem::remove(path, ec_rm);
