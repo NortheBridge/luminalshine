@@ -1646,6 +1646,13 @@ namespace display_helper_integration {
     constexpr std::int64_t kMinFailingMsBeforeProbe = 30'000;
     constexpr std::int64_t kMinMsBetweenStackProbes = 60'000;
 
+    /// Degraded ("API answers, zero paths") is reported far sooner than the
+    /// terminal verdict, because it is the state recovery can still act in.
+    constexpr std::uint64_t kEmptyEnumerationsBeforeDegradedProbe = 5;
+    constexpr std::int64_t kMinMsBetweenDegradedProbes = 30'000;
+    /// steady_clock ms of the last degraded probe.
+    std::atomic<std::int64_t> g_last_degraded_probe_ms {0};
+
     std::int64_t steady_ms_now() {
       return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now().time_since_epoch()
@@ -1696,12 +1703,36 @@ namespace display_helper_integration {
         failing_since = g_enumeration_failing_since_ms;
       }
 
+      if (tdr::stack_down()) {
+        return;  // already latched; nothing to add
+      }
+
+      // Degraded check first: it fires ~8 s before the terminal one and is the
+      // only signal available while recovery can still work. Purely a report --
+      // it must not reach mark_stack_down (tells the user to reboot) or
+      // mark_event (sets recovery_recent, which briefly refuses sessions),
+      // because a clean exclusive teardown legitimately has zero active paths
+      // for 2-4.5 s and would otherwise refuse the next session.
+      if (streak >= kEmptyEnumerationsBeforeDegradedProbe && streak < kEmptyEnumerationsBeforeProbe) {
+        auto last_degraded = g_last_degraded_probe_ms.load(std::memory_order_acquire);
+        if ((last_degraded == 0 || (now_ms - last_degraded) >= kMinMsBetweenDegradedProbes) &&
+            g_last_degraded_probe_ms.compare_exchange_strong(last_degraded, now_ms, std::memory_order_acq_rel)) {
+          LONG deg_status = ERROR_SUCCESS;
+          UINT32 deg_paths = 0;
+          if (platf::dxgi::display_stack_degraded_zero_paths(&deg_status, &deg_paths)) {
+            BOOST_LOG(warning) << "DISPLAY STACK DEGRADED: the display API is answering normally but reports ZERO "
+                                  "active paths, confirmed twice over ~2s, after "
+                               << streak << " empty enumerations. Nothing is attached to compose onto. If a virtual "
+                                  "display should be active this is the window in which recovery can still succeed -- "
+                                  "the API stops answering entirely a few seconds later. This is a report, not a "
+                                  "verdict: a clean exclusive-layout teardown also passes through this state.";
+          }
+        }
+      }
+
       if (streak < kEmptyEnumerationsBeforeProbe ||
           (now_ms - failing_since) < kMinFailingMsBeforeProbe) {
         return;
-      }
-      if (tdr::stack_down()) {
-        return;  // already latched; nothing to add
       }
 
       auto last_probe = g_last_stack_probe_ms.load(std::memory_order_acquire);

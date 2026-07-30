@@ -483,6 +483,59 @@ namespace platf::dxgi {
     return reported_paths > 0;
   }
 
+  bool display_stack_degraded_zero_paths(LONG *error_out, UINT32 *path_count_out) noexcept {
+    // The third verdict, between healthy and confirmed-down.
+    //
+    // display_config_api_healthy() folds two very different states into one
+    // "false": the API refused to answer, and the API answered that nothing is
+    // attached. display_stack_confirmed_down() then only recognises the first,
+    // because it requires ERROR_NOT_SUPPORTED (:513). So a stack that answers
+    // ERROR_SUCCESS with zero paths is invisible to both.
+    //
+    // That is not hypothetical. On 2026-07-30 the LuminalVGD Tier-1 duck-out
+    // parked the only active display at 09:02:18.421; from 09:02:18.514 to
+    // 09:02:26.419 QueryDisplayConfig returned ERROR_SUCCESS with zero paths
+    // 48 times, and only at 09:02:26.569 did it degrade to ERROR_NOT_SUPPORTED
+    // and stay there. Those 7.9 seconds were the entire window in which DWM was
+    // still alive and recovery was still possible, and the host had the
+    // observation in hand and discarded it every time.
+    //
+    // This reports that window. It is deliberately OBSERVATIONAL ONLY: it must
+    // never feed tdr::mark_stack_down (which tells the user to reboot) and must
+    // never feed tdr::mark_event (which sets recovery_recent and briefly
+    // refuses sessions). Zero active paths is a legitimate transient — exclusive
+    // teardown leaves no active path for 2-4.5 s on a perfectly clean session
+    // end — and latching anything terminal on a zero count is the PR #112 bug.
+    // Two reads with a settle delay filter the shortest of those transients;
+    // callers must treat even a true result as "look here", not as a fault.
+    LONG status = ERROR_SUCCESS;
+    UINT32 qdc_paths = 0;
+    const bool healthy = display_config_api_healthy(&status, &qdc_paths);
+    if (error_out) {
+      *error_out = status;
+    }
+    if (path_count_out) {
+      *path_count_out = qdc_paths;
+    }
+    // Only the "answered, but nothing attached" shape qualifies. A refusal is
+    // display_stack_confirmed_down()'s business, not ours.
+    const auto answered_empty = [](LONG s, UINT32 paths) {
+      return (s == ERROR_SUCCESS) && paths == 0;
+    };
+    if (healthy || !answered_empty(status, qdc_paths)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    const bool still_healthy = display_config_api_healthy(&status, &qdc_paths);
+    if (error_out) {
+      *error_out = status;
+    }
+    if (path_count_out) {
+      *path_count_out = qdc_paths;
+    }
+    return !still_healthy && answered_empty(status, qdc_paths);
+  }
+
   bool display_stack_confirmed_down(LONG *error_out, UINT32 *path_count_out) noexcept {
     // Gate for the TERMINAL tdr::mark_stack_down verdict. A single
     // unhealthy read is NOT enough evidence to tell the user to reboot:
