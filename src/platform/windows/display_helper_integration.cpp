@@ -39,9 +39,11 @@
   #include "src/platform/windows/ipc/display_settings_client.h"
   #include "src/platform/windows/ipc/misc_utils.h"
   #include "src/platform/windows/ipc/process_handler.h"
+  #include "src/platform/windows/display.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/process.h"
+  #include "src/tdr_state.h"
 
   #include <display_device/noop_audio_context.h>
   #include <display_device/noop_settings_persistence.h>
@@ -1625,6 +1627,112 @@ namespace display_helper_integration {
     return result;
   }
 
+  namespace {
+    /// Consecutive enumerate_devices() calls that came back with nothing.
+    std::atomic<std::uint64_t> g_empty_enumerations {0};
+    /// steady_clock ms at which the current failing streak began; 0 == not failing.
+    std::atomic<std::int64_t> g_enumeration_failing_since_ms {0};
+    /// steady_clock ms of the last confirm probe, so its 2 s sleep runs rarely.
+    std::atomic<std::int64_t> g_last_stack_probe_ms {0};
+
+    constexpr std::uint64_t kEmptyEnumerationsBeforeProbe = 20;
+    constexpr std::int64_t kMinFailingMsBeforeProbe = 30'000;
+    constexpr std::int64_t kMinMsBetweenStackProbes = 60'000;
+
+    std::int64_t steady_ms_now() {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()
+      )
+        .count();
+    }
+
+    /**
+     * @brief Escalate a sustained enumeration blackout to the terminal stack-down verdict.
+     *
+     * Until this existed, the only routes to tdr::mark_stack_down ran off
+     * D3D11CreateDevice exhaustion (display_base.cpp) and the session-start
+     * encoder probe (stream.cpp). Both need something to be actively trying to
+     * create a device, so a wedge with no stream running was invisible: during
+     * the 2026-07-29 20:22 incident the host spun ~12,500 QueryDisplayConfig
+     * give-up cycles over thirty minutes and never once latched. /api/health/tdr
+     * reported stack_down=false the entire time, so the Troubleshooting page
+     * told the user nothing was wrong while nothing worked.
+     *
+     * The bar is deliberately high, because latching refuses new sessions:
+     * twenty consecutive empty enumerations AND thirty seconds of continuous
+     * failure before the confirm probe is even considered, then
+     * display_stack_confirmed_down()'s own two ERROR_NOT_SUPPORTED reads two
+     * seconds apart. Anything short of the machine-wide wedge signature
+     * (ERROR_GEN_FAILURE, ACCESS_DENIED, a healthy API reporting zero paths)
+     * does not latch. A machine that recovers clears the latch by itself:
+     * tdr::stack_down() re-probes every five seconds through the recheck hook
+     * installed by tdr_lifeboat, and note_stack_healthy() un-latches.
+     *
+     * The probe sleeps two seconds internally and is called from a 150 ms poll
+     * loop, so it is additionally rate-limited to once a minute.
+     */
+    void note_enumeration_result(bool produced_devices) {
+      if (produced_devices) {
+        if (g_empty_enumerations.exchange(0, std::memory_order_release) != 0) {
+          g_enumeration_failing_since_ms.store(0, std::memory_order_release);
+        }
+        return;
+      }
+
+      const auto now_ms = steady_ms_now();
+      const auto streak = g_empty_enumerations.fetch_add(1, std::memory_order_acq_rel) + 1;
+      std::int64_t expected = 0;
+      g_enumeration_failing_since_ms.compare_exchange_strong(expected, now_ms, std::memory_order_acq_rel);
+
+      if (streak < kEmptyEnumerationsBeforeProbe) {
+        return;
+      }
+      const auto failing_since = g_enumeration_failing_since_ms.load(std::memory_order_acquire);
+      if (failing_since == 0 || (now_ms - failing_since) < kMinFailingMsBeforeProbe) {
+        return;
+      }
+      if (tdr::stack_down()) {
+        return;  // already latched; nothing to add
+      }
+
+      auto last_probe = g_last_stack_probe_ms.load(std::memory_order_acquire);
+      if (last_probe != 0 && (now_ms - last_probe) < kMinMsBetweenStackProbes) {
+        return;
+      }
+      if (!g_last_stack_probe_ms.compare_exchange_strong(last_probe, now_ms, std::memory_order_acq_rel)) {
+        return;  // another thread is probing
+      }
+
+      LONG qdc_status = ERROR_SUCCESS;
+      UINT32 qdc_paths = 0;
+      if (!platf::dxgi::display_stack_confirmed_down(&qdc_status, &qdc_paths)) {
+        BOOST_LOG(warning) << "Display enumeration has returned no devices for " << streak
+                           << " consecutive calls over " << ((now_ms - failing_since) / 1000)
+                           << "s, but the display API did not confirm the machine-wide wedge signature"
+                              " (status "
+                           << qdc_status << ", " << qdc_paths
+                           << " paths). Not latching a terminal verdict; will re-check.";
+        return;
+      }
+
+      std::string detail = "display enumeration returned no devices for ";
+      detail += std::to_string(streak);
+      detail += " consecutive calls over ";
+      detail += std::to_string((now_ms - failing_since) / 1000);
+      detail += "s; QueryDisplayConfig unavailable (status ";
+      detail += std::to_string(qdc_status);
+      detail += ", ";
+      detail += std::to_string(qdc_paths);
+      detail += " paths, confirmed twice)";
+
+      BOOST_LOG(fatal) << "DISPLAY STACK UNAVAILABLE MACHINE-WIDE: " << detail
+                       << ". No display can be configured or captured by any program until this clears."
+                          " First try Win+Ctrl+Shift+B to restart the Windows graphics stack; if displays"
+                          " do not return, this machine must be REBOOTED.";
+      tdr::mark_stack_down(static_cast<long>(qdc_status), std::move(detail));
+    }
+  }  // namespace
+
   std::optional<display_device::EnumeratedDeviceList> enumerate_devices(
     display_device::DeviceEnumerationDetail detail
   ) {
@@ -1632,8 +1740,14 @@ namespace display_helper_integration {
       display_device::DisplayRecoveryBehaviorGuard guard(display_device::DisplayRecoveryBehavior::Skip);
       auto api = std::make_shared<display_device::WinApiLayer>();
       display_device::WinDisplayDevice dd(api);
-      return dd.enumAvailableDevices(detail);
+      auto devices = dd.enumAvailableDevices(detail);
+      // enumAvailableDevices returns an ENGAGED but EMPTY list when the
+      // underlying QueryDisplayConfig fails, so "did it throw" is not the
+      // signal -- "did it produce anything" is.
+      note_enumeration_result(!devices.empty());
+      return devices;
     } catch (...) {
+      note_enumeration_result(false);
       return std::nullopt;
     }
   }
