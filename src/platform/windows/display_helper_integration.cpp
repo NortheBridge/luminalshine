@@ -1628,10 +1628,17 @@ namespace display_helper_integration {
   }
 
   namespace {
+    /// Streak counter and its start timestamp are one logical unit: updating them
+    /// as two independent atomics lets a success/failure interleave zero the
+    /// counter while leaving a live timestamp stranded, after which the "and
+    /// thirty seconds" half of the gate below is measured against an anchor that
+    /// never advances again. One small mutex keeps them consistent; this is not
+    /// a hot path (one enumeration has already happened by the time we get here).
+    std::mutex g_enumeration_state_mutex;
     /// Consecutive enumerate_devices() calls that came back with nothing.
-    std::atomic<std::uint64_t> g_empty_enumerations {0};
+    std::uint64_t g_empty_enumerations = 0;
     /// steady_clock ms at which the current failing streak began; 0 == not failing.
-    std::atomic<std::int64_t> g_enumeration_failing_since_ms {0};
+    std::int64_t g_enumeration_failing_since_ms = 0;
     /// steady_clock ms of the last confirm probe, so its 2 s sleep runs rarely.
     std::atomic<std::int64_t> g_last_stack_probe_ms {0};
 
@@ -1672,23 +1679,25 @@ namespace display_helper_integration {
      * loop, so it is additionally rate-limited to once a minute.
      */
     void note_enumeration_result(bool produced_devices) {
-      if (produced_devices) {
-        if (g_empty_enumerations.exchange(0, std::memory_order_release) != 0) {
-          g_enumeration_failing_since_ms.store(0, std::memory_order_release);
-        }
-        return;
-      }
-
       const auto now_ms = steady_ms_now();
-      const auto streak = g_empty_enumerations.fetch_add(1, std::memory_order_acq_rel) + 1;
-      std::int64_t expected = 0;
-      g_enumeration_failing_since_ms.compare_exchange_strong(expected, now_ms, std::memory_order_acq_rel);
-
-      if (streak < kEmptyEnumerationsBeforeProbe) {
-        return;
+      std::uint64_t streak = 0;
+      std::int64_t failing_since = 0;
+      {
+        std::lock_guard lg {g_enumeration_state_mutex};
+        if (produced_devices) {
+          g_empty_enumerations = 0;
+          g_enumeration_failing_since_ms = 0;
+          return;
+        }
+        if (g_empty_enumerations == 0) {
+          g_enumeration_failing_since_ms = now_ms;
+        }
+        streak = ++g_empty_enumerations;
+        failing_since = g_enumeration_failing_since_ms;
       }
-      const auto failing_since = g_enumeration_failing_since_ms.load(std::memory_order_acquire);
-      if (failing_since == 0 || (now_ms - failing_since) < kMinFailingMsBeforeProbe) {
+
+      if (streak < kEmptyEnumerationsBeforeProbe ||
+          (now_ms - failing_since) < kMinFailingMsBeforeProbe) {
         return;
       }
       if (tdr::stack_down()) {
