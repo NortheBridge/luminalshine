@@ -728,10 +728,12 @@ namespace config {
     _CONVERT_LAYOUT_(extended_isolated);
     _CONVERT_LAYOUT_(extended_primary_isolated);
 #undef _CONVERT_LAYOUT_
-    // Unrecognised value falls back to the shipped default. It must not fall
-    // back to `exclusive`, which deactivates every physical monitor — a typo in
-    // this key should not be able to leave the machine with the virtual display
-    // as its only output.
+    // Deliberately NOT the shipped default (which is `exclusive`). This is the
+    // typo path: an unrecognised value means the user's intent is unknown, and
+    // `exclusive` deactivates every physical monitor. Choosing it here would let
+    // a misspelling leave the machine with the virtual display as its only
+    // output. Asking for exclusive explicitly is a decision; misspelling it is
+    // not, so the two cases resolve differently on purpose.
     return video_t::virtual_display_layout_e::extended;
   }
 
@@ -796,7 +798,7 @@ namespace config {
     {},  // output_name
 
     video_t::virtual_display_mode_e::per_client,  // virtual_display_mode
-    video_t::virtual_display_layout_e::extended,  // virtual_display_layout
+    video_t::virtual_display_layout_e::exclusive,  // virtual_display_layout
     "auto",  // virtual_display_backend
     800,  // vgd_hdr_peak_nits
 
