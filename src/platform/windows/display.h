@@ -150,8 +150,14 @@ namespace platf::dxgi {
    * OBSERVATIONAL ONLY. A true result must never reach tdr::mark_stack_down or
    * tdr::mark_event: a clean exclusive-layout teardown legitimately produces
    * zero active paths for 2-4.5 s, and latching on a zero path count is the
-   * PR #112 regression. Confirmed on two reads ~2 s apart; blocks that long
-   * when the first read carries the signature.
+   * PR #112 regression.
+   *
+   * NON-BLOCKING. One QueryDisplayConfig read, no settle delay, unlike
+   * display_stack_confirmed_down. Callers poll enumeration under wall-clock
+   * budgets as short as 2 s, and overrunning one of those calls tdr::mark_event
+   * -> recovery_recent -> new sessions refused for 30 s. A stall here refuses
+   * sessions even when this returns false, so it must never sleep. Sustained
+   * evidence is the caller's job (a streak of empty enumerations over time).
    *
    * @param error_out Receives the last raw Win32 status, or nullptr.
    * @param path_count_out Receives the last path count, or nullptr.

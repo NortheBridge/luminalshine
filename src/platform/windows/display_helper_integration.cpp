@@ -1721,8 +1721,8 @@ namespace display_helper_integration {
           UINT32 deg_paths = 0;
           if (platf::dxgi::display_stack_degraded_zero_paths(&deg_status, &deg_paths)) {
             BOOST_LOG(warning) << "DISPLAY STACK DEGRADED: the display API is answering normally but reports ZERO "
-                                  "active paths, confirmed twice over ~2s, after "
-                               << streak << " empty enumerations. Nothing is attached to compose onto. If a virtual "
+                                  "active paths, after "
+                               << streak << " consecutive empty enumerations. Nothing is attached to compose onto. If a virtual "
                                   "display should be active this is the window in which recovery can still succeed -- "
                                   "the API stops answering entirely a few seconds later. This is a report, not a "
                                   "verdict: a clean exclusive-layout teardown also passes through this state.";

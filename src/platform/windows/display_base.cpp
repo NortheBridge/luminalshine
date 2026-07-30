@@ -519,21 +519,21 @@ namespace platf::dxgi {
     }
     // Only the "answered, but nothing attached" shape qualifies. A refusal is
     // display_stack_confirmed_down()'s business, not ours.
-    const auto answered_empty = [](LONG s, UINT32 paths) {
-      return (s == ERROR_SUCCESS) && paths == 0;
-    };
-    if (healthy || !answered_empty(status, qdc_paths)) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    const bool still_healthy = display_config_api_healthy(&status, &qdc_paths);
-    if (error_out) {
-      *error_out = status;
-    }
-    if (path_count_out) {
-      *path_count_out = qdc_paths;
-    }
-    return !still_healthy && answered_empty(status, qdc_paths);
+    //
+    // NON-BLOCKING BY CONSTRUCTION -- one read, no settle delay. This must never
+    // acquire the 2 s confirmation that display_stack_confirmed_down uses.
+    // enumerate_devices is polled by wait_for_virtual_display_ready under a hard
+    // 2 s wall-clock budget (virtual_display.cpp), and a 2 s stall inside the
+    // enumeration blows that budget, which calls tdr::mark_event, which sets
+    // recovery_recent, which refuses EVERY new session for 30 s -- on a machine
+    // whose display stack is perfectly healthy. The sleep alone is enough to do
+    // that; the verdict never has to be true. So there is no sleep.
+    //
+    // The temporal evidence comes from the caller instead: the enumeration hook
+    // only asks after a streak of consecutive empty enumerations, which is a
+    // sustained observation already spread over real time, and a strictly better
+    // one than a single in-line 2 s window.
+    return !healthy && status == ERROR_SUCCESS && qdc_paths == 0;
   }
 
   bool display_stack_confirmed_down(LONG *error_out, UINT32 *path_count_out) noexcept {
