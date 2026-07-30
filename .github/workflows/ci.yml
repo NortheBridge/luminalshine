@@ -129,6 +129,24 @@ jobs:
           draft: true
           prerelease: ${{ needs.release-setup.outputs.prerelease }}
           tag_name: ${{ needs.release-setup.outputs.release_tag }}
+          # Pin the tag to the commit these binaries were actually built from.
+          #
+          # A draft release creates no tag ref — GitHub creates the tag when the
+          # maintainer clicks Publish. Without this input, action-gh-release
+          # records the default branch NAME as the target, so the tag is
+          # resolved against whatever `main` happens to point at *at publish
+          # time*. Anything merged between the release build and the click
+          # silently mis-tags the release, and the tag then disagrees with the
+          # PROJECT_VERSION_COMMIT compiled into the binaries and shown on the
+          # About page. beta.7 escaped this by luck; rc.2 only escaped it
+          # because main was manually frozen for the whole window.
+          #
+          # release_commit is `git rev-parse HEAD` from release-setup's
+          # checkout, i.e. the exact commit the build ran against. Pinning it
+          # here removes the need to freeze main between building a release and
+          # publishing it. Verify after any publish: `git rev-parse <tag>`
+          # should equal the commit on the About page.
+          target_commitish: ${{ needs.release-setup.outputs.release_commit }}
           # Explicit file list — the raw MSI is intentionally excluded
           # from the published release. The MSI still ships inside the
           # build-Windows-AMD64 Actions artifact for internal /
