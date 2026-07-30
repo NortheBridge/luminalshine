@@ -33,6 +33,10 @@ namespace VDISPLAY::vgd {
       /// GDI display name ("\\\\.\\DISPLAY274") once the monitor surfaced;
       /// empty while the display is still inactive pre-APPLY.
       std::wstring display_name;
+      /// The client UID this monitor was built for. Recorded so the reuse
+      /// branch can prove the re-requested stream GUID belongs to the same
+      /// client before handing back a monitor built to someone else's mode.
+      std::string client_uid;
     };
 
     struct GuidKey {
@@ -266,23 +270,55 @@ namespace VDISPLAY::vgd {
     }
 
     if (auto it = g_sessions.find(key_of(guid)); it != g_sessions.end()) {
-      // Same stream GUID re-requested: report the existing display.
-      VirtualDisplayCreationResult result {};
-      result.reused_existing = true;
-      result.ready_since = std::chrono::steady_clock::now();
-      result.client_name = it->second.client_name;
-      lk.unlock();
-      auto names = luminal_display_names();
-      if (!names.empty()) {
-        result.display_name = names.front();
-        result.monitor_device_path = monitor_device_path_of(names.front());
-        result.device_id = resolveVirtualDisplayDeviceId(names.front());
-        std::lock_guard relock(g_mutex);
-        if (auto again = g_sessions.find(key_of(guid)); again != g_sessions.end()) {
-          again->second.display_name = names.front();
-        }
+      // Same stream GUID re-requested. Only hand back the existing monitor if
+      // it was actually built for this client and still exists: the tracked
+      // entry carries the mode, HDR depth and friendly name the OTHER client
+      // asked for, so reusing it across identities silently streams the wrong
+      // resolution/refresh/HDR state with nothing in the log to say why.
+      const std::string requested_uid = s_client_uid ? s_client_uid : "";
+      const bool same_client = it->second.client_uid == requested_uid;
+      const bool have_name = !it->second.display_name.empty();
+      bool still_present = false;
+      if (same_client && have_name) {
+        const auto present = luminal_display_names();
+        still_present = std::find(present.begin(), present.end(), it->second.display_name) != present.end();
       }
-      return result;
+
+      if (same_client && have_name && still_present) {
+        VirtualDisplayCreationResult result {};
+        result.reused_existing = true;
+        result.ready_since = std::chrono::steady_clock::now();
+        result.client_name = it->second.client_name;
+        // Use the display THIS session recorded, not names.front(): the latter
+        // is an arbitrary pick from every attached LuminalVGD adapter in
+        // EnumDisplayDevicesW order, which is only correct when exactly one
+        // virtual monitor exists.
+        // Copy everything needed off the entry BEFORE unlocking: once the lock
+        // is dropped another thread may erase it, and `it` dangles.
+        const auto tracked_name = it->second.display_name;
+        const auto tracked_session_id = it->second.session_id;
+        lk.unlock();
+        result.display_name = tracked_name;
+        result.monitor_device_path = monitor_device_path_of(tracked_name);
+        result.device_id = resolveVirtualDisplayDeviceId(tracked_name);
+        BOOST_LOG(info) << "LuminalVGD: reusing existing monitor for the same client (session 0x"
+                        << std::hex << tracked_session_id << std::dec << ").";
+        return result;
+      }
+
+      // Identity mismatch or the monitor is gone. Drop the stale tracking and
+      // fall through to create a monitor at THIS client's mode. Never refuse:
+      // returning nullopt here would leave an exclusive-layout host with no
+      // output at all.
+      BOOST_LOG(warning) << "LuminalVGD: stream GUID collision on an existing monitor — tracked client_uid='"
+                         << it->second.client_uid << "' vs requested '" << requested_uid
+                         << "'" << (have_name ? "" : ", tracked display never surfaced")
+                         << ((same_client && have_name && !still_present) ? ", tracked display no longer present" : "")
+                         << ". Discarding the stale session and creating a monitor for this client.";
+      if (g_device) {
+        vgd_destroy_monitor(g_device, it->second.session_id);
+      }
+      g_sessions.erase(it);
     }
 
     VgdCreateRequest req {};
@@ -348,6 +384,7 @@ namespace VDISPLAY::vgd {
       s_client_name ? s_client_name : "",
       reply.ring_slots,
       {},
+      s_client_uid ? s_client_uid : "",
     };
     BOOST_LOG(info) << "LuminalVGD monitor created: session 0x" << std::hex << req.session_id
                     << " display 0x" << reply.display_id << std::dec << " connector "

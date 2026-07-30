@@ -13,10 +13,12 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -85,7 +87,10 @@ namespace nvhttp {
       context.use_private_key_file(private_key_file, boost::asio::ssl::context::pem);
     }
 
-    std::function<int(SSL *)> verify;
+    /// Peer verification hook. Receives the remote endpoint alongside the SSL
+    /// handle so the verified certificate can be filed against the connection
+    /// it arrived on rather than against whichever thread happened to run.
+    std::function<int(SSL *, const boost::asio::ip::tcp::endpoint &)> verify;
     std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> on_verify_failed;
 
   protected:
@@ -130,7 +135,13 @@ namespace nvhttp {
               return;
             }
             if (!ec) {
-              if (verify && !verify(session->connection->socket->native_handle())) {
+              // Non-throwing overload: the peer can vanish between handshake
+              // completion and this call, and an exception escaping an asio
+              // completion handler would take the io_service down. A failure
+              // yields the default endpoint, which the store treats as "no key".
+              SimpleWeb::error_code ep_ec;
+              const auto peer_endpoint = session->connection->socket->lowest_layer().remote_endpoint(ep_ec);
+              if (verify && !verify(session->connection->socket->native_handle(), ep_ec ? boost::asio::ip::tcp::endpoint {} : peer_endpoint)) {
                 this->write(session, on_verify_failed);
               } else {
                 this->read(session);
@@ -432,8 +443,21 @@ namespace nvhttp {
 
         const auto effective_virtual_display_mode =
           launch_session->virtual_display_mode_override.value_or(config::video.virtual_display_mode);
+        // A session with no resolved client identity cannot be allocated per-client:
+        // there is nothing to key it on. Degrade to shared allocation for THIS launch
+        // rather than keying every anonymous client to one shared placeholder identity.
+        // Deliberately a local — mutating virtual_display_mode_override would flip
+        // virtual-display creation on for a user who set mode=disabled and would
+        // suppress the per-app override merge later in this function.
+        const bool identity_known = !launch_session->client_uuid.empty();
         const bool shared_mode =
-          (effective_virtual_display_mode == config::video_t::virtual_display_mode_e::shared);
+          (effective_virtual_display_mode == config::video_t::virtual_display_mode_e::shared) || !identity_known;
+        if (!identity_known &&
+            effective_virtual_display_mode != config::video_t::virtual_display_mode_e::shared) {
+          BOOST_LOG(warning) << "Virtual display: no per-client identity for this session; using SHARED "
+                                "allocation for this launch only (configured mode is unchanged). client_name='"
+                             << launch_session->client_name << "'.";
+        }
         uuid_util::uuid_t session_uuid;
         if (shared_mode) {
           session_uuid = ensure_shared_guid();
@@ -441,17 +465,32 @@ namespace nvhttp {
         } else if (auto parsed = parse_uuid(launch_session->unique_id)) {
           session_uuid = *parsed;
         } else {
-          session_uuid = VDISPLAY::persistentVirtualDisplayUuid();
+          // Mint a fresh GUID rather than reusing persistentVirtualDisplayUuid().
+          // That UUID is machine-wide AND is the encoder probe's GUID, so every
+          // client that reached this fallback keyed into the SAME driver session
+          // and was handed the probe's 1080p60 SDR monitor instead of one built
+          // for its own mode. WebRTC already mints per session (webrtc_stream.cpp).
+          session_uuid = uuid_util::uuid_t::generate();
           launch_session->unique_id = session_uuid.string();
         }
 
+        // The stream GUID above keys the host's per-session tracking and must be
+        // unique per launch. The display identity below is a different thing: the
+        // driver hashes it into a stable display id so a returning client reclaims
+        // its connector and its per-monitor Windows settings. Randomising it every
+        // launch would churn connectors, which is what destroys that memory.
         std::string display_uuid_source;
         if (!shared_mode && !launch_session->client_uuid.empty()) {
           display_uuid_source = launch_session->client_uuid;
           BOOST_LOG(debug) << "Using client UUID for virtual display: " << display_uuid_source;
-        } else {
+        } else if (shared_mode) {
           display_uuid_source = session_uuid.string();
-          BOOST_LOG(debug) << "Using session UUID for virtual display: " << display_uuid_source;
+          BOOST_LOG(debug) << "Using shared session UUID for virtual display: " << display_uuid_source;
+        } else {
+          display_uuid_source = VDISPLAY::persistentVirtualDisplayUuid().string();
+          BOOST_LOG(debug) << "No per-client identity for this session; using the machine display identity "
+                              "for virtual display: "
+                           << display_uuid_source;
         }
 
         GUID virtual_display_guid {};
@@ -1171,8 +1210,52 @@ namespace nvhttp {
     }
   }
 
-  // Thread-local storage for peer certificate during SSL verification
-  thread_local crypto::x509_t tl_peer_certificate;
+  /**
+   * @brief Verified peer certificates, keyed by the connection they arrived on.
+   *
+   * This used to be a single `thread_local crypto::x509_t`. The HTTPS server
+   * defaults to a one-thread pool and nothing overrides it, so "thread-local"
+   * meant "process-wide": every handshake overwrote the one slot, and every
+   * request handler read whichever certificate happened to have handshaked most
+   * recently rather than the one belonging to its own connection.
+   *
+   * That misfires with no attacker involved. Two paired clients streaming
+   * concurrently is enough — the second client's handshake silently rebinds the
+   * first client's identity, and with virtual_display_mode=per_client the wrong
+   * named_cert then supplies the display-mode, layout and config overrides.
+   *
+   * Keyed by remote endpoint rather than by Request pointer: keep-alive builds a
+   * fresh Request per exchange on the same connection and never re-runs verify.
+   * Entries are written only after the peer has passed both the chain check and
+   * the paired-store check, so an unpaired peer can no longer leave anything
+   * behind. Bounded and evicted in insertion order — hooking connection
+   * destruction would require patching the vendored server.
+   */
+  constexpr std::size_t kMaxTrackedPeerCerts = 64;
+  std::mutex peer_cert_mutex;
+  std::map<boost::asio::ip::tcp::endpoint, crypto::x509_t> peer_certs;
+  std::deque<boost::asio::ip::tcp::endpoint> peer_cert_order;
+
+  /// A default-constructed endpoint (0.0.0.0:0) is what asio yields when the
+  /// socket has already errored or the weak_ptr expired. Two unrelated failures
+  /// would collide on it, so it is never a valid key.
+  bool is_usable_peer_key(const boost::asio::ip::tcp::endpoint &ep) {
+    return !ep.address().is_unspecified() && ep.port() != 0;
+  }
+
+  void store_peer_certificate(const boost::asio::ip::tcp::endpoint &ep, crypto::x509_t cert) {
+    if (!is_usable_peer_key(ep) || !cert) {
+      return;
+    }
+    std::lock_guard lg {peer_cert_mutex};
+    if (auto [it, inserted] = peer_certs.insert_or_assign(ep, std::move(cert)); inserted) {
+      peer_cert_order.push_back(ep);
+    }
+    while (peer_cert_order.size() > kMaxTrackedPeerCerts) {
+      peer_certs.erase(peer_cert_order.front());
+      peer_cert_order.pop_front();
+    }
+  }
 
   std::string get_client_uuid_from_peer_cert(const crypto::x509_t &client_cert, std::string *client_name_out = nullptr) {
     if (!client_cert) {
@@ -1208,8 +1291,24 @@ namespace nvhttp {
   }
 
   std::string get_client_uuid_from_request(req_https_t request, std::string *client_name_out = nullptr) {
-    // Try to use the peer certificate that was stored during SSL verification
-    return get_client_uuid_from_peer_cert(tl_peer_certificate, client_name_out);
+    if (!request) {
+      return {};
+    }
+    // remote_endpoint() is noexcept and yields a default endpoint if the
+    // connection is already gone; that is a miss, never a match.
+    const auto ep = request->remote_endpoint();
+    if (!is_usable_peer_key(ep)) {
+      BOOST_LOG(debug) << "No usable peer endpoint for this request; client identity unavailable.";
+      return {};
+    }
+
+    std::lock_guard lg {peer_cert_mutex};
+    const auto it = peer_certs.find(ep);
+    if (it == peer_certs.end()) {
+      BOOST_LOG(debug) << "No verified peer certificate on record for this connection.";
+      return {};
+    }
+    return get_client_uuid_from_peer_cert(it->second, client_name_out);
   }
 
   named_cert_t *get_named_cert_by_uuid(const std::string &uuid) {
@@ -1302,10 +1401,24 @@ namespace nvhttp {
       launch_session->client_uuid = get_client_uuid_from_request(request, &launch_session->client_name);
     }
 
-    // Some launch paths may not provide a peer certificate (e.g. non-TLS resume).
-    // Fall back to the client-provided unique ID so per-client settings still apply.
+    // There used to be a fallback here to the client-supplied "uniqueid" arg,
+    // justified as "so per-client settings still apply". It never could: a
+    // named_cert uuid is always a 36-char generated UUID, so a 16-hex-char
+    // uniqueid never matched one. What it did do is hand every client the same
+    // identity, because Moonlight sends the literal "0123456789ABCDEF" — one
+    // attacker-controllable value, shared by every session on the machine, fed
+    // straight into the virtual display's identity hash.
+    //
+    // An unknown identity is now reported as unknown. It is NOT a refusal: the
+    // session continues, and the virtual-display allocation below falls back to
+    // shared mode for this launch only.
     if (launch_session->client_uuid.empty()) {
-      launch_session->client_uuid = get_arg(args, "uniqueid", "");
+      BOOST_LOG(warning) << "Client identity unavailable for this session (no paired certificate matched this "
+                            "connection); it will use SHARED virtual-display allocation. clientName='"
+                         << get_arg(args, "clientName", "") << "'.";
+    } else {
+      BOOST_LOG(info) << "Client identity resolved from the paired certificate: uuid="
+                      << launch_session->client_uuid << " name='" << launch_session->client_name << "'.";
     }
 
     auto client_name_arg = get_arg(args, "clientName", "");
@@ -2153,9 +2266,9 @@ namespace nvhttp {
         if (request) {
           client_uuid = get_client_uuid_from_request(request);
         }
-        if (client_uuid.empty()) {
-          client_uuid = get_arg(args, "uniqueid", "");
-        }
+        // No "uniqueid" fallback here either — see make_launch_session. An empty
+        // uuid simply finds no named_cert, which is the correct outcome for an
+        // unidentified client; get_named_cert_by_uuid early-returns on empty.
         if (auto *client_settings = get_named_cert_by_uuid(client_uuid)) {
           for (const auto &[k, v] : client_settings->config_overrides) {
             overrides.insert_or_assign(k, v);
@@ -2662,7 +2775,7 @@ namespace nvhttp {
     http_server_t http_server;
 
     // Verify certificates after establishing connection
-    https_server.verify = [add_cert](SSL *ssl) {
+    https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &peer_endpoint) {
       crypto::x509_t x509 {
 #if OPENSSL_VERSION_MAJOR >= 3
         SSL_get1_peer_certificate(ssl)
@@ -2671,10 +2784,11 @@ namespace nvhttp {
 #endif
       };
 
-      // Store peer certificate in thread-local storage for use in request handlers
-      if (x509) {
-        tl_peer_certificate = std::move(x509);
-      }
+      // Deliberately NOT stored yet. This certificate is filed against the
+      // connection only after it has cleared both the chain check and the
+      // paired-store check below; storing it here would let any peer that can
+      // complete a handshake with a self-signed certificate leave its identity
+      // behind, since after_bind()'s verify_callback accepts unconditionally.
 
       // Re-fetch for verification logic
       crypto::x509_t x509_verify {
@@ -2725,6 +2839,10 @@ namespace nvhttp {
 
         return verified;
       }
+
+      // Fully verified and paired: file it against this connection so the
+      // request handlers on it resolve this client, and only this client.
+      store_peer_certificate(peer_endpoint, std::move(x509));
 
       verified = 1;
 

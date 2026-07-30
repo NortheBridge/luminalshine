@@ -4,10 +4,33 @@
       {{ $t('troubleshooting.troubleshooting') }}
     </h1>
 
-    <!-- Persistent banner shown while the GPU/WDDM stack is mid-recovery
-         from a TDR. Driven by /api/health/tdr.recovery_recent. -->
+    <!-- Machine-wide display-stack failure. Outranks the TDR-recovery banner
+         below: recovery is transient and self-clearing, this is terminal and
+         needs a reboot. Driven by /api/health/tdr.stack_down. -->
     <n-alert
-      v-if="tdrRecoveryRecent"
+      v-if="tdrStackDown"
+      type="error"
+      :show-icon="true"
+      class="mb-3 rounded-xl"
+      :title="
+        translate('troubleshooting.tdr_stack_down_title', 'Display stack down — reboot required')
+      "
+    >
+      <p class="text-sm">
+        {{
+          translate(
+            'troubleshooting.tdr_stack_down_body',
+            "Windows' display API is unavailable for every program on this machine, so no display can be configured or captured. This happens when the graphics driver fails to recover from a GPU reset. Nothing LuminalShine (or any other application) can do will clear it — restart the host machine. Streaming will keep being refused until then.",
+          )
+        }}
+      </p>
+    </n-alert>
+
+    <!-- Persistent banner shown while the GPU/WDDM stack is mid-recovery
+         from a TDR. Driven by /api/health/tdr.recovery_recent. Suppressed
+         while the stack is confirmed down: the banner above supersedes it. -->
+    <n-alert
+      v-if="tdrRecoveryRecent && !tdrStackDown"
       type="warning"
       :show-icon="true"
       class="mb-3 rounded-xl"

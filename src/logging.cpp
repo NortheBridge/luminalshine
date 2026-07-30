@@ -78,6 +78,42 @@ namespace {
   constexpr std::string_view k_session_separator = "-";
   constexpr std::string_view k_log_suffix = ".log";
 
+#ifndef PROJECT_NAME
+  #define PROJECT_NAME "LuminalShine"
+#endif
+#ifndef PROJECT_VERSION
+  #define PROJECT_VERSION "unknown"
+#endif
+#ifndef PROJECT_VERSION_COMMIT
+  #define PROJECT_VERSION_COMMIT "unknown"
+#endif
+
+  /**
+   * @brief Identity line written at the top of every log file, including rollovers.
+   *
+   * A rollover used to inherit nothing from the file it succeeded, so a session
+   * that produced enough output to roll (a QueryDisplayConfig failure storm will
+   * do it in minutes) ended up with log files that named no binary at all. The
+   * 2026-07-29 20:22 incident is unattributable to a specific build for exactly
+   * that reason: the startup banner had been rotated out from under it. Every
+   * file now carries the build that wrote it.
+   *
+   * @param sequence Rollover ordinal; 0 is the file opened at session start.
+   * @return A single newline-terminated banner line.
+   */
+  std::string make_log_banner(std::uint64_t sequence) {
+    auto now = std::chrono::system_clock::now();
+    auto tt = std::chrono::system_clock::to_time_t(now);
+    auto local_tm = *std::localtime(&tt);
+
+    std::ostringstream oss;
+    oss << "[" << std::put_time(&local_tm, "%Y-%m-%d %H:%M:%S") << "]: Info: "
+        << PROJECT_NAME << " version: " << PROJECT_VERSION
+        << " commit: " << PROJECT_VERSION_COMMIT
+        << " (log segment " << sequence << ")\n";
+    return oss.str();
+  }
+
   std::filesystem::path resolve_log_root(const std::filesystem::path &configured_path) {
     namespace fs = std::filesystem;
     auto default_root_base = []() {
@@ -285,8 +321,16 @@ namespace {
       }
       const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
       stream_->write(reinterpret_cast<const char *>(bom), sizeof(bom));
-      stream_->flush();
       bytes_written_ = 0;
+
+      // Stamp the build identity into every segment, not just the first one.
+      const auto banner = make_log_banner(rollover_counter_);
+      stream_->write(banner.data(), static_cast<std::streamsize>(banner.size()));
+      if (stream_->good()) {
+        // Count the banner so the rollover threshold still bounds the file.
+        bytes_written_ = banner.size();
+      }
+      stream_->flush();
       return true;
     }
 
@@ -354,6 +398,8 @@ namespace {
     }
     const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
     file_stream->write(reinterpret_cast<const char *>(bom), sizeof(bom));
+    const auto banner = make_log_banner(0);
+    file_stream->write(banner.data(), static_cast<std::streamsize>(banner.size()));
     file_stream->flush();
     return file_stream;
   }
