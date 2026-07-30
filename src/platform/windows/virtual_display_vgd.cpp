@@ -293,13 +293,16 @@ namespace VDISPLAY::vgd {
         // is an arbitrary pick from every attached LuminalVGD adapter in
         // EnumDisplayDevicesW order, which is only correct when exactly one
         // virtual monitor exists.
+        // Copy everything needed off the entry BEFORE unlocking: once the lock
+        // is dropped another thread may erase it, and `it` dangles.
         const auto tracked_name = it->second.display_name;
+        const auto tracked_session_id = it->second.session_id;
         lk.unlock();
         result.display_name = tracked_name;
         result.monitor_device_path = monitor_device_path_of(tracked_name);
         result.device_id = resolveVirtualDisplayDeviceId(tracked_name);
         BOOST_LOG(info) << "LuminalVGD: reusing existing monitor for the same client (session 0x"
-                        << std::hex << it->second.session_id << std::dec << ").";
+                        << std::hex << tracked_session_id << std::dec << ").";
         return result;
       }
 
