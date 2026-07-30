@@ -5027,7 +5027,36 @@ namespace {
       const bool task_created = create_restore_scheduled_task();
       BOOST_LOG(info) << "Scheduled task creation result: " << (task_created ? "SUCCESS" : "FAILED");
 
-      if (!state.controller.apply(cfg, sunshine_topology)) {
+      // Under exclusive layout the host sends a single-group topology holding
+      // exactly the device being configured (display_helper_request_helpers.cpp
+      // builds it that way, and the exclusive path never carries a topology
+      // snapshot). computeNewTopology(EnsureOnlyDisplay, <named device>) then
+      // returns that same single group, so applySettings already deactivates the
+      // physical displays on its own. Pre-setting it first only overwrites
+      // libdisplaydevice's record of the pre-change topology -- making the
+      // exclusive topology its own revert target and leaving topology_prep_guard
+      // with nothing meaningful to roll back to if the apply fails partway.
+      //
+      // All three conjuncts are load-bearing. The layout string keeps this out of
+      // extended, where the host's merged topology IS the only thing that
+      // re-establishes the physical arrangement; EnsureOnlyDisplay corroborates
+      // the layout against the config actually being applied; and a non-empty
+      // device id matters because computeNewTopology falls back to the joined
+      // PRIMARY group when the id is empty, where the pre-set is genuinely
+      // load-bearing. The soft test above deliberately keeps sunshine_topology:
+      // dropping it there would run validate_topology_with_os and could skip the
+      // apply entirely, which is a refusal, not a fix.
+      auto pre_apply_topology = sunshine_topology;
+      if (requested_virtual_layout && *requested_virtual_layout == "exclusive" &&
+          cfg.m_device_prep == display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay &&
+          !cfg.m_device_id.empty()) {
+        BOOST_LOG(info) << "Display helper: exclusive layout targeting " << cfg.m_device_id
+                        << "; skipping the redundant pre-apply setTopology so the real pre-change "
+                           "topology is recorded as the revert target.";
+        pre_apply_topology.reset();
+      }
+
+      if (!state.controller.apply(cfg, pre_apply_topology)) {
         error_msg = "Helper failed to apply requested display configuration";
         return false;
       }
