@@ -728,7 +728,11 @@ namespace config {
     _CONVERT_LAYOUT_(extended_isolated);
     _CONVERT_LAYOUT_(extended_primary_isolated);
 #undef _CONVERT_LAYOUT_
-    return video_t::virtual_display_layout_e::exclusive;
+    // Unrecognised value falls back to the shipped default. It must not fall
+    // back to `exclusive`, which deactivates every physical monitor — a typo in
+    // this key should not be able to leave the machine with the virtual display
+    // as its only output.
+    return video_t::virtual_display_layout_e::extended;
   }
 
   video_t video {
@@ -792,7 +796,7 @@ namespace config {
     {},  // output_name
 
     video_t::virtual_display_mode_e::per_client,  // virtual_display_mode
-    video_t::virtual_display_layout_e::exclusive,  // virtual_display_layout
+    video_t::virtual_display_layout_e::extended,  // virtual_display_layout
     "auto",  // virtual_display_backend
     800,  // vgd_hdr_peak_nits
 
