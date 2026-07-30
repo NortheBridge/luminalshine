@@ -3,10 +3,35 @@
  * @brief Common declarations.
  */
 #pragma once
+#include <filesystem>
+
 #include <gtest/gtest.h>
 #include <src/globals.h>
 #include <src/logging.h>
 #include <src/platform/common.h>
+
+namespace test_env {
+  /**
+   * @brief Per-run scratch directory for tests that must write real files.
+   *
+   * Created and removed by SunshineEnvironment (tests/tests_environment.h),
+   * which also points the host's runtime state-file paths at it.
+   *
+   * Tests must never write into the current working directory. The test binary
+   * has to RUN FROM THE REPO ROOT — the integration suites read src/config.cpp,
+   * docs/configuration.md and the locale JSON through relative paths — so any
+   * relative filename a test opens lands in the source tree. That is how a
+   * tracked sunshine_state.json ended up being rewritten by the pairing tests
+   * on every run, and how write_file_test_*.txt kept appearing at the root.
+   *
+   * Empty if the directory could not be created; call sites should skip rather
+   * than fall back to a relative path.
+   */
+  inline std::filesystem::path &scratch_dir() {
+    static std::filesystem::path dir;
+    return dir;
+  }
+}  // namespace test_env
 
 // XFail/XPass pattern implementation (similar to pytest)
 namespace test_utils {

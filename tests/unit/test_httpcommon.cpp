@@ -49,7 +49,15 @@ struct DownloadFileTest: testing::TestWithParam<std::tuple<std::string, std::str
 
 TEST_P(DownloadFileTest, Run) {
   const auto &[url, filename] = GetParam();
-  const std::string test_dir = platf::appdata().string() + "/tests/";
+  if (test_env::scratch_dir().empty()) {
+    GTEST_SKIP() << "no scratch directory available";
+  }
+
+  // Was platf::appdata() — C:\ProgramData\LuminalShine\config on Windows,
+  // which an unelevated dev run cannot create under. download_file's own
+  // create_directories then threw, and because that escaped the test body the
+  // whole binary aborted rather than failing this one case.
+  const std::string test_dir = (test_env::scratch_dir() / "download").string() + "/";
   std::string path = test_dir + filename;
   ASSERT_TRUE(http::download_file(url, path, CURL_SSLVERSION_TLSv1_0));
 }
