@@ -1187,7 +1187,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            exclusive
+            extended
             @endcode</td>
     </tr>
     <tr>
@@ -1199,7 +1199,7 @@ editing the `conf` file in a text editor. Use the examples as reference.
     <tr>
         <td rowspan="5">Choices</td>
         <td>exclusive</td>
-        <td>Deactivate every other monitor so only the virtual display remains visible.</td>
+        <td>Deactivate every other monitor so only the virtual display remains visible. Note the tradeoff: with no physical monitor active, a display-driver reset (including the <code>Win+Ctrl+Shift+B</code> hotkey) leaves Windows with no hardware-backed output to recompose onto, and a failed reset can wedge the display stack until reboot.</td>
     </tr>
     <tr>
         <td>extended</td>

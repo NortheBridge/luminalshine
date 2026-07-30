@@ -118,7 +118,11 @@ const HP_INTEL: Record<string, unknown> = {
 
 const DEFAULTS: Record<string, unknown> = {
   virtual_display_mode: 'per_client',
-  virtual_display_layout: 'exclusive',
+  // Tracks the shipped default in src/config.cpp. Note HP_BASE above
+  // deliberately keeps 'exclusive' — that is the point of the preset — so
+  // turning High Performance ON still hands the machine a single virtual
+  // output, and turning it OFF restores the safer extended layout.
+  virtual_display_layout: 'extended',
   dd_configuration_option: 'verify_only',
   dd_wa_virtual_double_refresh: true,
   min_threads: 2,

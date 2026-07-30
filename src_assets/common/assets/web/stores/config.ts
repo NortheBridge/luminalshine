@@ -155,7 +155,7 @@ const defaultGroups = [
       output_name: '',
       virtual_display_backend: 'auto',
       virtual_display_mode: 'per_client',
-      virtual_display_layout: 'exclusive',
+      virtual_display_layout: 'extended',
       dd_configuration_option: 'verify_only',
       dd_resolution_option: 'auto',
       dd_manual_resolution: '',
