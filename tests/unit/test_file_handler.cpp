@@ -4,8 +4,24 @@
  */
 #include "../tests_common.h"
 
+#include <filesystem>
 #include <format>
 #include <src/file_handler.h>
+
+namespace {
+  /**
+   * Absolute path inside the per-run scratch directory.
+   *
+   * Every file these tests touch has to be addressed absolutely. A bare
+   * relative name resolves against the working directory, which for this
+   * binary is the repo root (the integration suites read source files through
+   * relative paths, so it cannot be changed) — that is how write_file_test_*.txt
+   * kept being left behind in the source tree.
+   */
+  std::string scratch_path(const std::string &leaf) {
+    return (test_env::scratch_dir() / leaf).string();
+  }
+}  // namespace
 
 struct FileHandlerParentDirectoryTest: testing::TestWithParam<std::tuple<std::string, std::string>> {};
 
@@ -28,7 +44,15 @@ struct FileHandlerMakeDirectoryTest: testing::TestWithParam<std::tuple<std::stri
 
 TEST_P(FileHandlerMakeDirectoryTest, Run) {
   auto [input, expected, remove] = GetParam();
-  const std::string test_dir = platf::appdata().string() + "/tests/path/";
+  if (test_env::scratch_dir().empty()) {
+    GTEST_SKIP() << "no scratch directory available";
+  }
+
+  // Was platf::appdata() — C:\ProgramData\LuminalShine\config on Windows,
+  // which an unelevated dev run cannot create under, so create_directories
+  // threw and aborted the whole suite mid-run. The scratch directory exercises
+  // make_directory just as well and needs no privileges.
+  const std::string test_dir = scratch_path("make_directory") + "/";
   input = test_dir + input;
 
   EXPECT_EQ(file_handler::make_directory(input), expected);
@@ -78,16 +102,25 @@ Hey, hey, hey!
   )
 );
 
-TEST_P(FileHandlerTests, WriteFileTest) {
+/**
+ * Round-trips through the scratch directory. Write and read are one test now:
+ * as two parameterised tests they shared a filename and depended on gtest's
+ * declaration order to run write-before-read, which is a fragile contract for
+ * no benefit.
+ */
+TEST_P(FileHandlerTests, WriteThenReadFileTest) {
   auto [fileNum, content] = GetParam();
-  const std::string fileName = std::format("write_file_test_{}.txt", fileNum);
-  EXPECT_EQ(file_handler::write_file(fileName.c_str(), content), 0);
-}
+  if (test_env::scratch_dir().empty()) {
+    GTEST_SKIP() << "no scratch directory available";
+  }
 
-TEST_P(FileHandlerTests, ReadFileTest) {
-  auto [fileNum, content] = GetParam();
-  const std::string fileName = std::format("write_file_test_{}.txt", fileNum);
+  const std::string fileName = scratch_path(std::format("write_file_test_{}.txt", fileNum));
+
+  EXPECT_EQ(file_handler::write_file(fileName.c_str(), content), 0);
   EXPECT_EQ(file_handler::read_file(fileName.c_str()), content);
+
+  std::error_code ec;
+  std::filesystem::remove(fileName, ec);
 }
 
 TEST(FileHandlerTests, ReadMissingFileTest) {
