@@ -138,6 +138,33 @@ namespace platf::dxgi {
    */
   bool display_stack_confirmed_down(LONG *error_out, UINT32 *path_count_out) noexcept;
 
+  /**
+   * @brief The state between healthy and confirmed-down: the API answers, but nothing is attached.
+   *
+   * QueryDisplayConfig returning ERROR_SUCCESS with zero paths is invisible to
+   * both display_config_api_healthy (false) and display_stack_confirmed_down
+   * (needs ERROR_NOT_SUPPORTED). On 2026-07-30 that state held for 7.9 s
+   * between the virtual display being parked and the display API dying — the
+   * whole window in which recovery was still possible.
+   *
+   * OBSERVATIONAL ONLY. A true result must never reach tdr::mark_stack_down or
+   * tdr::mark_event: a clean exclusive-layout teardown legitimately produces
+   * zero active paths for 2-4.5 s, and latching on a zero path count is the
+   * PR #112 regression.
+   *
+   * NON-BLOCKING. One QueryDisplayConfig read, no settle delay, unlike
+   * display_stack_confirmed_down. Callers poll enumeration under wall-clock
+   * budgets as short as 2 s, and overrunning one of those calls tdr::mark_event
+   * -> recovery_recent -> new sessions refused for 30 s. A stall here refuses
+   * sessions even when this returns false, so it must never sleep. Sustained
+   * evidence is the caller's job (a streak of empty enumerations over time).
+   *
+   * @param error_out Receives the last raw Win32 status, or nullptr.
+   * @param path_count_out Receives the last path count, or nullptr.
+   * @return true only when the API answered with zero paths on both reads.
+   */
+  bool display_stack_degraded_zero_paths(LONG *error_out, UINT32 *path_count_out) noexcept;
+
   using factory1_t = util::safe_ptr<IDXGIFactory1, Release<IDXGIFactory1>>;
   using dxgi_t = util::safe_ptr<IDXGIDevice, Release<IDXGIDevice>>;
 
