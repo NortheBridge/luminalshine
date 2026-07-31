@@ -2528,33 +2528,74 @@ namespace video {
   std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config);
 
   /**
-   * @brief Retry a failed encoder build at YUV 4:2:0, downgrading the session
-   *        only when that is both warranted and effective.
+   * @brief How long a downgrade site waits for a recovery verdict it may have
+   *        raced past, when it has no way to settle the question by retrying.
+   *
+   * The verdict is written by the capture thread and read by an encoder thread,
+   * so an encoder can reach its failure a beat before the capture loop has
+   * sampled the ring and said "recovering". This covers that beat and nothing
+   * more — it is not a wait for the OUTAGE, which is minutes long and is held
+   * for elsewhere, under a ceiling. Bounded, paid at most once per encoder
+   * build, and only ever on a 4:4:4 session that just failed.
+   */
+  constexpr auto kRecoveryVerdictGrace = std::chrono::milliseconds(500);
+  constexpr auto kRecoveryVerdictPoll = std::chrono::milliseconds(20);
+
+  /**
+   * @brief Give the capture thread a bounded beat to publish a recovery verdict.
+   * @param disp The display to re-sample. May be null.
+   * @param abort Returns true when the session is ending anyway.
+   * @return `true` when the display started reporting recovery within the grace.
+   */
+  bool recovery_verdict_appears(const platf::display_t *disp, const std::function<bool()> &abort) {
+    if (!disp) {
+      return false;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + kRecoveryVerdictGrace;
+    while (true) {
+      if (disp->capture_recovering()) {
+        return true;
+      }
+      if ((abort && abort()) || std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(kRecoveryVerdictPoll);
+    }
+  }
+
+  /**
+   * @brief Downgrade a failed encoder build to YUV 4:2:0, but only when that is
+   *        both warranted and earned.
    *
    * The downgrade is session-lifetime and irreversible, so it may not be spent
    * on a transient. See video::yuv444_fallback_t for the full rationale; in
    * short, a display inside a bounded recovery window fails every encoder build
-   * regardless of chroma, so the failure is no evidence about 4:4:4 — and a
-   * 4:2:0 retry that fails too settles the question after the fact for the race
-   * the verdict alone cannot cover.
+   * regardless of chroma, so the failure is no evidence about 4:4:4 — and
+   * because the verdict is published by one thread and read by another, the
+   * verdict check alone loses a race that has to be settled after the fact.
    *
    * @param disp The display whose recovery verdict to consult. May be null.
    * @param config The session's encode configuration; 4:2:0 only if committed.
    * @param chroma_downgrade_events Per-session event used to tell the control
    *        plane (and through it the session stats) that the chroma changed.
    * @param stage Human-readable description of what failed, for the log line.
-   * @param retry_at_420 Rebuilds whatever failed with `config` at 4:2:0 and
-   *        reports whether it worked. Empty where the caller has no in-line
-   *        retry — its own rebuild loop is the retry — in which case the
-   *        downgrade commits on the recovery verdict alone, as it always has.
-   * @return `true` when the session was downgraded and the retry succeeded.
+   * @param settle_downgrade Decides whether the provisional downgrade stands.
+   *        Four of the five sites answer by rebuilding at 4:2:0 in line and
+   *        reporting whether it worked. The fifth cannot — building a second
+   *        encoder session against a GPU that may be mid-reset is the
+   *        concurrent-teardown pattern that has corrupted the NVIDIA driver heap
+   *        before — and answers by re-sampling the recovery verdict instead.
+   *        Required, deliberately: a site that settles on nothing commits a
+   *        capability loss on a race, which is what this parameter exists to
+   *        stop.
+   * @return `true` when the session was downgraded and the downgrade stands.
    */
   bool downgrade_yuv444_to_420(
     const platf::display_t *disp,
     config_t &config,
     safe::mail_raw_t::event_t<bool> chroma_downgrade_events,
     const char *stage,
-    const std::function<bool()> &retry_at_420 = {}
+    const std::function<bool()> &settle_downgrade
   ) {
     yuv444_fallback_t fallback {config.chromaSamplingType};
 
@@ -2571,10 +2612,11 @@ namespace video {
         break;
     }
 
-    if (!fallback.settle(retry_at_420 ? retry_at_420() : true)) {
-      // 4:2:0 failed too, so the failure was never about chroma: 4:4:4 is back
-      // and the client is told nothing. Whatever is wrong gets today's handling
-      // from the caller, one capability better off than before.
+    if (!fallback.settle(settle_downgrade())) {
+      // The downgrade did not earn its keep — 4:2:0 failed too, or a recovery
+      // verdict turned up a beat late — so the failure was never about chroma.
+      // 4:4:4 is back and the client is told nothing. Whatever is wrong gets
+      // today's handling from the caller, one capability better off than before.
       return false;
     }
 
@@ -2708,9 +2750,28 @@ namespace video {
         // spinning on the same failure. No in-line retry: validating this one
         // would mean building and tearing down a second encoder session against
         // a GPU that may be mid-reset, which is the concurrent-teardown pattern
-        // that has corrupted the NVIDIA driver heap before. The recovery verdict
-        // is the guard here.
-        downgrade_yuv444_to_420(disp.get(), config, mail->event<bool>(mail::chroma_downgrade), "initial frame conversion");
+        // that has corrupted the NVIDIA driver heap before.
+        //
+        // So the recovery verdict is the whole guard here, and it is read on
+        // THIS thread while the capture thread writes it — which means a failure
+        // that lands a beat before the capture loop has sampled the ring reads
+        // "not recovering" and would otherwise cost the session its 4:4:4 for
+        // good, over an outage the system goes on to recover from completely.
+        // Re-sample it for a bounded beat and revoke the downgrade if it turns
+        // up. Costs nothing on the case the fallback exists for (a display that
+        // is genuinely not coming back never publishes a verdict, so the grace
+        // elapses once and the downgrade commits exactly as it does today).
+        downgrade_yuv444_to_420(
+          disp.get(),
+          config,
+          mail->event<bool>(mail::chroma_downgrade),
+          "initial frame conversion",
+          [&]() {
+            return !recovery_verdict_appears(disp.get(), [&]() {
+              return shutdown_event->peek() || !images->running();
+            });
+          }
+        );
         return;
       }
     }
