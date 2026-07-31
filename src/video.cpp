@@ -31,6 +31,7 @@ extern "C" {
 #include "config.h"
 #include "display_device.h"
 #include "encoder_probe_shield.h"
+#include "encoder_recovery_gate.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -2543,6 +2544,60 @@ namespace video {
     return true;
   }
 
+  /**
+   * @brief Hold an encoder thread while the capture source rides out a bounded
+   *        display outage, instead of ending the client's session.
+   *
+   * The capture side answers a recoverable GPU outage by deferring its reinit
+   * (see platf::display_t::capture_recovering()). That deferral is what keeps
+   * the pipeline in its cheap timeout loop — but it also leaves THIS thread
+   * running across the outage, where a reinit used to park it. Every encoder
+   * failure below is fatal to the session by design, and during the outage they
+   * all fail for the same non-fatal reason: the GPU is down and coming back.
+   * So wait the window out here and let the caller retry against the recovered
+   * display.
+   *
+   * @param disp The display whose recovery verdict to follow.
+   * @param gate Per-thread ceiling; bounds the WHOLE outage, not one call.
+   * @param abort Returns true when the session is ending anyway (shutdown).
+   * @return `true` when the caller should retry, `false` when it must run
+   *         today's failure handling — because the source was never recovering,
+   *         because the ceiling expired, or because the session is shutting
+   *         down.
+   */
+  bool hold_for_display_recovery(platf::display_t &disp, encoder_recovery_gate_t &gate, const std::function<bool()> &abort) {
+    const bool hold = gate.evaluate(disp.capture_recovering(), std::chrono::steady_clock::now()) ==
+                      encoder_recovery_action_e::hold;
+    if (!hold || abort()) {
+      return false;
+    }
+
+    BOOST_LOG(warning) << "Encoder: the display is recovering from a GPU outage; holding the session "
+                          "open instead of ending it."sv;
+
+    while (!abort() &&
+           gate.evaluate(disp.capture_recovering(), std::chrono::steady_clock::now()) ==
+             encoder_recovery_action_e::hold) {
+      std::this_thread::sleep_for(20ms);
+    }
+
+    const auto held_ms = std::chrono::duration_cast<std::chrono::milliseconds>(gate.held_for()).count();
+    if (abort()) {
+      return false;
+    }
+    if (disp.capture_recovering()) {
+      // The ceiling expired while the source still claims to be recovering.
+      // Stop trusting it and fall through to today's failure handling.
+      BOOST_LOG(warning) << "Encoder: the display has reported recovery for "sv << held_ms
+                         << " ms without returning; giving up on it."sv;
+      return false;
+    }
+
+    BOOST_LOG(info) << "Encoder: the display finished recovering after "sv << held_ms
+                    << " ms; rebuilding the encoder."sv;
+    return true;
+  }
+
   void encode_run(
     int &frame_nr,  // Store progress of the frame number
     safe::mail_t mail,
@@ -2905,7 +2960,8 @@ namespace video {
     std::vector<std::unique_ptr<sync_session_ctx_t>> &synced_session_ctxs,
     encode_session_ctx_queue_t &encode_session_ctx_queue,
     std::vector<std::string> &display_names,
-    int &display_p
+    int &display_p,
+    encoder_recovery_gate_t &recovery_gate
   ) {
     const auto *enc_ptr = chosen_encoder;
     if (!enc_ptr) {
@@ -2985,6 +3041,22 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        // The capture source can be riding out a bounded display outage (see
+        // platf::display_t::capture_recovering()). Unlike the async path there
+        // is nothing to park here — this callback IS the capture thread, called
+        // by the very loop that is doing the waiting. So keep every piece of
+        // session bookkeeping below running and skip only the encode.
+        //
+        // That skip is the fix: an encode against a GPU that is mid-reset
+        // fails, and today's handling of an encode failure is to raise the
+        // session's shutdown event. Deferring the capture reinit without this
+        // just moves the teardown from the capture loop into this callback,
+        // which the loop then calls every 10 ms for the length of the outage.
+        const bool recovering = disp && disp->capture_recovering();
+        const bool hold_for_recovery =
+          recovery_gate.evaluate(recovering, std::chrono::steady_clock::now()) ==
+          encoder_recovery_action_e::hold;
+
         // `img` is null whenever the backend reports a timeout (no frame this
         // round) — the loop below still needs one to bootstrap a joining
         // session, so leave the context queued until a real frame arrives
@@ -3031,6 +3103,15 @@ namespace video {
             ctx->idr_events->pop();
           }
 
+          if (hold_for_recovery) {
+            // Shutdown, IDR and (below) display-switch handling all still run;
+            // only the GPU work waits. The client keeps its last frame until
+            // the display returns, which beats losing the session over an
+            // outage the driver is already riding out.
+            ++pos;
+            continue;
+          }
+
           std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
           std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
           bool placeholder_input = pos->bootstrap.current_input_placeholder;
@@ -3070,6 +3151,9 @@ namespace video {
 
             continue;
           }
+          // A frame encoded: whatever outage the gate was holding for is over,
+          // so the next one starts from a full ceiling.
+          recovery_gate.note_progress();
 
           if (placeholder_input) {
             pos->bootstrap.placeholder_encoded = true;
@@ -3134,7 +3218,10 @@ namespace video {
 
     std::vector<std::string> display_names;
     int display_p = -1;
-    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p) == encode_e::reinit) {}
+    // Outside the reinit loop so the ceiling bounds the whole outage rather
+    // than restarting on every rebuild the outage causes.
+    encoder_recovery_gate_t recovery_gate;
+    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p, recovery_gate) == encode_e::reinit) {}
   }
 
   void capture_async(
@@ -3165,6 +3252,22 @@ namespace video {
 
     auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
+
+    // Bounds how long this thread defers to a recovering capture source. Lives
+    // out here, not per iteration, so the ceiling covers the whole outage
+    // however many encoder rebuilds it spans.
+    encoder_recovery_gate_t recovery_gate;
+    const auto session_ending = [&]() {
+      return shutdown_event->peek() || !images->running();
+    };
+    // Stop holding the moment the capture thread starts a reinit. The recovery
+    // verdict is published on the display object the capture thread is about to
+    // replace, so from here on it is stale by construction and would otherwise
+    // hold this thread for the whole ceiling; the reinit wait at the top of the
+    // loop below is the correct place to be instead.
+    const auto stop_holding = [&]() {
+      return session_ending() || ref->reinit_event.peek();
+    };
 
     // Encoding takes place on this thread
     platf::adjust_thread_priority(platf::thread_priority_e::high);
@@ -3198,8 +3301,25 @@ namespace video {
         encode_device = make_encode_device(*display, encoder, config);
       }
       if (!encode_device) {
+        // Returning here trips this function's fail guard, which raises
+        // mail::shutdown and ends the client's session. A GPU that is mid-reset
+        // cannot build an encode device, and the capture side is deliberately
+        // NOT reinitializing through that window — so without this the outage
+        // the driver ducks out of kills the stream from the encoder thread
+        // instead. Hold, then retry against the recovered display.
+        if (hold_for_display_recovery(*display, recovery_gate, stop_holding)) {
+          continue;
+        }
+        if (ref->reinit_event.peek()) {
+          // A reinit is already in flight, so this device was doomed to fail
+          // against a display that is being replaced anyway. Go wait for the
+          // replacement rather than ending the session over it.
+          continue;
+        }
         return;
       }
+      // A device built against this display is proof the outage is over.
+      recovery_gate.note_progress();
 
       // absolute mouse coordinates require that the dimensions of the screen are known
       touch_port_event->raise(make_port(display.get(), config));
@@ -3226,6 +3346,15 @@ namespace video {
         *ref->encoder_p,
         channel_data
       );
+
+      // encode_run returns on any encoder-side failure, and while the display
+      // is down every one of them recurs immediately. Without this the loop
+      // would spin encoder create/destroy cycles against a GPU that is still
+      // resetting — the exact overlapping-NvEnc-teardown pattern that has
+      // corrupted the driver heap before. Hold until the display is back, then
+      // rebuild once. A no-op when nothing is recovering, and it yields
+      // immediately once a reinit is in flight.
+      hold_for_display_recovery(*display, recovery_gate, stop_holding);
     }
   }
 
