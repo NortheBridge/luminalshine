@@ -201,21 +201,6 @@ namespace video {
     uint32_t flags;
   };
 
-  /**
-   * @brief Does a session on this encoder run the ASYNC capture/encode path?
-   *
-   * video::capture() dispatches on exactly this: true sends the session to
-   * capture_async (capture on one thread, encode on another, joined by an image
-   * queue), false to the sync path, where the capture callback does the encoding
-   * on the capture thread itself.
-   *
-   * Worth naming rather than open-coding, because the two paths handle a
-   * recovering display very differently and it is easy to harden the one nothing
-   * reaches: every encoder built for Windows sets this, so every RTSP and WebRTC
-   * session takes the async path.
-   */
-  bool uses_async_encode_path(const encoder_t &encoder);
-
   struct encode_session_t {
     virtual ~encode_session_t() = default;
 
