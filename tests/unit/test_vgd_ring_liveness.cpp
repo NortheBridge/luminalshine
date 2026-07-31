@@ -23,6 +23,7 @@
 #include "src/platform/windows/vgd_ring_liveness.h"
 
 #include <chrono>
+#include <optional>
 
 using platf::dxgi::vgd_ring_decision_t;
 using platf::dxgi::vgd_ring_liveness_config_t;
@@ -411,4 +412,176 @@ TEST(VgdRingLiveness, ConfigIsHonoured) {
   const auto ducked = recovering_sample(100, 99);
   EXPECT_EQ(live.evaluate(ducked, at(0s)).verdict, vgd_ring_verdict_e::wait);
   EXPECT_EQ(live.evaluate(ducked, at(31s)).reason, vgd_ring_reason_e::recovery_budget_expired);
+}
+
+// --- A wait verdict must honour the caller's timeout -----------------------
+
+/**
+ * The base capture loop reads `capture_e::timeout` as "nothing this round" and
+ * calls straight back after a 10 ms nap. A wait verdict that returns instantly
+ * therefore free-runs the capture thread at ~100 Hz for the WHOLE multi-minute
+ * recovery — a core burnt in a SYSTEM service to re-read a header the driver
+ * touches four times a second.
+ */
+TEST(VgdRingLiveness, WaitVerdictConsumesTheCallersWholeTimeout) {
+  std::chrono::nanoseconds waited {0};
+  int slices = 0;
+
+  while (true) {
+    const auto slice = platf::dxgi::vgd_wait_slice(200ms, waited);
+    if (slice <= 0ns) {
+      break;
+    }
+    ASSERT_LE(slice, 5ms) << "too long a slice delays noticing that the ring came back";
+    waited += slice;
+    ASSERT_LT(++slices, 1000) << "wait slicing does not terminate";
+  }
+
+  EXPECT_EQ(waited, 200ms) << "a wait verdict must spend the caller's timeout, not return instantly";
+  EXPECT_EQ(slices, 40) << "the ring is sampled at the caller's rate, not free-run";
+}
+
+TEST(VgdRingLiveness, WaitVerdictWithAZeroTimeoutStaysNonBlocking) {
+  // The base loop's frame-pacing path calls snapshot() with timeout 0 and must
+  // keep getting an immediate answer.
+  EXPECT_EQ(platf::dxgi::vgd_wait_slice(0ms, 0ns), 0ns);
+  EXPECT_EQ(platf::dxgi::vgd_wait_slice(0ms, 5ms), 0ns);
+}
+
+TEST(VgdRingLiveness, WaitSliceNeverOverrunsTheCallersTimeout) {
+  EXPECT_EQ(platf::dxgi::vgd_wait_slice(3ms, 0ns), 3ms);
+  EXPECT_EQ(platf::dxgi::vgd_wait_slice(200ms, 198ms), 2ms);
+  EXPECT_EQ(platf::dxgi::vgd_wait_slice(200ms, 200ms), 0ns);
+  EXPECT_EQ(platf::dxgi::vgd_wait_slice(200ms, 500ms), 0ns);
+}
+
+// --- The recovery budget is AGGREGATE, not per reader ---------------------
+
+/**
+ * The ladder lives on the ring reader, and every capture reinit destroys and
+ * rebuilds that reader. A per-object budget therefore restarts on each reinit,
+ * so the wait that actually matters — rebuild, spend the budget, reinit, spend
+ * it again — never ends. The owner carries the clock across instances.
+ */
+TEST(VgdRingLiveness, RecoveryBudgetIsAggregateAcrossReaderInstances) {
+  const auto ducked = recovering_sample(100, 99);
+
+  vgd_ring_liveness_t first;
+  ASSERT_EQ(first.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
+  ASSERT_EQ(first.evaluate(ducked, at(10min)).reason, vgd_ring_reason_e::recovering);
+
+  const auto carried = first.recovery_start();
+  ASSERT_TRUE(carried.has_value()) << "an in-progress outage must expose its clock";
+
+  // The reinit rebuilt the reader; the replacement adopts the running clock.
+  vgd_ring_liveness_t second;
+  second.adopt_recovery_start(carried);
+
+  const auto expired = second.evaluate(ducked, at(first.config().recovery_budget + 1s));
+  EXPECT_EQ(expired.verdict, vgd_ring_verdict_e::reinit);
+  EXPECT_EQ(expired.reason, vgd_ring_reason_e::recovery_budget_expired)
+    << "a rebuilt reader inherited a fresh budget, so the aggregate wait is unbounded";
+}
+
+TEST(VgdRingLiveness, TheRecoveryClockIsClearedWhenTheOutageEnds) {
+  vgd_ring_liveness_t live;
+
+  ASSERT_EQ(live.evaluate(recovering_sample(100, 99), at(0s)).reason, vgd_ring_reason_e::recovering);
+  EXPECT_TRUE(live.recovery_start().has_value());
+
+  ASSERT_EQ(live.evaluate(healthy(), at(1s)).verdict, vgd_ring_verdict_e::consume);
+  EXPECT_FALSE(live.recovery_start().has_value())
+    << "a finished outage must not hand its spent budget to the next one";
+}
+
+TEST(VgdRingLiveness, ResettingTheClockIsExplicitAndDistinctFromAdoptingNothing) {
+  // The owner abandons the clock when an exhausted budget hands the session to
+  // the fallback path; without a way to say so, the next publish would write
+  // the spent clock straight back into the store it was just cleared from.
+  vgd_ring_liveness_t live;
+  const auto ducked = recovering_sample(100, 99);
+
+  ASSERT_EQ(live.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
+  ASSERT_TRUE(live.recovery_start().has_value());
+
+  live.reset_recovery_clock();
+  EXPECT_FALSE(live.recovery_start().has_value());
+
+  // And the next outage gets a full budget, not the remains of the abandoned one.
+  EXPECT_EQ(live.evaluate(ducked, at(30min)).reason, vgd_ring_reason_e::recovering);
+  EXPECT_EQ(live.evaluate(ducked, at(40min)).reason, vgd_ring_reason_e::recovering);
+}
+
+TEST(VgdRingLiveness, AdoptingAnEmptyClockLeavesARunningOneAlone) {
+  vgd_ring_liveness_t live;
+  const auto ducked = recovering_sample(100, 99);
+
+  ASSERT_EQ(live.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
+  live.adopt_recovery_start(std::nullopt);
+
+  EXPECT_EQ(live.evaluate(ducked, at(10min)).reason, vgd_ring_reason_e::recovering);
+  EXPECT_EQ(live.evaluate(ducked, at(live.config().recovery_budget + 1s)).reason,
+            vgd_ring_reason_e::recovery_budget_expired);
+}
+
+// --- Drivers that never duck in place keep today's timeline exactly --------
+
+/**
+ * A pre-build-16 driver departs its monitor on a TDR and its heartbeat simply
+ * STOPS. For the 2 s staleness threshold that is indistinguishable from build
+ * 16's still-beating one, so reading REBUILDING as recovering would buy those
+ * drivers up to 2 s of deferral they never had — and the stale-DXGI-factory
+ * reinit is exactly where that shows up as a behaviour change. The owner
+ * vouches for the driver from its handshake build; nothing else can.
+ */
+TEST(VgdRingLiveness, AnUnvouchedDriverIsNeverReportedRecovering) {
+  vgd_ring_liveness_config_t cfg;
+  cfg.trust_rebuilding_heartbeat = false;
+  vgd_ring_liveness_t live {cfg};
+
+  const auto s = recovering_sample(100, 99);
+  const auto d = live.evaluate(s, at(0s));
+
+  EXPECT_EQ(d.verdict, vgd_ring_verdict_e::wait);
+  EXPECT_EQ(d.reason, vgd_ring_reason_e::rebuilding)
+    << "REBUILDING on an unvouched driver is the old plain wait, not recovery";
+  EXPECT_FALSE(live.recovering(s, at(0s)))
+    << "nothing may defer on a driver that does not duck in place";
+}
+
+TEST(VgdRingLiveness, AnUnvouchedDriverKeepsTodaysHeartbeatTimeline) {
+  vgd_ring_liveness_config_t cfg;
+  cfg.trust_rebuilding_heartbeat = false;
+  vgd_ring_liveness_t live {cfg};
+
+  auto s = recovering_sample(100, 99);
+  s.heartbeat_age = 3s;  // past the 2 s stale threshold
+
+  EXPECT_EQ(live.evaluate(s, at(0s)).reason, vgd_ring_reason_e::heartbeat_stale);
+  EXPECT_EQ(live.evaluate(s, at(9s)).verdict, vgd_ring_verdict_e::wait);
+
+  const auto lost = live.evaluate(s, at(11s));
+  EXPECT_EQ(lost.verdict, vgd_ring_verdict_e::reinit);
+  EXPECT_EQ(lost.reason, vgd_ring_reason_e::heartbeat_lost);
+}
+
+TEST(VgdRingLiveness, AnUnvouchedDriverStillReinitsImmediatelyOnAGpuResetEdge) {
+  // With a vouched driver this same sample defers the reinit (see
+  // GpuResetEdgeIsDeferredWhileRecoveringThenTaken). Without one it must fire
+  // on the first sample, which is what pre-build-16 drivers have always done.
+  vgd_ring_liveness_config_t cfg;
+  cfg.trust_rebuilding_heartbeat = false;
+  vgd_ring_liveness_t live {cfg};
+
+  auto s = recovering_sample(100, 99);
+  s.tdr_edge = true;
+
+  const auto d = live.evaluate(s, at(0s));
+  EXPECT_EQ(d.verdict, vgd_ring_verdict_e::reinit);
+  EXPECT_EQ(d.reason, vgd_ring_reason_e::gpu_reset);
+}
+
+TEST(VgdRingLiveness, VouchingIsTheDefaultBecauseThisClassExistsForBuild16) {
+  vgd_ring_liveness_config_t cfg;
+  EXPECT_TRUE(cfg.trust_rebuilding_heartbeat);
 }

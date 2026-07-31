@@ -671,6 +671,17 @@ namespace platf::dxgi {
     /// live cross-process allocations to terminate while the stack recovers.
     void release_shared_allocations();
 
+    /// Sleep out the caller's snapshot timeout on a `wait` verdict, returning
+    /// early if the ring leaves `waiting_state`. Without it a wait returns
+    /// instantly and the base capture loop free-runs at ~100 Hz for the whole
+    /// (multi-minute) recovery. Touches no GPU device — a header read only.
+    void wait_out_ring(std::chrono::milliseconds timeout, const vgd_ring_sample_t &waiting_on);
+
+    /// Push the ladder's recovery clock to the session-keyed store that
+    /// survives this object, so the budget bounds the outage rather than one
+    /// reader's slice of it. Cheap: only writes when the clock changes.
+    void publish_recovery_clock();
+
     ::VgdRingHandle *_ring = nullptr;
     uint64_t _session_id = 0;
     uint32_t _ring_slots = 0;
@@ -692,7 +703,18 @@ namespace platf::dxgi {
 
     /// Ring health ladder: REBUILDING + live heartbeat = recovering (wait),
     /// stale/absent heartbeat = dead (reinit). See vgd_ring_liveness.h.
+    /// Configured at init() from the driver's handshake build, and seeded with
+    /// any recovery clock still running for this session — the ladder's budget
+    /// has to bound the outage, not this object's slice of it.
     vgd_ring_liveness_t _liveness;
+
+    /// When the in-progress ring wait was last reported, so a multi-minute
+    /// wait leaves periodic evidence without logging at the sample rate.
+    std::chrono::steady_clock::time_point _wait_logged_at {};
+
+    /// Last value handed to the session-keyed recovery-clock store, so the
+    /// per-frame publish is a comparison rather than a lock acquisition.
+    std::optional<std::chrono::steady_clock::time_point> _published_recovery_start;
 
     // Broken-ring detection (see display_vgd.cpp): consecutive texture-open
     // failures on the ring's shared textures.

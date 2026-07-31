@@ -88,8 +88,62 @@ namespace platf::dxgi {
     /// therefore detected through the normal ladder — always lands first. This
     /// bound exists so a driver that heartbeats forever without ever finishing
     /// its rebuild cannot freeze the capture indefinitely.
+    ///
+    /// The budget is AGGREGATE across reader instances, not per instance: the
+    /// owner persists the running clock and seeds it into the next reader with
+    /// adopt_recovery_start(). Without that, every capture reinit would hand a
+    /// fresh budget to a fresh object and the real wait — rebuild, spend the
+    /// budget, reinit, spend it again — would be unbounded.
     std::chrono::nanoseconds recovery_budget {std::chrono::minutes(11)};
+
+    /// Whether "REBUILDING with a live heartbeat" may be read as RECOVERING at
+    /// all.
+    ///
+    /// Only driver build >= 16 keeps its IddCx monitor arrived and keeps
+    /// heartbeating through a GPU outage. Every older driver departs the
+    /// monitor and its heartbeat simply STOPS — and a stopped heartbeat is
+    /// indistinguishable from a beating one for up to `heartbeat_stale` (2 s),
+    /// because "age" is all the ring header exposes. Leaving this OFF for those
+    /// drivers is what keeps them bit-identical to pre-change behaviour: the
+    /// ladder never reports `recovering`, so no caller anywhere defers anything,
+    /// not even for those 2 s. The owner sets it from the handshake's
+    /// driver_build (see display_vgd.cpp); it defaults on because this class
+    /// exists for build 16.
+    bool trust_rebuilding_heartbeat = true;
   };
+
+  /**
+   * @brief How long a `wait` verdict may sleep before looking at the ring again.
+   *
+   * A `wait` that returns immediately is not free. The base capture loop reads
+   * `capture_e::timeout` as "nothing this round" and calls straight back after a
+   * 10 ms nap, so an instant return free-runs the capture thread at ~100 Hz for
+   * the whole (multi-minute) recovery — a core burnt in a SYSTEM service to
+   * re-read a header the driver touches four times a second. Honouring the
+   * caller's timeout, exactly as the frame-claim path below already does, puts
+   * that back at the rate the caller asked for.
+   *
+   * Sliced rather than slept in one go so a ring that comes back mid-wait is
+   * noticed within a slice instead of at the end of the caller's whole budget:
+   * the recovery-detection latency stays what it was.
+   *
+   * @param caller_timeout The timeout snapshot() was called with. Zero (the
+   *        frame-pacing path) must stay non-blocking.
+   * @param already_waited How much of it has been spent.
+   * @param max_slice Longest single sleep.
+   * @return The next sleep, or zero when the budget is spent.
+   */
+  [[nodiscard]] inline std::chrono::nanoseconds vgd_wait_slice(
+    std::chrono::nanoseconds caller_timeout,
+    std::chrono::nanoseconds already_waited,
+    std::chrono::nanoseconds max_slice = std::chrono::milliseconds(5)
+  ) {
+    const auto remaining = caller_timeout - already_waited;
+    if (remaining <= std::chrono::nanoseconds::zero()) {
+      return std::chrono::nanoseconds::zero();
+    }
+    return remaining < max_slice ? remaining : max_slice;
+  }
 
   /**
    * @brief State machine deciding whether a LuminalVGD frame ring is healthy,
@@ -117,6 +171,17 @@ namespace platf::dxgi {
    *  3. Everything else runs on exactly today's timeline: a GPU-reset edge
    *     reinitializes immediately, a stale heartbeat reinitializes after its
    *     grace window, and a genuinely undeliverable ring is declared broken.
+   *
+   * Two properties keep "wait longer" from becoming "wait forever":
+   *  - The recovery budget is AGGREGATE, not per instance. Every capture reinit
+   *    destroys and rebuilds the reader that owns this object, so the owner
+   *    persists the running clock and seeds the next one through
+   *    adopt_recovery_start()/recovery_start(). One outage gets one budget.
+   *  - The discriminator only runs for drivers the owner has vouched for
+   *    (config.trust_rebuilding_heartbeat). A pre-build-16 driver departs its
+   *    monitor and its heartbeat STOPS, which for `heartbeat_stale` (2 s) looks
+   *    exactly like build 16's beating one — so those drivers skip the branch
+   *    entirely and keep their pre-change timeline to the bit.
    *
    * A generation bump retires every sequence published under the previous
    * generation: the driver's rebuild frees all slots without rewinding
@@ -154,7 +219,10 @@ namespace platf::dxgi {
       // REBUILDING with a heartbeat that is still beating is a driver riding
       // out a GPU outage, not a driver that died. Wait it out; the wait is
       // bounded by recovery_budget and every other ladder below is unchanged.
-      if (sample.state == vgd_ring_state::rebuilding && heartbeat_live(sample)) {
+      // Skipped entirely for drivers that never do this (see
+      // config.trust_rebuilding_heartbeat), which drops straight through to
+      // the pre-change ladder below.
+      if (rebuilding_and_alive(sample)) {
         if (!within_recovery_budget(now)) {
           return decide(vgd_ring_verdict_e::reinit, vgd_ring_reason_e::recovery_budget_expired);
         }
@@ -233,10 +301,56 @@ namespace platf::dxgi {
      * not const for exactly that reason.
      */
     [[nodiscard]] bool recovering(const vgd_ring_sample_t &sample, time_point now) {
-      if (sample.state != vgd_ring_state::rebuilding || !heartbeat_live(sample)) {
+      if (!rebuilding_and_alive(sample)) {
         return false;
       }
       return within_recovery_budget(now);
+    }
+
+    /**
+     * @brief Adopt a recovery clock that started before this object existed.
+     *
+     * The reader owning this ladder is destroyed and rebuilt by every capture
+     * reinit, so a per-object budget restarts on each one and the wait that
+     * actually matters — the total time the host spends refusing to give up on
+     * one outage — is unbounded. The owner keeps the clock across reader
+     * instances (see display_vgd.cpp) and seeds it here, so one budget covers
+     * one outage no matter how many readers it spans.
+     *
+     * A no-op when `started` is empty, so adopting "no outage in progress"
+     * never disturbs a clock this object already started.
+     */
+    void adopt_recovery_start(std::optional<time_point> started) {
+      if (started) {
+        _rebuilding_since = started;
+      }
+    }
+
+    /**
+     * @brief The running recovery clock, or empty when no outage is in
+     * progress.
+     *
+     * The owner persists this after every evaluate() and feeds it back to the
+     * next reader through adopt_recovery_start(). Empty is the signal that the
+     * outage ENDED (the ladder clears the clock the moment the ring stops
+     * rebuilding), which is what lets a later, unrelated outage start a full
+     * budget of its own instead of inheriting a spent one.
+     */
+    [[nodiscard]] std::optional<time_point> recovery_start() const {
+      return _rebuilding_since;
+    }
+
+    /**
+     * @brief Abandon the running recovery clock.
+     *
+     * For the owner to call when it has decided the outage is over as far as
+     * this ladder is concerned — after an exhausted budget hands the session to
+     * the fallback path, say. Distinct from adopt_recovery_start(std::nullopt),
+     * which deliberately does nothing so that "no outage in progress" cannot
+     * silently cancel a clock this object already started.
+     */
+    void reset_recovery_clock() {
+      _rebuilding_since.reset();
     }
 
     /// Called after a frame is handed to the encoder: clears the stall evidence.
@@ -264,6 +378,16 @@ namespace platf::dxgi {
   private:
     [[nodiscard]] bool heartbeat_live(const vgd_ring_sample_t &sample) const {
       return sample.heartbeat_valid && sample.heartbeat_age <= _config.heartbeat_stale;
+    }
+
+    /// The build-16 duck: REBUILDING, monitor still arrived, heartbeat still
+    /// beating. THE one predicate behind both entry points, so a driver the
+    /// owner has not vouched for can never reach a `recovering` verdict by
+    /// either route.
+    [[nodiscard]] bool rebuilding_and_alive(const vgd_ring_sample_t &sample) const {
+      return _config.trust_rebuilding_heartbeat &&
+             sample.state == vgd_ring_state::rebuilding &&
+             heartbeat_live(sample);
     }
 
     /// Start the recovery clock if it is not running, and report whether the
