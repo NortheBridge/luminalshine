@@ -473,9 +473,10 @@ TEST(VgdRingLiveness, RecoveryBudgetIsAggregateAcrossReaderInstances) {
   const auto carried = first.recovery_start();
   ASSERT_TRUE(carried.has_value()) << "an in-progress outage must expose its clock";
 
-  // The reinit rebuilt the reader; the replacement adopts the running clock.
+  // The reinit rebuilt the reader; the replacement adopts the running clock. The
+  // handoff is immediate, which is what makes the clock a continuation.
   vgd_ring_liveness_t second;
-  second.adopt_recovery_start(carried);
+  second.adopt_recovery_start(carried, at(10min));
 
   const auto expired = second.evaluate(ducked, at(first.config().recovery_budget + 1s));
   EXPECT_EQ(expired.verdict, vgd_ring_verdict_e::reinit);
@@ -517,11 +518,163 @@ TEST(VgdRingLiveness, AdoptingAnEmptyClockLeavesARunningOneAlone) {
   const auto ducked = recovering_sample(100, 99);
 
   ASSERT_EQ(live.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
-  live.adopt_recovery_start(std::nullopt);
+  live.adopt_recovery_start(std::nullopt, at(1s));
 
   EXPECT_EQ(live.evaluate(ducked, at(10min)).reason, vgd_ring_reason_e::recovering);
   EXPECT_EQ(live.evaluate(ducked, at(live.config().recovery_budget + 1s)).reason,
             vgd_ring_reason_e::recovery_budget_expired);
+}
+
+// --- A spent clock must never be charged to a ring that did not spend it ---
+
+/**
+ * The regression these pin.
+ *
+ * An expired recovery budget is not an ordinary reinit: it stores the ring's
+ * session id in g_broken_session (display_vgd.cpp), which refuses ring capture
+ * for the REST OF THE PROCESS and cannot be cleared. That is the right answer
+ * for a ring that really has been rebuilding past the point the driver's own
+ * budget should have given up — and a catastrophic one for a healthy ring.
+ *
+ * The clock is what decides which of those a reader is looking at, and it is
+ * deliberately persisted across reader instances so one outage gets one budget.
+ * So it has to stop being persisted the moment the outage ends, and it has to
+ * stop being TRUSTED once nobody has been watching the ring — otherwise the
+ * ordinary ~10 ms REBUILDING blip of a mode change, minutes or hours later, is
+ * measured against a budget that ran out long ago and takes the ring out
+ * permanently.
+ */
+TEST(VgdRingLiveness, RecoveryEndingClearsTheClockEvenWhenTheVerdictIsAReinit) {
+  // The documented happy path: the outage ends, the ring goes ACTIVE, and the
+  // GPU-reset edge deferred through the whole recovery is finally taken. That
+  // reinit destroys the reader — so if it leaves the clock running, the clock
+  // outlives the outage it measured.
+  vgd_ring_liveness_t live;
+
+  auto ducked = recovering_sample(100, 99);
+  ducked.tdr_edge = true;
+  ASSERT_EQ(live.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
+  ASSERT_TRUE(live.recovery_start().has_value());
+
+  auto back = healthy(140);
+  back.generation = 8;
+  back.delivered_sequence = 99;
+  back.tdr_edge = true;
+
+  const auto d = live.evaluate(back, at(30s));
+  ASSERT_EQ(d.reason, vgd_ring_reason_e::gpu_reset);
+  EXPECT_FALSE(live.recovery_start().has_value())
+    << "a recovered ring handed its spent clock to whatever reader comes next";
+}
+
+TEST(VgdRingLiveness, EveryReinitPathClearsTheClockOnARingThatStoppedRebuilding) {
+  // Each of these returns before the ladder's old clearing point, so each one
+  // could strand a running clock in the owner's store.
+  const auto dead_ring = [] {
+    auto s = healthy();
+    s.state = vgd_ring_state::dead;
+    return s;
+  }();
+  const auto stale_beat = [] {
+    auto s = healthy();
+    s.heartbeat_age = 30s;
+    return s;
+  }();
+
+  for (const auto &after : {dead_ring, stale_beat}) {
+    vgd_ring_liveness_t live;
+    ASSERT_EQ(live.evaluate(recovering_sample(100, 99), at(0s)).reason, vgd_ring_reason_e::recovering);
+    ASSERT_TRUE(live.recovery_start().has_value());
+
+    (void) live.evaluate(after, at(30s));
+    EXPECT_FALSE(live.recovery_start().has_value())
+      << "a ring that stopped REBUILDING left its clock running";
+  }
+}
+
+TEST(VgdRingLiveness, TheRecoveringQueryAlsoEndsTheOutage) {
+  // is_recovering() can be the ONLY entry point a deferring capture loop
+  // reaches, so it has to be able to end an outage as well as start one.
+  vgd_ring_liveness_t live;
+
+  ASSERT_TRUE(live.recovering(recovering_sample(100, 99), at(0s)));
+  ASSERT_TRUE(live.recovery_start().has_value());
+
+  EXPECT_FALSE(live.recovering(healthy(), at(1s)));
+  EXPECT_FALSE(live.recovery_start().has_value())
+    << "the query started the clock but could never stop it";
+}
+
+TEST(VgdRingLiveness, AStaleClockIsNotAdoptedAndCannotLatchAHealthyRing) {
+  // A reader torn down mid-rebuild leaves its clock in the owner's session-keyed
+  // store. If ring capture is not attempted again for a while — the session fell
+  // back to WGC/DDA, the monitor was unplugged, the stream ended and restarted —
+  // nobody has been watching that ring, and the clock is no longer evidence of
+  // anything.
+  vgd_ring_liveness_t stranded;
+  ASSERT_EQ(stranded.evaluate(recovering_sample(100, 99), at(0s)).reason, vgd_ring_reason_e::recovering);
+  const auto leftover = stranded.recovery_start();
+  ASSERT_TRUE(leftover.has_value());
+
+  // An hour later a fresh reader opens a perfectly healthy ring.
+  vgd_ring_liveness_t live;
+  live.adopt_recovery_start(leftover, at(1h));
+  EXPECT_FALSE(live.recovery_start().has_value())
+    << "a clock nobody has confirmed for an hour was adopted as an outage in progress";
+
+  // Capture opens mid-blip: the ring's first observed state is an ordinary
+  // ~10 ms REBUILDING — a mode change, a swapchain reassignment. Measured
+  // against the adopted clock that is the whole budget gone at once, and
+  // recovery_budget_expired is not an ordinary reinit: it stores the session in
+  // g_broken_session, which refuses ring capture for the rest of the process and
+  // cannot be cleared.
+  const auto blip = live.evaluate(recovering_sample(100, 100), at(1h));
+  EXPECT_EQ(blip.verdict, vgd_ring_verdict_e::wait);
+  EXPECT_EQ(blip.reason, vgd_ring_reason_e::recovering)
+    << "a healthy ring was charged for an outage it never had and blacklisted for the session";
+
+  // And the budget it did get is a full one, measured from the blip.
+  EXPECT_EQ(live.evaluate(recovering_sample(100, 100), at(1h + 10min)).reason,
+            vgd_ring_reason_e::recovering);
+
+  // The blip ends; a healthy ring is consumed and the clock goes with it.
+  EXPECT_EQ(live.evaluate(healthy(), at(1h + 10min + 1s)).verdict, vgd_ring_verdict_e::consume);
+  EXPECT_FALSE(live.recovery_start().has_value());
+}
+
+TEST(VgdRingLiveness, AClockConfirmedWithinTheHandoffGraceIsStillAdopted) {
+  // The aggregate budget's whole job: a reinit destroys and rebuilds the reader
+  // MID-outage, and the replacement must not get a fresh budget. The handoff
+  // takes a moment (destroy the reader, rebuild it, reopen the ring), so the
+  // grace has to cover it comfortably.
+  vgd_ring_liveness_t first;
+  const auto ducked = recovering_sample(100, 99);
+  ASSERT_EQ(first.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
+  ASSERT_EQ(first.evaluate(ducked, at(10min)).reason, vgd_ring_reason_e::recovering);
+
+  vgd_ring_liveness_t second;
+  second.adopt_recovery_start(first.recovery_start(), at(10min + 2s));
+  ASSERT_TRUE(second.recovery_start().has_value()) << "a live handoff was refused";
+
+  const auto expired = second.evaluate(ducked, at(second.config().recovery_budget + 1s));
+  EXPECT_EQ(expired.verdict, vgd_ring_verdict_e::reinit);
+  EXPECT_EQ(expired.reason, vgd_ring_reason_e::recovery_budget_expired)
+    << "a rebuilt reader inherited a fresh budget, so the aggregate wait is unbounded";
+}
+
+TEST(VgdRingLiveness, TheHandoffClockCarriesItsLastConfirmationNotJustItsStart) {
+  // The staleness test is against the last CONFIRMATION, not the start —
+  // otherwise a genuine ten-minute outage would fail its own handoff.
+  vgd_ring_liveness_t live;
+  const auto ducked = recovering_sample(100, 99);
+
+  ASSERT_EQ(live.evaluate(ducked, at(0s)).reason, vgd_ring_reason_e::recovering);
+  ASSERT_EQ(live.evaluate(ducked, at(10min)).reason, vgd_ring_reason_e::recovering);
+
+  const auto clock = live.recovery_start();
+  ASSERT_TRUE(clock.has_value());
+  EXPECT_EQ(clock->started, at(0s));
+  EXPECT_EQ(clock->last_seen, at(10min));
 }
 
 // --- Drivers that never duck in place keep today's timeline exactly --------

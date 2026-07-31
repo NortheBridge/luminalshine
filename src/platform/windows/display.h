@@ -714,7 +714,7 @@ namespace platf::dxgi {
 
     /// Last value handed to the session-keyed recovery-clock store, so the
     /// per-frame publish is a comparison rather than a lock acquisition.
-    std::optional<std::chrono::steady_clock::time_point> _published_recovery_start;
+    std::optional<vgd_recovery_clock_t> _published_recovery_start;
 
     // Broken-ring detection (see display_vgd.cpp): consecutive texture-open
     // failures on the ring's shared textures.

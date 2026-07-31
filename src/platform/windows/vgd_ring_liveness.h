@@ -67,6 +67,24 @@ namespace platf::dxgi {
     bool first_report = false;
   };
 
+  /**
+   * @brief One outage's recovery clock, as it crosses reader instances.
+   *
+   * `started` is what the budget is measured from. `last_seen` is when a reader
+   * last CONFIRMED that the ring was still rebuilding, and it is what makes the
+   * handoff safe: a clock is only evidence of an outage that is still in
+   * progress for as long as somebody has been watching. Once nobody is — the
+   * reader was torn down and ring capture was not re-attempted for a while —
+   * the clock says nothing about the ring a later reader opens, and adopting it
+   * would spend a budget that ring never used. See adopt_recovery_start().
+   */
+  struct vgd_recovery_clock_t {
+    std::chrono::steady_clock::time_point started {};
+    std::chrono::steady_clock::time_point last_seen {};
+
+    friend bool operator==(const vgd_recovery_clock_t &, const vgd_recovery_clock_t &) = default;
+  };
+
   struct vgd_ring_liveness_config_t {
     /// The driver heartbeats the ring header far more often than this even when
     /// no frames flow (build >= 16 ticks it every 250 ms straight through a GPU
@@ -95,6 +113,27 @@ namespace platf::dxgi {
     /// fresh budget to a fresh object and the real wait — rebuild, spend the
     /// budget, reinit, spend it again — would be unbounded.
     std::chrono::nanoseconds recovery_budget {std::chrono::minutes(11)};
+
+    /// How long a persisted recovery clock may go unconfirmed and still be
+    /// adopted by the next reader.
+    ///
+    /// The aggregate budget above is only sound while the clock describes ONE
+    /// CONTINUOUS outage. A reader torn down mid-rebuild leaves its clock in the
+    /// owner's store with nobody watching the ring, and ring capture may not be
+    /// attempted again for a long time (the session falls back to WGC/DDA, the
+    /// monitor is unplugged, the stream ends and restarts). A clock adopted
+    /// after such a gap is not a continuation of anything: the ring it lands on
+    /// may be perfectly healthy, and its first ordinary REBUILDING blip — a mode
+    /// change, a swapchain reassignment, ~10 ms — would then be judged against a
+    /// budget that has long since run out, reinit with recovery_budget_expired
+    /// and PERMANENTLY blacklist the ring (g_broken_session, display_vgd.cpp, is
+    /// unclearable for the life of the process).
+    ///
+    /// A genuine outage re-confirms the clock at the capture loop's rate for as
+    /// long as it lasts, and the owner republishes it once a second, so a real
+    /// handoff — destroy the reader, rebuild it, open the ring — never comes
+    /// close to this. It is a staleness test, not a wait.
+    std::chrono::nanoseconds recovery_clock_handoff_grace {std::chrono::seconds(30)};
 
     /// Whether "REBUILDING with a live heartbeat" may be read as RECOVERING at
     /// all.
@@ -176,7 +215,11 @@ namespace platf::dxgi {
    *  - The recovery budget is AGGREGATE, not per instance. Every capture reinit
    *    destroys and rebuilds the reader that owns this object, so the owner
    *    persists the running clock and seeds the next one through
-   *    adopt_recovery_start()/recovery_start(). One outage gets one budget.
+   *    adopt_recovery_start()/recovery_start(). One outage gets one budget —
+   *    and, symmetrically, ONE OUTAGE ONLY: the clock is cleared the moment the
+   *    ring is observed not rebuilding, and a clock nobody has confirmed
+   *    recently is not adopted at all, so a ring can never be charged for an
+   *    outage that is over or that was never its own.
    *  - The discriminator only runs for drivers the owner has vouched for
    *    (config.trust_rebuilding_heartbeat). A pre-build-16 driver departs its
    *    monitor and its heartbeat STOPS, which for `heartbeat_stale` (2 s) looks
@@ -210,6 +253,23 @@ namespace platf::dxgi {
      */
     [[nodiscard]] vgd_ring_decision_t evaluate(const vgd_ring_sample_t &sample, time_point now) {
       note_generation(sample);
+
+      // THE clock invariant: `_rebuilding_since` means "the ring has been
+      // continuously REBUILDING since", so any observation that is not
+      // REBUILDING ends that run — here, before any branch can return.
+      //
+      // It used to be cleared only on the fall-through at the bottom, which
+      // every reinit-producing branch above returns past: a DEAD ring, a pending
+      // GPU reset (the documented recovery ending — the ring goes ACTIVE with a
+      // tdr_edge still recorded, so the deferred reinit is taken), a heartbeat
+      // that went stale on an ACTIVE ring. Each of those left a running clock
+      // behind for the owner to persist, where it outlived the outage it
+      // measured and waited to be adopted by a later reader. Clearing it on
+      // recovery is what stops a spent budget from being charged to a ring that
+      // never spent it.
+      if (sample.state != vgd_ring_state::rebuilding) {
+        clear_recovery_clock();
+      }
 
       if (sample.state == vgd_ring_state::dead) {
         return decide(vgd_ring_verdict_e::reinit, vgd_ring_reason_e::ring_dead);
@@ -269,7 +329,6 @@ namespace platf::dxgi {
         _undelivered_since.reset();
         return decide(vgd_ring_verdict_e::wait, vgd_ring_reason_e::rebuilding);
       }
-      _rebuilding_since.reset();
 
       // A frame NEWER than the one we last delivered sitting unclaimed for a
       // long stretch means the reader side is broken. Cumulative publish
@@ -301,6 +360,13 @@ namespace platf::dxgi {
      * not const for exactly that reason.
      */
     [[nodiscard]] bool recovering(const vgd_ring_sample_t &sample, time_point now) {
+      // Same clock invariant as evaluate(): this can be the only entry point a
+      // deferring capture loop ever reaches, so it has to be able to end the
+      // outage as well as start one.
+      if (sample.state != vgd_ring_state::rebuilding) {
+        clear_recovery_clock();
+        return false;
+      }
       if (!rebuilding_and_alive(sample)) {
         return false;
       }
@@ -317,13 +383,30 @@ namespace platf::dxgi {
      * instances (see display_vgd.cpp) and seeds it here, so one budget covers
      * one outage no matter how many readers it spans.
      *
-     * A no-op when `started` is empty, so adopting "no outage in progress"
-     * never disturbs a clock this object already started.
+     * The clock is adopted only when it is still CURRENT — when a reader
+     * confirmed the ring was rebuilding within `recovery_clock_handoff_grace`.
+     * That is the difference between a handoff (the outage never stopped; this
+     * object is the next pair of eyes on it) and a leftover (nobody has been
+     * watching, so the clock says nothing about the ring this object just
+     * opened). Adopting a leftover is how a HEALTHY ring got charged for an
+     * outage it never had, expired a budget it never spent, and was permanently
+     * blacklisted for it.
+     *
+     * A no-op when `clock` is empty, so adopting "no outage in progress" never
+     * disturbs a clock this object already started.
+     *
+     * @param clock The owner's persisted clock, if any.
+     * @param now Timestamp of the adoption (monotonic).
      */
-    void adopt_recovery_start(std::optional<time_point> started) {
-      if (started) {
-        _rebuilding_since = started;
+    void adopt_recovery_start(std::optional<vgd_recovery_clock_t> clock, time_point now) {
+      if (!clock) {
+        return;
       }
+      if (now - clock->last_seen > _config.recovery_clock_handoff_grace) {
+        return;
+      }
+      _rebuilding_since = clock->started;
+      _rebuilding_seen = clock->last_seen;
     }
 
     /**
@@ -336,8 +419,11 @@ namespace platf::dxgi {
      * rebuilding), which is what lets a later, unrelated outage start a full
      * budget of its own instead of inheriting a spent one.
      */
-    [[nodiscard]] std::optional<time_point> recovery_start() const {
-      return _rebuilding_since;
+    [[nodiscard]] std::optional<vgd_recovery_clock_t> recovery_start() const {
+      if (!_rebuilding_since) {
+        return std::nullopt;
+      }
+      return vgd_recovery_clock_t {*_rebuilding_since, _rebuilding_seen.value_or(*_rebuilding_since)};
     }
 
     /**
@@ -350,7 +436,7 @@ namespace platf::dxgi {
      * silently cancel a clock this object already started.
      */
     void reset_recovery_clock() {
-      _rebuilding_since.reset();
+      clear_recovery_clock();
     }
 
     /// Called after a frame is handed to the encoder: clears the stall evidence.
@@ -398,7 +484,15 @@ namespace platf::dxgi {
       if (!_rebuilding_since) {
         _rebuilding_since = now;
       }
+      // Every rebuilding observation is also a confirmation that the outage is
+      // still in progress. That is what the next reader checks before adopting.
+      _rebuilding_seen = now;
       return (now - *_rebuilding_since) <= _config.recovery_budget;
+    }
+
+    void clear_recovery_clock() {
+      _rebuilding_since.reset();
+      _rebuilding_seen.reset();
     }
 
     void note_generation(const vgd_ring_sample_t &sample) {
@@ -435,6 +529,9 @@ namespace platf::dxgi {
     std::optional<time_point> _undelivered_since;
     std::optional<time_point> _heartbeat_stale_since;
     std::optional<time_point> _rebuilding_since;
+    /// When this object last CONFIRMED the ring was rebuilding. Travels with
+    /// `_rebuilding_since` across the reader handoff; see adopt_recovery_start().
+    std::optional<time_point> _rebuilding_seen;
     std::optional<vgd_ring_reason_e> _last_reason;
   };
 

@@ -105,7 +105,17 @@ namespace platf::dxgi {
     /// spend the budget, reinit, spend it again, forever) is unbounded. These
     /// survive the reader so one outage gets one budget.
     std::mutex g_recovery_clock_mutex;
-    std::map<uint64_t, std::chrono::steady_clock::time_point> g_recovery_clocks;
+    std::map<uint64_t, vgd_recovery_clock_t> g_recovery_clocks;
+
+    /// How often a running clock is refreshed in the store above.
+    ///
+    /// The stored `last_seen` is what the next reader checks before adopting
+    /// (vgd_ring_liveness_config_t::recovery_clock_handoff_grace), so it has to
+    /// keep up with a live outage — but this runs once per sampled frame, so it
+    /// must not take a process-wide lock at that rate. Once a second is two
+    /// orders of magnitude inside the 30 s grace and ~1/100th of the sampling
+    /// rate.
+    constexpr auto kRecoveryClockRepublishInterval = std::chrono::seconds(1);
 
     /// Cap on the table above. Bounded by construction rather than by age: a
     /// time-based sweep could drop precisely the expired clock a rebuilt reader
@@ -113,16 +123,17 @@ namespace platf::dxgi {
     /// unboundedness this exists to remove.
     constexpr size_t kMaxTrackedRecoveryClocks = 8;
 
-    /// Persist (or clear) the recovery clock of `session_id`. An empty
-    /// `started` means the ladder reports no outage in progress, which is what
-    /// lets a later, unrelated outage start a full budget of its own.
-    void store_recovery_clock(uint64_t session_id, std::optional<std::chrono::steady_clock::time_point> started) {
+    /// Persist (or clear) the recovery clock of `session_id`. An empty `clock`
+    /// means the ladder reports no outage in progress, which is what lets a
+    /// later, unrelated outage start a full budget of its own — and what stops
+    /// a spent clock from lying in wait here to be adopted by a healthy ring.
+    void store_recovery_clock(uint64_t session_id, std::optional<vgd_recovery_clock_t> clock) {
       std::lock_guard lk(g_recovery_clock_mutex);
-      if (!started) {
+      if (!clock) {
         g_recovery_clocks.erase(session_id);
         return;
       }
-      g_recovery_clocks[session_id] = *started;
+      g_recovery_clocks[session_id] = *clock;
       while (g_recovery_clocks.size() > kMaxTrackedRecoveryClocks) {
         // Evict the oldest clock that is not the one just stored.
         auto oldest = g_recovery_clocks.end();
@@ -130,7 +141,7 @@ namespace platf::dxgi {
           if (it->first == session_id) {
             continue;
           }
-          if (oldest == g_recovery_clocks.end() || it->second < oldest->second) {
+          if (oldest == g_recovery_clocks.end() || it->second.started < oldest->second.started) {
             oldest = it;
           }
         }
@@ -141,7 +152,7 @@ namespace platf::dxgi {
       }
     }
 
-    std::optional<std::chrono::steady_clock::time_point> load_recovery_clock(uint64_t session_id) {
+    std::optional<vgd_recovery_clock_t> load_recovery_clock(uint64_t session_id) {
       std::lock_guard lk(g_recovery_clock_mutex);
       auto it = g_recovery_clocks.find(session_id);
       if (it == g_recovery_clocks.end()) {
@@ -326,9 +337,12 @@ namespace platf::dxgi {
 
     // Adopt any recovery clock still running for this session: the reader this
     // one replaces may have been rebuilt BY the outage, and the budget has to
-    // cover the outage rather than restart with each reader.
+    // cover the outage rather than restart with each reader. The ladder itself
+    // decides whether the stored clock is still CURRENT — a leftover from an
+    // outage nobody has been watching is not a handoff, and charging this ring
+    // for it would expire a budget it never spent (see adopt_recovery_start).
     _published_recovery_start = load_recovery_clock(_session_id);
-    _liveness.adopt_recovery_start(_published_recovery_start);
+    _liveness.adopt_recovery_start(_published_recovery_start, std::chrono::steady_clock::now());
 
     // Hardware-cursor plane: with a cursor-capable driver (build >= 4) the
     // cursor is NOT in the frames — it must be blended here. A missing
@@ -602,12 +616,25 @@ namespace platf::dxgi {
   void display_vgd_vram_t::publish_recovery_clock() {
     // Only on a change: this runs per captured frame, and the common case (no
     // outage, nothing to publish) should not touch a process-wide lock at all.
-    const auto started = _liveness.recovery_start();
-    if (started == _published_recovery_start) {
+    const auto clock = _liveness.recovery_start();
+    if (!clock) {
+      if (_published_recovery_start) {
+        // The outage ended. Clearing the store is what stops a spent clock from
+        // being adopted by a later reader, so it is not an optimisation.
+        _published_recovery_start.reset();
+        store_recovery_clock(_session_id, std::nullopt);
+      }
       return;
     }
-    _published_recovery_start = started;
-    store_recovery_clock(_session_id, started);
+    if (_published_recovery_start &&
+        _published_recovery_start->started == clock->started &&
+        clock->last_seen - _published_recovery_start->last_seen < kRecoveryClockRepublishInterval) {
+      // Same outage, and the stored confirmation is still recent enough for the
+      // next reader to trust it.
+      return;
+    }
+    _published_recovery_start = clock;
+    store_recovery_clock(_session_id, clock);
   }
 
   bool display_vgd_vram_t::read_ring_sample(vgd_ring_sample_t &sample, bool tdr_edge) {
