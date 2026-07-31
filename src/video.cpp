@@ -41,6 +41,7 @@ extern "C" {
 #include "tdr_state.h"
 #include "video.h"
 #include "webrtc_stream.h"
+#include "yuv444_fallback.h"
 #ifdef _WIN32
   #include "amf/amf_caps.h"
   #include "platform/windows/frame_limiter.h"
@@ -2523,21 +2524,59 @@ namespace video {
   std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config);
 
   /**
-   * @brief Downgrade an in-flight YUV 4:4:4 session to 4:2:0 after an encoder failure.
-   * @param config The session's encode configuration, mutated to 4:2:0 on downgrade.
-   * @param chroma_downgrade_events Per-session event used to tell the control plane
-   *        (and through it the session stats) that the effective chroma changed.
+   * @brief Retry a failed encoder build at YUV 4:2:0, downgrading the session
+   *        only when that is both warranted and effective.
+   *
+   * The downgrade is session-lifetime and irreversible, so it may not be spent
+   * on a transient. See video::yuv444_fallback_t for the full rationale; in
+   * short, a display inside a bounded recovery window fails every encoder build
+   * regardless of chroma, so the failure is no evidence about 4:4:4 — and a
+   * 4:2:0 retry that fails too settles the question after the fact for the race
+   * the verdict alone cannot cover.
+   *
+   * @param disp The display whose recovery verdict to consult. May be null.
+   * @param config The session's encode configuration; 4:2:0 only if committed.
+   * @param chroma_downgrade_events Per-session event used to tell the control
+   *        plane (and through it the session stats) that the chroma changed.
    * @param stage Human-readable description of what failed, for the log line.
-   * @return `true` if the session was downgraded and a retry at 4:2:0 makes sense.
+   * @param retry_at_420 Rebuilds whatever failed with `config` at 4:2:0 and
+   *        reports whether it worked. Empty where the caller has no in-line
+   *        retry — its own rebuild loop is the retry — in which case the
+   *        downgrade commits on the recovery verdict alone, as it always has.
+   * @return `true` when the session was downgraded and the retry succeeded.
    */
-  bool downgrade_yuv444_to_420(config_t &config, safe::mail_raw_t::event_t<bool> chroma_downgrade_events, const char *stage) {
-    if (config.chromaSamplingType != 1) {
+  bool downgrade_yuv444_to_420(
+    const platf::display_t *disp,
+    config_t &config,
+    safe::mail_raw_t::event_t<bool> chroma_downgrade_events,
+    const char *stage,
+    const std::function<bool()> &retry_at_420 = {}
+  ) {
+    yuv444_fallback_t fallback {config.chromaSamplingType};
+
+    switch (fallback.attempt(disp && disp->capture_recovering())) {
+      case yuv444_fallback_e::not_applicable:
+        return false;
+      case yuv444_fallback_e::keep_444:
+        BOOST_LOG(info) << "YUV 4:4:4 "sv << stage
+                        << " failed while the display is recovering from a GPU outage. That fails "
+                           "at any chroma, so it says nothing about 4:4:4 — keeping 4:4:4 and "
+                           "waiting for the display instead of downgrading the session for good."sv;
+        return false;
+      case yuv444_fallback_e::try_420:
+        break;
+    }
+
+    if (!fallback.settle(retry_at_420 ? retry_at_420() : true)) {
+      // 4:2:0 failed too, so the failure was never about chroma: 4:4:4 is back
+      // and the client is told nothing. Whatever is wrong gets today's handling
+      // from the caller, one capability better off than before.
       return false;
     }
+
     BOOST_LOG(error) << "YUV 4:4:4 "sv << stage << " failed in flight — the GPU, driver, or display path rejected 4:4:4 output. "
                      << "Falling back to YUV 4:2:0 for this session. If your TV or monitor cannot accept YUV 4:4:4, "
                      << "disable 'YUV 4:4:4 Streaming' in Settings to avoid the retry."sv;
-    config.chromaSamplingType = 0;
     if (chroma_downgrade_events) {
       chroma_downgrade_events->raise(true);
     }
@@ -2610,12 +2649,17 @@ namespace video {
     void *channel_data
   ) {
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
-    if (!session && downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "encoder session creation")) {
-      if (auto fallback_device = make_encode_device(*disp, encoder, config)) {
-        session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(fallback_device));
-      }
+    if (!session) {
+      downgrade_yuv444_to_420(disp.get(), config, mail->event<bool>(mail::chroma_downgrade), "encoder session creation", [&]() {
+        if (auto fallback_device = make_encode_device(*disp, encoder, config)) {
+          session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(fallback_device));
+        }
+        return static_cast<bool>(session);
+      });
     }
     if (!session) {
+      // Nothing to hold for here: the caller (capture_async) owns the recovery
+      // gate and holds on its own side before rebuilding this.
       return;
     }
 
@@ -2657,8 +2701,12 @@ namespace video {
       if (!dummy_img || disp->dummy_img(dummy_img.get()) || session->convert(*dummy_img)) {
         // If the 4:4:4 color conversion path is what failed, downgrade so the
         // caller's reinit loop retries this session at 4:2:0 instead of
-        // spinning on the same failure.
-        downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "initial frame conversion");
+        // spinning on the same failure. No in-line retry: validating this one
+        // would mean building and tearing down a second encoder session against
+        // a GPU that may be mid-reset, which is the concurrent-teardown pattern
+        // that has corrupted the NVIDIA driver heap before. The recovery verdict
+        // is the guard here.
+        downgrade_yuv444_to_420(disp.get(), config, mail->event<bool>(mail::chroma_downgrade), "initial frame conversion");
         return;
       }
     }
@@ -2913,8 +2961,11 @@ namespace video {
     encode_session.ctx = &ctx;
 
     auto encode_device = make_encode_device(*disp, encoder, ctx.config);
-    if (!encode_device && downgrade_yuv444_to_420(ctx.config, ctx.chroma_downgrade_events, "encode device creation")) {
-      encode_device = make_encode_device(*disp, encoder, ctx.config);
+    if (!encode_device) {
+      downgrade_yuv444_to_420(disp, ctx.config, ctx.chroma_downgrade_events, "encode device creation", [&]() {
+        encode_device = make_encode_device(*disp, encoder, ctx.config);
+        return static_cast<bool>(encode_device);
+      });
     }
     if (!encode_device) {
       return std::nullopt;
@@ -2935,10 +2986,13 @@ namespace video {
     ctx.hdr_events->raise(std::move(hdr_info));
 
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
-    if (!session && downgrade_yuv444_to_420(ctx.config, ctx.chroma_downgrade_events, "encoder session creation")) {
-      if (auto fallback_device = make_encode_device(*disp, encoder, ctx.config)) {
-        session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(fallback_device));
-      }
+    if (!session) {
+      downgrade_yuv444_to_420(disp, ctx.config, ctx.chroma_downgrade_events, "encoder session creation", [&]() {
+        if (auto fallback_device = make_encode_device(*disp, encoder, ctx.config)) {
+          session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(fallback_device));
+        }
+        return static_cast<bool>(session);
+      });
     }
     if (!session) {
       return std::nullopt;
@@ -3297,8 +3351,18 @@ namespace video {
       auto &encoder = *enc_ptr;
 
       auto encode_device = make_encode_device(*display, encoder, config);
-      if (!encode_device && downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "encode device creation")) {
-        encode_device = make_encode_device(*display, encoder, config);
+      if (!encode_device) {
+        // The recovery verdict is consulted INSIDE this, ahead of any mutation
+        // of `config`: the 4:4:4 fallback is session-lifetime and irreversible,
+        // and a GPU that is mid-reset fails this call at every chroma. Before
+        // the session survived an outage the distinction did not matter — the
+        // session died here and the client renegotiated 4:4:4 on reconnect.
+        // Now it does: an unguarded downgrade here would cost a fully recovered
+        // outage its 4:4:4 for the rest of the session's life.
+        downgrade_yuv444_to_420(display.get(), config, mail->event<bool>(mail::chroma_downgrade), "encode device creation", [&]() {
+          encode_device = make_encode_device(*display, encoder, config);
+          return static_cast<bool>(encode_device);
+        });
       }
       if (!encode_device) {
         // Returning here trips this function's fail guard, which raises
