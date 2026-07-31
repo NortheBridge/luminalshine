@@ -26,8 +26,12 @@
  */
 
 // standard includes
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <map>
+#include <mutex>
+#include <optional>
 #include <thread>
 
 // platform includes
@@ -55,33 +59,149 @@ namespace platf::dxgi {
     constexpr uint64_t kVgdMutexKeyHost = 1;
     constexpr uint32_t kVgdMutexTimeoutMs = 100;
 
-    // proto ring_state::*
-    constexpr uint32_t kRingStateActive = 1;
-    constexpr uint32_t kRingStateRebuilding = 2;
-    constexpr uint32_t kRingStateDead = 3;
-
-    /// Driver heartbeats the ring header at least every 500 ms even when no
-    /// frames flow; treat several missed beats as the worker being stopped.
-    constexpr auto kHeartbeatStale = std::chrono::milliseconds(2000);
-
-    /// How long to wait out a stale heartbeat before reinitializing: mode
-    /// transitions unassign the swapchain (worker stops, heartbeat halts)
-    /// for a few seconds; only a persistently silent ring is worth the
-    /// cost of a capture teardown.
-    constexpr auto kHeartbeatReinitGrace = std::chrono::seconds(10);
-
     /// Circuit breaker: a session whose ring consistently fails to deliver
     /// (texture opens failing, or frames publishing that we can never claim)
     /// is remembered here so the factory's next attempt refuses and the
     /// stream falls back to WGC/DDA instead of staying black.
+    ///
+    /// Deliberately permanent for the life of the process: a ring that cannot
+    /// deliver does not heal, and re-arming it on a timer would reintroduce a
+    /// capture teardown every time the timer expired. What keeps that safe is
+    /// that only genuine READER breakage reaches it — a RECOVERABLE GPU outage
+    /// (ring rebuilding, our device removed) resolves to reinit, never here.
+    ///
+    /// The one non-reader-breakage entry is an exhausted AGGREGATE recovery
+    /// budget: a ring that has been REBUILDING past the point where even the
+    /// driver's own budget should have given up is not coming back, and a plain
+    /// reinit there would just build a new reader onto the same stuck ring
+    /// forever. Latching hands the session to WGC/DDA, which is a terminal
+    /// state rather than a cycle — and still a streaming session.
     std::atomic<uint64_t> g_broken_session {0};
 
     /// Consecutive slot-texture open failures before giving up on the ring.
     constexpr int kMaxOpenFailures = 20;
 
-    /// If the driver is publishing frames but none reach us for this long,
-    /// the reader side is broken (claim CAS or texture path) — bail out.
-    constexpr auto kDeliveryStall = std::chrono::seconds(5);
+    /// How often to report an in-progress ring wait. The ladder logs on
+    /// transitions only (a recovering ring is sampled for minutes), which
+    /// leaves nothing in the log between "started waiting" and whatever ends
+    /// the wait — the two field outcomes that most need telling apart.
+    constexpr auto kRingWaitProgressLogInterval = std::chrono::seconds(15);
+
+    /// The driver build that introduced the TDR duck-in-place this whole
+    /// ladder is built around: the monitor stays ARRIVED, the ring goes
+    /// REBUILDING, and a device-independent heartbeat keeps ticking for the
+    /// whole outage. Every older build departs the monitor instead and its
+    /// heartbeat simply stops — indistinguishable from a live one for the
+    /// 2 s staleness threshold, so those builds must never reach the
+    /// recovering branch at all (see trust_rebuilding_heartbeat).
+    constexpr uint32_t kFirstDuckInPlaceDriverBuild = 16;
+
+    /// Aggregate recovery clocks, keyed by ring session and kept ACROSS reader
+    /// instances.
+    ///
+    /// The liveness ladder lives on the reader, and every capture reinit
+    /// destroys and rebuilds the reader — so a per-object recovery budget
+    /// restarts on each reinit and the wait that actually matters (rebuild,
+    /// spend the budget, reinit, spend it again, forever) is unbounded. These
+    /// survive the reader so one outage gets one budget.
+    std::mutex g_recovery_clock_mutex;
+    std::map<uint64_t, vgd_recovery_clock_t> g_recovery_clocks;
+
+    /// How often a running clock is refreshed in the store above.
+    ///
+    /// The stored `last_seen` is what the next reader checks before adopting
+    /// (vgd_ring_liveness_config_t::recovery_clock_handoff_grace), so it has to
+    /// keep up with a live outage — but this runs once per sampled frame, so it
+    /// must not take a process-wide lock at that rate. Once a second is two
+    /// orders of magnitude inside the 30 s grace and ~1/100th of the sampling
+    /// rate.
+    constexpr auto kRecoveryClockRepublishInterval = std::chrono::seconds(1);
+
+    /// Cap on the table above. Bounded by construction rather than by age: a
+    /// time-based sweep could drop precisely the expired clock a rebuilt reader
+    /// is about to adopt, handing it a fresh budget and restoring the very
+    /// unboundedness this exists to remove.
+    constexpr size_t kMaxTrackedRecoveryClocks = 8;
+
+    /// Persist (or clear) the recovery clock of `session_id`. An empty `clock`
+    /// means the ladder reports no outage in progress, which is what lets a
+    /// later, unrelated outage start a full budget of its own — and what stops
+    /// a spent clock from lying in wait here to be adopted by a healthy ring.
+    void store_recovery_clock(uint64_t session_id, std::optional<vgd_recovery_clock_t> clock) {
+      std::lock_guard lk(g_recovery_clock_mutex);
+      if (!clock) {
+        g_recovery_clocks.erase(session_id);
+        return;
+      }
+      g_recovery_clocks[session_id] = *clock;
+      while (g_recovery_clocks.size() > kMaxTrackedRecoveryClocks) {
+        // Evict the oldest clock that is not the one just stored.
+        auto oldest = g_recovery_clocks.end();
+        for (auto it = g_recovery_clocks.begin(); it != g_recovery_clocks.end(); ++it) {
+          if (it->first == session_id) {
+            continue;
+          }
+          if (oldest == g_recovery_clocks.end() || it->second.started < oldest->second.started) {
+            oldest = it;
+          }
+        }
+        if (oldest == g_recovery_clocks.end()) {
+          break;
+        }
+        g_recovery_clocks.erase(oldest);
+      }
+    }
+
+    std::optional<vgd_recovery_clock_t> load_recovery_clock(uint64_t session_id) {
+      std::lock_guard lk(g_recovery_clock_mutex);
+      auto it = g_recovery_clocks.find(session_id);
+      if (it == g_recovery_clocks.end()) {
+        return std::nullopt;
+      }
+      return it->second;
+    }
+
+    /// One line per liveness-ladder transition (never per snapshot — a
+    /// recovering ring is sampled ~100x/s for minutes).
+    void log_ring_decision(const vgd_ring_decision_t &decision, const vgd_ring_sample_t &sample) {
+      const auto heartbeat_ms = std::chrono::duration_cast<std::chrono::milliseconds>(sample.heartbeat_age).count();
+      switch (decision.reason) {
+        case vgd_ring_reason_e::ring_dead:
+          BOOST_LOG(warning) << "LuminalVGD capture: ring is DEAD; reinitializing.";
+          break;
+        case vgd_ring_reason_e::recovering:
+          BOOST_LOG(info) << "LuminalVGD capture: ring is REBUILDING with a live heartbeat ("
+                          << heartbeat_ms << " ms behind) — the driver is riding out a GPU "
+                                             "outage with the monitor still arrived. Holding the "
+                                             "capture instead of tearing it down.";
+          break;
+        case vgd_ring_reason_e::rebuilding:
+          BOOST_LOG(info) << "LuminalVGD capture: ring is REBUILDING (no usable heartbeat); waiting.";
+          break;
+        case vgd_ring_reason_e::recovery_budget_expired:
+          BOOST_LOG(warning) << "LuminalVGD capture: ring has been REBUILDING past the host's "
+                                "recovery budget; reinitializing.";
+          break;
+        case vgd_ring_reason_e::heartbeat_stale:
+          BOOST_LOG(info) << "LuminalVGD capture: ring heartbeat stale (" << heartbeat_ms
+                          << " ms); waiting out a possible swapchain reassignment.";
+          break;
+        case vgd_ring_reason_e::heartbeat_lost:
+          BOOST_LOG(warning) << "LuminalVGD capture: ring heartbeat stale past the grace window ("
+                             << heartbeat_ms << " ms behind); reinitializing.";
+          break;
+        case vgd_ring_reason_e::gpu_reset:
+          BOOST_LOG(warning) << "LuminalVGD capture: reinitializing after a GPU-reset event.";
+          break;
+        case vgd_ring_reason_e::delivery_stall:
+          BOOST_LOG(error) << "LuminalVGD capture: a newer frame (seq " << sample.latest_sequence
+                           << " vs delivered " << sample.delivered_sequence
+                           << ") sat unclaimed; disabling ring capture for this session.";
+          break;
+        case vgd_ring_reason_e::healthy:
+          break;
+      }
+    }
 
     // SEH-isolated mutex ops: the virtual display (and with it the D3D
     // device backing the shared texture) can vanish mid-stream; keyed-mutex
@@ -194,6 +314,35 @@ namespace platf::dxgi {
     _display_name = display_name;
     _tdr_marks_at_open = tdr::event_count();
     capture_format = DXGI_FORMAT_UNKNOWN;  // latched from the first claimed frame
+
+    // Only vouch for the "REBUILDING + live heartbeat = recovering" reading on
+    // a driver that actually behaves that way. Older builds depart the monitor
+    // on a TDR and their heartbeat stops, which for the 2 s staleness threshold
+    // reads exactly like a beating one — so trusting it there would buy them up
+    // to 2 s of deferral they never had before. An unknown build (no handshake)
+    // counts as old: this is the conservative direction, and it keeps every
+    // pre-build-16 driver bit-identical to pre-change behaviour.
+    const auto driver_build = VDISPLAY::vgd::driver_build();
+    vgd_ring_liveness_config_t liveness_config;
+    liveness_config.trust_rebuilding_heartbeat =
+      driver_build && *driver_build >= kFirstDuckInPlaceDriverBuild;
+    _liveness = vgd_ring_liveness_t {liveness_config};
+    if (!liveness_config.trust_rebuilding_heartbeat) {
+      BOOST_LOG(info) << "LuminalVGD capture: driver build "
+                      << (driver_build ? std::to_string(*driver_build) : std::string("unknown"))
+                      << " predates the TDR duck-in-place contract (build "
+                      << kFirstDuckInPlaceDriverBuild
+                      << "); a REBUILDING ring will be treated as it always was.";
+    }
+
+    // Adopt any recovery clock still running for this session: the reader this
+    // one replaces may have been rebuilt BY the outage, and the budget has to
+    // cover the outage rather than restart with each reader. The ladder itself
+    // decides whether the stored clock is still CURRENT — a leftover from an
+    // outage nobody has been watching is not a handoff, and charging this ring
+    // for it would expire a budget it never spent (see adopt_recovery_start).
+    _published_recovery_start = load_recovery_clock(_session_id);
+    _liveness.adopt_recovery_start(_published_recovery_start, std::chrono::steady_clock::now());
 
     // Hardware-cursor plane: with a cursor-capable driver (build >= 4) the
     // cursor is NOT in the frames — it must be blended here. A missing
@@ -364,6 +513,14 @@ namespace platf::dxgi {
   }
 
   display_vgd_vram_t::slot_texture_t *display_vgd_vram_t::slot_texture(uint32_t generation, uint32_t slot) {
+    // Clear BEFORE any exit path, so the flag always describes THIS call.
+    // Clearing it further down left the out-of-range return below reporting a
+    // previous call's device-removed verdict, and the caller reads it only when
+    // this returns null: a stale `true` turns every subsequent failure into
+    // "reinit against a fresh device" forever, so the open-failure counter never
+    // reaches its limit and the bounded fall back to WGC/DDA never happens.
+    _open_failed_device_removed = false;
+
     if (_texture_generation != generation) {
       _slot_textures.clear();
       _texture_generation = generation;
@@ -398,9 +555,20 @@ namespace platf::dxgi {
       (void **) &texture
     );
     if (FAILED(status)) {
+      // Distinguish "the ring's textures are unreachable" (a broken reader —
+      // worth blacklisting the session) from "OUR OWN D3D device was removed"
+      // (a GPU reset — the ring is fine and a reinit against a fresh device
+      // fixes it). Without this, a device removed by the same TDR the driver
+      // is riding out fails every open forever and permanently disables ring
+      // capture for a session that was only ever recovering.
+      const HRESULT removed_reason = device->GetDeviceRemovedReason();
+      _open_failed_device_removed = FAILED(removed_reason) ||
+                                    status == DXGI_ERROR_DEVICE_REMOVED ||
+                                    status == DXGI_ERROR_DEVICE_RESET;
       BOOST_LOG(warning) << "LuminalVGD capture: OpenSharedResourceByName failed for slot "
                          << slot << " gen " << generation << " [0x"sv
-                         << util::hex(status).to_string_view() << ']';
+                         << util::hex(status).to_string_view() << "], device removed reason [0x"sv
+                         << util::hex(removed_reason).to_string_view() << ']';
       return nullptr;
     }
 
@@ -416,26 +584,187 @@ namespace platf::dxgi {
     return &entry;
   }
 
+  void display_vgd_vram_t::release_shared_allocations() {
+    _slot_textures.clear();
+    _last_frame.reset();
+  }
+
+  void display_vgd_vram_t::wait_out_ring(std::chrono::milliseconds timeout, const vgd_ring_sample_t &waiting_on) {
+    const auto started = std::chrono::steady_clock::now();
+    while (true) {
+      const auto slice = vgd_wait_slice(timeout, std::chrono::steady_clock::now() - started);
+      if (slice <= std::chrono::nanoseconds::zero()) {
+        return;
+      }
+      std::this_thread::sleep_for(slice);
+
+      // A pure shared-memory header read — no device work, which is the whole
+      // point of the wait verdict. Watching the published sequence as well as
+      // the state matters for the heartbeat-stale wait, where the ring stays
+      // ACTIVE throughout: a driver that resumes publishing mid-wait (the
+      // swapchain-reassignment case, which is over in seconds) is then picked
+      // up within a slice instead of at the end of the caller's timeout.
+      VgdRingStatus status {};
+      if (vgd_ring_status(_ring, &status) != 0 ||
+          status.state != waiting_on.state ||
+          status.latest_sequence != waiting_on.latest_sequence) {
+        return;
+      }
+    }
+  }
+
+  void display_vgd_vram_t::publish_recovery_clock() {
+    // Only on a change: this runs per captured frame, and the common case (no
+    // outage, nothing to publish) should not touch a process-wide lock at all.
+    const auto clock = _liveness.recovery_start();
+    if (!clock) {
+      if (_published_recovery_start) {
+        // The outage ended. Clearing the store is what stops a spent clock from
+        // being adopted by a later reader, so it is not an optimisation.
+        _published_recovery_start.reset();
+        store_recovery_clock(_session_id, std::nullopt);
+      }
+      return;
+    }
+    if (_published_recovery_start &&
+        _published_recovery_start->started == clock->started &&
+        clock->last_seen - _published_recovery_start->last_seen < kRecoveryClockRepublishInterval) {
+      // Same outage, and the stored confirmation is still recent enough for the
+      // next reader to trust it.
+      return;
+    }
+    _published_recovery_start = clock;
+    store_recovery_clock(_session_id, clock);
+  }
+
+  bool display_vgd_vram_t::read_ring_sample(vgd_ring_sample_t &sample, bool tdr_edge) {
+    VgdRingStatus status {};
+    if (vgd_ring_status(_ring, &status) != 0) {
+      return false;
+    }
+
+    sample.state = status.state;
+    sample.generation = status.generation;
+    sample.latest_sequence = status.latest_sequence;
+    sample.delivered_sequence = _last_sequence;
+    sample.tdr_edge = tdr_edge;
+    sample.heartbeat_valid = status.qpc_frequency != 0 && status.heartbeat_qpc != 0;
+    if (sample.heartbeat_valid) {
+      sample.heartbeat_age = qpc_time_difference(qpc_counter(), static_cast<int64_t>(status.heartbeat_qpc));
+    }
+    return true;
+  }
+
+  bool display_vgd_vram_t::is_recovering() {
+    if (!_ring) {
+      return false;
+    }
+    vgd_ring_sample_t sample {};
+    if (!read_ring_sample(sample, false)) {
+      return false;
+    }
+    const bool recovering = _liveness.recovering(sample, std::chrono::steady_clock::now());
+    // Keep the aggregate clock in step: this entry point can be the ONLY one a
+    // deferring capture loop ever reaches, so it has to persist the clock too
+    // or a reader rebuilt out of that path would adopt nothing.
+    publish_recovery_clock();
+    return recovering;
+  }
+
   capture_e display_vgd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
     if (!_ring) {
       return capture_e::error;
     }
 
-    // TDR blast-radius shrink: once any GPU-reset-class event is
-    // recorded (the encoder stall fires within ~100 ms of a hang), drop
-    // every shared GPU allocation this reader holds — the cached
-    // cross-process slot textures and the last-frame copy — and
-    // reinitialize. Fewer live shared allocations for VidMm to
-    // terminate while the driver stack recovers (a 0x10E_37 bugcheck in
-    // dxgmms2's pending-termination path took the whole machine down in
-    // the field); the factory re-opens the ring against a healthy
-    // device afterwards.
-    if (tdr::event_count() != _tdr_marks_at_open) {
-      BOOST_LOG(warning) << "LuminalVGD capture: GPU-reset event recorded; releasing shared ring "
-                            "textures and reinitializing for recovery.";
-      _slot_textures.clear();
-      _last_frame.reset();
+    // TDR blast-radius shrink: once any GPU-reset-class event is recorded
+    // (the encoder stall fires within ~100 ms of a hang), drop every shared
+    // GPU allocation this reader holds — the cached cross-process slot
+    // textures and the last-frame copy. Fewer live shared allocations for
+    // VidMm to terminate while the driver stack recovers (a 0x10E_37
+    // bugcheck in dxgmms2's pending-termination path took the whole machine
+    // down in the field). The DROP is unconditional and immediate; the
+    // reinit that used to accompany it is now a verdict of the liveness
+    // ladder, which defers it while the ring says it is recovering.
+    const bool tdr_edge = tdr::event_count() != _tdr_marks_at_open;
+    if (tdr_edge && !_tdr_allocations_dropped) {
+      BOOST_LOG(warning) << "LuminalVGD capture: GPU-reset event recorded; releasing shared ring textures.";
+      release_shared_allocations();
+      _tdr_allocations_dropped = true;
+    }
+
+    vgd_ring_sample_t sample {};
+    if (!read_ring_sample(sample, tdr_edge)) {
+      release_shared_allocations();
       return capture_e::reinit;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto decision = _liveness.evaluate(sample, now);
+
+    // Publish the verdict for the ENCODER threads before acting on it. Holding
+    // the capture loop through an outage is only half the job: the encoder runs
+    // across that same window and ends the client's session on its first failed
+    // encode unless it is told the display is coming back. One store, never a
+    // clear-then-set (see platf::display_t::capture_recovering()).
+    set_capture_recovering(decision.reason == vgd_ring_reason_e::recovering);
+    // Persist the ladder's recovery clock so the budget survives the capture
+    // reinits an outage causes, and covers the outage instead of restarting.
+    publish_recovery_clock();
+
+    switch (decision.verdict) {
+      case vgd_ring_verdict_e::wait:
+        if (decision.first_report) {
+          log_ring_decision(decision, sample);
+          _wait_logged_at = now;
+        } else if (now - _wait_logged_at >= kRingWaitProgressLogInterval) {
+          // A recovery runs for minutes. Without this the log goes silent for
+          // all of it and "host wedged" is indistinguishable from "host
+          // correctly waiting" after the fact. Rate-limited, and bounded
+          // overall by the recovery budget.
+          _wait_logged_at = now;
+          BOOST_LOG(info) << "LuminalVGD capture: still waiting on the ring after "
+                          << std::chrono::duration_cast<std::chrono::seconds>(_liveness.rebuilding_for(now)).count()
+                          << " s; holding the capture.";
+        }
+        // Nothing to deliver and the GPU may be mid-reset: do not touch the
+        // device (no cursor sync, no claim). Honour the caller's timeout rather
+        // than returning instantly — the base capture loop treats `timeout` as
+        // "nothing this round" and calls straight back, so an instant return
+        // free-runs this thread at ~100 Hz for the whole multi-minute recovery,
+        // burning a core in a SYSTEM service to re-read a header the driver
+        // touches four times a second.
+        wait_out_ring(timeout, sample);
+        return capture_e::timeout;
+
+      case vgd_ring_verdict_e::reinit:
+        log_ring_decision(decision, sample);
+        if (decision.reason == vgd_ring_reason_e::recovery_budget_expired) {
+          // The budget is aggregate, so this is not "this reader waited long
+          // enough" but "the host has waited out the whole outage and the ring
+          // never came back" — past the point the driver's own budget should
+          // have given up first. A plain reinit would build a fresh reader onto
+          // the same stuck ring and wait again; latch instead so the reinit
+          // lands on WGC/DDA and the session gets a definite answer.
+          BOOST_LOG(error) << "LuminalVGD capture: ring never finished rebuilding within the host's "
+                              "recovery budget; disabling ring capture for this session and falling "
+                              "back to WGC/DDA.";
+          g_broken_session.store(_session_id, std::memory_order_release);
+          // Drop the clock everywhere. The ladder's copy first, so a later
+          // publish cannot resurrect the spent one into the session-keyed store.
+          _liveness.reset_recovery_clock();
+          publish_recovery_clock();
+        }
+        release_shared_allocations();
+        return capture_e::reinit;
+
+      case vgd_ring_verdict_e::broken:
+        log_ring_decision(decision, sample);
+        g_broken_session.store(_session_id, std::memory_order_release);
+        release_shared_allocations();
+        return capture_e::reinit;
+
+      case vgd_ring_verdict_e::consume:
+        break;
     }
 
     // Cursor-capable driver: frames arrive cursor-free; pull the live
@@ -444,68 +773,6 @@ namespace platf::dxgi {
     // frames and `_cursor` stays null.
     if (_cursor) {
       sync_cursor();
-    }
-
-    VgdRingStatus status {};
-    if (vgd_ring_status(_ring, &status) != 0) {
-      return capture_e::reinit;
-    }
-    if (status.state == kRingStateDead) {
-      BOOST_LOG(warning) << "LuminalVGD capture: ring is DEAD; reinitializing.";
-      return capture_e::reinit;
-    }
-    if (status.qpc_frequency != 0 && status.heartbeat_qpc != 0) {
-      const auto beats_behind = qpc_time_difference(qpc_counter(), static_cast<int64_t>(status.heartbeat_qpc));
-      if (beats_behind > kHeartbeatStale) {
-        // The heartbeat stops whenever the OS unassigns the swapchain
-        // (game fullscreen/mode transitions) — the worker isn't dead, it's
-        // between assignments, and frames resume within seconds. Tearing
-        // the capture pipeline down for that turns a sub-second hiccup
-        // into a multi-second outage (encoder teardown + re-detection +
-        // settle), so wait out a grace window first.
-        const auto now = std::chrono::steady_clock::now();
-        if (!_heartbeat_stale_since) {
-          _heartbeat_stale_since = now;
-          BOOST_LOG(info) << "LuminalVGD capture: ring heartbeat stale ("
-                          << std::chrono::duration_cast<std::chrono::milliseconds>(beats_behind).count()
-                          << " ms); waiting out a possible swapchain reassignment.";
-        }
-        if (now - *_heartbeat_stale_since > kHeartbeatReinitGrace) {
-          BOOST_LOG(warning) << "LuminalVGD capture: ring heartbeat stale for "
-                             << std::chrono::duration_cast<std::chrono::seconds>(now - *_heartbeat_stale_since).count()
-                             << " s; reinitializing.";
-          return capture_e::reinit;
-        }
-        return capture_e::timeout;
-      }
-      _heartbeat_stale_since.reset();
-    }
-    if (status.state == kRingStateRebuilding) {
-      // The driver is retiring/recreating textures (mode change, swapchain
-      // reassignment). Frames resume under a new generation shortly.
-      return capture_e::timeout;
-    }
-
-    // A frame NEWER than the one we last delivered sitting unclaimed for a
-    // long stretch means the reader side is broken (claim CAS, texture
-    // path) — blacklist the ring so the reinit falls back to WGC/DDA
-    // instead of leaving the stream black. Cumulative publish counters are
-    // deliberately NOT used here: an idle desktop (driver publishing
-    // nothing new) is indistinguishable from a stall by counters alone.
-    if (status.latest_sequence > _last_sequence) {
-      const auto now = std::chrono::steady_clock::now();
-      if (!_undelivered_since) {
-        _undelivered_since = now;
-      } else if (now - *_undelivered_since > kDeliveryStall) {
-        BOOST_LOG(error) << "LuminalVGD capture: a newer frame (seq " << status.latest_sequence
-                         << " vs delivered " << _last_sequence << ") sat unclaimed for "
-                         << std::chrono::duration_cast<std::chrono::seconds>(kDeliveryStall).count()
-                         << " s; disabling ring capture for this session.";
-        g_broken_session.store(_session_id, std::memory_order_release);
-        return capture_e::reinit;
-      }
-    } else {
-      _undelivered_since.reset();
     }
 
     // True when the live cursor state has moved past what the client
@@ -615,6 +882,16 @@ namespace platf::dxgi {
 
     auto *slot = slot_texture(frame.generation, frame.index);
     if (!slot) {
+      if (_open_failed_device_removed) {
+        // Our own device is gone, not the ring. Rebuild against a fresh one;
+        // blacklisting the session here would retire ring capture for the
+        // rest of the process over a recoverable GPU event.
+        BOOST_LOG(warning) << "LuminalVGD capture: local D3D device removed while opening a slot "
+                              "texture; reinitializing against a fresh device.";
+        _open_failures = 0;
+        release_shared_allocations();
+        return capture_e::reinit;
+      }
       // Generation likely moved on between claim and open; retry next call —
       // but a persistent failure means the shared textures are unreachable.
       if (++_open_failures >= kMaxOpenFailures) {
@@ -727,7 +1004,7 @@ namespace platf::dxgi {
     claim_guard.disable();
     vgd_ring_release(_ring, frame.index);
     _last_sequence = frame.sequence;
-    _undelivered_since.reset();
+    _liveness.note_delivered();
 
     d3d_img->blank = false;
     d3d_img->format = capture_format;

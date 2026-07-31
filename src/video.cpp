@@ -31,6 +31,7 @@ extern "C" {
 #include "config.h"
 #include "display_device.h"
 #include "encoder_probe_shield.h"
+#include "encoder_recovery_gate.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -40,6 +41,7 @@ extern "C" {
 #include "tdr_state.h"
 #include "video.h"
 #include "webrtc_stream.h"
+#include "yuv444_fallback.h"
 #ifdef _WIN32
   #include "amf/amf_caps.h"
   #include "platform/windows/frame_limiter.h"
@@ -2522,24 +2524,158 @@ namespace video {
   std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config);
 
   /**
-   * @brief Downgrade an in-flight YUV 4:4:4 session to 4:2:0 after an encoder failure.
-   * @param config The session's encode configuration, mutated to 4:2:0 on downgrade.
-   * @param chroma_downgrade_events Per-session event used to tell the control plane
-   *        (and through it the session stats) that the effective chroma changed.
-   * @param stage Human-readable description of what failed, for the log line.
-   * @return `true` if the session was downgraded and a retry at 4:2:0 makes sense.
+   * @brief How long a downgrade site waits for a recovery verdict it may have
+   *        raced past, when it has no way to settle the question by retrying.
+   *
+   * The verdict is written by the capture thread and read by an encoder thread,
+   * so an encoder can reach its failure a beat before the capture loop has
+   * sampled the ring and said "recovering". This covers that beat and nothing
+   * more — it is not a wait for the OUTAGE, which is minutes long and is held
+   * for elsewhere, under a ceiling. Bounded, paid at most once per encoder
+   * build, and only ever on a 4:4:4 session that just failed.
    */
-  bool downgrade_yuv444_to_420(config_t &config, safe::mail_raw_t::event_t<bool> chroma_downgrade_events, const char *stage) {
-    if (config.chromaSamplingType != 1) {
+  constexpr auto kRecoveryVerdictGrace = std::chrono::milliseconds(500);
+  constexpr auto kRecoveryVerdictPoll = std::chrono::milliseconds(20);
+
+  /**
+   * @brief Give the capture thread a bounded beat to publish a recovery verdict.
+   * @param disp The display to re-sample. May be null.
+   * @param abort Returns true when the session is ending anyway.
+   * @return `true` when the display started reporting recovery within the grace.
+   */
+  bool recovery_verdict_appears(const platf::display_t *disp, const std::function<bool()> &abort) {
+    if (!disp) {
       return false;
     }
+    const auto deadline = std::chrono::steady_clock::now() + kRecoveryVerdictGrace;
+    while (true) {
+      if (disp->capture_recovering()) {
+        return true;
+      }
+      if ((abort && abort()) || std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(kRecoveryVerdictPoll);
+    }
+  }
+
+  /**
+   * @brief Downgrade a failed encoder build to YUV 4:2:0, but only when that is
+   *        both warranted and earned.
+   *
+   * The downgrade is session-lifetime and irreversible, so it may not be spent
+   * on a transient. See video::yuv444_fallback_t for the full rationale; in
+   * short, a display inside a bounded recovery window fails every encoder build
+   * regardless of chroma, so the failure is no evidence about 4:4:4 — and
+   * because the verdict is published by one thread and read by another, the
+   * verdict check alone loses a race that has to be settled after the fact.
+   *
+   * @param disp The display whose recovery verdict to consult. May be null.
+   * @param config The session's encode configuration; 4:2:0 only if committed.
+   * @param chroma_downgrade_events Per-session event used to tell the control
+   *        plane (and through it the session stats) that the chroma changed.
+   * @param stage Human-readable description of what failed, for the log line.
+   * @param settle_downgrade Decides whether the provisional downgrade stands.
+   *        Four of the five sites answer by rebuilding at 4:2:0 in line and
+   *        reporting whether it worked. The fifth cannot — building a second
+   *        encoder session against a GPU that may be mid-reset is the
+   *        concurrent-teardown pattern that has corrupted the NVIDIA driver heap
+   *        before — and answers by re-sampling the recovery verdict instead.
+   *        Required, deliberately: a site that settles on nothing commits a
+   *        capability loss on a race, which is what this parameter exists to
+   *        stop.
+   * @return `true` when the session was downgraded and the downgrade stands.
+   */
+  bool downgrade_yuv444_to_420(
+    const platf::display_t *disp,
+    config_t &config,
+    safe::mail_raw_t::event_t<bool> chroma_downgrade_events,
+    const char *stage,
+    const std::function<bool()> &settle_downgrade
+  ) {
+    yuv444_fallback_t fallback {config.chromaSamplingType};
+
+    switch (fallback.attempt(disp && disp->capture_recovering())) {
+      case yuv444_fallback_e::not_applicable:
+        return false;
+      case yuv444_fallback_e::keep_444:
+        BOOST_LOG(info) << "YUV 4:4:4 "sv << stage
+                        << " failed while the display is recovering from a GPU outage. That fails "
+                           "at any chroma, so it says nothing about 4:4:4 — keeping 4:4:4 and "
+                           "waiting for the display instead of downgrading the session for good."sv;
+        return false;
+      case yuv444_fallback_e::try_420:
+        break;
+    }
+
+    if (!fallback.settle(settle_downgrade())) {
+      // The downgrade did not earn its keep — 4:2:0 failed too, or a recovery
+      // verdict turned up a beat late — so the failure was never about chroma.
+      // 4:4:4 is back and the client is told nothing. Whatever is wrong gets
+      // today's handling from the caller, one capability better off than before.
+      return false;
+    }
+
     BOOST_LOG(error) << "YUV 4:4:4 "sv << stage << " failed in flight — the GPU, driver, or display path rejected 4:4:4 output. "
                      << "Falling back to YUV 4:2:0 for this session. If your TV or monitor cannot accept YUV 4:4:4, "
                      << "disable 'YUV 4:4:4 Streaming' in Settings to avoid the retry."sv;
-    config.chromaSamplingType = 0;
     if (chroma_downgrade_events) {
       chroma_downgrade_events->raise(true);
     }
+    return true;
+  }
+
+  /**
+   * @brief Hold an encoder thread while the capture source rides out a bounded
+   *        display outage, instead of ending the client's session.
+   *
+   * The capture side answers a recoverable GPU outage by deferring its reinit
+   * (see platf::display_t::capture_recovering()). That deferral is what keeps
+   * the pipeline in its cheap timeout loop — but it also leaves THIS thread
+   * running across the outage, where a reinit used to park it. Every encoder
+   * failure below is fatal to the session by design, and during the outage they
+   * all fail for the same non-fatal reason: the GPU is down and coming back.
+   * So wait the window out here and let the caller retry against the recovered
+   * display.
+   *
+   * @param disp The display whose recovery verdict to follow.
+   * @param gate Per-thread ceiling; bounds the WHOLE outage, not one call.
+   * @param abort Returns true when the session is ending anyway (shutdown).
+   * @return `true` when the caller should retry, `false` when it must run
+   *         today's failure handling — because the source was never recovering,
+   *         because the ceiling expired, or because the session is shutting
+   *         down.
+   */
+  bool hold_for_display_recovery(platf::display_t &disp, encoder_recovery_gate_t &gate, const std::function<bool()> &abort) {
+    const bool hold = gate.evaluate(disp.capture_recovering(), std::chrono::steady_clock::now()) ==
+                      encoder_recovery_action_e::hold;
+    if (!hold || abort()) {
+      return false;
+    }
+
+    BOOST_LOG(warning) << "Encoder: the display is recovering from a GPU outage; holding the session "
+                          "open instead of ending it."sv;
+
+    while (!abort() &&
+           gate.evaluate(disp.capture_recovering(), std::chrono::steady_clock::now()) ==
+             encoder_recovery_action_e::hold) {
+      std::this_thread::sleep_for(20ms);
+    }
+
+    const auto held_ms = std::chrono::duration_cast<std::chrono::milliseconds>(gate.held_for()).count();
+    if (abort()) {
+      return false;
+    }
+    if (disp.capture_recovering()) {
+      // The ceiling expired while the source still claims to be recovering.
+      // Stop trusting it and fall through to today's failure handling.
+      BOOST_LOG(warning) << "Encoder: the display has reported recovery for "sv << held_ms
+                         << " ms without returning; giving up on it."sv;
+      return false;
+    }
+
+    BOOST_LOG(info) << "Encoder: the display finished recovering after "sv << held_ms
+                    << " ms; rebuilding the encoder."sv;
     return true;
   }
 
@@ -2555,12 +2691,17 @@ namespace video {
     void *channel_data
   ) {
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
-    if (!session && downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "encoder session creation")) {
-      if (auto fallback_device = make_encode_device(*disp, encoder, config)) {
-        session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(fallback_device));
-      }
+    if (!session) {
+      downgrade_yuv444_to_420(disp.get(), config, mail->event<bool>(mail::chroma_downgrade), "encoder session creation", [&]() {
+        if (auto fallback_device = make_encode_device(*disp, encoder, config)) {
+          session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(fallback_device));
+        }
+        return static_cast<bool>(session);
+      });
     }
     if (!session) {
+      // Nothing to hold for here: the caller (capture_async) owns the recovery
+      // gate and holds on its own side before rebuilding this.
       return;
     }
 
@@ -2602,8 +2743,31 @@ namespace video {
       if (!dummy_img || disp->dummy_img(dummy_img.get()) || session->convert(*dummy_img)) {
         // If the 4:4:4 color conversion path is what failed, downgrade so the
         // caller's reinit loop retries this session at 4:2:0 instead of
-        // spinning on the same failure.
-        downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "initial frame conversion");
+        // spinning on the same failure. No in-line retry: validating this one
+        // would mean building and tearing down a second encoder session against
+        // a GPU that may be mid-reset, which is the concurrent-teardown pattern
+        // that has corrupted the NVIDIA driver heap before.
+        //
+        // So the recovery verdict is the whole guard here, and it is read on
+        // THIS thread while the capture thread writes it — which means a failure
+        // that lands a beat before the capture loop has sampled the ring reads
+        // "not recovering" and would otherwise cost the session its 4:4:4 for
+        // good, over an outage the system goes on to recover from completely.
+        // Re-sample it for a bounded beat and revoke the downgrade if it turns
+        // up. Costs nothing on the case the fallback exists for (a display that
+        // is genuinely not coming back never publishes a verdict, so the grace
+        // elapses once and the downgrade commits exactly as it does today).
+        downgrade_yuv444_to_420(
+          disp.get(),
+          config,
+          mail->event<bool>(mail::chroma_downgrade),
+          "initial frame conversion",
+          [&]() {
+            return !recovery_verdict_appears(disp.get(), [&]() {
+              return shutdown_event->peek() || !images->running();
+            });
+          }
+        );
         return;
       }
     }
@@ -2858,8 +3022,11 @@ namespace video {
     encode_session.ctx = &ctx;
 
     auto encode_device = make_encode_device(*disp, encoder, ctx.config);
-    if (!encode_device && downgrade_yuv444_to_420(ctx.config, ctx.chroma_downgrade_events, "encode device creation")) {
-      encode_device = make_encode_device(*disp, encoder, ctx.config);
+    if (!encode_device) {
+      downgrade_yuv444_to_420(disp, ctx.config, ctx.chroma_downgrade_events, "encode device creation", [&]() {
+        encode_device = make_encode_device(*disp, encoder, ctx.config);
+        return static_cast<bool>(encode_device);
+      });
     }
     if (!encode_device) {
       return std::nullopt;
@@ -2880,10 +3047,13 @@ namespace video {
     ctx.hdr_events->raise(std::move(hdr_info));
 
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
-    if (!session && downgrade_yuv444_to_420(ctx.config, ctx.chroma_downgrade_events, "encoder session creation")) {
-      if (auto fallback_device = make_encode_device(*disp, encoder, ctx.config)) {
-        session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(fallback_device));
-      }
+    if (!session) {
+      downgrade_yuv444_to_420(disp, ctx.config, ctx.chroma_downgrade_events, "encoder session creation", [&]() {
+        if (auto fallback_device = make_encode_device(*disp, encoder, ctx.config)) {
+          session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(fallback_device));
+        }
+        return static_cast<bool>(session);
+      });
     }
     if (!session) {
       return std::nullopt;
@@ -2905,7 +3075,8 @@ namespace video {
     std::vector<std::unique_ptr<sync_session_ctx_t>> &synced_session_ctxs,
     encode_session_ctx_queue_t &encode_session_ctx_queue,
     std::vector<std::string> &display_names,
-    int &display_p
+    int &display_p,
+    encoder_recovery_gate_t &recovery_gate
   ) {
     const auto *enc_ptr = chosen_encoder;
     if (!enc_ptr) {
@@ -2985,7 +3156,29 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
-        while (encode_session_ctx_queue.peek()) {
+        // The capture source can be riding out a bounded display outage (see
+        // platf::display_t::capture_recovering()). Unlike the async path there
+        // is nothing to park here — this callback IS the capture thread, called
+        // by the very loop that is doing the waiting. So keep every piece of
+        // session bookkeeping below running and skip only the encode.
+        //
+        // That skip is the fix: an encode against a GPU that is mid-reset
+        // fails, and today's handling of an encode failure is to raise the
+        // session's shutdown event. Deferring the capture reinit without this
+        // just moves the teardown from the capture loop into this callback,
+        // which the loop then calls every 10 ms for the length of the outage.
+        const bool recovering = disp && disp->capture_recovering();
+        const bool hold_for_recovery =
+          recovery_gate.evaluate(recovering, std::chrono::steady_clock::now()) ==
+          encoder_recovery_action_e::hold;
+
+        // `img` is null whenever the backend reports a timeout (no frame this
+        // round) — the loop below still needs one to bootstrap a joining
+        // session, so leave the context queued until a real frame arrives
+        // rather than dereferencing null. This matters most while a display is
+        // recovering: the capture loop can service this callback for minutes
+        // without ever producing an image.
+        while (img && encode_session_ctx_queue.peek()) {
           auto encode_session_ctx = encode_session_ctx_queue.pop();
           if (!encode_session_ctx) {
             return false;
@@ -3023,6 +3216,15 @@ namespace video {
           if (ctx->idr_events->peek()) {
             pos->session->request_idr_frame();
             ctx->idr_events->pop();
+          }
+
+          if (hold_for_recovery) {
+            // Shutdown, IDR and (below) display-switch handling all still run;
+            // only the GPU work waits. The client keeps its last frame until
+            // the display returns, which beats losing the session over an
+            // outage the driver is already riding out.
+            ++pos;
+            continue;
           }
 
           std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
@@ -3064,6 +3266,9 @@ namespace video {
 
             continue;
           }
+          // A frame encoded: whatever outage the gate was holding for is over,
+          // so the next one starts from a full ceiling.
+          recovery_gate.note_progress();
 
           if (placeholder_input) {
             pos->bootstrap.placeholder_encoded = true;
@@ -3128,7 +3333,10 @@ namespace video {
 
     std::vector<std::string> display_names;
     int display_p = -1;
-    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p) == encode_e::reinit) {}
+    // Outside the reinit loop so the ceiling bounds the whole outage rather
+    // than restarting on every rebuild the outage causes.
+    encoder_recovery_gate_t recovery_gate;
+    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p, recovery_gate) == encode_e::reinit) {}
   }
 
   void capture_async(
@@ -3160,6 +3368,22 @@ namespace video {
     auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
 
+    // Bounds how long this thread defers to a recovering capture source. Lives
+    // out here, not per iteration, so the ceiling covers the whole outage
+    // however many encoder rebuilds it spans.
+    encoder_recovery_gate_t recovery_gate;
+    const auto session_ending = [&]() {
+      return shutdown_event->peek() || !images->running();
+    };
+    // Stop holding the moment the capture thread starts a reinit. The recovery
+    // verdict is published on the display object the capture thread is about to
+    // replace, so from here on it is stale by construction and would otherwise
+    // hold this thread for the whole ceiling; the reinit wait at the top of the
+    // loop below is the correct place to be instead.
+    const auto stop_holding = [&]() {
+      return session_ending() || ref->reinit_event.peek();
+    };
+
     // Encoding takes place on this thread
     platf::adjust_thread_priority(platf::thread_priority_e::high);
 
@@ -3188,12 +3412,39 @@ namespace video {
       auto &encoder = *enc_ptr;
 
       auto encode_device = make_encode_device(*display, encoder, config);
-      if (!encode_device && downgrade_yuv444_to_420(config, mail->event<bool>(mail::chroma_downgrade), "encode device creation")) {
-        encode_device = make_encode_device(*display, encoder, config);
+      if (!encode_device) {
+        // The recovery verdict is consulted INSIDE this, ahead of any mutation
+        // of `config`: the 4:4:4 fallback is session-lifetime and irreversible,
+        // and a GPU that is mid-reset fails this call at every chroma. Before
+        // the session survived an outage the distinction did not matter — the
+        // session died here and the client renegotiated 4:4:4 on reconnect.
+        // Now it does: an unguarded downgrade here would cost a fully recovered
+        // outage its 4:4:4 for the rest of the session's life.
+        downgrade_yuv444_to_420(display.get(), config, mail->event<bool>(mail::chroma_downgrade), "encode device creation", [&]() {
+          encode_device = make_encode_device(*display, encoder, config);
+          return static_cast<bool>(encode_device);
+        });
       }
       if (!encode_device) {
+        // Returning here trips this function's fail guard, which raises
+        // mail::shutdown and ends the client's session. A GPU that is mid-reset
+        // cannot build an encode device, and the capture side is deliberately
+        // NOT reinitializing through that window — so without this the outage
+        // the driver ducks out of kills the stream from the encoder thread
+        // instead. Hold, then retry against the recovered display.
+        if (hold_for_display_recovery(*display, recovery_gate, stop_holding)) {
+          continue;
+        }
+        if (ref->reinit_event.peek()) {
+          // A reinit is already in flight, so this device was doomed to fail
+          // against a display that is being replaced anyway. Go wait for the
+          // replacement rather than ending the session over it.
+          continue;
+        }
         return;
       }
+      // A device built against this display is proof the outage is over.
+      recovery_gate.note_progress();
 
       // absolute mouse coordinates require that the dimensions of the screen are known
       touch_port_event->raise(make_port(display.get(), config));
@@ -3220,7 +3471,20 @@ namespace video {
         *ref->encoder_p,
         channel_data
       );
+
+      // encode_run returns on any encoder-side failure, and while the display
+      // is down every one of them recurs immediately. Without this the loop
+      // would spin encoder create/destroy cycles against a GPU that is still
+      // resetting — the exact overlapping-NvEnc-teardown pattern that has
+      // corrupted the driver heap before. Hold until the display is back, then
+      // rebuild once. A no-op when nothing is recovering, and it yields
+      // immediately once a reinit is in flight.
+      hold_for_display_recovery(*display, recovery_gate, stop_holding);
     }
+  }
+
+  bool uses_async_encode_path(const encoder_t &encoder) {
+    return (encoder.flags & PARALLEL_ENCODING) != 0;
   }
 
   void capture(
@@ -3238,7 +3502,7 @@ namespace video {
     auto idr_events = mail->event<bool>(mail::idr);
 
     idr_events->raise(true);
-    if (encoder->flags & PARALLEL_ENCODING) {
+    if (uses_async_encode_path(*encoder)) {
       capture_async(std::move(mail), config, channel_data);
     } else {
       safe::signal_t join_event;

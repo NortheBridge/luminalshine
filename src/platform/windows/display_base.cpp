@@ -1016,6 +1016,20 @@ namespace platf::dxgi {
     std::optional<std::chrono::steady_clock::time_point> frame_pacing_group_start;
     uint32_t frame_pacing_group_frames = 0;
 
+    // Hard ceiling on deferring a stale-factory reinit for a capture source
+    // that says it is recovering (see is_recovering()). Sits above the ring
+    // backend's own recovery budget, which sits above the driver's — each
+    // layer's give-up lands before the one above it has to.
+    constexpr auto kMaxRecoveryDeferral = std::chrono::minutes(15);
+    // How often to say so while waiting. A deferral can legitimately run for
+    // minutes, and a multi-minute silence in a capture log is undiagnosable
+    // from the field: "frozen host" and "host correctly riding out a GPU
+    // outage" look identical. Rate-limited because the loop below spins at
+    // ~100 Hz, and bounded overall by kMaxRecoveryDeferral above.
+    constexpr auto kRecoveryProgressLogInterval = std::chrono::seconds(15);
+    std::optional<std::chrono::steady_clock::time_point> recovery_deferral_started;
+    std::optional<std::chrono::steady_clock::time_point> recovery_deferral_logged;
+
     // Keep the display awake during capture. If the display goes to sleep during
     // capture, best case is that capture stops until it powers back on. However,
     // worst case it will trigger us to reinit DD, waking the display back up in
@@ -1032,8 +1046,73 @@ namespace platf::dxgi {
       // display or GPU changes. We should reinit to examine the updated state of
       // the display subsystem. It is recommended to call this once per frame.
       if (!factory->IsCurrent()) {
-        return platf::capture_e::reinit;
+        // A GPU reset makes the factory stale too. When the capture source
+        // knows it is inside a bounded recovery window — a LuminalVGD ring
+        // that is REBUILDING with a live heartbeat, i.e. a driver riding out
+        // the outage with its monitor still arrived — reinitializing now
+        // would drop the encoder out of its cheap timeout loop and spin the
+        // capture-reinit machinery against a GPU that has not come back yet.
+        // Defer, don't cancel: is_recovering() self-limits, and the reinit is
+        // taken on the very next iteration once it stops returning true.
+        //
+        // The local deadline is belt-and-braces on top of that self-limit —
+        // this runs in a SYSTEM service, and an override that forgot to bound
+        // itself must not be able to wedge the capture thread forever.
+        //
+        // Publishing the verdict is not optional bookkeeping: deferring the
+        // reinit leaves the ENCODER thread running across the outage, and it
+        // ends the session on its first failed encode unless it learns the same
+        // thing this loop just did (see platf::display_t::capture_recovering()).
+        // One store per iteration, never a clear followed by a set — an encoder
+        // that sampled the gap would read a spurious "not recovering".
+        const bool recovering = is_recovering();
+        set_capture_recovering(recovering);
+
+        if (!recovering) {
+          recovery_deferral_started.reset();
+          recovery_deferral_logged.reset();
+          return platf::capture_e::reinit;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (!recovery_deferral_started) {
+          recovery_deferral_started = now;
+          recovery_deferral_logged = now;
+          BOOST_LOG(info) << "Capture source reports a bounded recovery window; deferring the display "
+                             "reinit and holding the session (giving up after "sv
+                          << std::chrono::duration_cast<std::chrono::minutes>(kMaxRecoveryDeferral).count()
+                          << " minutes)."sv;
+        } else if (now - *recovery_deferral_started > kMaxRecoveryDeferral) {
+          BOOST_LOG(warning) << "Capture source reported recovery for longer than "sv
+                             << std::chrono::duration_cast<std::chrono::minutes>(kMaxRecoveryDeferral).count()
+                             << " minutes; reinitializing anyway."sv;
+          set_capture_recovering(false);
+          recovery_deferral_started.reset();
+          recovery_deferral_logged.reset();
+          return platf::capture_e::reinit;
+        } else if (now - *recovery_deferral_logged >= kRecoveryProgressLogInterval) {
+          recovery_deferral_logged = now;
+          BOOST_LOG(info) << "Capture source still recovering after "sv
+                          << std::chrono::duration_cast<std::chrono::seconds>(now - *recovery_deferral_started).count()
+                          << " s; still holding the session."sv;
+        }
+
+        // Keep servicing the callback so joining sessions and display-switch
+        // requests are still picked up while we wait.
+        std::shared_ptr<img_t> no_img;
+        if (!push_captured_image_cb(std::move(no_img), false)) {
+          return capture_e::ok;
+        }
+        std::this_thread::sleep_for(10ms);
+        continue;
       }
+      // Factory is current again: a later, unrelated recovery gets a full
+      // deferral window of its own rather than the remains of this one. The
+      // published verdict is deliberately NOT cleared here — snapshot() below
+      // is the authority whenever the factory is current, and clearing it first
+      // would open exactly the spurious-"not recovering" window described above.
+      recovery_deferral_started.reset();
+      recovery_deferral_logged.reset();
 
       platf::capture_e status = capture_e::ok;
       std::shared_ptr<img_t> img_out;

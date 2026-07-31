@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <atomic>
 #include <bitset>
 #include <filesystem>
 #include <functional>
@@ -517,6 +518,42 @@ namespace platf {
       return true;
     }
 
+    /**
+     * @brief True while this capture source is inside a BOUNDED, known-transient
+     * recovery window in which the display is down but coming back.
+     *
+     * Published by the capture thread; read by ENCODER threads at exactly the
+     * points where they would otherwise end the client's session. A capture
+     * backend that can tell "the GPU is resetting and the display will return"
+     * from "the display is gone" answers the former by NOT reinitializing — but
+     * that only moves the teardown to the other thread. The reinit used to park
+     * the encoder for the duration; deferring it leaves the encoder running
+     * across the outage, where its first failed encode, or its first failed
+     * encode-device creation against a GPU that is still down, runs the ordinary
+     * failure path and ends the session anyway. So the verdict has to reach the
+     * encoder as well as the capture loop.
+     *
+     * Always false for backends that never publish it, which keeps every other
+     * capture path bit-identical.
+     *
+     * @return true while a recovery window is open.
+     */
+    [[nodiscard]] bool capture_recovering() const {
+      return _capture_recovering.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Publish the recovery verdict for this iteration.
+     *
+     * Capture thread only, and it must be a single store per iteration rather
+     * than a clear followed by a set: an encoder sampling the gap between them
+     * would read a spurious "not recovering" and tear the session down for the
+     * outage this whole mechanism exists to survive.
+     */
+    void set_capture_recovering(bool recovering) {
+      _capture_recovering.store(recovering, std::memory_order_release);
+    }
+
     virtual ~display_t() = default;
 
     // Offsets for when streaming a specific monitor. By default, they are 0.
@@ -530,6 +567,11 @@ namespace platf {
   protected:
     // collect capture timing data (at loglevel debug)
     logging::time_delta_periodic_logger sleep_overshoot_logger = {debug, "Frame capture sleep overshoot"};
+
+  private:
+    /// See capture_recovering(). Written by the capture thread, read by encoder
+    /// threads, so it is atomic even though only one thread ever stores it.
+    std::atomic<bool> _capture_recovering {false};
   };
 
   class mic_t {
