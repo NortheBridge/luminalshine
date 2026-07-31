@@ -24,6 +24,7 @@
 #include "../tests_common.h"
 #include "src/encoder_recovery_gate.h"
 
+#include <algorithm>
 #include <chrono>
 
 using video::encoder_recovery_action_e;
@@ -157,4 +158,128 @@ TEST(DisplayRecoveryGate, ConfigIsHonoured) {
   EXPECT_EQ(gate.evaluate(recovering, at(0s)), encoder_recovery_action_e::hold);
   EXPECT_EQ(gate.evaluate(recovering, at(20s)), encoder_recovery_action_e::hold);
   EXPECT_EQ(gate.evaluate(recovering, at(31s)), encoder_recovery_action_e::fail);
+}
+
+// --- The hold has to keep the CLIENT as well as the host session ----------
+
+/**
+ * The second half of the regression the gate above exists for.
+ *
+ * Holding the host's session open is worth nothing if the client leaves. A
+ * Moonlight client that receives no video for a few seconds tears the session
+ * down from its end, and the outages this whole mechanism exists to survive run
+ * for MINUTES — so an encoder that answers a hold by emitting nothing saves the
+ * host's session and loses the client's, which is worse than the teardown it
+ * replaced.
+ *
+ * The sync encode path is where that bites: its push-image callback IS the
+ * capture thread, so there is nothing to park, and skipping the encode outright
+ * — the obvious way to keep failing encodes off a resetting GPU — is exactly
+ * "emit nothing for the whole window". These pin the cadence that replaces it.
+ */
+TEST(RecoveryKeepalive, AHoldKeepsEmittingVideoForItsWholeLength) {
+  // Three minutes of holding, polled at the capture loop's 10 ms rate — the
+  // shape of a real recovery on the sync path.
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(500ms);
+
+  int emitted = 0;
+  std::chrono::nanoseconds longest_gap {0};
+  auto last = at(0ms);
+
+  for (auto t = 0ms; t < 3min; t += 10ms) {
+    if (!keepalive.due(true, at(t))) {
+      continue;
+    }
+    keepalive.note_emitted(at(t));
+    longest_gap = std::max(longest_gap, at(t) - last);
+    last = at(t);
+    ++emitted;
+  }
+
+  EXPECT_GT(emitted, 0) << "the client received no video at all for the whole outage";
+  EXPECT_NEAR(emitted, static_cast<int>(3min / 500ms), 2);
+  EXPECT_LE(longest_gap, 1s) << "a gap this long is what the client's own timeout fires on";
+}
+
+TEST(RecoveryKeepalive, TheFirstTickOfAHoldIsDueImmediately) {
+  // The client is already counting down when the hold starts; it should hear
+  // from the host on the same tick, not an interval into the outage.
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(1s);
+
+  EXPECT_TRUE(keepalive.due(true, at(0ms)));
+}
+
+TEST(RecoveryKeepalive, NothingIsEmittedWhenTheEncoderIsNotHolding) {
+  // Normal streaming is untouched: the keepalive only ever runs in place of an
+  // encode the hold would otherwise have skipped.
+  video::recovery_keepalive_t keepalive;
+
+  EXPECT_FALSE(keepalive.due(false, at(0ms)));
+  EXPECT_FALSE(keepalive.due(false, at(1h)));
+}
+
+TEST(RecoveryKeepalive, TheCadenceIsPacedNotFreeRun) {
+  // The callback is invoked every 10 ms during a hold. Emitting on every one of
+  // them would aim ~100 encodes a second at a GPU that may still be resetting,
+  // to re-send a picture that cannot change — there is no new capture.
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(500ms);
+
+  ASSERT_TRUE(keepalive.due(true, at(0ms)));
+  keepalive.note_emitted(at(0ms));
+
+  EXPECT_FALSE(keepalive.due(true, at(10ms)));
+  EXPECT_FALSE(keepalive.due(true, at(499ms)));
+  EXPECT_TRUE(keepalive.due(true, at(500ms)));
+}
+
+TEST(RecoveryKeepalive, TheSessionsCadenceIsClampedAtBothEnds) {
+  video::recovery_keepalive_t keepalive;
+
+  keepalive.set_interval(16ms);  // a 60 fps session's minimum-FPS frame time
+  EXPECT_EQ(keepalive.interval(), keepalive.config().fastest)
+    << "a full-rate keepalive hammers a recovering GPU for minutes";
+
+  keepalive.set_interval(30s);  // a session configured for a very low floor
+  EXPECT_EQ(keepalive.interval(), keepalive.config().slowest)
+    << "a keepalive slower than the client's no-video timeout is not a keepalive";
+
+  keepalive.set_interval(400ms);
+  EXPECT_EQ(keepalive.interval(), 400ms);
+}
+
+TEST(RecoveryKeepalive, AFailingKeepaliveIsPacedAndReportedSparingly) {
+  // Every keepalive of a hold can fail — the GPU is down. The cadence must not
+  // change (the moment the encoder can produce a frame again, the client gets
+  // one) and the log must not fill with one line per attempt.
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(500ms);
+
+  int reported = 0;
+  for (auto t = 0ms; t < 3min; t += 10ms) {
+    if (!keepalive.due(true, at(t))) {
+      continue;
+    }
+    keepalive.note_emitted(at(t));  // the attempt happened; it just failed
+    if (keepalive.should_report_failure(at(t))) {
+      ++reported;
+    }
+  }
+
+  EXPECT_GT(reported, 0) << "a multi-minute failing hold left no evidence in the log";
+  EXPECT_LE(reported, static_cast<int>(3min / keepalive.config().failure_log_interval) + 1);
+}
+
+TEST(RecoveryKeepalive, ARealFrameResetsThePacerSoTheNextHoldEmitsAtOnce) {
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(1s);
+
+  ASSERT_TRUE(keepalive.due(true, at(0ms)));
+  keepalive.note_emitted(at(0ms));
+  ASSERT_FALSE(keepalive.due(true, at(100ms)));
+
+  keepalive.note_progress();
+  EXPECT_TRUE(keepalive.due(true, at(100ms)));
 }

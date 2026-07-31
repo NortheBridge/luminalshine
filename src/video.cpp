@@ -735,6 +735,10 @@ namespace video {
     sync_session_ctx_t *ctx;
     std::unique_ptr<encode_session_t> session;
     encode_bootstrap_state_t bootstrap;
+    /// Paces the video this session keeps sending while the display rides out an
+    /// outage. Without it the hold is self-defeating: the host keeps a session
+    /// the client has already timed out of. See recovery_keepalive_t.
+    recovery_keepalive_t keepalive;
   };
 
   using encode_session_ctx_queue_t = safe::queue_t<sync_session_ctx_t>;
@@ -3007,6 +3011,20 @@ namespace video {
     encode_session.bootstrap.allow_placeholder_before_first_real = ctx.frame_nr <= 1;
     encode_session.session = std::move(session);
 
+    // Same minimum-FPS intent the async path encodes static content at, clamped
+    // by the keepalive to a rate that is safe to aim at a GPU that may still be
+    // resetting and still fast enough to beat the client's no-video timeout.
+    const double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ?
+                                        config::video.minimum_fps_target :
+                                        ctx.config.framerate;
+    if (minimum_fps_target > 0.0) {
+      encode_session.keepalive.set_interval(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::duration<double, std::milli> {1000.0 / minimum_fps_target}
+        )
+      );
+    }
+
     return encode_session;
   }
 
@@ -3099,16 +3117,22 @@ namespace video {
         // platf::display_t::capture_recovering()). Unlike the async path there
         // is nothing to park here — this callback IS the capture thread, called
         // by the very loop that is doing the waiting. So keep every piece of
-        // session bookkeeping below running and skip only the encode.
+        // session bookkeeping below running, and slow the encode down to a
+        // keepalive rather than running it at the loop's rate.
         //
-        // That skip is the fix: an encode against a GPU that is mid-reset
-        // fails, and today's handling of an encode failure is to raise the
-        // session's shutdown event. Deferring the capture reinit without this
+        // Slowing it is the fix for an encode against a GPU that is mid-reset:
+        // it fails, and today's handling of an encode failure is to raise the
+        // session's shutdown event, so deferring the capture reinit without this
         // just moves the teardown from the capture loop into this callback,
         // which the loop then calls every 10 ms for the length of the outage.
+        // STOPPING it is not the fix, though — an outage runs for minutes and a
+        // client that receives no video for that long ends the session from its
+        // own side, so the host would be left holding a session nobody is
+        // watching. See recovery_keepalive_t.
+        const auto callback_now = std::chrono::steady_clock::now();
         const bool recovering = disp && disp->capture_recovering();
         const bool hold_for_recovery =
-          recovery_gate.evaluate(recovering, std::chrono::steady_clock::now()) ==
+          recovery_gate.evaluate(recovering, callback_now) ==
           encoder_recovery_action_e::hold;
 
         // `img` is null whenever the backend reports a timeout (no frame this
@@ -3159,9 +3183,34 @@ namespace video {
 
           if (hold_for_recovery) {
             // Shutdown, IDR and (below) display-switch handling all still run;
-            // only the GPU work waits. The client keeps its last frame until
-            // the display returns, which beats losing the session over an
-            // outage the driver is already riding out.
+            // the encode drops to the keepalive cadence. There is no new capture
+            // to send, so this re-sends the frame the session already holds —
+            // the client's picture is frozen either way, and the point is that
+            // its video stream is not.
+            if (!pos->keepalive.due(true, callback_now)) {
+              ++pos;
+              continue;
+            }
+            pos->keepalive.note_emitted(callback_now);
+
+            if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, std::nullopt, std::nullopt)) {
+              // Do NOT raise the shutdown event: this failure IS the outage the
+              // session is being held open for, not a verdict about the session.
+              // What bounds it is `recovery_gate` — when its ceiling expires
+              // hold_for_recovery goes false and the encode below runs today's
+              // failure handling on the very next callback.
+              if (pos->keepalive.should_report_failure(callback_now)) {
+                BOOST_LOG(warning) << "Encoder: keepalive frame failed while the display is recovering; "
+                                      "holding the session and trying again."sv;
+              }
+              ++pos;
+              continue;
+            }
+            // Deliberately no recovery_gate.note_progress() here. A keepalive is
+            // not progress — it carries no new capture — and counting it as such
+            // would refresh the ceiling on every one of them and make the hold
+            // unbounded.
+            pos->session->request_normal_frame();
             ++pos;
             continue;
           }
@@ -3206,8 +3255,10 @@ namespace video {
             continue;
           }
           // A frame encoded: whatever outage the gate was holding for is over,
-          // so the next one starts from a full ceiling.
+          // so the next one starts from a full ceiling — and the next hold
+          // starts its keepalive immediately rather than one interval in.
           recovery_gate.note_progress();
+          pos->keepalive.note_progress();
 
           if (placeholder_input) {
             pos->bootstrap.placeholder_encoded = true;

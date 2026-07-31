@@ -134,4 +134,147 @@ namespace video {
     bool _last_was_recovering = false;
   };
 
+  struct recovery_keepalive_config_t {
+    /**
+     * @brief Fastest the keepalive may run while holding.
+     *
+     * Every keepalive emitted during an outage is an encode against a GPU that
+     * may still be resetting, so running it at the session's full minimum-FPS
+     * cadence (16 ms at 60 fps) would hammer a recovering device for minutes to
+     * re-send a picture that cannot change — there is no new capture. The client
+     * only needs to hear from us often enough not to time out.
+     */
+    std::chrono::nanoseconds fastest {std::chrono::milliseconds(250)};
+
+    /**
+     * @brief Slowest the keepalive may run while holding.
+     *
+     * The client's own no-video timeout is the entire reason this exists: a host
+     * that holds a session open while emitting nothing has saved the session and
+     * lost the client, which is worse than either outcome alone. So a session
+     * whose minimum-FPS target is very low still gets a floor.
+     */
+    std::chrono::nanoseconds slowest {std::chrono::seconds(1)};
+
+    /// How often a FAILING keepalive may be logged. A hold runs for minutes and
+    /// this is polled at the capture loop's rate.
+    std::chrono::nanoseconds failure_log_interval {std::chrono::seconds(15)};
+  };
+
+  /**
+   * @brief Paces the video keepalive an encoder emits while it is holding a
+   * session open across a capture source's recovery.
+   *
+   * Why this exists: holding the session is only half of surviving an outage.
+   * The other half is that the CLIENT has to survive it too, and a Moonlight
+   * client that receives no video for a few seconds tears the session down from
+   * its end. An outage the driver rides out runs for MINUTES. So a hold that
+   * also stops emitting saves the host's session and loses the client's — the
+   * host ends up nursing a session nobody is watching, which is a worse outcome
+   * than the teardown the hold was introduced to prevent.
+   *
+   * The sync encode path is where that bites: its callback IS the capture
+   * thread, so there is nothing to park, and skipping the encode outright (the
+   * obvious way to avoid a failing encode against a resetting GPU) means no
+   * packets at all for the whole window. Re-sending the last converted frame on
+   * a slow cadence keeps the stream alive, costs nothing when the GPU is fine
+   * (the picture is static anyway — there is no new capture to send), and when
+   * the GPU is not fine the encode simply fails.
+   *
+   * That failure must NOT end the session: it is the outage, not a verdict about
+   * the session, and the encoder gate above is what bounds how long it may go on
+   * being tolerated. Nor is a successful keepalive progress — progress is a real
+   * captured frame. Treating one as progress would refresh the gate's ceiling on
+   * every keepalive and make the hold unbounded.
+   *
+   * Purely functional over its inputs (no clock access, no I/O, no logging) so
+   * it can be unit-tested deterministically. Not thread-safe: one per session.
+   */
+  class recovery_keepalive_t {
+  public:
+    using time_point = std::chrono::steady_clock::time_point;
+
+    recovery_keepalive_t() = default;
+
+    explicit recovery_keepalive_t(recovery_keepalive_config_t config):
+        _config(config) {
+    }
+
+    /**
+     * @brief Set the cadence from the session's minimum-FPS frame time.
+     *
+     * Clamped into [fastest, slowest]: the session's own static-content cadence
+     * is the right intent, but neither end of its range is safe here.
+     */
+    void set_interval(std::chrono::nanoseconds session_interval) {
+      _interval = session_interval < _config.fastest ? _config.fastest :
+                  session_interval > _config.slowest ? _config.slowest :
+                                                       session_interval;
+    }
+
+    [[nodiscard]] std::chrono::nanoseconds interval() const {
+      return _interval;
+    }
+
+    /**
+     * @brief Is a keepalive frame due right now?
+     *
+     * @param holding Whether the encoder is holding for a display recovery.
+     * @param now Timestamp of the observation (monotonic).
+     * @return true when the caller should emit a keepalive frame.
+     *
+     * The first observation of a hold is always due, so the client hears from
+     * the host on the same tick the hold starts rather than one interval into an
+     * outage it is already counting down on.
+     */
+    [[nodiscard]] bool due(bool holding, time_point now) const {
+      if (!holding) {
+        return false;
+      }
+      if (!_last_emitted) {
+        return true;
+      }
+      return now - *_last_emitted >= _interval;
+    }
+
+    /// Record that a keepalive went out — successfully or not. Either way the
+    /// device was asked, which is what the cadence is pacing.
+    void note_emitted(time_point now) {
+      _last_emitted = now;
+    }
+
+    /**
+     * @brief Whether this keepalive failure should be logged.
+     *
+     * Rate-limited: a hold runs for minutes and every keepalive in it can fail.
+     */
+    [[nodiscard]] bool should_report_failure(time_point now) {
+      if (_failure_reported && now - *_failure_reported < _config.failure_log_interval) {
+        return false;
+      }
+      _failure_reported = now;
+      return true;
+    }
+
+    /**
+     * @brief A real captured frame went out: this outage is over.
+     *
+     * Deliberately NOT called for a successful keepalive — see the class note.
+     */
+    void note_progress() {
+      _last_emitted.reset();
+      _failure_reported.reset();
+    }
+
+    [[nodiscard]] const recovery_keepalive_config_t &config() const {
+      return _config;
+    }
+
+  private:
+    recovery_keepalive_config_t _config {};
+    std::chrono::nanoseconds _interval {std::chrono::milliseconds(250)};
+    std::optional<time_point> _last_emitted;
+    std::optional<time_point> _failure_reported;
+  };
+
 }  // namespace video
