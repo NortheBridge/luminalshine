@@ -329,4 +329,50 @@ namespace video {
     bool _suspended = false;
   };
 
+  /// What one turn of an encoder loop should do about a capture source that may
+  /// be riding out a display outage.
+  enum class recovery_hold_step_e {
+    proceed,  ///< Not holding. Run the ordinary encode path, failures and all.
+    wait,  ///< Holding, and the keepalive is not due yet. Do nothing this turn.
+    keepalive,  ///< Holding, and a keepalive frame is due now.
+  };
+
+  /**
+   * @brief The encoder-side hold, as one non-blocking step.
+   *
+   * Both encode paths run this once per turn of their own loop, which is what
+   * lets the hold coexist with the rest of the loop's bookkeeping: shutdown,
+   * IDR requests, reference-frame invalidation and reinit all keep being
+   * serviced through an outage that lasts minutes, and the loop's existing wait
+   * (the capture queue's timeout on the async path, the capture callback's own
+   * cadence on the sync one) is what paces the polling.
+   *
+   * Emitting is deliberately NOT progress: `keepalive` is advanced here, but
+   * `gate` is not, so a hold that emits for its whole length still exhausts the
+   * same ceiling as a hold that emits nothing. Only the caller, on a real
+   * captured frame, calls note_progress() on either.
+   *
+   * @param gate Bounds the whole outage for this thread.
+   * @param keepalive Paces what goes out while holding.
+   * @param capture_recovering What platf::display_t::capture_recovering() says.
+   *        Callers pass false when they have a real captured frame in hand — a
+   *        frame is proof the outage is over whatever the verdict still says.
+   * @param now Timestamp of this turn (monotonic).
+   */
+  [[nodiscard]] inline recovery_hold_step_e step_recovery_hold(
+    encoder_recovery_gate_t &gate,
+    recovery_keepalive_t &keepalive,
+    bool capture_recovering,
+    encoder_recovery_gate_t::time_point now
+  ) {
+    if (gate.evaluate(capture_recovering, now) != encoder_recovery_action_e::hold) {
+      return recovery_hold_step_e::proceed;
+    }
+    if (!keepalive.due(true, now)) {
+      return recovery_hold_step_e::wait;
+    }
+    keepalive.note_emitted(now);
+    return recovery_hold_step_e::keepalive;
+  }
+
 }  // namespace video

@@ -23,9 +23,11 @@
  */
 #include "../tests_common.h"
 #include "src/encoder_recovery_gate.h"
+#include "src/video.h"
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 
 using video::encoder_recovery_action_e;
 using video::encoder_recovery_gate_config_t;
@@ -355,3 +357,142 @@ TEST(RecoveryKeepalive, WithoutABudgetNothingIsEverStoodDown) {
   EXPECT_TRUE(keepalive.due(true, at(0ms)));
 }
 
+// --- The ASYNC path is the one a real session takes ------------------------
+
+/**
+ * Every encoder LuminalShine builds for Windows — nvenc, quicksync, amdvce,
+ * mediafoundation and the software fallback — sets PARALLEL_ENCODING, so
+ * video::capture() sends every RTSP and WebRTC session to capture_async and its
+ * encode_run loop. The sync path (captureThreadSync / encode_run_sync) is not
+ * reachable on any configuration this fork ships.
+ *
+ * Which makes a keepalive that exists only on the sync path a keepalive that
+ * never runs: the host holds the session open across a multi-minute outage while
+ * the client, having heard nothing, tears it down from its end — the exact
+ * outcome the hold was introduced to prevent, with the host left nursing a
+ * session nobody is watching.
+ *
+ * These drive video::step_recovery_hold the way encode_run drives it: one turn
+ * per capture-queue timeout, because during an outage the queue is empty and the
+ * pop always times out.
+ */
+TEST(AsyncEncoderRecoveryHold, EveryShippedEncoderTakesTheAsyncPath) {
+  for (const auto *encoder : {
+#if !defined(__APPLE__)
+         &video::nvenc,
+#endif
+#ifdef _WIN32
+         &video::quicksync,
+         &video::amdvce,
+         &video::mediafoundation,
+#endif
+#if defined(__linux__) || defined(__FreeBSD__)
+         &video::vaapi,
+#endif
+         &video::software
+       }) {
+    EXPECT_TRUE(video::uses_async_encode_path(*encoder))
+      << encoder->name << " takes the sync path, so hardening only the async one would miss it";
+  }
+}
+
+TEST(AsyncEncoderRecoveryHold, AHoldKeepsTheClientsVideoAliveForItsWholeLength) {
+  video::encoder_recovery_gate_t gate;
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(16ms);  // a 60 fps session's minimum-FPS frame time
+  ASSERT_EQ(keepalive.interval(), keepalive.config().fastest);
+
+  // encode_run turns over every time images->pop(max_frametime) times out,
+  // which is every turn while the display is down: nothing is being captured.
+  constexpr auto turn = 16ms;
+  int emitted = 0;
+  int proceeded = 0;
+  std::chrono::nanoseconds longest_gap {0};
+  auto last_emission = at(0ms);
+
+  for (auto t = 0ms; t < 3min; t += turn) {
+    switch (video::step_recovery_hold(gate, keepalive, recovering, at(t))) {
+      case video::recovery_hold_step_e::proceed:
+        ++proceeded;
+        break;
+      case video::recovery_hold_step_e::wait:
+        break;
+      case video::recovery_hold_step_e::keepalive:
+        // The encode fails all through the outage — the GPU is resetting — and
+        // that changes nothing about the cadence or the hold.
+        longest_gap = std::max(longest_gap, at(t) - last_emission);
+        last_emission = at(t);
+        ++emitted;
+        break;
+    }
+  }
+
+  EXPECT_EQ(proceeded, 0)
+    << "the encoder ran today's failure handling during an outage the driver is riding out";
+  EXPECT_GT(emitted, 0) << "the client received no video at all for the whole outage";
+  EXPECT_GE(emitted, static_cast<int>(3min / 1s)) << "fewer than one frame a second is not a keepalive";
+  EXPECT_LE(emitted, static_cast<int>(3min / keepalive.interval()) + 1)
+    << "a keepalive faster than its own cadence is hammering a recovering GPU";
+  EXPECT_LE(longest_gap, 1s) << "a gap this long is what the client's own no-video timeout fires on";
+}
+
+TEST(AsyncEncoderRecoveryHold, ARealCapturedFrameEndsTheHoldAndIsTheOnlyProgress) {
+  video::encoder_recovery_gate_t gate;
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(250ms);
+
+  for (auto t = 0ms; t < 30s; t += 16ms) {
+    (void) video::step_recovery_hold(gate, keepalive, recovering, at(t));
+  }
+  ASSERT_GT(gate.held_for(), 0ns) << "keepalives must not have refreshed the ceiling";
+
+  // encode_run passes `!captured_real_frame && capture_recovering()`, so a frame
+  // that actually came out of the capture queue reads as "not recovering"
+  // whatever the verdict still says a beat later, and is encoded normally.
+  EXPECT_EQ(video::step_recovery_hold(gate, keepalive, not_recovering, at(30s)),
+            video::recovery_hold_step_e::proceed);
+  gate.note_progress();
+  keepalive.note_progress();
+  EXPECT_EQ(gate.held_for(), 0ns);
+
+  // A later, unrelated outage gets a full ceiling and hears from the host at once.
+  EXPECT_EQ(video::step_recovery_hold(gate, keepalive, recovering, at(31s)),
+            video::recovery_hold_step_e::keepalive);
+}
+
+TEST(AsyncEncoderRecoveryHold, AHoldThatEmitsThroughoutStillExhaustsTheCeiling) {
+  // The invariant that keeps the hold bounded: emitting is not progress. An
+  // implementation that counted its own keepalives would hold forever here.
+  video::encoder_recovery_gate_t gate;
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(250ms);
+
+  std::optional<std::chrono::milliseconds> gave_up_at;
+  for (auto t = 0ms; t < 30min; t += 16ms) {
+    if (video::step_recovery_hold(gate, keepalive, recovering, at(t)) ==
+        video::recovery_hold_step_e::proceed) {
+      gave_up_at = t;
+      break;
+    }
+  }
+
+  ASSERT_TRUE(gave_up_at.has_value())
+    << "a hold that keeps emitting never gave up; the ceiling is not a ceiling";
+  EXPECT_GT(*gave_up_at, 15min) << "the encoder gave up before the capture loop's own ceiling";
+  EXPECT_LE(*gave_up_at, gate.config().hold_ceiling + 1s);
+}
+
+TEST(AsyncEncoderRecoveryHold, NormalStreamingNeverEntersTheHold) {
+  // Every capture backend but the LuminalVGD ring publishes no verdict at all,
+  // so this is the path they all take: no keepalives, no waiting, and an encoder
+  // failure gets today's handling on the first observation.
+  video::encoder_recovery_gate_t gate;
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(250ms);
+
+  for (auto t = 0ms; t < 10s; t += 16ms) {
+    ASSERT_EQ(video::step_recovery_hold(gate, keepalive, not_recovering, at(t)),
+              video::recovery_hold_step_e::proceed);
+  }
+  EXPECT_EQ(gate.held_for(), 0ns);
+}
