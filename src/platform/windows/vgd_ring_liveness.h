@@ -204,9 +204,16 @@ namespace platf::dxgi {
    *  2. RECOVERING (REBUILDING + live heartbeat + inside the budget) short-
    *     circuits everything below it, including a pending GPU-reset reinit.
    *     Deferring that reinit — rather than cancelling it — is what keeps the
-   *     capture pipeline in its cheap timeout loop (the encoder re-sends the
-   *     last frame, the client stays connected) instead of spinning the
+   *     capture pipeline in its cheap timeout loop instead of spinning the
    *     capture-reinit machinery while the GPU is still down.
+   *
+   *     Note the encoder is SILENT for the whole hold: it attempts exactly one
+   *     encode per rebuild, and once that fails it parks rather than re-entering
+   *     the failed NVENC session (which NVENC's contract forbids — re-entry is
+   *     the known heap-corruption path). So the client hits its own no-video
+   *     timeout and reconnects when the display returns. That is the same thing
+   *     it does today; what changed is that the HOST now survives, instead of
+   *     tearing down into an unrecoverable session.
    *  3. Everything else runs on exactly today's timeline: a GPU-reset edge
    *     reinitializes immediately, a stale heartbeat reinitializes after its
    *     grace window, and a genuinely undeliverable ring is declared broken.
