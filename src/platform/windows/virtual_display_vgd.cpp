@@ -358,9 +358,30 @@ namespace VDISPLAY::vgd {
     // Callers pass millihertz (nvhttp/webrtc normalize Hz → mHz before the
     // call); the spec below must NOT rescale it again.
     req.modes[0] = VgdModeSpec {width, height, fps_millihz};
-    if (framegen_refresh_active && base_fps_millihz != 0 && base_fps_millihz != fps_millihz) {
-      // Advertise the base rate too so the OS can drop out of the
-      // frame-generation-doubled mode without a monitor cycle.
+    // Advertise the base rate alongside the requested one whenever they differ,
+    // NOT only when a per-app frame-generation flag happened to be set.
+    //
+    // A monitor's mode list is fixed for its lifetime: IddCx has no DDI, in 1.10
+    // or 1.11, that replaces a monitor description on an arrived monitor, and
+    // the only way to change the advertised set is destroy + recreate — the
+    // monitor cycle that broadcasts DBT_DEVNODES_CHANGED and kills GTA V
+    // Enhanced. So whatever is advertised here is all this session will ever
+    // have. Anything not in this list cannot be reached later at any price.
+    //
+    // That makes the guard actively harmful in the case that matters. A client
+    // streams "Desktop" — which has no per-app flag — and then launches a
+    // frame-generation game inside the session. With the guard, mode_count is 1
+    // and the doubled rate was never advertised, so it can never be selected.
+    // Worse, the failure is silent: the host's apply path already requests 2x
+    // base on every session (virtual_double_refresh defaults true and
+    // virtual_display_mode defaults per_client), and libdisplaydevice snaps an
+    // unadvertised request to the nearest supported mode and reports success.
+    // The log says the refresh changed; nothing changed.
+    //
+    // Advertising the superset up front costs two mode-list entries and removes
+    // both problems, with no display event at game launch because nothing has to
+    // change. A virtual display idling at the higher rate is free.
+    if (base_fps_millihz != 0 && base_fps_millihz != fps_millihz) {
       req.modes[1] = VgdModeSpec {width, height, base_fps_millihz};
       req.mode_count = 2;
     }
