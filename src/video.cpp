@@ -3483,6 +3483,10 @@ namespace video {
     }
   }
 
+  bool uses_async_encode_path(const encoder_t &encoder) {
+    return (encoder.flags & PARALLEL_ENCODING) != 0;
+  }
+
   void capture(
     safe::mail_t mail,
     config_t config,
@@ -3498,7 +3502,7 @@ namespace video {
     auto idr_events = mail->event<bool>(mail::idr);
 
     idr_events->raise(true);
-    if (encoder->flags & PARALLEL_ENCODING) {
+    if (uses_async_encode_path(*encoder)) {
       capture_async(std::move(mail), config, channel_data);
     } else {
       safe::signal_t join_event;

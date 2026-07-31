@@ -20,9 +20,18 @@
  *  - the bound measures the OUTAGE, not wall-clock time: a source that flaps in
  *    and out of recovery cannot refresh it, and only real encoder progress
  *    clears it.
+ *
+ * The hold is SILENT: nothing is emitted to the client while it runs. Keeping
+ * the client's video alive across the outage would mean re-entering an encode
+ * session that has already failed, which NVENC does not tolerate, so the client
+ * disconnects on its own no-video timeout and reconnects once the display is
+ * back. The host session surviving is the point; the client's stream surviving
+ * is a separate piece of work that has to rebuild the encode session rather than
+ * re-enter it.
  */
 #include "../tests_common.h"
 #include "src/encoder_recovery_gate.h"
+#include "src/video.h"
 
 #include <chrono>
 
@@ -157,4 +166,44 @@ TEST(DisplayRecoveryGate, ConfigIsHonoured) {
   EXPECT_EQ(gate.evaluate(recovering, at(0s)), encoder_recovery_action_e::hold);
   EXPECT_EQ(gate.evaluate(recovering, at(20s)), encoder_recovery_action_e::hold);
   EXPECT_EQ(gate.evaluate(recovering, at(31s)), encoder_recovery_action_e::fail);
+}
+
+// --- Which encode path a real session actually takes -----------------------
+
+/**
+ * The two encode paths hold differently, so it matters which one ships.
+ *
+ * On the ASYNC path the hold lives in capture_async: encode_run returns on the
+ * first failure the outage causes, and hold_for_display_recovery then parks the
+ * encoder thread — with no session to send with — until the display is back or
+ * the gate's ceiling expires. The client receives nothing for the length of the
+ * hold. On the SYNC path the callback IS the capture thread, so the hold skips
+ * the encode in place and is equally silent.
+ *
+ * Both are silent by design: keeping the client's video alive across the outage
+ * means re-entering an encode session that has already failed, which is the
+ * teardown-after-failed-encode pattern NVENC does not tolerate, so it is not
+ * done here at all. This test pins which of the two silences is the one that
+ * actually runs — every encoder built for Windows sets PARALLEL_ENCODING, so
+ * every RTSP and WebRTC session takes the async path and the sync path is
+ * unreachable on any configuration this fork ships.
+ */
+TEST(DisplayRecoveryGate, EveryShippedEncoderTakesTheAsyncPath) {
+  for (const auto *encoder : {
+#if !defined(__APPLE__)
+         &video::nvenc,
+#endif
+#ifdef _WIN32
+         &video::quicksync,
+         &video::amdvce,
+         &video::mediafoundation,
+#endif
+#if defined(__linux__) || defined(__FreeBSD__)
+         &video::vaapi,
+#endif
+         &video::software
+       }) {
+    EXPECT_TRUE(video::uses_async_encode_path(*encoder))
+      << encoder->name << " takes the sync path, so the async path's hold is not the whole story";
+  }
 }
