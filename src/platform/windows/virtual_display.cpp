@@ -1011,6 +1011,7 @@ namespace VDISPLAY {
       return true;
     }
 
+
     std::string normalize_display_name(std::string name) {
       auto trim = [](std::string &inout) {
         size_t start = 0;
@@ -4341,6 +4342,40 @@ namespace VDISPLAY {
     return std::nullopt;
   }
 
+  std::optional<std::string> resolveVirtualDisplayDeviceIdExact(const std::wstring &display_name) {
+    if (display_name.empty()) {
+      return std::nullopt;
+    }
+
+    auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) {
+      return std::nullopt;
+    }
+
+    const auto target = normalize_display_name(platf::to_utf8(display_name));
+    if (target.empty()) {
+      return std::nullopt;
+    }
+
+    for (const auto &device : *devices) {
+      if (!is_virtual_display_device(device) || device.m_device_id.empty()) {
+        continue;
+      }
+      const auto device_name = normalize_display_name(device.m_display_name);
+      if (!device_name.empty() && device_name == target) {
+        return device.m_device_id;
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool is_truncated_client_label(const std::string &monitor_name, const std::string &client_name) {
+    if (monitor_name.size() != kEdidProductNameCapacity || client_name.size() <= kEdidProductNameCapacity) {
+      return false;
+    }
+    return equals_ci(monitor_name, client_name.substr(0, kEdidProductNameCapacity));
+  }
+
   std::optional<std::string> resolveVirtualDisplayDeviceIdForClient(const std::string &client_name) {
     if (client_name.empty()) {
       return std::nullopt;
@@ -4353,20 +4388,34 @@ namespace VDISPLAY {
 
     std::optional<std::string> active_match;
     std::optional<std::string> any_match;
+    // Truncated matches are kept apart from exact ones and only used when
+    // nothing matched exactly — a prefix is weaker evidence, so it must
+    // never outrank a full-length agreement.
+    std::optional<std::string> truncated_active;
+    std::optional<std::string> truncated_any;
+    size_t truncated_count = 0;
     for (const auto &device : *devices) {
-      if (!is_virtual_display_device(device) || device.m_device_id.empty()) {
+      if (!is_virtual_display_device(device) || device.m_device_id.empty() || device.m_friendly_name.empty()) {
         continue;
       }
-      if (device.m_friendly_name.empty() || !equals_ci(device.m_friendly_name, client_name)) {
+      const bool active = device.m_info.has_value();
+      if (equals_ci(device.m_friendly_name, client_name)) {
+        if (!any_match) {
+          any_match = device.m_device_id;
+        }
+        if (active && !active_match) {
+          active_match = device.m_device_id;
+        }
         continue;
       }
-
-      if (!any_match) {
-        any_match = device.m_device_id;
-      }
-      if (device.m_info) {
-        active_match = device.m_device_id;
-        break;
+      if (is_truncated_client_label(device.m_friendly_name, client_name)) {
+        ++truncated_count;
+        if (!truncated_any) {
+          truncated_any = device.m_device_id;
+        }
+        if (active && !truncated_active) {
+          truncated_active = device.m_device_id;
+        }
       }
     }
 
@@ -4376,7 +4425,51 @@ namespace VDISPLAY {
     if (any_match) {
       return any_match;
     }
+    // A truncated label only identifies a monitor when exactly one carries
+    // it. Two clients sharing their first 13 characters are genuinely
+    // indistinguishable here, and handing back the wrong client's display
+    // is worse than reporting nothing and letting the caller's other arms
+    // (identity-based resolution) decide.
+    if (truncated_count == 1) {
+      return truncated_active ? truncated_active : truncated_any;
+    }
+    if (truncated_count > 1) {
+      BOOST_LOG(warning) << "Virtual display: " << truncated_count << " monitors share the first "
+                         << kEdidProductNameCapacity << " characters of client name '" << client_name
+                         << "'; refusing to guess which one is theirs.";
+    }
     return std::nullopt;
+  }
+
+  std::optional<std::string> resolveVirtualDisplayDeviceIdForEdidSerial(uint32_t edid_serial) {
+    // 0 is what a monitor with no serial descriptor parses to, so it
+    // identifies nothing and must never match.
+    if (edid_serial == 0) {
+      return std::nullopt;
+    }
+
+    auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) {
+      return std::nullopt;
+    }
+
+    std::optional<std::string> any_match;
+    for (const auto &device : *devices) {
+      if (!is_virtual_display_device(device) || device.m_device_id.empty()) {
+        continue;
+      }
+      if (!device.m_edid || device.m_edid->m_serial_number != edid_serial) {
+        continue;
+      }
+      if (device.m_info) {
+        // Already attached to the desktop — the best answer available.
+        return device.m_device_id;
+      }
+      if (!any_match) {
+        any_match = device.m_device_id;
+      }
+    }
+    return any_match;
   }
 
   // Track consecutive enumerate_devices failures so we can detect a stuck
