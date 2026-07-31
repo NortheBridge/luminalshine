@@ -24,6 +24,7 @@
 #include "src/platform/common.h"
 #include "src/platform/windows/ipc/pipes.h"
 #include "src/platform/windows/ipc/process_handler.h"
+#include "src/platform/windows/vgd_ring_liveness.h"
 #include "src/utility.h"
 #include "src/video.h"
 
@@ -281,6 +282,25 @@ namespace platf::dxgi {
     int init(const ::video::config_t &config, const std::string &display_name, bool skip_dd_test = false);
 
     capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override;
+
+    /**
+     * @brief True while this capture source is inside a BOUNDED, known-transient
+     * recovery window in which a reinit would be premature.
+     *
+     * The capture loop reinitializes whenever the DXGI factory goes stale, which
+     * a GPU reset makes it do. A LuminalVGD ring backed by a build-16+ driver
+     * can see that reset and still know the display is alive and coming back
+     * (ring REBUILDING with a live heartbeat), and reinitializing during that
+     * window is exactly the amplification the driver change exists to remove: it
+     * drops the encoder out of its cheap timeout loop and spins the capture
+     * reinit machinery against a GPU that has not returned yet.
+     *
+     * Implementations MUST self-limit — the loop keeps deferring for as long as
+     * this returns true, and takes the reinit the moment it returns false.
+     */
+    virtual bool is_recovering() {
+      return false;
+    }
 
     factory1_t factory;
     adapter_t adapter;
@@ -624,6 +644,11 @@ namespace platf::dxgi {
 
     int dummy_img(platf::img_t *img_base) override;
 
+    /// True while the ring is REBUILDING with a live heartbeat and the host's
+    /// recovery budget has not run out — the driver is riding out a GPU outage
+    /// with the monitor still arrived (driver build >= 16).
+    bool is_recovering() override;
+
   protected:
     capture_e release_snapshot() override;
 
@@ -637,6 +662,15 @@ namespace platf::dxgi {
     /// current generation. Returns nullptr on open failure.
     slot_texture_t *slot_texture(uint32_t generation, uint32_t slot);
 
+    /// Read the ring header into a liveness sample. False when the header read
+    /// itself failed (dead handle / faulting section).
+    bool read_ring_sample(vgd_ring_sample_t &sample, bool tdr_edge);
+
+    /// Drop every shared GPU allocation this reader holds. Called before any
+    /// reinit and the moment a GPU-reset event is recorded, so VidMm has fewer
+    /// live cross-process allocations to terminate while the stack recovers.
+    void release_shared_allocations();
+
     ::VgdRingHandle *_ring = nullptr;
     uint64_t _session_id = 0;
     uint32_t _ring_slots = 0;
@@ -648,16 +682,25 @@ namespace platf::dxgi {
 
     // TDR blast-radius shrink: tdr::event_count() snapshot taken at init.
     // When it advances, snapshot() drops every shared GPU allocation this
-    // reader holds and reinitializes (see display_vgd.cpp).
+    // reader holds (see display_vgd.cpp). The reinit that follows is DEFERRED
+    // while the ring reports it is recovering.
     std::uint64_t _tdr_marks_at_open = 0;
+    /// Whether the shared allocations have already been dropped for the
+    /// currently-pending GPU-reset edge (the drop must happen once, not per
+    /// snapshot, and must not be repeated during a multi-minute recovery).
+    bool _tdr_allocations_dropped = false;
+
+    /// Ring health ladder: REBUILDING + live heartbeat = recovering (wait),
+    /// stale/absent heartbeat = dead (reinit). See vgd_ring_liveness.h.
+    vgd_ring_liveness_t _liveness;
 
     // Broken-ring detection (see display_vgd.cpp): consecutive texture-open
-    // failures, and how long a newer-than-delivered frame has sat unclaimed.
+    // failures on the ring's shared textures.
     int _open_failures = 0;
-    std::optional<std::chrono::steady_clock::time_point> _undelivered_since;
-    // How long the driver's heartbeat has been stale (swapchain unassigned
-    // during mode transitions stops the worker without marking the ring).
-    std::optional<std::chrono::steady_clock::time_point> _heartbeat_stale_since;
+    /// Set when the last slot-texture open failed because OUR OWN D3D device
+    /// was removed (a GPU reset) rather than because the ring is unreachable —
+    /// that is a reinit, never a reason to blacklist the session's ring.
+    bool _open_failed_device_removed = false;
 
     // --- Hardware-cursor plane (driver caps::HW_CURSOR) ---------------
     // With a cursor-capable driver, frames arrive cursor-free (the driver

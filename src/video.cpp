@@ -2985,7 +2985,13 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
-        while (encode_session_ctx_queue.peek()) {
+        // `img` is null whenever the backend reports a timeout (no frame this
+        // round) — the loop below still needs one to bootstrap a joining
+        // session, so leave the context queued until a real frame arrives
+        // rather than dereferencing null. This matters most while a display is
+        // recovering: the capture loop can service this callback for minutes
+        // without ever producing an image.
+        while (img && encode_session_ctx_queue.peek()) {
           auto encode_session_ctx = encode_session_ctx_queue.pop();
           if (!encode_session_ctx) {
             return false;
