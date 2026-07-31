@@ -283,3 +283,75 @@ TEST(RecoveryKeepalive, ARealFrameResetsThePacerSoTheNextHoldEmitsAtOnce) {
   keepalive.note_progress();
   EXPECT_TRUE(keepalive.due(true, at(100ms)));
 }
+
+// --- The emit budget: for a thread that cannot afford to wait on the GPU ---
+
+/**
+ * The sync path emits from the CAPTURE thread, because there its push-image
+ * callback IS the capture thread. That is the thread publishing the recovery
+ * verdict, enforcing the capture loop's own multi-minute deferral ceiling and
+ * servicing joining sessions — the innermost ceiling of the whole nest — so an
+ * encode that comes back slowly is stealing exactly the time those depend on.
+ *
+ * The budget bounds the total charge to one slow call per hold. The async path
+ * sets none: there a slow encode costs the stream and nothing else, and giving
+ * up on the keepalive would lose the client the hold exists to keep.
+ */
+TEST(RecoveryKeepalive, AKeepaliveTooSlowForItsThreadStandsThePacerDown) {
+  video::recovery_keepalive_config_t cfg;
+  cfg.emit_budget = 250ms;
+  video::recovery_keepalive_t keepalive {cfg};
+  keepalive.set_interval(500ms);
+
+  ASSERT_TRUE(keepalive.due(true, at(0ms)));
+  keepalive.note_emitted(at(0ms));
+  EXPECT_TRUE(keepalive.note_emit_duration(3s)) << "an overrun must be reported once so it can be logged once";
+  EXPECT_TRUE(keepalive.suspended());
+
+  // Nothing more goes out for the rest of this hold, however long it runs.
+  for (auto t = 500ms; t < 5min; t += 10ms) {
+    ASSERT_FALSE(keepalive.due(true, at(t))) << "the capture thread is still being charged for keepalives";
+  }
+  EXPECT_FALSE(keepalive.note_emit_duration(3s)) << "already stood down; do not log it again";
+
+  // The display coming back is the only thing that clears it.
+  keepalive.note_progress();
+  EXPECT_FALSE(keepalive.suspended());
+  EXPECT_TRUE(keepalive.due(true, at(5min)));
+}
+
+TEST(RecoveryKeepalive, AKeepaliveThatFailsQUICKLYKeepsRunning) {
+  // The common case for the whole mechanism: the GPU is down, every keepalive
+  // fails, and every one of them fails fast. That costs the capture thread
+  // nothing, so the cadence must be untouched — the moment the device answers
+  // again the client gets a frame.
+  video::recovery_keepalive_config_t cfg;
+  cfg.emit_budget = 250ms;
+  video::recovery_keepalive_t keepalive {cfg};
+  keepalive.set_interval(500ms);
+
+  int emitted = 0;
+  for (auto t = 0ms; t < 3min; t += 10ms) {
+    if (!keepalive.due(true, at(t))) {
+      continue;
+    }
+    keepalive.note_emitted(at(t));
+    keepalive.note_emit_duration(2ms);  // failed, but instantly
+    ++emitted;
+  }
+
+  EXPECT_FALSE(keepalive.suspended());
+  EXPECT_NEAR(emitted, static_cast<int>(3min / 500ms), 2);
+}
+
+TEST(RecoveryKeepalive, WithoutABudgetNothingIsEverStoodDown) {
+  // The async path's configuration: its encoder thread is allowed to wait.
+  video::recovery_keepalive_t keepalive;
+  keepalive.set_interval(500ms);
+
+  ASSERT_FALSE(keepalive.config().emit_budget.has_value());
+  EXPECT_FALSE(keepalive.note_emit_duration(1h));
+  EXPECT_FALSE(keepalive.suspended());
+  EXPECT_TRUE(keepalive.due(true, at(0ms)));
+}
+

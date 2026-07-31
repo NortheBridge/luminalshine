@@ -3020,6 +3020,35 @@ namespace video {
     return result;
   }
 
+  /**
+   * @brief Keepalive pacing for the SYNC encode path.
+   *
+   * Identical to the async path's but for one thing: an emit budget. On this
+   * path the push-image callback IS the capture thread, so a keepalive encode
+   * runs on the same thread that publishes the recovery verdict, enforces the
+   * capture loop's own multi-minute deferral ceiling, and services joining
+   * sessions and display switches. Aimed at a GPU that may still be resetting,
+   * that encode is bounded only by the encoder's internal deadline — seconds for
+   * NvEnc, unspecified elsewhere — and every millisecond of it is a millisecond
+   * the recovery loop is not ticking, on the innermost ceiling of the whole
+   * nest.
+   *
+   * The budget bounds the total charge to ONE slow keepalive per hold: the first
+   * one that overruns stands the pacer down for the rest of the outage and the
+   * loop goes back to its 10 ms tick, ceilings intact. A keepalive that FAILS
+   * quickly is not slow, keeps running, and costs the recovery loop nothing —
+   * which is the case this whole mechanism exists for.
+   *
+   * 250 ms is the keepalive's own fastest cadence: past that, one keepalive is
+   * eating more than an entire interval of the loop's time, which is the point
+   * at which it stops being a keepalive and starts being the problem.
+   */
+  recovery_keepalive_config_t sync_keepalive_config() {
+    recovery_keepalive_config_t config;
+    config.emit_budget = std::chrono::milliseconds(250);
+    return config;
+  }
+
   std::optional<sync_session_t> make_synced_session(platf::display_t *disp, const encoder_t &encoder, platf::img_t &img, sync_session_ctx_t &ctx) {
     sync_session_t encode_session;
 
@@ -3075,6 +3104,7 @@ namespace video {
     // Same minimum-FPS intent the async path encodes static content at, clamped
     // by the keepalive to a rate that is safe to aim at a GPU that may still be
     // resetting and still fast enough to beat the client's no-video timeout.
+    encode_session.keepalive = recovery_keepalive_t {sync_keepalive_config()};
     const double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ?
                                         config::video.minimum_fps_target :
                                         ctx.config.framerate;
@@ -3190,6 +3220,13 @@ namespace video {
         // client that receives no video for that long ends the session from its
         // own side, so the host would be left holding a session nobody is
         // watching. See recovery_keepalive_t.
+        //
+        // What IS different here, and what sync_keepalive_config() answers, is
+        // that every one of those encodes is charged to the capture thread's own
+        // recovery loop — the innermost ceiling in the nest, and the thing that
+        // publishes the verdict the encoder side reads. A keepalive that comes
+        // back slowly stands its pacer down for the rest of the hold rather than
+        // going on stealing that loop's time.
         const auto callback_now = std::chrono::steady_clock::now();
         const bool recovering = disp && disp->capture_recovering();
         const bool hold_for_recovery =
@@ -3254,7 +3291,18 @@ namespace video {
             }
             pos->keepalive.note_emitted(callback_now);
 
-            if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, std::nullopt, std::nullopt)) {
+            const auto emit_started = std::chrono::steady_clock::now();
+            const bool emit_failed = encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, std::nullopt, std::nullopt);
+            // Charged whether it worked or not: what the budget bounds is the
+            // capture thread's time, and a slow failure costs exactly as much of
+            // it as a slow success.
+            if (pos->keepalive.note_emit_duration(std::chrono::steady_clock::now() - emit_started)) {
+              BOOST_LOG(warning) << "Encoder: a keepalive frame took longer than the capture thread can "
+                                    "spare while the display is recovering; holding the session without "
+                                    "further keepalives until it returns. The client may time out."sv;
+            }
+
+            if (emit_failed) {
               // Do NOT raise the shutdown event: this failure IS the outage the
               // session is being held open for, not a verdict about the session.
               // What bounds it is `recovery_gate` — when its ceiling expires

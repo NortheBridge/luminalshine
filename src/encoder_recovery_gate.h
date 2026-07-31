@@ -159,6 +159,32 @@ namespace video {
     /// How often a FAILING keepalive may be logged. A hold runs for minutes and
     /// this is polled at the capture loop's rate.
     std::chrono::nanoseconds failure_log_interval {std::chrono::seconds(15)};
+
+    /**
+     * @brief Ceiling on how long ONE keepalive encode may take before this pacer
+     * stops asking for more, or empty when the emitting thread can afford to
+     * wait on the GPU.
+     *
+     * Empty is right for a dedicated encoder thread: a slow encode there costs
+     * the stream and nothing else, and giving up on the keepalive would lose the
+     * client the hold exists to keep.
+     *
+     * It is NOT right for a thread that also has to keep ticking. The sync
+     * encode path emits from the CAPTURE thread — the same thread that publishes
+     * the recovery verdict, enforces the capture loop's own deferral ceiling and
+     * services joining sessions and display switches — because on that path the
+     * encode callback IS the capture thread. A keepalive aimed at a GPU that is
+     * still resetting is bounded only by the encoder's internal deadline
+     * (seconds for NvEnc, unspecified elsewhere), and every millisecond of it is
+     * a millisecond the recovery loop is not ticking. A budget bounds the total
+     * charge to ONE slow call per hold: the first overrun suspends the pacer
+     * until real progress resumes.
+     *
+     * A keepalive that FAILS quickly is not slow and keeps running — that is the
+     * common case during an outage, it costs the recovery loop nothing, and it
+     * is the whole point of the mechanism.
+     */
+    std::optional<std::chrono::nanoseconds> emit_budget {};
   };
 
   /**
@@ -228,7 +254,7 @@ namespace video {
      * outage it is already counting down on.
      */
     [[nodiscard]] bool due(bool holding, time_point now) const {
-      if (!holding) {
+      if (!holding || _suspended) {
         return false;
       }
       if (!_last_emitted) {
@@ -241,6 +267,30 @@ namespace video {
     /// device was asked, which is what the cadence is pacing.
     void note_emitted(time_point now) {
       _last_emitted = now;
+    }
+
+    /**
+     * @brief Report how long the keepalive that just went out took.
+     * @return true when this call suspended the pacer, so the caller can say so
+     *         once instead of on every skipped tick.
+     *
+     * A no-op unless the caller set an emit budget — see
+     * recovery_keepalive_config_t::emit_budget for which threads need one and
+     * why. Suspension lasts until note_progress(): the display coming back is
+     * the only evidence that the device answers promptly again.
+     */
+    bool note_emit_duration(std::chrono::nanoseconds took) {
+      if (_suspended || !_config.emit_budget || took <= *_config.emit_budget) {
+        return false;
+      }
+      _suspended = true;
+      return true;
+    }
+
+    /// True while a keepalive that overran the emit budget has stood this pacer
+    /// down. due() is false throughout.
+    [[nodiscard]] bool suspended() const {
+      return _suspended;
     }
 
     /**
@@ -264,6 +314,7 @@ namespace video {
     void note_progress() {
       _last_emitted.reset();
       _failure_reported.reset();
+      _suspended = false;
     }
 
     [[nodiscard]] const recovery_keepalive_config_t &config() const {
@@ -275,6 +326,7 @@ namespace video {
     std::chrono::nanoseconds _interval {std::chrono::milliseconds(250)};
     std::optional<time_point> _last_emitted;
     std::optional<time_point> _failure_reported;
+    bool _suspended = false;
   };
 
 }  // namespace video
