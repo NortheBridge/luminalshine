@@ -37,6 +37,12 @@ namespace VDISPLAY::vgd {
       /// branch can prove the re-requested stream GUID belongs to the same
       /// client before handing back a monitor built to someone else's mode.
       std::string client_uid;
+      /// libdisplaydevice device id, recorded whenever the monitor was
+      /// resolved while still INACTIVE (so `display_name` is necessarily
+      /// empty). It is the only handle on such a session until the display
+      /// helper attaches it, and `ring_target_for_display` needs one to
+      /// tell two pre-APPLY sessions apart.
+      std::string device_id;
     };
 
     struct GuidKey {
@@ -81,6 +87,20 @@ namespace VDISPLAY::vgd {
       const uint64_t h = client_uid ? fnv1a64(client_uid, std::strlen(client_uid)) : 0;
       uint64_t id = (h & 0x0FFF'FFFF'FFFF'FFFFULL) | 0x4000'0000'0000'0000ULL;
       return id;
+    }
+
+    /// The EDID serial the driver stamps for a display identity.
+    ///
+    /// MUST stay in step with `luminal-vgd-core`'s
+    /// `identity::serial_from_display_id` (the 32-bit fold below); it is
+    /// duplicated rather than plumbed through the FFI because
+    /// `VgdCreateReply` carries no serial field and reply structs in this
+    /// proto can never grow. If the driver ever changes the derivation,
+    /// identity resolution silently degrades to the client-name arm — it
+    /// does not break, but the LuminalVGD backend loses its only
+    /// name-length-independent way to find an inactive monitor.
+    uint32_t edid_serial_for_display_id(uint64_t display_id) {
+      return static_cast<uint32_t>(display_id ^ (display_id >> 32));
     }
 
     uint64_t fresh_session_id(const GUID &guid) {
@@ -406,6 +426,7 @@ namespace VDISPLAY::vgd {
       reply.ring_slots,
       {},
       s_client_uid ? s_client_uid : "",
+      {},
     };
     BOOST_LOG(info) << "LuminalVGD monitor created: session 0x" << std::hex << req.session_id
                     << " display 0x" << reply.display_id << std::dec << " connector "
@@ -418,7 +439,10 @@ namespace VDISPLAY::vgd {
     result.reused_existing = false;
     result.ready_since = std::chrono::steady_clock::now();
     result.client_name = s_client_name ? std::optional<std::string> {s_client_name} : std::nullopt;
-    for (int attempt = 0; attempt < 50; ++attempt) {  // ≤5 s
+    // 50 passes, but NOT 5 s: each pass also runs two full display
+    // enumerations, so the measured wall clock is ~7 s. Keep the number
+    // quoted in the failure message below in step with that.
+    for (int attempt = 0; attempt < 50; ++attempt) {
       auto now = luminal_display_names();
       for (auto &name : now) {
         if (std::find(before.begin(), before.end(), name) == before.end()) {
@@ -440,14 +464,35 @@ namespace VDISPLAY::vgd {
       }
       // The monitor arrives inactive (it only attaches to the desktop once
       // the display helper applies the topology), so the attached-display
-      // poll above may never see it. The client-name resolver enumerates
+      // poll above may never see it. Both resolvers below enumerate
       // inactive devices too — a resolved device id is enough for the
       // topology layer to activate the display.
-      if (s_client_name) {
-        if (auto id = resolveVirtualDisplayDeviceIdForClient(s_client_name)) {
-          result.device_id = std::move(id);
-          return result;
+      //
+      // IDENTITY FIRST, LABEL SECOND. The driver stamps this monitor's
+      // EDID serial from the very display id we asked for, so the serial
+      // match is exact and says nothing about what the client called
+      // itself. The label arm cannot see any client whose name outgrows
+      // the 13-byte EDID product-name descriptor — which is most of them
+      // ('LG C2 83" OLED webOS', 'XBOXONE Series X') — so leaving it as
+      // the only fallback meant an arrived-but-inactive monitor was
+      // reported missing and then destroyed, on a loop, for those clients.
+      // reply.display_id, not req.display_id: the driver's answer is what
+      // it actually stamped the EDID from, and it is free to hand back an
+      // identity other than the one asked for.
+      auto resolved = resolveVirtualDisplayDeviceIdForEdidSerial(edid_serial_for_display_id(reply.display_id));
+      if (!resolved && s_client_name) {
+        resolved = resolveVirtualDisplayDeviceIdForClient(s_client_name);
+      }
+      if (resolved) {
+        result.device_id = resolved;
+        // Record it: the display has no GDI name yet (that arrives with
+        // the topology apply), so this id is the only thing that can tell
+        // this session apart from another pre-APPLY one later.
+        std::lock_guard relock(g_mutex);
+        if (auto it = g_sessions.find(key_of(guid)); it != g_sessions.end()) {
+          it->second.device_id = *resolved;
         }
+        return result;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -460,7 +505,7 @@ namespace VDISPLAY::vgd {
     // 2026-07-27 incident), and the driver's watchdog couldn't reap them
     // because our ping thread kept the leases fed. Destroy what we
     // created and report failure so the caller can fall back cleanly.
-    BOOST_LOG(error) << "LuminalVGD monitor created but no new display surfaced within 5 s; "
+    BOOST_LOG(error) << "LuminalVGD monitor created but no new display surfaced within ~7 s; "
                         "destroying the orphaned driver session (session 0x"
                      << std::hex << req.session_id << std::dec
                      << "). If this repeats, the Windows display stack is likely down — "
@@ -538,7 +583,7 @@ namespace VDISPLAY::vgd {
 
   std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name) {
     std::wstring wanted(display_name.begin(), display_name.end());
-    std::lock_guard lk(g_mutex);
+    std::unique_lock lk(g_mutex);
     if (g_sessions.empty()) {
       return std::nullopt;
     }
@@ -567,6 +612,16 @@ namespace VDISPLAY::vgd {
         return std::nullopt;
       }
       if (!wanted.empty() && s.display_name != wanted) {
+        // Silent until now, and indistinguishable in a log from "no
+        // session at all". Worth a line: during topology churn the caller
+        // can ask for a name the sole session does not (yet) own, and
+        // knowing WHICH name was asked for is the difference between a
+        // benign mid-modeset miss and a genuinely mistracked display.
+        // Narrowed the same way `wanted` was widened; GDI names are ASCII.
+        const std::string tracked(s.display_name.begin(), s.display_name.end());
+        BOOST_LOG(debug) << "LuminalVGD: sole session 0x" << std::hex << s.session_id << std::dec
+                         << " tracks display '" << tracked << "', not '" << display_name
+                         << "'; declining ring capture for it.";
         return std::nullopt;
       }
       return RingTargetInfo {s.session_id, s.ring_slots};
@@ -574,6 +629,53 @@ namespace VDISPLAY::vgd {
     for (const auto &[k, s] : g_sessions) {
       if (!s.display_name.empty() && s.display_name == wanted) {
         return RingTargetInfo {s.session_id, s.ring_slots};
+      }
+    }
+    // No name matched. A session whose monitor was resolved while still
+    // INACTIVE has no GDI name to match with — create()'s poll found it by
+    // identity, and the name only exists once the helper attaches it — so
+    // with two or more sessions the loop above can never match it and ring
+    // capture was refused for a display that is now perfectly usable.
+    // Map the requested GDI name back to its device id and match on that,
+    // then backfill the name so the cheap comparison works from here on.
+    const bool have_pre_apply_session = std::any_of(
+      g_sessions.begin(),
+      g_sessions.end(),
+      [](const auto &kv) {
+        return kv.second.display_name.empty() && !kv.second.device_id.empty();
+      }
+    );
+    if (!wanted.empty() && have_pre_apply_session) {
+      // Resolving a device id is a display-config query with its own
+      // internal retries — on a wedged stack it takes seconds. It must not
+      // run under g_mutex, which create/destroy/ping all need; that is the
+      // same "never hold a lock a teardown path needs across an OS call"
+      // rule the ring-lock convoy taught us. Drop it, query, retake, and
+      // re-derive everything from the map as it is afterwards.
+      //
+      // STRICT resolver, deliberately. `resolveVirtualDisplayDeviceId`
+      // falls back to "any active virtual display" and then "any virtual
+      // display", so it practically never reports nothing — and an
+      // INACTIVE display enumerates with an empty GDI name, so the name it
+      // is given here routinely matches nothing and the fallback fires.
+      // Pairing that arbitrary id with a session would adopt a display
+      // name onto the wrong session, hand a client another client's ring,
+      // and poison the tracked name permanently (nothing ever clears it,
+      // so that session would lose ring capture for good).
+      lk.unlock();
+      auto wanted_device_id = resolveVirtualDisplayDeviceIdExact(wanted);
+      lk.lock();
+      if (wanted_device_id) {
+        for (auto &[k, s] : g_sessions) {
+          if (!s.display_name.empty() || s.device_id.empty() || s.device_id != *wanted_device_id) {
+            continue;
+          }
+          s.display_name = wanted;
+          BOOST_LOG(info) << "LuminalVGD: adopted display '" << display_name << "' for session 0x"
+                          << std::hex << s.session_id << std::dec
+                          << " by device id (monitor activated after creation).";
+          return RingTargetInfo {s.session_id, s.ring_slots};
+        }
       }
     }
     BOOST_LOG(warning) << "LuminalVGD: no tracked session matches display '"

@@ -137,6 +137,55 @@ namespace VDISPLAY {
 
   std::optional<std::string> resolveVirtualDisplayDeviceId(const std::wstring &display_name);
   std::optional<std::string> resolveVirtualDisplayDeviceIdForClient(const std::string &client_name);
+
+  /// Strict name → device-id lookup: the device id of the virtual display
+  /// whose GDI name really is `display_name`, or nullopt.
+  ///
+  /// `resolveVirtualDisplayDeviceId` above is deliberately lenient — when
+  /// no name matches it falls back to "any active virtual display", then
+  /// "any virtual display", so it essentially never returns nullopt while
+  /// one exists. That is right for its callers, which pass a name they
+  /// just read out of the attached-display list and only want a usable id.
+  /// It is wrong wherever the answer is used as an IDENTITY, because an
+  /// inactive display enumerates with an EMPTY GDI name and can therefore
+  /// never match by name — so the lenient resolver silently hands back a
+  /// different display's id and the caller pairs it with the wrong session.
+  std::optional<std::string> resolveVirtualDisplayDeviceIdExact(const std::wstring &display_name);
+
+  /// Bytes an EDID display-product-name descriptor can carry. Fixed by the
+  /// EDID structure, not by any driver choice.
+  inline constexpr size_t kEdidProductNameCapacity = 13;
+
+  /// True when `monitor_name` is what Windows reports for a client that
+  /// called itself `client_name` but whose label did not fit the EDID.
+  ///
+  /// A virtual-display driver publishes the client label through the EDID
+  /// product-name descriptor, so anything past 13 characters is dropped
+  /// before Windows ever sees it. Comparing the full label for equality
+  /// therefore excluded every client with a longer name — 'LG C2 83" OLED
+  /// webOS' arrives as 'LG C2 83" OLE', 'XBOXONE Series X' as 'XBOXONE
+  /// Serie' — while short ones like 'macOS' matched, so the resolver
+  /// looked like it worked. Exposed for the regression test that pins it.
+  ///
+  /// Only a SATURATED monitor name may match this way: a shorter one was
+  /// published in full, and a mismatch there is a genuine mismatch.
+  bool is_truncated_client_label(const std::string &monitor_name, const std::string &client_name);
+
+  /// Resolve a virtual display by the EDID serial its driver stamped for a
+  /// given display identity — exact, and independent of what the client
+  /// called itself.
+  ///
+  /// This exists because the client-name resolver above cannot see most
+  /// clients at all. EDID's display-product-name descriptor holds 13 bytes,
+  /// so a longer client label reaches Windows truncated ('LG C2 83" OLED
+  /// webOS' arrives as 'LG C2 83" OLE') and never compares equal to the
+  /// label the caller is holding. The serial has no such ceiling.
+  ///
+  /// Like the client-name resolver, this sees INACTIVE monitors: a virtual
+  /// display arrives detached and is only attached when the display helper
+  /// applies the topology, so resolving it before that point is the whole
+  /// purpose of both functions.
+  std::optional<std::string> resolveVirtualDisplayDeviceIdForEdidSerial(uint32_t edid_serial);
   std::optional<std::string> resolveActiveVirtualDisplayDeviceId(
     const std::string &preferred_output_identifier,
     const std::string &client_name
