@@ -55,18 +55,17 @@ find_program(LUMINAL_VGD_CARGO_EXE
 if(NOT LUMINAL_VGD_CARGO_EXE)
     message(FATAL_ERROR "cargo not found (needed for luminal-vgd-ffi); install rustup or set LUMINAL_VGD_CARGO_EXE")
 endif()
-# Produce the staticlib via cargo. add_custom_command(OUTPUT ...) gives
-# ninja a rule for the exact link-input path; cargo is its own (fast,
-# incremental) dependency tracker, so we always invoke it and let it
-# decide whether a rebuild is needed. The custom target drives the
-# command and sunshine depends on it (cmake/targets/windows.cmake).
-add_custom_command(
-    OUTPUT "${LUMINAL_VGD_FFI_LIB}"
+# Produce the staticlib via cargo. This target intentionally runs on every
+# build: Cargo is the dependency tracker for the vendored workspace, while a
+# Ninja OUTPUT-only rule sees only the archive timestamp and otherwise misses
+# Rust source/header changes (which leaves new C ABI exports undefined at the
+# final C++ link).
+add_custom_target(luminal_vgd_ffi_build
     COMMAND "${LUMINAL_VGD_CARGO_EXE}" build -p luminal-vgd-ffi --release --target x86_64-pc-windows-gnullvm
     WORKING_DIRECTORY "${LUMINAL_VGD_DIR}"
+    BYPRODUCTS "${LUMINAL_VGD_FFI_LIB}"
     COMMENT "cargo build luminal-vgd-ffi (staticlib, x86_64-pc-windows-gnullvm)"
     VERBATIM)
-add_custom_target(luminal_vgd_ffi_build DEPENDS "${LUMINAL_VGD_FFI_LIB}")
 set_source_files_properties("${LUMINAL_VGD_FFI_LIB}" PROPERTIES GENERATED TRUE)
 
 # sunshine icon
@@ -82,7 +81,7 @@ add_library(sunshine_rc_object OBJECT "${CMAKE_SOURCE_DIR}/src/platform/windows/
 # Set minimal properties for RC compilation - only what's needed for the resource file
 # Otherwise compilation can fail due to "line too long" errors
 set_target_properties(sunshine_rc_object PROPERTIES
-    COMPILE_DEFINITIONS "PROJECT_ICON_PATH=${SUNSHINE_ICON_PATH};PROJECT_NAME=${PROJECT_NAME};PROJECT_VENDOR=${SUNSHINE_PUBLISHER_NAME};PROJECT_VERSION=${PROJECT_VERSION};PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR};PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR};PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH};RC_VERSION_BUILD=${RC_VERSION_BUILD};RC_VERSION_REVISION=${RC_VERSION_REVISION}"  # cmake-lint: disable=C0301
+    COMPILE_DEFINITIONS "PROJECT_ICON_PATH=${SUNSHINE_ICON_PATH};PROJECT_NAME=${PROJECT_NAME};PROJECT_VENDOR=${SUNSHINE_PUBLISHER_NAME};PROJECT_VERSION=${PROJECT_VERSION};PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR};PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR};PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH};RC_VERSION_MAJOR=${RC_VERSION_MAJOR};RC_VERSION_MINOR=${RC_VERSION_MINOR};RC_VERSION_BUILD=${RC_VERSION_BUILD};RC_VERSION_REVISION=${RC_VERSION_REVISION}"  # cmake-lint: disable=C0301
     INCLUDE_DIRECTORIES ""
 )
 

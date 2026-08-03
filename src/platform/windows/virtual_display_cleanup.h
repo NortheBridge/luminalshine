@@ -14,12 +14,15 @@ namespace platf::virtual_display_cleanup {
     bool virtual_displays_removed {false};
     bool helper_revert_dispatched {false};
     bool database_restore_applied {false};
+    bool physical_display_verified {false};
+    bool helper_restarted {false};
+    bool physical_fallback_applied {false};
   };
 
   cleanup_result_t run(
     std::string_view reason,
     bool enforce_db_restore = true,
-    revert_order_t revert_order = revert_order_t::remove_before_restore,
+    revert_order_t revert_order = revert_order_t::restore_before_remove,
     bool prefer_golden_if_current_missing = false
   );
 }  // namespace platf::virtual_display_cleanup

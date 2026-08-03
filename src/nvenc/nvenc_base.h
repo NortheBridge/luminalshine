@@ -86,6 +86,24 @@ namespace nvenc {
      */
     virtual bool create_and_register_input_buffer() = 0;
 
+    /** Allocate the encoded-output resource. D3D12 must provide and register
+     *  a readback buffer; the default implementation uses NVENC's managed
+     *  bitstream buffer (D3D11/CUDA). */
+    virtual bool create_output_buffer();
+    virtual void destroy_output_buffer();
+
+    /** Translate the generic mapped input/output handles into the ABI objects
+     *  required by the active graphics API. D3D12 supplies structures carrying
+     *  explicit fence points rather than passing opaque handles directly. */
+    virtual void prepare_picture_resources(
+      NV_ENC_INPUT_PTR mapped_input,
+      NV_ENC_BUFFER_FORMAT mapped_format,
+      NV_ENC_PIC_PARAMS &pic_params,
+      NV_ENC_LOCK_BITSTREAM &lock_params
+    );
+
+    virtual void cleanup_rejected_initialize();
+
     /**
      * @brief Optional. Override if you must perform additional operations on the registered input surface in the beginning of `encode_frame()`.
      *        Typically used for interop copy.
@@ -220,8 +238,9 @@ namespace nvenc {
     uint32_t selected_api_version = 0;  ///< API version selected after runtime probing.
     NVENCSTATUS last_nvenc_status = NV_ENC_SUCCESS;
 
-  private:
     NV_ENC_OUTPUT_PTR output_bitstream = nullptr;
+
+  private:
 
     struct {
       uint64_t last_encoded_frame_index = 0;

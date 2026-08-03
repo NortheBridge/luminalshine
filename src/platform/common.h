@@ -489,6 +489,13 @@ namespace platf {
 
     virtual std::shared_ptr<img_t> alloc_img() = 0;
 
+    /// Maximum number of capture images allowed to own GPU resources at
+    /// once. Backends with very large shared HDR surfaces can lower this to
+    /// prevent a temporary encoder backlog from multiplying VRAM residency.
+    virtual std::size_t capture_pool_size() const {
+      return 12;
+    }
+
     virtual int dummy_img(img_t *img) = 0;
 
     virtual std::unique_ptr<avcodec_encode_device_t> make_avcodec_encode_device(pix_fmt_e pix_fmt) {

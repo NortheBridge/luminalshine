@@ -303,6 +303,23 @@ TEST_P(ParseRefreshRateOption, IntegrationTest) {
   }
 }
 
+TEST(ParseRefreshRateOption, VirtualDisplayUsesClientCadenceInsteadOfFrameGenerationMetadata) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::verify_only;
+  video_config.dd.refresh_rate_option = refresh_rate_option_e::automatic;
+
+  rtsp_stream::launch_session_t session {};
+  session.fps = 120;
+  session.virtual_display = true;
+  session.framegen_refresh_rate = 240;
+
+  const auto result = display_device::parse_configuration(video_config, session);
+  const auto &parsed = std::get<display_device::SingleDisplayConfiguration>(result);
+  const std::optional<display_device::FloatingPoint> expected =
+    display_device::Rational {120u, 1u};
+  EXPECT_EQ(parsed.m_refresh_rate, expected);
+}
+
 namespace {
   using res_t = resolution_t;
   using fps_t = client_fps_t;

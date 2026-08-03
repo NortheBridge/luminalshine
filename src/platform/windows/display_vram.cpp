@@ -23,6 +23,7 @@ extern "C" {
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_d3d11_native.h"
+#include "src/nvenc/nvenc_d3d12.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
 #include "src/video.h"
@@ -756,7 +757,8 @@ namespace platf::dxgi {
       return 0;
     }
 
-    int init(std::shared_ptr<platf::display_t> display, adapter_t::pointer adapter_p, pix_fmt_e pix_fmt) {
+    int init(std::shared_ptr<platf::display_t> display, adapter_t::pointer adapter_p, pix_fmt_e pix_fmt,
+             ID3D11Device *supplied_device = nullptr, ID3D11DeviceContext *supplied_context = nullptr) {
       switch (pix_fmt) {
         case pix_fmt_e::nv12:
           format = DXGI_FORMAT_NV12;
@@ -793,19 +795,19 @@ namespace platf::dxgi {
         D3D_FEATURE_LEVEL_9_1
       };
 
-      HRESULT status = D3D11CreateDeviceWithRecovery(
-        adapter_p,
-        D3D_DRIVER_TYPE_UNKNOWN,
-        nullptr,
-        D3D11_CREATE_DEVICE_FLAGS | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-        featureLevels,
-        sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-        D3D11_SDK_VERSION,
-        &device,
-        nullptr,
-        &device_ctx,
-        "encoder"
-      );
+      HRESULT status = S_OK;
+      if (supplied_device && supplied_context) {
+        supplied_device->AddRef();
+        supplied_context->AddRef();
+        device.reset(supplied_device);
+        device_ctx.reset(supplied_context);
+      } else {
+        status = D3D11CreateDeviceWithRecovery(
+          adapter_p, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+          D3D11_CREATE_DEVICE_FLAGS | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+          featureLevels, sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
+          D3D11_SDK_VERSION, &device, nullptr, &device_ctx, "encoder");
+      }
 
       if (FAILED(status)) {
         BOOST_LOG(error) << "Failed to create encoder D3D11 device [0x"sv << util::hex(status).to_string_view() << ']';
@@ -1111,14 +1113,36 @@ namespace platf::dxgi {
   class d3d_nvenc_encode_device_t: public nvenc_encode_device_t {
   public:
     bool init_device(std::shared_ptr<platf::display_t> display, adapter_t::pointer adapter_p, pix_fmt_e pix_fmt) {
+      source_display = display;
+      source_pix_fmt = pix_fmt;
+      adapter_p->AddRef();
+      source_adapter.reset(adapter_p);
       buffer_format = nvenc::nvenc_format_from_sunshine_format(pix_fmt);
       if (buffer_format == NV_ENC_BUFFER_FORMAT_UNDEFINED) {
         BOOST_LOG(error) << "Unexpected pixel format for NvENC ["sv << from_pix_fmt(pix_fmt) << ']';
         return false;
       }
 
-      if (base.init(display, adapter_p, pix_fmt)) {
-        return false;
+      // Prefer the native D3D12 NVENC contract. D3D11On12 lets the proven
+      // Sunshine colour-conversion shaders render directly into the D3D12
+      // input allocation while NVENC receives explicit fence points.
+      if (pix_fmt != pix_fmt_e::yuv444p16) {
+        auto native12 = std::make_unique<nvenc::nvenc_d3d12>(adapter_p);
+        if (native12->valid() && !base.init(display, adapter_p, pix_fmt,
+                                            native12->d3d11_device(), native12->d3d11_context())) {
+          nvenc_d3d12 = native12.get();
+          nvenc_d3d = std::move(native12);
+          BOOST_LOG(info) << "NvEnc: native D3D12 input/output path selected (explicit fences)";
+        }
+      }
+      if (!nvenc_d3d) {
+        if (base.init(display, adapter_p, pix_fmt)) return false;
+        if (pix_fmt == pix_fmt_e::yuv444p16) {
+          nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_on_cuda>(base.device.get());
+        } else {
+          nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_native>(base.device.get());
+        }
+        BOOST_LOG(info) << "NvEnc: D3D11 compatibility path selected";
       }
 
       // Async encoder teardown may destroy D3D resources on a different thread.
@@ -1131,11 +1155,6 @@ namespace platf::dxgi {
         BOOST_LOG(warning) << "Failed to query ID3D11Multithread interface from device [0x"sv << util::hex(status).to_string_view() << ']';
       }
 
-      if (pix_fmt == pix_fmt_e::yuv444p16) {
-        nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_on_cuda>(base.device.get());
-      } else {
-        nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_native>(base.device.get());
-      }
       nvenc = nvenc_d3d.get();
 
       return true;
@@ -1180,21 +1199,63 @@ namespace platf::dxgi {
       );
 
       if (!nvenc_d3d->create_encoder(encoder_cfg, client_config, nvenc_colorspace, buffer_format)) {
-        return false;
+        if (!nvenc_d3d12) {
+          return false;
+        }
+
+        // D3D12 support varies independently of ordinary NVENC support. A
+        // driver may accept OpenEncodeSession on ID3D12Device yet reject
+        // InitializeEncoder for a particular codec/surface combination.
+        // Reconstruct the conventional device immediately; probing must
+        // degrade to D3D11, never terminate the host or remove NVENC.
+        BOOST_LOG(warning) << "NvEnc: native D3D12 initialization rejected; retrying with D3D11 compatibility path";
+        nvenc_d3d12 = nullptr;
+        // cleanup_rejected_initialize() quarantines this driver branch. Keep
+        // its D3D12 device graph alive too: releasing it while the NVIDIA
+        // driver retains the rejected session produces the same SEH fault as
+        // DestroyEncoder. One bounded process-lifetime leak is preferable to
+        // a host crash; the process-wide gate prevents another attempt.
+        (void) nvenc_d3d.release();
+        nvenc = nullptr;
+        base = d3d_base_encode_device {};
+        if (base.init(source_display, source_adapter.get(), source_pix_fmt)) {
+          return false;
+        }
+        multithread_t mt;
+        if (SUCCEEDED(base.device->QueryInterface(IID_ID3D11Multithread, (void **) &mt))) {
+          mt->SetMultithreadProtected(TRUE);
+        }
+        if (source_pix_fmt == pix_fmt_e::yuv444p16) {
+          nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_on_cuda>(base.device.get());
+        } else {
+          nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_native>(base.device.get());
+        }
+        nvenc = nvenc_d3d.get();
+        if (!nvenc_d3d->create_encoder(encoder_cfg, client_config, nvenc_colorspace, buffer_format)) {
+          return false;
+        }
       }
 
       base.apply_colorspace(colorspace);
-      return base.init_output(nvenc_d3d->get_input_texture(), client_config.width, client_config.height) == 0;
+      auto *input = nvenc_d3d12 ? nvenc_d3d12->get_input_texture() : nvenc_d3d->get_input_texture();
+      return base.init_output(input, client_config.width, client_config.height) == 0;
     }
 
     int convert(platf::img_t &img_base) override {
-      return base.convert(img_base);
+      if (nvenc_d3d12 && !nvenc_d3d12->begin_conversion()) return -1;
+      const int result = base.convert(img_base);
+      if (nvenc_d3d12 && !nvenc_d3d12->end_conversion()) return -1;
+      return result;
     }
 
   private:
     d3d_base_encode_device base;
     std::unique_ptr<nvenc::nvenc_d3d11> nvenc_d3d;
+    nvenc::nvenc_d3d12 *nvenc_d3d12 = nullptr;
     NV_ENC_BUFFER_FORMAT buffer_format = NV_ENC_BUFFER_FORMAT_UNDEFINED;
+    std::shared_ptr<platf::display_t> source_display;
+    adapter_t source_adapter;
+    pix_fmt_e source_pix_fmt = pix_fmt_e::nv12;
   };
 
   bool set_cursor_texture(device_t::pointer device, gpu_cursor_t &cursor, util::buffer_t<std::uint8_t> &&cursor_img, DXGI_OUTDUPL_POINTER_SHAPE_INFO &shape_info) {
@@ -1798,7 +1859,41 @@ namespace platf::dxgi {
 
     auto status = device->CreateTexture2D(&t, nullptr, &img->capture_texture);
     if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to create img buf texture [0x"sv << util::hex(status).to_string_view() << ']';
+      const HRESULT removed = device->GetDeviceRemovedReason();
+      BOOST_LOG(error) << "Failed to create img buf texture " << t.Width << 'x' << t.Height
+                       << " format=" << static_cast<unsigned>(t.Format)
+                       << " [" << util::log_hex(status) << "], device=" << util::log_hex(removed);
+
+      // E_OUTOFMEMORY is also returned while VidMm/WDDM is wedged. Record the
+      // actual residency budget at the allocation site so ordinary VRAM
+      // pressure can be distinguished from a dead graphics stack.
+      Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
+      Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+      Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter3;
+      if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgi_device))) &&
+          SUCCEEDED(dxgi_device->GetAdapter(&adapter)) &&
+          SUCCEEDED(adapter.As(&adapter3))) {
+        DXGI_QUERY_VIDEO_MEMORY_INFO local {};
+        DXGI_QUERY_VIDEO_MEMORY_INFO nonlocal {};
+        const HRESULT local_hr = adapter3->QueryVideoMemoryInfo(
+          0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local);
+        const HRESULT nonlocal_hr = adapter3->QueryVideoMemoryInfo(
+          0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonlocal);
+        if (SUCCEEDED(local_hr)) {
+          BOOST_LOG(error) << "DXGI memory at texture failure: local usage=" << local.CurrentUsage
+                           << " budget=" << local.Budget
+                           << " reservation=" << local.CurrentReservation
+                           << " available-for-reservation=" << local.AvailableForReservation;
+        } else {
+          BOOST_LOG(error) << "DXGI local-memory query failed: " << util::log_hex(local_hr);
+        }
+        if (SUCCEEDED(nonlocal_hr)) {
+          BOOST_LOG(error) << "DXGI memory at texture failure: non-local usage=" << nonlocal.CurrentUsage
+                           << " budget=" << nonlocal.Budget
+                           << " reservation=" << nonlocal.CurrentReservation
+                           << " available-for-reservation=" << nonlocal.AvailableForReservation;
+        }
+      }
       return -1;
     }
 

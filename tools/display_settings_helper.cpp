@@ -173,6 +173,8 @@ namespace {
     Disarm = 7,  // cancel any pending restore requests/watchdogs
     SnapshotCurrent = 8,  // snapshot current session state (rotate current->previous) without applying
     WddmReset = 9,  // synthesise Ctrl+Win+Shift+B in this user session (no payload)
+    RevertAccepted = 10,  // payload: [u8 accepted], restoration completes asynchronously
+    ApplyAccepted = 11,  // payload: [u8 accepted], completion follows as ApplyResult
     Ping = 0xFE,  // no payload, reply with Pong
     Stop = 0xFF  // no payload, terminate process
   };
@@ -2429,6 +2431,9 @@ namespace {
     std::atomic<bool> command_worker_stop {false};
     std::jthread command_worker;
     std::atomic<uint64_t> command_worker_epoch {0};
+    // Incremented for every APPLY. Background work carries the generation that
+    // created it and exits before touching Windows if a newer phase supersedes it.
+    std::atomic<uint64_t> apply_generation {0};
     std::mutex async_join_mutex;  // Guards async joiners used to avoid blocking the command loop
     std::vector<std::jthread> async_join_threads;
 
@@ -4064,6 +4069,7 @@ namespace {
     }
 
     void schedule_post_apply_tasks(
+      uint64_t expected_apply_generation,
       bool enforce_snapshot,
       std::optional<std::string> before_sig,
       bool wa_hdr_toggle,
@@ -4075,6 +4081,7 @@ namespace {
       cancel_post_apply_tasks();
       post_apply_thread = std::jthread(
         [this,
+         expected_apply_generation,
          enforce_snapshot,
          before_sig = std::move(before_sig),
          wa_hdr_toggle,
@@ -4084,7 +4091,8 @@ namespace {
          reapply_delays = std::move(reapply_delays)](std::stop_token st) mutable {
           const auto apply_epoch = current_connection_epoch();
           auto cancelled = [&]() {
-            return st.stop_requested() || !is_connection_epoch_current(apply_epoch);
+            return st.stop_requested() || !is_connection_epoch_current(apply_epoch) ||
+                   apply_generation.load(std::memory_order_acquire) != expected_apply_generation;
           };
           if (cancelled()) {
             return;
@@ -4902,9 +4910,11 @@ namespace {
     state.cancel_delayed_reapply();
     state.cancel_post_apply_tasks();
     state.exit_after_revert.store(false, std::memory_order_release);
+    const uint64_t apply_generation = state.apply_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
 
     std::string json(reinterpret_cast<const char *>(payload.data()), payload.size());
     bool wa_hdr_toggle = false;
+    bool transitional_apply = false;
     std::optional<std::string> requested_virtual_layout;
     std::vector<std::pair<std::string, display_device::Point>> monitor_position_overrides;
     std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> refresh_rate_overrides;
@@ -4917,6 +4927,10 @@ namespace {
         if (j.contains("wa_hdr_toggle")) {
           wa_hdr_toggle = j["wa_hdr_toggle"].get<bool>();
           j.erase("wa_hdr_toggle");
+        }
+        if (j.contains("sunshine_transitional_apply") && j["sunshine_transitional_apply"].is_boolean()) {
+          transitional_apply = j["sunshine_transitional_apply"].get<bool>();
+          j.erase("sunshine_transitional_apply");
         }
         if (j.contains("sunshine_virtual_layout") && j["sunshine_virtual_layout"].is_string()) {
           requested_virtual_layout = j["sunshine_virtual_layout"].get<std::string>();
@@ -5023,9 +5037,13 @@ namespace {
     }
 
     if (validated) {
-      BOOST_LOG(info) << "Display configuration validated, creating scheduled task before applying settings";
-      const bool task_created = create_restore_scheduled_task();
-      BOOST_LOG(info) << "Scheduled task creation result: " << (task_created ? "SUCCESS" : "FAILED");
+      if (!transitional_apply) {
+        BOOST_LOG(info) << "Display configuration validated, creating scheduled task before applying settings";
+        const bool task_created = create_restore_scheduled_task();
+        BOOST_LOG(info) << "Scheduled task creation result: " << (task_created ? "SUCCESS" : "FAILED");
+      } else {
+        BOOST_LOG(info) << "Display helper: transitional APPLY validated; suppressing scheduled restore/task churn until final topology commit.";
+      }
 
       // Under exclusive layout the host sends a single-group topology holding
       // exactly the device being configured (display_helper_request_helpers.cpp
@@ -5091,15 +5109,21 @@ namespace {
       }
 
       state.retry_apply_on_topology.store(false, std::memory_order_release);
-      state.schedule_post_apply_tasks(
-        false,
-        std::nullopt,
-        wa_hdr_toggle,
-        requested_virtual_layout,
-        std::move(monitor_position_overrides),
-        std::move(refresh_rate_overrides),
-        std::move(reapply_delays)
-      );
+      if (!transitional_apply) {
+        state.schedule_post_apply_tasks(
+          apply_generation,
+          false,
+          std::nullopt,
+          wa_hdr_toggle,
+          requested_virtual_layout,
+          std::move(monitor_position_overrides),
+          std::move(refresh_rate_overrides),
+          std::move(reapply_delays)
+        );
+      } else {
+        state.retry_apply_on_topology.store(false, std::memory_order_release);
+        BOOST_LOG(info) << "Display helper: transitional APPLY complete; no delayed reapply, HDR, shell, or placement work scheduled.";
+      }
     } else {
       BOOST_LOG(error) << "Display helper: configuration failed SDC_VALIDATE soft-test; not applying.";
       error_msg = "Display configuration failed validation";
@@ -5546,6 +5570,15 @@ int main(int argc, char *argv[]) {
     auto on_message = [&, connection_epoch](std::span<const uint8_t> bytes) {
       if (!state.is_connection_epoch_current(connection_epoch)) {
         return;
+      }
+      // Report acceptance from the pipe callback before the serialized worker
+      // enters a potentially blocking Windows topology operation. Completion is
+      // a separate ApplyResult. REVERT acceptance remains responsive even when
+      // the preceding APPLY has stalled inside SetDisplayConfig.
+      if (!bytes.empty() && bytes[0] == static_cast<uint8_t>(MsgType::Apply)) {
+        send_framed_content(async_pipe, MsgType::ApplyAccepted, std::vector<uint8_t> {1u});
+      } else if (!bytes.empty() && bytes[0] == static_cast<uint8_t>(MsgType::Revert)) {
+        send_framed_content(async_pipe, MsgType::RevertAccepted, std::vector<uint8_t> {1u});
       }
       {
         std::lock_guard<std::mutex> lg(state.command_queue_mutex);

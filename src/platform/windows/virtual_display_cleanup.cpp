@@ -60,6 +60,18 @@ namespace platf::virtual_display_cleanup {
       }
     }
 
+    bool wait_for_physical_display(std::chrono::steady_clock::duration timeout) {
+      constexpr auto kPollInterval = std::chrono::milliseconds(100);
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      do {
+        if (VDISPLAY::has_active_physical_display()) {
+          return true;
+        }
+        std::this_thread::sleep_for(kPollInterval);
+      } while (std::chrono::steady_clock::now() < deadline);
+      return VDISPLAY::has_active_physical_display();
+    }
+
     bool restore_windows_display_database() {
       try {
         auto api = std::make_shared<display_device::WinApiLayer>();
@@ -93,41 +105,55 @@ namespace platf::virtual_display_cleanup {
     const bool had_active_virtual_display = has_active_virtual_display();
     VDISPLAY::setWatchdogFeedingEnabled(false);
 
-    const auto try_helper_revert = [&]() {
-      if (!enforce_db_restore || result.helper_revert_dispatched) {
-        return;
+    // Restoration is intentionally completed while the VGD output still
+    // exists. Removing the only active path first can destroy the helper's
+    // desktop and its IPC pipe before it has a chance to restore Windows.
+    if (enforce_db_restore) {
+      if (revert_order == revert_order_t::remove_before_restore) {
+        BOOST_LOG(warning) << "Virtual display cleanup: overriding legacy remove-before-restore ordering for safety.";
       }
 
       result.helper_revert_dispatched = display_helper_integration::revert(prefer_golden_if_current_missing);
       if (result.helper_revert_dispatched) {
-        result.database_restore_applied = true;
-      }
-    };
-
-    if (enforce_db_restore && revert_order == revert_order_t::restore_before_remove) {
-      try_helper_revert();
-    }
-
-    result.virtual_displays_removed = VDISPLAY::removeAllVirtualDisplays();
-    const bool should_wait_for_teardown_before_restore =
-      had_active_virtual_display &&
-      enforce_db_restore &&
-      (revert_order == revert_order_t::remove_before_restore || !result.helper_revert_dispatched);
-    if (should_wait_for_teardown_before_restore) {
-      constexpr auto kTeardownSettleTimeout = std::chrono::seconds(5);
-      if (wait_for_virtual_display_teardown(kTeardownSettleTimeout)) {
-        BOOST_LOG(debug) << "Virtual display cleanup: teardown settled before restore.";
-      }
-    }
-
-    if (enforce_db_restore) {
-      if (revert_order == revert_order_t::remove_before_restore) {
-        try_helper_revert();
+        // REVERT is accepted synchronously but executes after the helper's
+        // reconnect grace period. Observable topology is the completion ACK.
+        result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(12));
       }
 
-      if (!result.helper_revert_dispatched) {
+      if (!result.physical_display_verified) {
+        BOOST_LOG(warning) << "Virtual display cleanup: helper restore was not verified; restarting the helper and retrying.";
+        result.helper_restarted = display_helper_integration::restart_helper_for_recovery();
+        if (result.helper_restarted) {
+          result.helper_revert_dispatched =
+            display_helper_integration::revert(prefer_golden_if_current_missing) || result.helper_revert_dispatched;
+          result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(12));
+        }
+      }
+
+      if (!result.physical_display_verified) {
         result.database_restore_applied = restore_windows_display_database();
+        if (result.database_restore_applied) {
+          result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(5));
+        }
       }
+
+      if (!result.physical_display_verified) {
+        result.physical_fallback_applied = display_helper_integration::ensure_physical_display_active();
+        if (result.physical_fallback_applied) {
+          result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(5));
+        }
+      }
+    } else {
+      result.physical_display_verified = VDISPLAY::has_active_physical_display();
+    }
+
+    if (!enforce_db_restore || result.physical_display_verified || !had_active_virtual_display) {
+      result.virtual_displays_removed = VDISPLAY::removeAllVirtualDisplays();
+      if (result.virtual_displays_removed) {
+        (void) wait_for_virtual_display_teardown(std::chrono::seconds(5));
+      }
+    } else {
+      BOOST_LOG(error) << "Virtual display cleanup: retaining VGD because no physical display could be verified; refusing to leave Windows headless.";
     }
 
     BOOST_LOG(info) << "Virtual display cleanup: finished (reason=" << reason_text
@@ -135,6 +161,9 @@ namespace platf::virtual_display_cleanup {
                     << ", virtual_displays_removed=" << (result.virtual_displays_removed ? "true" : "false")
                     << ", helper_revert_dispatched=" << (result.helper_revert_dispatched ? "true" : "false")
                     << ", database_restore_applied=" << (result.database_restore_applied ? "true" : "false")
+                    << ", physical_display_verified=" << (result.physical_display_verified ? "true" : "false")
+                    << ", helper_restarted=" << (result.helper_restarted ? "true" : "false")
+                    << ", physical_fallback_applied=" << (result.physical_fallback_applied ? "true" : "false")
                     << ")";
     return result;
   }

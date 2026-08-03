@@ -25,7 +25,8 @@ namespace platf::display_helper_client {
     constexpr int kConnectTimeoutMs = 2000;
     constexpr int kSendTimeoutMs = 5000;
     constexpr int kShutdownIpcTimeoutMs = 500;
-    constexpr int kApplyResultTimeoutMs = 5000;
+    constexpr int kApplyResultTimeoutMs = 30000;
+    constexpr int kRevertAcceptedTimeoutMs = 2000;
 
     bool shutdown_requested() {
       if (!mail::man) {
@@ -61,6 +62,8 @@ namespace platf::display_helper_client {
     Disarm = 7,  ///< Cancel any pending restore/watchdog actions on the helper.
     SnapshotCurrent = 8,  ///< Save current session snapshot (rotate current->previous) without applying config.
     WddmReset = 9,  ///< Synthesise Ctrl+Win+Shift+B in the user's desktop. No payload, no reply.
+    RevertAccepted = 10,  ///< Helper acknowledgement that asynchronous REVERT was scheduled.
+    ApplyAccepted = 11,  ///< Helper acknowledgement that APPLY was queued for execution.
     Ping = 0xFE,  ///< Health check message; expects a response.
     Stop = 0xFF  ///< Request helper process to terminate gracefully.
   };
@@ -71,6 +74,7 @@ namespace platf::display_helper_client {
 
       const auto deadline = steady_clock::now() + milliseconds(kApplyResultTimeoutMs);
       std::array<uint8_t, 2048> buffer {};
+      bool accepted = false;
 
       while (steady_clock::now() < deadline) {
         const auto now = steady_clock::now();
@@ -104,6 +108,16 @@ namespace platf::display_helper_client {
           return success;
         }
 
+        if (msg_type == static_cast<uint8_t>(MsgType::ApplyAccepted)) {
+          accepted = bytes_read >= 2 && buffer[1] != 0;
+          if (!accepted) {
+            BOOST_LOG(error) << "Display helper rejected APPLY before execution";
+            return false;
+          }
+          BOOST_LOG(debug) << "Display helper acknowledged APPLY acceptance; awaiting completion.";
+          continue;
+        }
+
         if (msg_type == static_cast<uint8_t>(MsgType::Ping)) {
           continue;
         }
@@ -112,8 +126,36 @@ namespace platf::display_helper_client {
                          << " while awaiting APPLY result";
       }
 
-      BOOST_LOG(error) << "Display helper IPC: timed out waiting for APPLY result acknowledgement";
+      BOOST_LOG(error) << "Display helper IPC: timed out waiting for APPLY completion"
+                       << (accepted ? " after acceptance" : " before acceptance");
       return std::nullopt;
+    }
+    bool wait_for_revert_accepted_locked(platf::dxgi::INamedPipe &pipe) {
+      using namespace std::chrono;
+      const auto deadline = steady_clock::now() + milliseconds(kRevertAcceptedTimeoutMs);
+      std::array<uint8_t, 256> buffer {};
+      while (steady_clock::now() < deadline) {
+        size_t bytes_read = 0;
+        const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
+        const auto result = pipe.receive(buffer, bytes_read,
+                                         static_cast<int>(std::max<int64_t>(remaining.count(), 100)));
+        if (result == platf::dxgi::PipeResult::Timeout) {
+          continue;
+        }
+        if (result != platf::dxgi::PipeResult::Success || bytes_read == 0) {
+          BOOST_LOG(error) << "Display helper IPC: connection failed while awaiting REVERT acceptance";
+          return false;
+        }
+        if (buffer[0] == static_cast<uint8_t>(MsgType::RevertAccepted)) {
+          return bytes_read >= 2 && buffer[1] != 0;
+        }
+        if (buffer[0] != static_cast<uint8_t>(MsgType::Ping)) {
+          BOOST_LOG(debug) << "Display helper IPC: ignoring message type="
+                           << static_cast<int>(buffer[0]) << " while awaiting REVERT acceptance";
+        }
+      }
+      BOOST_LOG(error) << "Display helper IPC: timed out waiting for REVERT acceptance";
+      return false;
     }
   }  // namespace
 
@@ -227,29 +269,33 @@ namespace platf::display_helper_client {
     pipe.reset();
   }
 
-  bool send_apply_json(const std::string &json) {
+  ApplyOutcome send_apply_json(const std::string &json) {
     BOOST_LOG(debug) << "Display helper IPC: APPLY request queued (json_len=" << json.size() << ")";
     std::unique_lock<std::mutex> lk(pipe_mutex());
     if (!ensure_connected_locked()) {
       BOOST_LOG(warning) << "Display helper IPC: APPLY aborted - no connection";
-      return false;
+      return ApplyOutcome::indeterminate;
     }
     std::vector<uint8_t> payload(json.begin(), json.end());
     auto &pipe = pipe_singleton();
     if (!pipe) {
       BOOST_LOG(warning) << "Display helper IPC: APPLY aborted - no pipe instance";
-      return false;
+      return ApplyOutcome::indeterminate;
     }
 
     if (!send_message(*pipe, MsgType::Apply, payload)) {
-      return false;
+      return ApplyOutcome::indeterminate;
     }
 
     if (auto result = wait_for_apply_result_locked(*pipe)) {
-      return *result;
+      return *result ? ApplyOutcome::applied : ApplyOutcome::rejected;
     }
 
-    return false;
+    // The helper performs SetDisplayConfig before replying. A missing reply
+    // therefore does not prove the apply failed: the modeset may have replaced
+    // the IddCx swapchain (and briefly stalled IPC) after Windows committed it.
+    // Let the integration layer verify observable OS state before deciding.
+    return ApplyOutcome::indeterminate;
   }
 
   bool send_revert(const std::string &json_payload) {
@@ -262,7 +308,7 @@ namespace platf::display_helper_client {
     std::vector<uint8_t> payload(json_payload.begin(), json_payload.end());
     auto &pipe = pipe_singleton();
     if (pipe && send_message(*pipe, MsgType::Revert, payload)) {
-      return true;
+      return wait_for_revert_accepted_locked(*pipe);
     }
     return false;
   }

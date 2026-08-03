@@ -233,7 +233,13 @@ namespace display_helper_integration::helpers {
     if (session_.height > 0) {
       overrides.height_override = session_.height;
     }
-    if (session_.framegen_refresh_rate && *session_.framegen_refresh_rate > 0) {
+    const bool direct_vgd_cadence = session_.virtual_display && VDISPLAY::is_luminalvgd_active();
+    if (direct_vgd_cadence && session_.fps > 0) {
+      overrides.fps_override = session_.fps;
+      overrides.framegen_refresh_override.reset();
+      BOOST_LOG(info) << "Display helper: direct LuminalVGD live mode clamped to client cadence "
+                      << session_.fps << " Hz; frame-generation refresh remains metadata only.";
+    } else if (session_.framegen_refresh_rate && *session_.framegen_refresh_rate > 0) {
       overrides.framegen_refresh_override = session_.framegen_refresh_rate;
       overrides.fps_override = session_.framegen_refresh_rate;
     } else if (session_.fps > 0) {
@@ -250,7 +256,7 @@ namespace display_helper_integration::helpers {
     std::optional<int> framegen_refresh = session_.framegen_refresh_rate;
     const bool framegen_active = framegen_refresh && *framegen_refresh > 0;
     BOOST_LOG(debug) << "framegen_refresh: " << (framegen_refresh ? std::to_string(*framegen_refresh) : "nullopt");
-    const int framegen_display_fps = framegen_active ? *framegen_refresh : 0;
+    const int framegen_display_fps = framegen_active && !direct_vgd_cadence ? *framegen_refresh : 0;
     const int display_fps = framegen_display_fps > 0 ? framegen_display_fps : base_fps;
     BOOST_LOG(debug) << "display_fps: " << display_fps;
 
@@ -264,10 +270,10 @@ namespace display_helper_integration::helpers {
     BOOST_LOG(debug) << "session_requests_virtual: " << session_requests_virtual;
     const bool double_virtual_refresh = session_requests_virtual && effective_video_config_.dd.wa.virtual_double_refresh;
     // Either option (virtual_double_refresh or framegen) requests a minimum of 2x base fps
-    const bool needs_double_minimum = double_virtual_refresh || framegen_active;
+    const bool needs_double_minimum = !direct_vgd_cadence && (double_virtual_refresh || framegen_active);
     const int minimum_fps = needs_double_minimum ? safe_double_int(base_fps) : base_fps;
     // Use the higher of display_fps (which may already be doubled by framegen) or the minimum
-    const int effective_virtual_display_fps = std::max(display_fps, minimum_fps);
+    const int effective_virtual_display_fps = direct_vgd_cadence ? base_fps : std::max(display_fps, minimum_fps);
     BOOST_LOG(debug) << "double_virtual_refresh: " << double_virtual_refresh;
     BOOST_LOG(debug) << "needs_double_minimum: " << needs_double_minimum;
     BOOST_LOG(debug) << "minimum_fps: " << minimum_fps;
@@ -339,7 +345,7 @@ namespace display_helper_integration::helpers {
     if (display_fps > 0) {
       overrides.fps_override = display_fps;
     }
-    overrides.framegen_refresh_override = session_.framegen_refresh_rate;
+    overrides.framegen_refresh_override = VDISPLAY::is_luminalvgd_active() ? std::nullopt : session_.framegen_refresh_rate;
 
     builder.set_configuration(vd_cfg);
     builder.set_virtual_display_watchdog(true);

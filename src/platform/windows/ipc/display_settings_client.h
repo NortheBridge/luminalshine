@@ -10,6 +10,11 @@
   #include <string>
 
 namespace platf::display_helper_client {
+  enum class ApplyOutcome {
+    applied,
+    rejected,
+    indeterminate,
+  };
   // Shared IPC pipe name for the display-settings helper. Both ends of the
   // pipe — the server in tools/display_settings_helper.cpp and the client
   // in src/platform/windows/ipc/display_settings_client.cpp — read this
@@ -31,7 +36,7 @@ namespace platf::display_helper_client {
   inline constexpr const char *display_helper_pipe_name = "luminalshine_display_helper";
 
   // Send APPLY with JSON payload (SingleDisplayConfiguration)
-  bool send_apply_json(const std::string &json);
+  ApplyOutcome send_apply_json(const std::string &json);
 
   // Send REVERT with optional JSON payload.
   bool send_revert(const std::string &json_payload = {});

@@ -29,6 +29,7 @@
 #include <utility>
 
 #ifdef _WIN32
+  #include "platform/windows/display.h"
   #include <winsock2.h>
 #endif
 
@@ -2450,7 +2451,11 @@ namespace webrtc_stream {
           return value * 2;
         };
 
-        if (launch_session->gen1_framegen_fix || launch_session->gen2_framegen_fix) {
+        // Keep native/game-provided FG at the client-requested cadence.  A 2x
+        // display mode adds compositor/IDD load but is encoded back down to
+        // the original WebRTC rate.
+        const bool game_provided_fg = boost::iequals(launch_session->frame_generation_provider, "game-provided");
+        if (!game_provided_fg && (launch_session->gen1_framegen_fix || launch_session->gen2_framegen_fix)) {
           apply_refresh_override(saturating_double(launch_session->fps));
         }
       }
@@ -2637,7 +2642,21 @@ namespace webrtc_stream {
         auto _hot_apply_gate = config::acquire_apply_read_gate();
 
 #ifdef _WIN32
+        const HRESULT display_health = platf::dxgi::D3D11ProbeDeviceHealth();
+        if (FAILED(display_health)) {
+          BOOST_LOG(error) << "WebRTC start refused before display preparation: D3D11 health probe failed (hresult=0x"
+                           << std::hex << display_health << std::dec << ").";
+          return std::string {"GPU/display stack is not ready; retry after recovery or reboot the host."};
+        }
         prepare_virtual_display_for_webrtc_session(launch_session, allow_display_changes);
+        const auto cleanup_failed_virtual_prepare = [&]() {
+          if (launch_session->virtual_display) {
+            (void) platf::virtual_display_cleanup::run(
+              "webrtc_display_prepare_aborted",
+              config::video.dd.config_revert_on_disconnect
+            );
+          }
+        };
         if (allow_display_changes ||
             launch_session->virtual_display_recreated_on_demand ||
             launch_session->virtual_display_needs_resume_apply) {
@@ -2653,9 +2672,19 @@ namespace webrtc_stream {
           (void) display_helper_integration::disarm_pending_restore();
           auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
           if (!request) {
-            BOOST_LOG(warning) << "Display helper: failed to build display configuration request; continuing with existing display.";
+            BOOST_LOG(error) << "Display helper: failed to build WebRTC display configuration request.";
+            if (launch_session->virtual_display) {
+              cleanup_failed_virtual_prepare();
+              return std::string {"Failed to prepare the client virtual display."};
+            }
           } else if (!display_helper_integration::apply(*request)) {
-            BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
+            if (launch_session->virtual_display) {
+              BOOST_LOG(error) << "Display helper: mandatory WebRTC virtual-display APPLY/readiness verification failed.";
+              cleanup_failed_virtual_prepare();
+              return std::string {display_helper_integration::apply_failure_message(
+                display_helper_integration::last_apply_failure())};
+            }
+            BOOST_LOG(warning) << "Display helper: failed to apply physical display configuration; continuing with existing display.";
           }
         }
 #endif

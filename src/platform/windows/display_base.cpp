@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <cctype>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -55,6 +56,19 @@ namespace platf::dxgi {
     std::mutex g_adapter_luid_mutex;
     std::optional<LUID> g_last_wgc_adapter_luid;
     std::optional<LUID> g_dxgi_adapter_luid_override;
+    std::atomic<std::int64_t> g_d3d_oom_retry_after_ms {0};
+    std::atomic<bool> g_d3d_oom_probe_in_flight {false};
+    constexpr auto kD3dOomCircuitBreak = std::chrono::seconds(30);
+
+    std::int64_t steady_now_ms() {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+    }
+
+    bool d3d_oom_circuit_open() {
+      return steady_now_ms() < g_d3d_oom_retry_after_ms.load(std::memory_order_acquire);
+    }
 
     bool luid_equal(const LUID &lhs, const LUID &rhs) {
       return lhs.HighPart == rhs.HighPart && lhs.LowPart == rhs.LowPart;
@@ -625,6 +639,21 @@ namespace platf::dxgi {
     using namespace std::chrono_literals;
     constexpr std::chrono::milliseconds backoff_schedule[] = {1000ms, 2000ms, 4000ms, 8000ms};
     constexpr int max_attempts = sizeof(backoff_schedule) / sizeof(backoff_schedule[0]) + 1;
+    bool owns_oom_probe = false;
+
+    const auto retry_after = g_d3d_oom_retry_after_ms.load(std::memory_order_acquire);
+    if (retry_after != 0) {
+      const auto now_ms = steady_now_ms();
+      if (now_ms < retry_after) {
+        return E_OUTOFMEMORY;
+      }
+      bool expected = false;
+      if (!g_d3d_oom_probe_in_flight.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return E_OUTOFMEMORY;
+      }
+      owns_oom_probe = true;
+    }
 
     // Already known dead: skip the ladder entirely. Otherwise every
     // encoder candidate burns the full ~15s of sleeps re-proving it, which
@@ -684,6 +713,10 @@ namespace platf::dxgi {
         // Proof the stack is alive — clears any latched terminal state so
         // a recovered machine resumes without needing a restart.
         tdr::note_stack_healthy();
+        g_d3d_oom_retry_after_ms.store(0, std::memory_order_release);
+        if (owns_oom_probe) {
+          g_d3d_oom_probe_in_flight.store(false, std::memory_order_release);
+        }
         if (attempt > 1) {
           BOOST_LOG(info) << "D3D11CreateDevice (" << (call_site ? call_site : "unknown")
                           << "): recovered after " << attempt << " attempts (status 0x"
@@ -695,6 +728,23 @@ namespace platf::dxgi {
       const bool is_transient =
         status == DXGI_ERROR_UNSUPPORTED
         || status == DXGI_ERROR_DEVICE_REMOVED;
+      if (status == E_OUTOFMEMORY) {
+        const auto until = steady_now_ms() +
+          std::chrono::duration_cast<std::chrono::milliseconds>(kD3dOomCircuitBreak).count();
+        const bool first = g_d3d_oom_retry_after_ms.exchange(until, std::memory_order_acq_rel) == 0;
+        g_d3d_oom_probe_in_flight.store(false, std::memory_order_release);
+        if (first) {
+          const char *const site = call_site ? call_site : "unknown";
+          tdr::mark_event(
+            std::string_view(site) == "encoder" ? tdr::source_t::encoder_d3d11 : tdr::source_t::dd_test_d3d11,
+            static_cast<long>(status),
+            std::string("D3D11 E_OUTOFMEMORY opened the 30-second graphics recovery circuit (") + site + ")"
+          );
+          BOOST_LOG(error) << "D3D11 recovery circuit opened after E_OUTOFMEMORY; "
+                              "suspending device creation and display recovery for 30 seconds.";
+        }
+        return status;
+      }
       if (!is_transient || attempt == max_attempts) {
         // Either the failure mode isn't recoverable by waiting (E_FAIL,
         // E_INVALIDARG, etc.) or we've exhausted the backoff schedule.
@@ -764,6 +814,9 @@ namespace platf::dxgi {
                              << "(QueryDisplayConfig status " << qdc_status << ", "
                              << qdc_paths << " paths). Not recording a terminal verdict.";
           }
+        }
+        if (owns_oom_probe) {
+          g_d3d_oom_probe_in_flight.store(false, std::memory_order_release);
         }
         return status;
       }
@@ -1224,6 +1277,9 @@ namespace platf::dxgi {
    * @param enumeration_only Specifies whether this test is occurring for display enumeration.
    */
   bool test_dxgi_duplication(adapter_t &adapter, output_t &output, bool enumeration_only) {
+    if (d3d_oom_circuit_open()) {
+      return false;
+    }
     D3D_FEATURE_LEVEL featureLevels[] {
       D3D_FEATURE_LEVEL_11_1,
       D3D_FEATURE_LEVEL_11_0,

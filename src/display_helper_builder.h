@@ -72,6 +72,9 @@ namespace display_helper_integration {
     ActiveSessionState session_overrides {};
     bool enable_virtual_display_watchdog {false};
     bool attach_hdr_toggle_flag {false};
+    // Internal pre-capture phase: apply synchronously without scheduling any
+    // delayed verification/reapply/HDR/shell work that could overlap the next phase.
+    bool transitional_apply {false};
     const rtsp_stream::launch_session_t *session {nullptr};
     DisplayTopologyDefinition topology {};
     std::optional<VirtualDisplayArrangement> virtual_display_arrangement;

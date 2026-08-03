@@ -2653,6 +2653,7 @@ namespace VDISPLAY {
       std::optional<std::chrono::steady_clock::time_point> inactive_since;
       std::optional<std::chrono::steady_clock::time_point> missing_since;
       auto recovery_cooldown_until = std::chrono::steady_clock::now();
+      bool graphics_circuit_logged = false;
 
       while (true) {
         if (g_recovery_monitors_shutting_down.load(std::memory_order_acquire)) {
@@ -2663,6 +2664,17 @@ namespace VDISPLAY {
           BOOST_LOG(debug) << "Virtual display recovery monitor aborted for " << state.describe_target();
           return;
         }
+
+        if (tdr::recovery_recent(std::chrono::seconds(30))) {
+          if (!graphics_circuit_logged) {
+            graphics_circuit_logged = true;
+            BOOST_LOG(warning) << "Virtual display recovery paused by the graphics recovery circuit; "
+                                  "capture, encoder, and topology retries will not race the same outage.";
+          }
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+          continue;
+        }
+        graphics_circuit_logged = false;
 
         const auto now = std::chrono::steady_clock::now();
         const auto presence = monitor_target_presence(state);
