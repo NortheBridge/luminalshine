@@ -341,7 +341,11 @@ jobs:
           # (github.com/NortheBridge/LuminalVGD releases). Bump on driver
           # releases. SudoVDA is gone by decision (2026-07-23) — the MSI's
           # drivers\luminalvgd\install.ps1 also removes it wherever found.
-          LUMINALVGD_VERSION: 'v0.1.0-alpha.6'
+          LUMINALVGD_VERSION: 'v0.1.0-alpha.7'
+          # SHA-256 published in the release's SHA256SUMS asset. Keep this
+          # pinned with the tag so a replaced or partial download cannot enter
+          # the installer supply chain unnoticed.
+          LUMINALVGD_SHA256: 'afe890d0b0b94232b20eb0b6e3aac738e2f1ea73c66572541b9bb1b2e97d5afe'
         run: |
           $ErrorActionPreference = 'Stop'
           $packageDir = Join-Path $PWD 'src_assets/windows/drivers/luminalvgd/driver-package'
@@ -351,6 +355,11 @@ jobs:
           $zipPath = Join-Path $env:RUNNER_TEMP 'luminalvgd.zip'
           Write-Host "Downloading LuminalVGD $($env:LUMINALVGD_VERSION)..."
           Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:LUMINALVGD_SHA256) {
+            throw "LuminalVGD archive SHA-256 mismatch: expected $($env:LUMINALVGD_SHA256), got $actualHash"
+          }
+          Write-Host "Verified LuminalVGD archive SHA-256: $actualHash"
           $tmp = Join-Path $env:RUNNER_TEMP 'luminalvgd'
           Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
 

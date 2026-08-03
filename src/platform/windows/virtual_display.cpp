@@ -2895,14 +2895,6 @@ namespace VDISPLAY {
       return;
     }
 
-    const auto initial_presence = monitor_target_presence(initial_state);
-    if (initial_presence != MonitorTargetPresence::present_active) {
-      BOOST_LOG(info) << "Virtual display recovery monitor not armed for " << initial_state.describe_target()
-                      << ": display was not confirmed active at schedule time (presence="
-                      << monitor_target_presence_name(initial_presence) << ").";
-      return;
-    }
-
     const auto abort_flag = reset_recovery_monitor_abort_flag(guid_uuid);
     VirtualDisplayRecoveryParams wrapped = params;
     const auto external_abort = params.should_abort;
@@ -2914,10 +2906,40 @@ namespace VDISPLAY {
     };
 
     RecoveryMonitorState state(wrapped);
-    state.confirmed_active_at_schedule = true;
-    BOOST_LOG(debug) << "Virtual display recovery monitor scheduled for " << state.describe_target()
-                     << " (max_attempts=" << params.max_attempts << ").";
+    const auto initial_presence = monitor_target_presence(state);
+    state.confirmed_active_at_schedule = initial_presence == MonitorTargetPresence::present_active;
+    if (state.confirmed_active_at_schedule) {
+      BOOST_LOG(debug) << "Virtual display recovery monitor scheduled for " << state.describe_target()
+                       << " (max_attempts=" << params.max_attempts << ").";
+    } else {
+      BOOST_LOG(info) << "Virtual display recovery monitor pending activation for " << state.describe_target()
+                      << " (presence=" << monitor_target_presence_name(initial_presence)
+                      << "); it will arm after the staged topology apply confirms the display active.";
+    }
     std::thread monitor_thread([state = std::move(state)]() mutable {
+      if (!state.confirmed_active_at_schedule) {
+        constexpr auto kActivationBudget = std::chrono::seconds(30);
+        constexpr auto kActivationPoll = std::chrono::milliseconds(100);
+        const auto deadline = std::chrono::steady_clock::now() + kActivationBudget;
+        while (std::chrono::steady_clock::now() < deadline) {
+          if (g_recovery_monitors_shutting_down.load(std::memory_order_acquire) ||
+              monitor_should_abort(state)) {
+            return;
+          }
+          if (monitor_target_presence(state) == MonitorTargetPresence::present_active) {
+            state.confirmed_active_at_schedule = true;
+            BOOST_LOG(info) << "Virtual display recovery monitor armed after activation for "
+                            << state.describe_target() << '.';
+            break;
+          }
+          std::this_thread::sleep_for(kActivationPoll);
+        }
+        if (!state.confirmed_active_at_schedule) {
+          BOOST_LOG(warning) << "Virtual display recovery monitor activation window expired for "
+                             << state.describe_target() << "; no active display was ever observed.";
+          return;
+        }
+      }
       run_virtual_display_recovery_monitor(std::move(state));
     });
     monitor_thread.detach();
