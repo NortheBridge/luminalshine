@@ -709,6 +709,11 @@ namespace platf::dxgi {
     /// a claimed slot before releasing it to the driver.
     bool prepare_fence_transport(uint32_t generation);
 
+    /// Adopt the transport selected by Build 23 for the claimed generation.
+    /// The driver can downgrade a rejected D3D12 fence ring to keyed mutexes
+    /// without recreating the monitor.
+    bool refresh_transport();
+
     /// Wait for this consumer's copy to leave the source slot. The wait is
     /// bounded so a wedged GPU produces reinit/fallback instead of blocking
     /// capture indefinitely.

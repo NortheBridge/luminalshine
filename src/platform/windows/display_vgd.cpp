@@ -739,6 +739,27 @@ namespace platf::dxgi {
     return true;
   }
 
+  bool display_vgd_vram_t::refresh_transport() {
+    VgdRingStatus status {};
+    if (vgd_ring_status(_ring, &status) != 0) {
+      return false;
+    }
+    const bool fence = (status.transport_flags & VGD_CREATE_D3D12_FENCE_TRANSPORT) != 0;
+    if (fence == _fence_transport) {
+      return true;
+    }
+
+    BOOST_LOG(info) << "LuminalVGD capture: driver selected "
+                    << (fence ? "shared timeline-fence" : "legacy keyed-mutex")
+                    << " transport for ring generation " << status.generation << '.';
+    _fence_transport = fence;
+    _slot_textures.clear();
+    _texture_generation = 0;
+    _producer_fence.reset();
+    _fence_generation = 0;
+    return true;
+  }
+
   bool display_vgd_vram_t::finish_slot_copy() {
     const uint64_t value = ++_consumer_fence_value;
     HRESULT status = _device_ctx4->Signal(_consumer_fence.get(), value);
@@ -1066,6 +1087,11 @@ namespace platf::dxgi {
     auto claim_guard = util::fail_guard([&]() {
       vgd_ring_release(_ring, frame.index);
     });
+
+    if (!refresh_transport()) {
+      BOOST_LOG(warning) << "LuminalVGD capture: unable to read the selected ring transport; reinitializing.";
+      return capture_e::reinit;
+    }
 
     auto *slot = slot_texture(frame.generation, frame.index);
     if (!slot) {
