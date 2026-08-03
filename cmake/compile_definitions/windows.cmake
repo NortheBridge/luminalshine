@@ -193,6 +193,7 @@ list(PREPEND PLATFORM_LIBRARIES
         dbghelp
         dwmapi
         dxgi
+        dxguid
         iphlpapi
         ksuser
         libssp.a
