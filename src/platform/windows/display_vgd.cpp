@@ -79,6 +79,14 @@ namespace platf::dxgi {
     /// state rather than a cycle — and still a streaming session.
     std::atomic<uint64_t> g_broken_session {0};
 
+    /// A pre-capture admission timeout is not proof of reader corruption.
+    /// Build 22 can be REBUILDING while Windows transiently refuses
+    /// D3D11CreateDevice during topology activation, then publish normally
+    /// after the driver's bounded retry. Give that distinct condition one
+    /// final, stable-ring qualification when the capture factory starts.
+    std::atomic<uint64_t> g_pre_admission_session {0};
+    std::atomic<uint64_t> g_pre_admission_attempted_session {0};
+
     /// Consecutive slot-texture open failures before giving up on the ring.
     constexpr int kMaxOpenFailures = 20;
 
@@ -259,9 +267,12 @@ namespace platf::dxgi {
 
   void mark_vgd_ring_broken(uint64_t session_id) {
     if (session_id != 0) {
-      g_broken_session.store(session_id, std::memory_order_release);
+      const auto prior_session = g_pre_admission_session.exchange(session_id, std::memory_order_acq_rel);
+      if (prior_session != session_id) {
+        g_pre_admission_attempted_session.store(0, std::memory_order_release);
+      }
       BOOST_LOG(warning) << "LuminalVGD capture: session 0x" << std::hex << session_id
-                         << std::dec << " failed first-frame admission; direct ring disabled for this session.";
+                         << std::dec << " failed first-frame admission; one bounded requalification remains.";
     }
   }
 
@@ -300,6 +311,37 @@ namespace platf::dxgi {
                          << target->session_id << std::dec
                          << " marked broken earlier; using fallback capture.";
       return -1;
+    }
+    if (g_pre_admission_session.load(std::memory_order_acquire) == target->session_id) {
+      uint64_t expected = 0;
+      if (!g_pre_admission_attempted_session.compare_exchange_strong(
+            expected,
+            target->session_id,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+          )) {
+        BOOST_LOG(warning) << "LuminalVGD capture: pre-admission requalification already spent for session 0x"
+                           << std::hex << target->session_id << std::dec << "; using fallback capture.";
+        return -1;
+      }
+
+      const auto token = VDISPLAY::vgd::begin_planned_modeset();
+      if (!token || token->session_id != target->session_id ||
+          !VDISPLAY::vgd::wait_for_planned_modeset(*token, std::chrono::seconds(3))) {
+        BOOST_LOG(warning) << "LuminalVGD capture: session 0x" << std::hex << target->session_id
+                           << std::dec << " did not recover during its final 3-second qualification; using fallback capture.";
+        return -1;
+      }
+
+      uint64_t admitted_session = target->session_id;
+      g_pre_admission_session.compare_exchange_strong(
+        admitted_session,
+        0,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+      );
+      BOOST_LOG(info) << "LuminalVGD capture: session 0x" << std::hex << target->session_id
+                      << std::dec << " published a stable frame during final qualification; direct capture restored.";
     }
 
     if (display_base_t::init(config, display_name, true /* skip_dd_test: ring capture doesn't use Desktop Duplication */)) {
