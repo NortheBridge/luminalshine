@@ -42,6 +42,7 @@
   #include "src/platform/windows/display.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
+  #include "src/platform/windows/virtual_display_vgd.h"
   #include "src/process.h"
   #include "src/tdr_state.h"
 
@@ -53,6 +54,9 @@
   #include <tlhelp32.h>
 
 namespace {
+  std::atomic<display_helper_integration::ApplyFailure> g_last_apply_failure {
+    display_helper_integration::ApplyFailure::none
+  };
   // Serialize helper start/inspect to avoid races that could spawn duplicate helpers
   std::mutex &helper_mutex() {
     static std::mutex m;
@@ -299,6 +303,179 @@ namespace {
         return true;
       }
     }
+    return false;
+  }
+
+  double floating_point_value(const display_device::FloatingPoint &value) {
+    if (const auto *number = std::get_if<double>(&value)) {
+      return *number;
+    }
+    const auto &rational = std::get<display_device::Rational>(value);
+    return rational.m_denominator == 0 ? 0.0 :
+           static_cast<double>(rational.m_numerator) / rational.m_denominator;
+  }
+
+  std::string refresh_rate_description(const display_device::FloatingPoint &value) {
+    if (const auto *number = std::get_if<double>(&value)) {
+      return std::to_string(*number) + " (floating)";
+    }
+    const auto &rational = std::get<display_device::Rational>(value);
+    return std::to_string(rational.m_numerator) + '/' + std::to_string(rational.m_denominator);
+  }
+
+  bool requested_mode_is_active(const display_device::SingleDisplayConfiguration &configuration) {
+    if (configuration.m_device_id.empty()) {
+      return false;
+    }
+    auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(
+      display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) {
+      return false;
+    }
+    for (const auto &device : *devices) {
+      if (!device.m_info || !device_id_equals_ci(device.m_device_id, configuration.m_device_id)) {
+        continue;
+      }
+      if (configuration.m_resolution &&
+          device.m_info->m_resolution != *configuration.m_resolution) {
+        return false;
+      }
+      if (configuration.m_refresh_rate) {
+        const double requested = floating_point_value(*configuration.m_refresh_rate);
+        const double active = floating_point_value(device.m_info->m_refresh_rate);
+        // Windows commonly reports 239.760 for a nominal 240 Hz mode.
+        if (std::abs(requested - active) > 0.5) {
+          return false;
+        }
+      }
+      if (configuration.m_hdr_state && device.m_info->m_hdr_state &&
+          device.m_info->m_hdr_state != configuration.m_hdr_state) {
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  bool requested_core_mode_is_active(const display_device::SingleDisplayConfiguration &configuration) {
+    if (configuration.m_device_id.empty()) {
+      return false;
+    }
+    const auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(
+      display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) {
+      return false;
+    }
+    for (const auto &device : *devices) {
+      if (!device.m_info || !device_id_equals_ci(device.m_device_id, configuration.m_device_id)) {
+        continue;
+      }
+      if (configuration.m_resolution && device.m_info->m_resolution != *configuration.m_resolution) {
+        return false;
+      }
+      if (configuration.m_refresh_rate) {
+        const double requested = floating_point_value(*configuration.m_refresh_rate);
+        const double active = floating_point_value(device.m_info->m_refresh_rate);
+        if (std::abs(requested - active) > 0.5) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  bool wait_for_requested_core_mode(
+    const display_device::SingleDisplayConfiguration &configuration,
+    std::chrono::steady_clock::duration timeout
+  ) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    do {
+      if (requested_core_mode_is_active(configuration)) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    } while (std::chrono::steady_clock::now() < deadline && !shutdown_requested());
+    return false;
+  }
+
+  bool apply_best_effort_hdr_now(
+    const std::string &device_id,
+    std::optional<display_device::HdrState> desired_hdr
+  ) {
+    if (device_id.empty() || !desired_hdr) {
+      return true;
+    }
+    if (!device_is_active(device_id)) {
+      BOOST_LOG(warning) << "Display helper: pre-capture HDR skipped because the target is not active.";
+      return false;
+    }
+    try {
+      auto api = std::make_shared<display_device::WinApiLayer>();
+      auto win_dd = std::make_shared<display_device::WinDisplayDevice>(api);
+      auto impersonated = std::make_shared<display_device::ImpersonatingDisplayDevice>(win_dd);
+      const display_device::HdrStateMap states {{device_id, desired_hdr}};
+      const bool applied = impersonated->setHdrStates(states);
+      if (applied) {
+        BOOST_LOG(info) << "Display helper: pre-capture HDR applied for device_id=" << device_id << ".";
+      } else {
+        BOOST_LOG(warning) << "Display helper: pre-capture HDR did not stick for device_id=" << device_id << ".";
+      }
+      return applied;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Display helper: pre-capture HDR failed: " << e.what();
+    } catch (...) {
+      BOOST_LOG(warning) << "Display helper: pre-capture HDR failed with an unknown exception.";
+    }
+    return false;
+  }
+
+  void log_observed_mode(
+    const display_device::SingleDisplayConfiguration &configuration,
+    const char *stage
+  ) {
+    const auto devices = platf::display_helper::Coordinator::instance().enumerate_devices(
+      display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) {
+      BOOST_LOG(warning) << "Display helper: " << stage << " could not enumerate the observed mode.";
+      return;
+    }
+    for (const auto &device : *devices) {
+      if (!device.m_info || !device_id_equals_ci(device.m_device_id, configuration.m_device_id)) {
+        continue;
+      }
+      BOOST_LOG(info) << "Display helper: " << stage << " observed device_id=" << device.m_device_id
+                      << " mode=" << device.m_info->m_resolution.m_width << 'x'
+                      << device.m_info->m_resolution.m_height << '@'
+                      << floating_point_value(device.m_info->m_refresh_rate) << "Hz"
+                      << " active_refresh=" << refresh_rate_description(device.m_info->m_refresh_rate)
+                      << " requested_refresh="
+                      << (configuration.m_refresh_rate ? refresh_rate_description(*configuration.m_refresh_rate) : "topology-only")
+                      << (requested_core_mode_is_active(configuration) ? " (core mode matched)" : " (core mode mismatch)")
+                      << ", HDR="
+                      << (device.m_info->m_hdr_state ?
+                            (*device.m_info->m_hdr_state == display_device::HdrState::Enabled ? "enabled" : "disabled") :
+                            "unknown")
+                      << (configuration.m_hdr_state && device.m_info->m_hdr_state &&
+                          configuration.m_hdr_state != device.m_info->m_hdr_state ?
+                            " (deferred; not admission-critical)" : "");
+      return;
+    }
+    BOOST_LOG(warning) << "Display helper: " << stage << " device_id=" << configuration.m_device_id
+                       << " was not active/enumerated.";
+  }
+
+  bool wait_for_requested_mode(
+    const display_device::SingleDisplayConfiguration &configuration,
+    std::chrono::steady_clock::duration timeout
+  ) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    do {
+      if (requested_mode_is_active(configuration)) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    } while (std::chrono::steady_clock::now() < deadline && !shutdown_requested());
     return false;
   }
 
@@ -949,7 +1126,9 @@ namespace {
     std::optional<int> framegen_refresh_override = std::nullopt
   ) {
     std::lock_guard<std::mutex> lg(g_session_mutex);
-    const int effective_fps = fps_override ? *fps_override : (session.framegen_refresh_rate && *session.framegen_refresh_rate > 0 ? *session.framegen_refresh_rate : session.fps);
+    const int effective_fps = fps_override ? *fps_override :
+      (session.virtual_display ? session.fps :
+       (session.framegen_refresh_rate && *session.framegen_refresh_rate > 0 ? *session.framegen_refresh_rate : session.fps));
     g_active_session_dd = session_dd_fields_t {
       .width = width_override ? *width_override : session.width,
       .height = height_override ? *height_override : session.height,
@@ -995,6 +1174,10 @@ namespace {
 
     if (request.attach_hdr_toggle_flag) {
       j["wa_hdr_toggle"] = true;
+    }
+
+    if (request.transitional_apply) {
+      j["sunshine_transitional_apply"] = true;
     }
 
     if (request.virtual_display_arrangement) {
@@ -1103,6 +1286,7 @@ namespace {
 namespace display_helper_integration {
   namespace {
     bool apply_internal(const DisplayApplyRequest &request, bool allow_resolution_deferral) {
+      g_last_apply_failure.store(ApplyFailure::none, std::memory_order_release);
       if (request.action == DisplayApplyAction::Skip) {
         BOOST_LOG(info) << "Display helper: configuration parse failed; not dispatching.";
         return false;
@@ -1133,50 +1317,239 @@ namespace display_helper_integration {
         BOOST_LOG(debug) << "Display helper: SYSTEM context without user session; preferring helper dispatch.";
       }
 
-      // Stream-start policy: if a helper is already running, hard-restart it immediately
-      // rather than attempting graceful STOP (avoids apply timeouts and wedged restore loops).
+      // Keep one helper alive across SNAPSHOT_CURRENT -> DISARM -> APPLY. Killing
+      // it here discards the process that owns the snapshot and creates a fresh
+      // pipe immediately before the longest SetDisplayConfig transaction.
       // Exception: if we recently asked the helper to restore and did not cancel it inside
       // the short disarm grace window, keep that helper alive and let APPLY supersede the
       // restore through IPC. Killing it here can strand the host in a partially restored
       // physical-display mode when a monitor input is still switched away.
-      // In SYSTEM/no-user-session mode we still keep hard restart to recover stale pipe state,
-      // but we avoid in-process display API fallback if helper IPC remains unavailable.
+      // An unresponsive helper is still restarted below; reuse applies only
+      // when the existing process answers its liveness probe.
       const bool restore_expected = restore_expected_with_live_helper();
-      const bool hard_restart = (request.session != nullptr) && !restore_expected;
+      const bool hard_restart = false;
       if (request.session && restore_expected) {
         BOOST_LOG(info) << "Display helper: reusing existing helper because an unconfirmed restore is pending; APPLY will supersede it.";
       }
 
       bool helper_ready = ensure_helper_started(hard_restart, true);
-      if (!helper_ready && hard_restart) {
-        BOOST_LOG(warning) << "Display helper: hard restart path unavailable; retrying helper start without restart.";
-        helper_ready = ensure_helper_started(false, true);
-      }
       if (!helper_ready) {
-        helper_ready = ensure_helper_started(hard_restart, true);
+        BOOST_LOG(warning) << "Display helper: existing helper is not responsive; replacing it before APPLY.";
+        helper_ready = ensure_helper_started(true, true);
       }
 
       if (helper_ready) {
-        auto payload = build_helper_apply_payload(request);
+        DisplayApplyRequest final_request = request;
+        bool direct_ring_admitted = true;
+        auto verification_configuration = request.configuration;
+        if (request.session && request.session->virtual_display && verification_configuration &&
+            request.session->fps > 0) {
+          const auto previous_refresh = verification_configuration->m_refresh_rate;
+          verification_configuration->m_refresh_rate = display_device::Rational {
+            static_cast<unsigned int>(request.session->fps), 1u
+          };
+          final_request.configuration = verification_configuration;
+          final_request.session_overrides.fps_override = request.session->fps;
+          final_request.session_overrides.framegen_refresh_override.reset();
+          BOOST_LOG(info) << "Display helper: canonical direct-VGD refresh requested="
+                          << (previous_refresh ? refresh_rate_description(*previous_refresh) : "unset")
+                          << " live=" << request.session->fps << "/1 source=client_fps"
+                          << " framegen_metadata="
+                          << (request.session->framegen_refresh_rate ?
+                                std::to_string(*request.session->framegen_refresh_rate) : "unset")
+                          << " legacy_override_ignored=true";
+        }
+        if (request.session && request.session->virtual_display && verification_configuration &&
+            !verification_configuration->m_device_id.empty()) {
+          // Newly created IddCx monitors enumerate inactive. Asking Windows to
+          // activate that target, select its mode, and tear down every physical
+          // path in one SetDisplayConfig transaction can block indefinitely.
+          // First establish a simple extended/EnsureActive path; only after it
+          // is observable do we request the exclusive client topology.
+          display_device::SingleDisplayConfiguration activation_config;
+          activation_config.m_device_id = verification_configuration->m_device_id;
+          activation_config.m_device_prep =
+            display_device::SingleDisplayConfiguration::DevicePreparation::EnsureActive;
+          DisplayApplyRequest activation_request;
+          activation_request.action = DisplayApplyAction::Apply;
+          activation_request.configuration = activation_config;
+          activation_request.transitional_apply = true;
+          const auto activation_payload = build_helper_apply_payload(activation_request);
+          if (!activation_payload) {
+            g_last_apply_failure.store(ApplyFailure::virtual_display_activation, std::memory_order_release);
+            return false;
+          }
+
+          BOOST_LOG(info) << "Display helper: stage 1/3 activating LuminalVGD alongside the physical topology.";
+          const auto activation_outcome = platf::display_helper_client::send_apply_json(*activation_payload);
+          bool activated = wait_for_device_activation(
+            activation_config.m_device_id,
+            std::chrono::seconds(10)
+          );
+          if (!activated) {
+            log_observed_mode(activation_config, "stage 1/3");
+            BOOST_LOG(error) << "Display helper: stage 1/3 failed; Windows did not activate the LuminalVGD target.";
+            g_last_apply_failure.store(ApplyFailure::virtual_display_activation, std::memory_order_release);
+            return false;
+          }
+          log_observed_mode(*verification_configuration, "stage 1/3");
+          if (activation_outcome == platf::display_helper_client::ApplyOutcome::indeterminate) {
+            BOOST_LOG(warning) << "Display helper: activation became observable after an indeterminate helper completion; restarting the helper before exclusive APPLY.";
+            if (!ensure_helper_started(true, true)) {
+              g_last_apply_failure.store(ApplyFailure::helper_unavailable, std::memory_order_release);
+              return false;
+            }
+          } else if (activation_outcome == platf::display_helper_client::ApplyOutcome::rejected) {
+            BOOST_LOG(error) << "Display helper: stage 1/3 activation was rejected despite transient device visibility.";
+            g_last_apply_failure.store(ApplyFailure::virtual_display_activation, std::memory_order_release);
+            return false;
+          }
+          // The driver normally activates directly at its EDID-preferred client
+          // mode. Do not re-apply an already-correct mode (the former middle
+          // stage waited on HDR and created the very race this sequence avoids).
+          // If Windows selected a different core mode, correct resolution/rate
+          // once while extended, explicitly excluding HDR from the gate.
+          if (!wait_for_requested_core_mode(*verification_configuration, std::chrono::seconds(2))) {
+            auto mode_config = *verification_configuration;
+            mode_config.m_hdr_state.reset();
+            mode_config.m_device_prep =
+              display_device::SingleDisplayConfiguration::DevicePreparation::EnsureActive;
+            DisplayApplyRequest mode_request;
+            mode_request.action = DisplayApplyAction::Apply;
+            mode_request.configuration = mode_config;
+            mode_request.transitional_apply = true;
+            const auto mode_payload = build_helper_apply_payload(mode_request);
+            const auto mode_outcome = mode_payload ?
+                                        platf::display_helper_client::send_apply_json(*mode_payload) :
+                                        platf::display_helper_client::ApplyOutcome::rejected;
+            if (mode_outcome == platf::display_helper_client::ApplyOutcome::rejected ||
+                !wait_for_requested_core_mode(mode_config, std::chrono::seconds(10))) {
+              log_observed_mode(mode_config, "stage 1/3 core-mode correction");
+              BOOST_LOG(error) << "Display helper: stage 1/3 failed; requested resolution/refresh was not observed.";
+              g_last_apply_failure.store(ApplyFailure::requested_mode, std::memory_order_release);
+              return false;
+            }
+            if (mode_outcome == platf::display_helper_client::ApplyOutcome::indeterminate &&
+                !ensure_helper_started(true, true)) {
+              g_last_apply_failure.store(ApplyFailure::helper_unavailable, std::memory_order_release);
+              return false;
+            }
+          } else {
+            BOOST_LOG(info) << "Display helper: requested resolution/refresh already active; skipping redundant mode APPLY.";
+          }
+
+          BOOST_LOG(info) << "Display helper: stage 1/3 complete; entering a 2-second quiet settle before making LuminalVGD primary.";
+          std::this_thread::sleep_for(std::chrono::seconds(2));
+
+          display_device::SingleDisplayConfiguration primary_config;
+          primary_config.m_device_id = verification_configuration->m_device_id;
+          primary_config.m_device_prep =
+            display_device::SingleDisplayConfiguration::DevicePreparation::EnsurePrimary;
+          DisplayApplyRequest primary_request;
+          primary_request.action = DisplayApplyAction::Apply;
+          primary_request.configuration = primary_config;
+          primary_request.transitional_apply = true;
+          const auto primary_payload = build_helper_apply_payload(primary_request);
+          BOOST_LOG(info) << "Display helper: stage 2/3 making LuminalVGD primary while retaining the physical topology.";
+          const auto primary_outcome = primary_payload ?
+                                         platf::display_helper_client::send_apply_json(*primary_payload) :
+                                         platf::display_helper_client::ApplyOutcome::rejected;
+          if (primary_outcome == platf::display_helper_client::ApplyOutcome::rejected ||
+              !wait_for_requested_core_mode(*verification_configuration, std::chrono::seconds(10))) {
+            log_observed_mode(*verification_configuration, "stage 2/3");
+            BOOST_LOG(error) << "Display helper: stage 2/3 failed; LuminalVGD did not remain capture-ready while becoming primary.";
+            g_last_apply_failure.store(ApplyFailure::requested_mode, std::memory_order_release);
+            return false;
+          }
+          BOOST_LOG(info) << "Display helper: stage 2/3 complete; retaining both displays for a 3-second capture-ready settle.";
+          std::this_thread::sleep_for(std::chrono::seconds(3));
+
+          const auto pre_exclusive_ring = VDISPLAY::vgd::begin_planned_modeset();
+          (void) apply_best_effort_hdr_now(
+            verification_configuration->m_device_id,
+            verification_configuration->m_hdr_state
+          );
+          if (!pre_exclusive_ring ||
+              !VDISPLAY::vgd::wait_for_planned_modeset(*pre_exclusive_ring, std::chrono::seconds(12))) {
+            direct_ring_admitted = false;
+            if (pre_exclusive_ring) {
+              platf::dxgi::mark_vgd_ring_broken(pre_exclusive_ring->session_id);
+            }
+            BOOST_LOG(warning) << "Display helper: LuminalVGD did not publish a pre-exclusive frame; "
+                                  "retaining VGD-primary extended topology and selecting HDR-capable fallback capture.";
+            final_request.configuration = primary_config;
+            final_request.virtual_display_arrangement = VirtualDisplayArrangement::ExtendedPrimary;
+          } else {
+            BOOST_LOG(info) << "Display helper: pre-exclusive LuminalVGD frame published after final HDR state; direct capture admitted.";
+            auto exclusive_config = *verification_configuration;
+            exclusive_config.m_resolution.reset();
+            exclusive_config.m_refresh_rate.reset();
+            exclusive_config.m_hdr_state.reset();
+            final_request.configuration = std::move(exclusive_config);
+          }
+        }
+
+        auto payload = build_helper_apply_payload(final_request);
         if (!payload) {
           BOOST_LOG(error) << "Display helper: failed to build APPLY payload for helper dispatch.";
           return false;
         }
 
-        BOOST_LOG(info) << "Display helper: sending APPLY request via helper.";
-        const bool ok = platf::display_helper_client::send_apply_json(*payload);
+        BOOST_LOG(info) << (direct_ring_admitted ?
+          "Display helper: stage 3/3 committing topology-only exclusive APPLY via helper." :
+          "Display helper: stage 3/3 committing safe VGD-primary fallback topology via helper.");
+        const auto ring_before = direct_ring_admitted && request.session && request.session->virtual_display ?
+                                   VDISPLAY::vgd::begin_planned_modeset() : std::nullopt;
+        const auto outcome = platf::display_helper_client::send_apply_json(*payload);
+        bool ok = outcome == platf::display_helper_client::ApplyOutcome::applied;
+        if (outcome == platf::display_helper_client::ApplyOutcome::indeterminate &&
+            verification_configuration && request.session) {
+          BOOST_LOG(info) << "Display helper: APPLY acknowledgement was indeterminate; "
+                             "verifying the requested Windows mode before declaring failure.";
+          ok = request.session->virtual_display ?
+                 wait_for_requested_core_mode(*verification_configuration, std::chrono::seconds(30)) :
+                 wait_for_requested_mode(*verification_configuration, kTopologyWaitTimeout);
+          if (ok) {
+            BOOST_LOG(info) << "Display helper: requested mode is active despite the missing APPLY acknowledgement.";
+            // The old pipe may still contain a late acknowledgement. Reconnect
+            // before the next command so it cannot be mistaken for that reply.
+            platf::display_helper_client::reset_connection();
+          }
+        }
+        if (ok && verification_configuration && request.session &&
+            !(request.session->virtual_display ?
+                wait_for_requested_core_mode(*verification_configuration, std::chrono::seconds(30)) :
+                wait_for_requested_mode(*verification_configuration, kTopologyWaitTimeout))) {
+          BOOST_LOG(error) << "Display helper: APPLY was accepted, but mandatory requested-mode verification failed.";
+          ok = false;
+        }
+        if (verification_configuration && request.session) {
+          log_observed_mode(*verification_configuration, "stage 3/3");
+        }
+        if (ok && ring_before) {
+          BOOST_LOG(info) << "Display helper: Windows accepted the planned modeset; waiting for "
+                             "the LuminalVGD ring to settle ACTIVE before capture starts.";
+          if (!VDISPLAY::vgd::wait_for_planned_modeset(*ring_before, std::chrono::seconds(8))) {
+            BOOST_LOG(error) << "Display helper: requested mode is active, but the LuminalVGD ring "
+                                "did not settle ACTIVE after the planned modeset.";
+            ok = false;
+            g_last_apply_failure.store(ApplyFailure::capture_ring, std::memory_order_release);
+          } else {
+            BOOST_LOG(info) << "Display helper: LuminalVGD ring is ACTIVE after the planned modeset.";
+          }
+        }
         BOOST_LOG(info) << "Display helper: APPLY dispatch result=" << (ok ? "true" : "false");
         if (ok && request.session) {
           g_restore_expected.store(false, std::memory_order_relaxed);
           g_last_apply_completed_us.store(now_steady_us(), std::memory_order_relaxed);
           set_active_session(
             *request.session,
-            request.session_overrides.device_id_override,
-            request.session_overrides.fps_override,
-            request.session_overrides.width_override,
-            request.session_overrides.height_override,
-            request.session_overrides.virtual_display_override,
-            request.session_overrides.framegen_refresh_override
+            final_request.session_overrides.device_id_override,
+            final_request.session_overrides.fps_override,
+            final_request.session_overrides.width_override,
+            final_request.session_overrides.height_override,
+            final_request.session_overrides.virtual_display_override,
+            final_request.session_overrides.framegen_refresh_override
           );
           if (request.enable_virtual_display_watchdog) {
             platf::display_helper::Coordinator::instance().set_virtual_display_watchdog_enabled(true);
@@ -1185,6 +1558,9 @@ namespace display_helper_integration {
         if (!ok && allow_resolution_deferral && request.session && platf::is_lock_screen_active()) {
           BOOST_LOG(info) << "Display helper: APPLY failed during lock screen; queuing deferred apply for retry after unlock.";
           queue_deferred_resolution_apply(request);
+        }
+        if (!ok && g_last_apply_failure.load(std::memory_order_acquire) == ApplyFailure::none) {
+          g_last_apply_failure.store(ApplyFailure::requested_mode, std::memory_order_release);
         }
         return ok;
       }
@@ -1213,9 +1589,18 @@ namespace display_helper_integration {
 
       const auto device_id = request.configuration ? request.configuration->m_device_id : std::string {};
       if (!verify_helper_topology(*request.session, device_id)) {
-        BOOST_LOG(warning) << "Display helper: topology verification failed after in-process APPLY.";
+        BOOST_LOG(error) << "Display helper: topology verification failed after in-process APPLY.";
+        return false;
       }
       (void) apply_topology_definition(request.topology, "in-process");
+
+      if (request.session->virtual_display) {
+        const auto ring_before = VDISPLAY::vgd::begin_planned_modeset();
+        if (!ring_before || !VDISPLAY::vgd::wait_for_planned_modeset(*ring_before, std::chrono::seconds(8))) {
+          BOOST_LOG(error) << "Display helper: in-process APPLY did not produce a stable, publishing LuminalVGD ring.";
+          return false;
+        }
+      }
 
       g_last_apply_completed_us.store(now_steady_us(), std::memory_order_relaxed);
       set_active_session(
@@ -1256,6 +1641,79 @@ namespace display_helper_integration {
     }
     clear_active_session();
     return ok;
+  }
+
+  ApplyFailure last_apply_failure() {
+    return g_last_apply_failure.load(std::memory_order_acquire);
+  }
+
+  const char *apply_failure_message(ApplyFailure failure) {
+    switch (failure) {
+      case ApplyFailure::virtual_display_activation:
+        return "Windows did not activate the virtual display.";
+      case ApplyFailure::requested_mode:
+        return "Windows did not apply the requested virtual-display mode.";
+      case ApplyFailure::capture_ring:
+        return "The virtual display activated, but its capture ring did not begin publishing frames.";
+      case ApplyFailure::helper_unavailable:
+        return "The Windows display helper was unavailable.";
+      case ApplyFailure::none:
+      default:
+        return "Display configuration failed.";
+    }
+  }
+
+  bool restart_helper_for_recovery() {
+    platf::display_helper_client::reset_connection();
+    return ensure_helper_started(true, true);
+  }
+
+  bool ensure_physical_display_active() {
+    if (VDISPLAY::has_active_physical_display()) {
+      return true;
+    }
+    const auto devices = enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) {
+      return false;
+    }
+    for (const auto &device : *devices) {
+      if (device.m_device_id.empty() || VDISPLAY::is_virtual_display_enumerated_device(device)) {
+        continue;
+      }
+      display_device::SingleDisplayConfiguration config;
+      config.m_device_id = device.m_device_id;
+      config.m_device_prep = display_device::SingleDisplayConfiguration::DevicePreparation::EnsureActive;
+      DisplayApplyRequest request;
+      request.action = DisplayApplyAction::Apply;
+      request.configuration = config;
+      BOOST_LOG(warning) << "Display helper recovery: activating physical display '"
+                         << (device.m_friendly_name.empty() ? device.m_device_id : device.m_friendly_name)
+                         << "' alongside the virtual display.";
+      return apply(request);
+    }
+    return false;
+  }
+
+  bool request_wddm_reset_recovery() {
+    static std::atomic<std::int64_t> last_reset_ms {0};
+    constexpr std::int64_t kResetCooldownMs = 15LL * 60LL * 1000LL;
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+    auto previous = last_reset_ms.load(std::memory_order_acquire);
+    if (previous != 0 && now_ms - previous < kResetCooldownMs) {
+      BOOST_LOG(debug) << "Display helper: WDDM reset suppressed by the 15-minute safety cooldown.";
+      return false;
+    }
+    if (!last_reset_ms.compare_exchange_strong(previous, now_ms, std::memory_order_acq_rel)) {
+      return false;
+    }
+    if (!ensure_helper_started(false, true)) {
+      BOOST_LOG(error) << "Display helper: cannot request WDDM reset because the interactive helper is unavailable.";
+      return false;
+    }
+    BOOST_LOG(warning) << "Display helper: requesting one rate-limited WDDM reset (Ctrl+Win+Shift+B).";
+    return platf::display_helper_client::send_wddm_reset();
   }
 
   bool disarm_pending_restore() {

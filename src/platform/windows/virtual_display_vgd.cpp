@@ -30,6 +30,7 @@ namespace VDISPLAY::vgd {
       uint64_t display_id;
       std::string client_name;
       uint32_t ring_slots;
+      uint32_t transport_flags;
       /// GDI display name ("\\\\.\\DISPLAY274") once the monitor surfaced;
       /// empty while the display is still inactive pre-APPLY.
       std::wstring display_name;
@@ -43,6 +44,11 @@ namespace VDISPLAY::vgd {
       /// helper attaches it, and `ring_target_for_display` needs one to
       /// tell two pre-APPLY sessions apart.
       std::string device_id;
+      uint32_t width;
+      uint32_t height;
+      uint32_t base_fps_millihz;
+      uint32_t framegen_fps_millihz;
+      bool framegen_promoted;
     };
 
     struct GuidKey {
@@ -270,6 +276,15 @@ namespace VDISPLAY::vgd {
     bool framegen_refresh_active,
     bool enable_hdr
   ) {
+    // Direct-to-encode capture must run at the cadence negotiated with the
+    // client. Legacy frame-generation settings passed 2x as the requested
+    // rate and the client rate as the base rate. Preserve that 2x mode in the
+    // immutable advertised superset, but never make it the active target.
+    const uint32_t advertised_fps_millihz = fps_millihz;
+    const uint32_t client_fps_millihz = base_fps_millihz ? base_fps_millihz : fps_millihz;
+    fps_millihz = client_fps_millihz;
+    framegen_refresh_active = false;
+
     if (platf::vgd_devnode::rebind_in_flight()) {
       // A background driver rebind is replacing the devnode right now; a
       // session created into it would be yanked by the recreate fallback
@@ -373,11 +388,15 @@ namespace VDISPLAY::vgd {
                         << ") uses its built-in 993 nits.";
       }
     }
-    req.flags = 0;
+    // Build 21 / proto 0.7 can publish D3D12-openable ring textures guarded
+    // by one shared timeline fence. Request it only after capability gating;
+    // older drivers retain their keyed-mutex transport unchanged.
+    req.flags = (g_caps && (g_caps->caps & VGD_CAP_D3D12_FENCE_TRANSPORT)) ?
+                  VGD_CREATE_D3D12_FENCE_TRANSPORT : 0;
     req.mode_count = 1;
     // Callers pass millihertz (nvhttp/webrtc normalize Hz → mHz before the
     // call); the spec below must NOT rescale it again.
-    req.modes[0] = VgdModeSpec {width, height, fps_millihz};
+    req.modes[0] = VgdModeSpec {width, height, client_fps_millihz};
     // Advertise the base rate alongside the requested one whenever they differ,
     // NOT only when a per-app frame-generation flag happened to be set.
     //
@@ -401,8 +420,14 @@ namespace VDISPLAY::vgd {
     // Advertising the superset up front costs two mode-list entries and removes
     // both problems, with no display event at game launch because nothing has to
     // change. A virtual display idling at the higher rate is free.
-    if (base_fps_millihz != 0 && base_fps_millihz != fps_millihz) {
-      req.modes[1] = VgdModeSpec {width, height, base_fps_millihz};
+    if (advertised_fps_millihz != 0 && advertised_fps_millihz != client_fps_millihz) {
+      req.modes[1] = VgdModeSpec {width, height, advertised_fps_millihz};
+      req.mode_count = 2;
+    } else if (client_fps_millihz != 0 && client_fps_millihz <= UINT32_MAX / 2) {
+      // Native/game-controlled FG is discovered only after the encoder has
+      // inspected the render stack. Put 2x in the immutable monitor-mode
+      // superset now so the live session can promote without unplug/replug.
+      req.modes[1] = VgdModeSpec {width, height, client_fps_millihz * 2};
       req.mode_count = 2;
     }
     if (s_client_name) {
@@ -424,13 +449,37 @@ namespace VDISPLAY::vgd {
       reply.display_id,
       s_client_name ? s_client_name : "",
       reply.ring_slots,
+      req.flags,
       {},
       s_client_uid ? s_client_uid : "",
       {},
+      width,
+      height,
+      client_fps_millihz,
+      (advertised_fps_millihz != client_fps_millihz) ? advertised_fps_millihz : client_fps_millihz * 2,
+      false,
     };
+
+    // CREATE necessarily publishes the whole monitor-mode superset. With a
+    // dynamic-modes driver, narrow the initial target list to the requested
+    // (base) mode. The doubled mode remains in the immutable monitor list and
+    // can be exposed later without a monitor cycle.
+    if (g_caps && (g_caps->caps & VGD_CAP_DYNAMIC_MODES)) {
+      VgdUpdateModesRequest initial {};
+      initial.session_id = req.session_id;
+      initial.mode_count = 1;
+      initial.modes[0] = req.modes[0];
+      VgdUpdateModesReply update {};
+      const int update_io = vgd_update_modes(g_device, &initial, &update);
+      if (update_io != 0 || update.result != 0) {
+        BOOST_LOG(warning) << "LuminalVGD: could not gate the initial target list to the client refresh: io="
+                           << update_io << " result=" << update.result;
+      }
+    }
     BOOST_LOG(info) << "LuminalVGD monitor created: session 0x" << std::hex << req.session_id
                     << " display 0x" << reply.display_id << std::dec << " connector "
-                    << reply.connector_index << ' ' << width << 'x' << height << '@' << fps_millihz << "mHz";
+                    << reply.connector_index << ' ' << width << 'x' << height << '@' << client_fps_millihz
+                    << "mHz (client cadence; advertised alternate " << req.modes[1].refresh_millihz << "mHz)";
     lk.unlock();
 
     // The monitor arrives asynchronously; wait briefly for the OS to
@@ -624,11 +673,11 @@ namespace VDISPLAY::vgd {
                          << "'; declining ring capture for it.";
         return std::nullopt;
       }
-      return RingTargetInfo {s.session_id, s.ring_slots};
+      return RingTargetInfo {s.session_id, s.ring_slots, s.transport_flags};
     }
     for (const auto &[k, s] : g_sessions) {
       if (!s.display_name.empty() && s.display_name == wanted) {
-        return RingTargetInfo {s.session_id, s.ring_slots};
+        return RingTargetInfo {s.session_id, s.ring_slots, s.transport_flags};
       }
     }
     // No name matched. A session whose monitor was resolved while still
@@ -674,13 +723,165 @@ namespace VDISPLAY::vgd {
           BOOST_LOG(info) << "LuminalVGD: adopted display '" << display_name << "' for session 0x"
                           << std::hex << s.session_id << std::dec
                           << " by device id (monitor activated after creation).";
-          return RingTargetInfo {s.session_id, s.ring_slots};
+          return RingTargetInfo {s.session_id, s.ring_slots, s.transport_flags};
         }
       }
     }
     BOOST_LOG(warning) << "LuminalVGD: no tracked session matches display '"
                        << display_name << "' (" << g_sessions.size() << " sessions).";
     return std::nullopt;
+  }
+
+  std::optional<RingTransitionToken> begin_planned_modeset() {
+    uint64_t session_id = 0;
+    uint32_t ring_slots = 0;
+    {
+      std::lock_guard lk(g_mutex);
+      if (g_sessions.size() != 1) {
+        return std::nullopt;
+      }
+      session_id = g_sessions.begin()->second.session_id;
+      ring_slots = g_sessions.begin()->second.ring_slots;
+    }
+
+    VgdRingHandle *ring = vgd_ring_open(session_id, ring_slots);
+    if (!ring) {
+      return RingTransitionToken {session_id, ring_slots, 0};
+    }
+    VgdRingStatus status {};
+    const bool read = vgd_ring_status(ring, &status) == 0;
+    vgd_ring_close(ring);
+    return RingTransitionToken {session_id, ring_slots, read ? status.generation : 0};
+  }
+
+  bool wait_for_planned_modeset(
+    const RingTransitionToken &before,
+    std::chrono::milliseconds timeout
+  ) {
+    using namespace std::chrono_literals;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::optional<std::chrono::steady_clock::time_point> ready_since;
+    bool observed_transition = false;
+
+    const auto ring_is_capture_ready = [](const VgdRingStatus &status) {
+      if (status.state != 1 || status.generation == 0 ||
+          status.latest_sequence == 0 || status.heartbeat_qpc == 0 ||
+          status.qpc_frequency == 0) {
+        return false;
+      }
+      LARGE_INTEGER now {};
+      if (!QueryPerformanceCounter(&now) || now.QuadPart < 0 ||
+          static_cast<uint64_t>(now.QuadPart) < status.heartbeat_qpc) {
+        return false;
+      }
+      const auto age_qpc = static_cast<uint64_t>(now.QuadPart) - status.heartbeat_qpc;
+      return age_qpc <= status.qpc_frequency * 2;
+    };
+
+    while (std::chrono::steady_clock::now() < deadline) {
+      VgdRingHandle *ring = vgd_ring_open(before.session_id, before.ring_slots);
+      VgdRingStatus status {};
+      const bool read = ring && vgd_ring_status(ring, &status) == 0;
+      if (ring) {
+        vgd_ring_close(ring);
+      }
+      if (!read) {
+        observed_transition = true;
+        ready_since.reset();
+      } else if (status.state != 1 ||
+                 (before.generation != 0 && status.generation != before.generation)) {
+        observed_transition = true;
+        ready_since.reset();
+      }
+
+      if (read && ring_is_capture_ready(status)) {
+        if (!ready_since) {
+          ready_since = std::chrono::steady_clock::now();
+        }
+        // A single ACTIVE read is insufficient: IddCx can unassign the old
+        // swapchain shortly after the Windows modeset. Require a fresh,
+        // publishing ring with a stable generation for a short settle window.
+        if (std::chrono::steady_clock::now() - *ready_since >= 500ms &&
+            (observed_transition || before.generation == 0 ||
+             status.generation == before.generation)) {
+          return true;
+        }
+      } else {
+        ready_since.reset();
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    return false;
+  }
+
+  bool promote_frame_generation_refresh() {
+    // Deliberately a successful no-op. Native FG may be detected after capture
+    // starts, but direct VGD sessions stay at the client-negotiated cadence;
+    // changing the Windows target here would tear down/reassign the IddCx
+    // swapchain that is feeding the encoder.
+    BOOST_LOG(info) << "LuminalVGD: native frame generation detected; retaining the client refresh for direct capture.";
+    return true;
+
+#if 0
+    using namespace std::chrono_literals;
+    TrackedSession session {};
+    {
+      std::lock_guard lk(g_mutex);
+      if (!g_device || !g_caps || !(g_caps->caps & VGD_CAP_DYNAMIC_MODES) || g_sessions.size() != 1) {
+        BOOST_LOG(warning) << "LuminalVGD: native frame-generation refresh promotion is unavailable";
+        return false;
+      }
+      auto &tracked = g_sessions.begin()->second;
+      if (tracked.framegen_promoted) {
+        return true;
+      }
+      if (tracked.display_name.empty()) {
+        BOOST_LOG(warning) << "LuminalVGD: cannot promote frame-generation refresh before the virtual display has a GDI name";
+        return false;
+      }
+      tracked.framegen_promoted = true;
+      session = tracked;
+    }
+
+    VgdUpdateModesRequest req {};
+    req.session_id = session.session_id;
+    req.mode_count = 2;
+    req.modes[0] = VgdModeSpec {session.width, session.height, session.base_fps_millihz};
+    req.modes[1] = VgdModeSpec {session.width, session.height, session.framegen_fps_millihz};
+    VgdUpdateModesReply reply {};
+    const int io = vgd_update_modes(g_device, &req, &reply);
+    if (io != 0 || reply.result != 0 || reply.accepted != 2) {
+      BOOST_LOG(error) << "LuminalVGD: failed to expose the live 2x frame-generation mode: io=" << io
+                       << " result=" << reply.result << " accepted=" << reply.accepted;
+      std::lock_guard lk(g_mutex);
+      if (g_sessions.size() == 1 && g_sessions.begin()->second.session_id == session.session_id) {
+        g_sessions.begin()->second.framegen_promoted = false;
+      }
+      return false;
+    }
+
+    auto before = begin_planned_modeset();
+    DEVMODEW mode {};
+    mode.dmSize = sizeof(mode);
+    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+    mode.dmPelsWidth = session.width;
+    mode.dmPelsHeight = session.height;
+    mode.dmDisplayFrequency = (session.framegen_fps_millihz + 500) / 1000;
+    const LONG changed = ChangeDisplaySettingsExW(
+      session.display_name.c_str(),
+      &mode, nullptr, CDS_FULLSCREEN, nullptr);
+    if (changed != DISP_CHANGE_SUCCESSFUL) {
+      BOOST_LOG(error) << "LuminalVGD: Windows rejected the live frame-generation modeset (code " << changed << ')';
+      return false;
+    }
+    if (before && !wait_for_planned_modeset(*before, 10s)) {
+      BOOST_LOG(warning) << "LuminalVGD: timed out waiting for the capture ring after the live frame-generation modeset";
+      return false;
+    }
+    BOOST_LOG(info) << "LuminalVGD: game-provided frame generation promoted the live display to "
+                    << session.width << 'x' << session.height << '@' << session.framegen_fps_millihz << "mHz";
+    return true;
+#endif
   }
 
 }  // namespace VDISPLAY::vgd

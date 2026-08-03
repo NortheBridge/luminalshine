@@ -201,6 +201,9 @@ namespace platf::dxgi {
   using depth_stencil_state_t = util::safe_ptr<ID3D11DepthStencilState, Release<ID3D11DepthStencilState>>;
   using depth_stencil_view_t = util::safe_ptr<ID3D11DepthStencilView, Release<ID3D11DepthStencilView>>;
   using keyed_mutex_t = util::safe_ptr<IDXGIKeyedMutex, Release<IDXGIKeyedMutex>>;
+  using fence11_t = util::safe_ptr<ID3D11Fence, Release<ID3D11Fence>>;
+  using device5_t = util::safe_ptr<ID3D11Device5, Release<ID3D11Device5>>;
+  using device_ctx4_t = util::safe_ptr<ID3D11DeviceContext4, Release<ID3D11DeviceContext4>>;
 
   namespace video {
     using device_t = util::safe_ptr<ID3D11VideoDevice, Release<ID3D11VideoDevice>>;
@@ -654,6 +657,11 @@ namespace platf::dxgi {
    * it), GPU-copies the pixels into a pooled img_d3d_t under the slot's keyed
    * mutex, and releases the slot — claims are never held across encode.
    */
+  /// Prevent direct-ring capture for one session after pre-capture frame
+  /// admission fails. The display factory then selects the normal HDR-capable
+  /// fallback without repeatedly reopening a ring that never published.
+  void mark_vgd_ring_broken(uint64_t session_id);
+
   class display_vgd_vram_t: public display_vram_t {
   public:
     ~display_vgd_vram_t() override;
@@ -670,6 +678,13 @@ namespace platf::dxgi {
     capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
 
     int dummy_img(platf::img_t *img_base) override;
+
+    /// Four 4K FP16 images are already roughly 256 MiB before the driver
+    /// ring and encoder surfaces. Bounding this backend prevents a transient
+    /// encode backlog from growing the general twelve-image pool to ~768 MiB.
+    std::size_t capture_pool_size() const override {
+      return 4;
+    }
 
     /// True while the ring is REBUILDING with a live heartbeat and the host's
     /// recovery budget has not run out — the driver is riding out a GPU outage
@@ -688,6 +703,16 @@ namespace platf::dxgi {
     /// Open (or fetch the cached) named shared texture for a ring slot of the
     /// current generation. Returns nullptr on open failure.
     slot_texture_t *slot_texture(uint32_t generation, uint32_t slot);
+
+    /// Open the producer timeline fence for a ring generation and create the
+    /// local completion fence used to prove CopyResource has stopped reading
+    /// a claimed slot before releasing it to the driver.
+    bool prepare_fence_transport(uint32_t generation);
+
+    /// Wait for this consumer's copy to leave the source slot. The wait is
+    /// bounded so a wedged GPU produces reinit/fallback instead of blocking
+    /// capture indefinitely.
+    bool finish_slot_copy();
 
     /// Read the ring header into a liveness sample. False when the header read
     /// itself failed (dead handle / faulting section).
@@ -712,10 +737,19 @@ namespace platf::dxgi {
     ::VgdRingHandle *_ring = nullptr;
     uint64_t _session_id = 0;
     uint32_t _ring_slots = 0;
+    bool _fence_transport = false;
+    uint32_t _fence_generation = 0;
+    fence11_t _producer_fence;
+    fence11_t _consumer_fence;
+    device_ctx4_t _device_ctx4;
+    HANDLE _consumer_fence_event = nullptr;
+    uint64_t _consumer_fence_value = 0;
     /// Generation the cached slot textures were opened for; a bump retires them.
     uint32_t _texture_generation = 0;
     std::vector<slot_texture_t> _slot_textures;
     uint64_t _last_sequence = 0;
+    std::chrono::steady_clock::time_point _first_frame_deadline {};
+    bool _first_frame_timeout_reported = false;
     std::string _display_name;
 
     // TDR blast-radius shrink: tdr::event_count() snapshot taken at init.

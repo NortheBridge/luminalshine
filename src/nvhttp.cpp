@@ -49,6 +49,7 @@
 #include "platform/common.h"
 #include "state_storage.h"
 #ifdef _WIN32
+  #include "platform/windows/display.h"
   #include "platform/windows/display_helper_request_helpers.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/virtual_display.h"
@@ -1570,7 +1571,13 @@ namespace nvhttp {
         return value * 2;
       };
 
-      if (launch_session->gen1_framegen_fix || launch_session->gen2_framegen_fix) {
+      // Game-provided FG produces the extra frames inside the game's target
+      // cadence.  Direct VGD capture must stay at the client's requested
+      // refresh; selecting 2x here only doubles DWM/IDD work before encoding
+      // back down to the client rate.  Keep the legacy 2x policy for the
+      // explicit non-native capture-fix providers.
+      const bool game_provided_fg = boost::iequals(launch_session->frame_generation_provider, "game-provided");
+      if (!game_provided_fg && (launch_session->gen1_framegen_fix || launch_session->gen2_framegen_fix)) {
         apply_refresh_override(saturating_double(launch_session->fps));
       }
     }
@@ -2316,6 +2323,15 @@ namespace nvhttp {
     }
 
 #ifdef _WIN32
+    const HRESULT display_health = no_active_sessions ? platf::dxgi::D3D11ProbeDeviceHealth() : S_OK;
+    if (FAILED(display_health)) {
+      BOOST_LOG(error) << "Launch refused before display preparation: D3D11 health probe failed (hresult=0x"
+                       << std::hex << display_health << std::dec << ").";
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "GPU/display stack is not ready; retry after recovery or reboot the host.");
+      tree.put("root.gamesession", 0);
+      return;
+    }
     prepare_virtual_display_for_session(launch_session, no_active_sessions, allow_display_changes, pending_output_override);
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
@@ -2344,13 +2360,27 @@ namespace nvhttp {
       (void) display_helper_integration::disarm_pending_restore();
       auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
       if (!request) {
-        BOOST_LOG(warning) << "Display helper: failed to build display configuration request; continuing with existing display.";
+        BOOST_LOG(error) << "Display helper: failed to build display configuration request.";
+        if (launch_session->virtual_display) {
+          tree.put("root.<xmlattr>.status_code", 503);
+          tree.put("root.<xmlattr>.status_message", "Failed to prepare the client virtual display.");
+          tree.put("root.gamesession", 0);
+          return;
+        }
       }
 
       if (request) {
         const bool applied = display_helper_integration::apply(*request);
         launch_session->display_config_preapplied = applied;
         if (!applied) {
+          if (launch_session->virtual_display) {
+            BOOST_LOG(error) << "Display helper: mandatory virtual-display APPLY/readiness verification failed; aborting launch.";
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message",
+                     display_helper_integration::apply_failure_message(display_helper_integration::last_apply_failure()));
+            tree.put("root.gamesession", 0);
+            return;
+          }
           if (helper_session_available) {
             BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
           }
@@ -2541,6 +2571,15 @@ namespace nvhttp {
     });
 
 #ifdef _WIN32
+    const HRESULT display_health = no_active_sessions ? platf::dxgi::D3D11ProbeDeviceHealth() : S_OK;
+    if (FAILED(display_health)) {
+      BOOST_LOG(error) << "Resume refused before display preparation: D3D11 health probe failed (hresult=0x"
+                       << std::hex << display_health << std::dec << ").";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "GPU/display stack is not ready; retry after recovery or reboot the host.");
+      return;
+    }
     prepare_virtual_display_for_session(launch_session, no_active_sessions, allow_display_changes, pending_output_override);
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
@@ -2582,11 +2621,25 @@ namespace nvhttp {
         (void) display_helper_integration::disarm_pending_restore();
         auto request = display_helper_integration::helpers::build_request_from_session(config::video, *launch_session);
         if (!request) {
-          BOOST_LOG(warning) << "Display helper: failed to build display configuration request; continuing with existing display.";
+          BOOST_LOG(error) << "Display helper: failed to build display configuration request.";
+          if (launch_session->virtual_display) {
+            tree.put("root.resume", 0);
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "Failed to prepare the client virtual display.");
+            return;
+          }
         }
 
         if (request) {
           if (!display_helper_integration::apply(*request)) {
+            if (launch_session->virtual_display) {
+              BOOST_LOG(error) << "Display helper: mandatory virtual-display APPLY/readiness verification failed; aborting resume.";
+              tree.put("root.resume", 0);
+              tree.put("root.<xmlattr>.status_code", 503);
+              tree.put("root.<xmlattr>.status_message",
+                       display_helper_integration::apply_failure_message(display_helper_integration::last_apply_failure()));
+              return;
+            }
             if (helper_session_available) {
               BOOST_LOG(warning) << "Display helper: failed to apply display configuration; continuing with existing display.";
             }

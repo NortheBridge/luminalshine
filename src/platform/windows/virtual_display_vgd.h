@@ -13,6 +13,7 @@
 #pragma once
 
 #include <functional>
+#include <chrono>
 #include <optional>
 #include <string>
 
@@ -73,6 +74,7 @@ namespace VDISPLAY::vgd {
   struct RingTargetInfo {
     uint64_t session_id;
     uint32_t ring_slots;
+    uint32_t transport_flags;
   };
 
   /// Resolve the tracked session whose monitor backs `display_name`
@@ -80,5 +82,28 @@ namespace VDISPLAY::vgd {
   /// common per-client case) that session is returned directly;
   /// otherwise the session whose recorded display name matches wins.
   std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name);
+
+  struct RingTransitionToken {
+    uint64_t session_id {0};
+    uint32_t ring_slots {0};
+    uint32_t generation {0};
+  };
+
+  /// Snapshot the sole tracked ring before a planned display modeset.
+  std::optional<RingTransitionToken> begin_planned_modeset();
+
+  /// Wait until the planned modeset has either produced and activated a newer
+  /// ring generation, or the original generation has remained ACTIVE for the
+  /// whole settle window (the apply was a no-op).
+  bool wait_for_planned_modeset(
+    const RingTransitionToken &before,
+    std::chrono::milliseconds timeout
+  );
+
+  /// Promote the sole live LuminalVGD monitor from the client refresh to its
+  /// create-time 2x mode.  This is intentionally one-way for a stream: the
+  /// render-stack detector has a reliable positive edge but no reliable
+  /// negative edge.  Stream teardown restores the client's base mode.
+  bool promote_frame_generation_refresh();
 
 }  // namespace VDISPLAY::vgd

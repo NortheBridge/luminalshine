@@ -418,6 +418,15 @@ namespace nvenc {
       init_params.darWidth = encoder_params.width;
       init_params.encodeHeight = encoder_params.height;
       init_params.darHeight = encoder_params.height;
+      // D3D11 NVENC historically treated zero maxima as "same as encode
+      // extent". The native D3D12 entry point follows the documented
+      // contract strictly and rejects encodeWidth/Height > zero maxima.
+      init_params.maxEncodeWidth = encoder_params.width;
+      init_params.maxEncodeHeight = encoder_params.height;
+      // Required by NVENC only for a D3D12 session (ignored by D3D11).
+      // Leaving the zero-initialized value produces the driver's otherwise
+      // opaque "Invalid buffer format" rejection during initialization.
+      init_params.bufferFormat = buffer_format;
       init_params.frameRateNum = client_config.framerate;
       init_params.frameRateDen = 1;
       if (client_config.framerateX100 > 0) {
@@ -722,6 +731,13 @@ namespace nvenc {
 
     init_params.encodeConfig = &enc_config;
 
+    // An encoder which rejected InitializeEncoder has no registered async
+    // event or buffers. Destroy it directly and clear the handle before
+    // returning so the general teardown path does not attempt to unregister
+    // resources that were never registered (some D3D12 drivers raise an SEH
+    // exception for that invalid cleanup sequence).
+    auto destroy_rejected_init_session = [&]() { cleanup_rejected_initialize(); };
+
     if (nvenc_failed(nvenc->nvEncInitializeEncoder(encoder, &init_params))) {
       auto init_error = last_nvenc_error_string;
       auto init_status = last_nvenc_status;
@@ -757,6 +773,7 @@ namespace nvenc {
         if (nvenc_failed(nvenc->nvEncInitializeEncoder(encoder, &init_params))) {
           BOOST_LOG(error) << "NvEnc: NvEncInitializeEncoder() failed with both explicit config (" << init_error
                            << ") and driver defaults (" << last_nvenc_error_string << ")";
+          destroy_rejected_init_session();
           return false;
         }
 
@@ -764,9 +781,11 @@ namespace nvenc {
       } else if (!have_preset_config && init_status == NV_ENC_ERR_INVALID_PARAM && client_config.videoFormat == 2) {
         BOOST_LOG(error) << "NvEnc: NvEncInitializeEncoder() failed: " << init_error
                          << " (AV1 preset fallback unavailable; skipping driver-default retry)";
+        destroy_rejected_init_session();
         return false;
       } else {
         BOOST_LOG(error) << "NvEnc: NvEncInitializeEncoder() failed: " << init_error;
+        destroy_rejected_init_session();
         return false;
       }
     }
@@ -780,12 +799,9 @@ namespace nvenc {
       }
     }
 
-    NV_ENC_CREATE_BITSTREAM_BUFFER create_bitstream_buffer = {api::create_bitstream_buffer_version(selected_api_version)};
-    if (nvenc_failed(nvenc->nvEncCreateBitstreamBuffer(encoder, &create_bitstream_buffer))) {
-      BOOST_LOG(error) << "NvEnc: NvEncCreateBitstreamBuffer() failed: " << last_nvenc_error_string;
+    if (!create_output_buffer()) {
       return false;
     }
-    output_bitstream = create_bitstream_buffer.bitstreamBuffer;
 
     if (!create_and_register_input_buffer()) {
       return false;
@@ -863,6 +879,45 @@ namespace nvenc {
 
     fail_guard.disable();
     return true;
+  }
+
+  bool nvenc_base::create_output_buffer() {
+    NV_ENC_CREATE_BITSTREAM_BUFFER params = {api::create_bitstream_buffer_version(selected_api_version)};
+    if (nvenc_failed(nvenc->nvEncCreateBitstreamBuffer(encoder, &params))) {
+      BOOST_LOG(error) << "NvEnc: NvEncCreateBitstreamBuffer() failed: " << last_nvenc_error_string;
+      return false;
+    }
+    output_bitstream = params.bitstreamBuffer;
+    return true;
+  }
+
+  void nvenc_base::cleanup_rejected_initialize() {
+    if (encoder) {
+      nvenc->nvEncDestroyEncoder(encoder);
+      encoder = nullptr;
+    }
+  }
+
+  void nvenc_base::destroy_output_buffer() {
+    if (!output_bitstream) {
+      return;
+    }
+    if (nvenc_failed(nvenc->nvEncDestroyBitstreamBuffer(encoder, output_bitstream))) {
+      BOOST_LOG(error) << "NvEnc: NvEncDestroyBitstreamBuffer() failed: " << last_nvenc_error_string;
+    }
+    output_bitstream = nullptr;
+  }
+
+  void nvenc_base::prepare_picture_resources(
+    NV_ENC_INPUT_PTR mapped_input,
+    NV_ENC_BUFFER_FORMAT mapped_format,
+    NV_ENC_PIC_PARAMS &pic_params,
+    NV_ENC_LOCK_BITSTREAM &lock_params
+  ) {
+    pic_params.inputBuffer = mapped_input;
+    pic_params.bufferFmt = mapped_format;
+    pic_params.outputBitstream = output_bitstream;
+    lock_params.outputBitstream = output_bitstream;
   }
 
   void nvenc_base::destroy_encoder() {
@@ -947,12 +1002,7 @@ namespace nvenc {
       }
       encoder_state.has_pending_async = false;
     }
-    if (output_bitstream) {
-      if (nvenc_failed(nvenc->nvEncDestroyBitstreamBuffer(encoder, output_bitstream))) {
-        BOOST_LOG(error) << "NvEnc: NvEncDestroyBitstreamBuffer() failed: " << last_nvenc_error_string;
-      }
-      output_bitstream = nullptr;
-    }
+    destroy_output_buffer();
     if (encoder && async_event_handle) {
       NV_ENC_EVENT_PARAMS event_params = {api::event_params_version(selected_api_version)};
       event_params.completionEvent = async_event_handle;
@@ -1032,15 +1082,15 @@ namespace nvenc {
     };
 
     NV_ENC_PIC_PARAMS pic_params = {api::pic_params_version(selected_api_version)};
+    NV_ENC_LOCK_BITSTREAM lock_bitstream = {api::lock_bitstream_version(selected_api_version)};
     pic_params.inputWidth = encoder_params.width;
     pic_params.inputHeight = encoder_params.height;
     pic_params.encodePicFlags = force_idr ? NV_ENC_PIC_FLAG_FORCEIDR : 0;
     pic_params.inputTimeStamp = frame_index;
     pic_params.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-    pic_params.inputBuffer = mapped_input_buffer.mappedResource;
-    pic_params.bufferFmt = mapped_input_buffer.mappedBufferFmt;
-    pic_params.outputBitstream = output_bitstream;
     pic_params.completionEvent = async_event_handle;
+    lock_bitstream.doNotWait = async_event_handle ? 1 : 0;
+    prepare_picture_resources(mapped_input_buffer.mappedResource, mapped_input_buffer.mappedBufferFmt, pic_params, lock_bitstream);
 
     // Discard any stale signal latched on the auto-reset completion event
     // by a previously-timed-out wait. Without this, the WaitForSingleObject
@@ -1057,10 +1107,6 @@ namespace nvenc {
       unmap_now();
       return {};
     }
-
-    NV_ENC_LOCK_BITSTREAM lock_bitstream = {api::lock_bitstream_version(selected_api_version)};
-    lock_bitstream.outputBitstream = output_bitstream;
-    lock_bitstream.doNotWait = async_event_handle ? 1 : 0;
 
     std::uint32_t wait_removed_reason = 0;
     const auto wait_result = async_event_handle ?

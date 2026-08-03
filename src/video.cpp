@@ -53,6 +53,7 @@ extern "C" {
   #include <excpt.h>  // __try/__except for the encoder-probe SEH wrapper.
 
   #include "src/platform/windows/display_helper_integration.h"
+  #include "src/platform/windows/display.h"
   #include "src/platform/windows/display_vram.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
@@ -1636,8 +1637,9 @@ namespace video {
 
     display_wp = disp;
 
-    constexpr auto capture_buffer_size = 12;
+    const auto capture_buffer_size = std::max<std::size_t>(2, disp->capture_pool_size());
     std::list<std::shared_ptr<platf::img_t>> imgs(capture_buffer_size);
+    BOOST_LOG(info) << "Capture GPU image pool limited to " << capture_buffer_size << " surfaces.";
 
     std::vector<std::optional<std::chrono::steady_clock::time_point>> imgs_used_timestamps;
     const std::chrono::seconds trim_timeot = 3s;
@@ -1814,6 +1816,13 @@ namespace video {
             }
 
             while (capture_ctx_queue->running()) {
+#ifdef _WIN32
+              if (tdr::stack_down()) {
+                BOOST_LOG(error) << "Stopping capture recovery: the Windows display stack is down; "
+                                    "further display and D3D retries cannot succeed until reboot."sv;
+                return;
+              }
+#endif
               // Release the display before reenumerating displays, since some capture backends
               // only support a single display session per device/application.
               disp.reset();
@@ -3100,6 +3109,13 @@ namespace video {
 
     while (encode_session_ctx_queue.running()) {
 #ifdef _WIN32
+      if (tdr::stack_down()) {
+        BOOST_LOG(error) << "Stopping synchronous capture recovery: the Windows display stack is down; "
+                            "further display and D3D retries cannot succeed until reboot."sv;
+        return encode_e::error;
+      }
+#endif
+#ifdef _WIN32
       // After a recent display-helper APPLY, give the display subsystem time to settle.
       {
         const auto ms_since_apply = display_helper_integration::ms_since_last_apply();
@@ -3336,7 +3352,14 @@ namespace video {
     // Outside the reinit loop so the ceiling bounds the whole outage rather
     // than restarting on every rebuild the outage causes.
     encoder_recovery_gate_t recovery_gate;
-    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p, recovery_gate) == encode_e::reinit) {}
+    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p, recovery_gate) == encode_e::reinit) {
+#ifdef _WIN32
+      if (tdr::stack_down()) {
+        BOOST_LOG(error) << "Abandoning synchronous capture reinitialization because the Windows display stack is down."sv;
+        break;
+      }
+#endif
+    }
   }
 
   void capture_async(
@@ -3962,6 +3985,38 @@ namespace video {
       update_probe_cache(cache_key, false, false, false, false, false, false);
       return -1;
     }
+
+#ifdef _WIN32
+    // One cheap device creation distinguishes an encoder/capability failure
+    // from a process-wide D3D allocation failure. Without this gate the probe
+    // matrix repeats the identical failure for every codec, encoder and output.
+    const HRESULT d3d_health = platf::dxgi::D3D11ProbeDeviceHealth();
+    if (FAILED(d3d_health)) {
+      static std::mutex health_log_mutex;
+      static HRESULT last_health_hr = S_OK;
+      static std::chrono::steady_clock::time_point last_health_log {};
+      static std::uint64_t suppressed_generations = 0;
+      const auto now = std::chrono::steady_clock::now();
+      {
+        std::lock_guard health_lock {health_log_mutex};
+        const bool log_now = last_health_hr != d3d_health ||
+                             last_health_log == std::chrono::steady_clock::time_point {} ||
+                             now - last_health_log >= std::chrono::seconds(30);
+        if (log_now) {
+          BOOST_LOG(error) << "Encoder probe generation blocked by D3D11 health gate (hresult=0x"
+                           << std::hex << d3d_health << std::dec << "). Skipping the exhaustive encoder/output matrix; "
+                           << suppressed_generations << " identical generation(s) suppressed since the previous report.";
+          last_health_hr = d3d_health;
+          last_health_log = now;
+          suppressed_generations = 0;
+        } else {
+          ++suppressed_generations;
+        }
+      }
+      update_probe_cache(cache_key, false, false, false, false, false, false);
+      return -1;
+    }
+#endif
 
     if (!allow_encoder_probing()) {
       // Error already logged

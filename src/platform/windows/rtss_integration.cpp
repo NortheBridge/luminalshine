@@ -859,7 +859,7 @@ namespace platf {
   }  // namespace
 
   void rtss_restore_pending_overrides() {
-    maybe_restore_from_overrides_file();
+    // Disabled by product policy: do not inspect or mutate RTSS at startup.
   }
 
   void rtss_set_sync_limiter_override(std::optional<std::string> value) {
@@ -875,15 +875,20 @@ namespace platf {
   }
 
   bool rtss_warmup_process() {
+    return false;
+#if 0
     g_rtss_root = resolve_rtss_root();
     if (!fs::exists(g_rtss_root)) {
       BOOST_LOG(warning) << "RTSS install path not found: "sv << g_rtss_root.string();
       return false;
     }
     return ensure_rtss_running(g_rtss_root);
+#endif
   }
 
   bool rtss_streaming_start(int fps, const std::string &app_profile) {
+    return false;
+#if 0
     g_limit_active = false;
     g_settings_dirty = false;
     g_flags_modified = false;
@@ -1056,9 +1061,12 @@ namespace platf {
       g_recovery_file_owned = false;
     }
     return g_limit_active;
+#endif
   }
 
   bool rtss_streaming_refresh(int fps) {
+    return false;
+#if 0
     if (!config::frame_limiter.enable) {
       return false;
     }
@@ -1177,9 +1185,12 @@ namespace platf {
     }
 
     return applied_limit;
+#endif
   }
 
   void rtss_streaming_stop() {
+    return;
+#if 0
     g_sync_limiter_override.reset();
     auto cleanup = [&]() {
       g_original_limit.reset();
@@ -1300,14 +1311,16 @@ namespace platf {
     g_recovery_file_owned = false;
 
     cleanup();
+#endif
   }
 
   bool rtss_is_configured() {
-    auto st = rtss_get_status();
-    return st.path_exists && st.hooks_found;
+    return false;
   }
 
   rtss_status_t rtss_get_status() {
+    return {};
+#if 0
     rtss_status_t st {};
     st.enabled = config::frame_limiter.enable;
     st.configured_path = config::rtss.install_path;
@@ -1327,6 +1340,7 @@ namespace platf {
     }
     st.process_running = is_rtss_process_running();
     return st;
+#endif
   }
 }  // namespace platf
 

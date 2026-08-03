@@ -44,6 +44,7 @@
   #include "src/display_helper_integration.h"
   #include "src/platform/common.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
+  #include "src/platform/windows/display.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/playnite_integration.h"
   #include "src/platform/windows/rtss_integration.h"
@@ -777,12 +778,63 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    bool startup_d3d_unhealthy = false;
+#ifdef _WIN32
+    HRESULT startup_d3d_hr = platf::dxgi::D3D11ProbeDeviceHealth();
+    if (FAILED(startup_d3d_hr) && !shutdown_event->peek()) {
+      startup_d3d_unhealthy = true;
+      static std::atomic<long long> last_startup_health_report_ms {0};
+      const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+      auto previous_report = last_startup_health_report_ms.load(std::memory_order_acquire);
+      const bool report_health_failure =
+        previous_report == 0 || now_ms - previous_report >= 30'000;
+      if (report_health_failure) {
+        (void) last_startup_health_report_ms.compare_exchange_strong(
+          previous_report, now_ms, std::memory_order_acq_rel);
+        BOOST_LOG(error) << "Startup D3D11 health gate failed (hresult=0x" << std::hex
+                         << startup_d3d_hr << std::dec
+                         << "). The encoder matrix will not run until graphics-device creation recovers; identical checks are suppressed for 30 seconds.";
+      }
+
+      // Keep a hardware-backed path active before resetting WDDM, then ask the
+      // interactive helper to synthesize the Windows graphics reset exactly
+      // once under its process-wide cooldown.
+      if (report_health_failure) {
+        (void) display_helper_integration::ensure_physical_display_active();
+      }
+      if (report_health_failure && display_helper_integration::request_wddm_reset_recovery()) {
+        BOOST_LOG(warning) << "Startup recovery: WDDM reset dispatched; waiting up to 8 seconds for D3D11 recovery.";
+        const auto recovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        do {
+          if (shutdown_event->peek()) {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+          startup_d3d_hr = platf::dxgi::D3D11ProbeDeviceHealth();
+          if (SUCCEEDED(startup_d3d_hr)) {
+            startup_d3d_unhealthy = false;
+            BOOST_LOG(info) << "Startup recovery: D3D11 device creation recovered after the WDDM reset.";
+            break;
+          }
+        } while (std::chrono::steady_clock::now() < recovery_deadline);
+      }
+
+      if (startup_d3d_unhealthy && report_health_failure) {
+        BOOST_LOG(error) << "Startup recovery exhausted: D3D11 still fails with hresult=0x"
+                         << std::hex << startup_d3d_hr << std::dec
+                         << ". LuminalShine will stay available in degraded mode; reboot Windows if the adapter does not recover.";
+      }
+    }
+#endif
+
     bool encoder_probe_failed = video::probe_encoders();
 
 #ifdef _WIN32
     // If the probe failed and there's no active display (headless with VDD),
     // wait for the display to become available via DXGI and retry.
-    if (encoder_probe_failed && !shutdown_event->peek()) {
+    if (encoder_probe_failed && !startup_d3d_unhealthy && !shutdown_event->peek()) {
       BOOST_LOG(info) << "Startup encoder probe failed; waiting for display activation before retry.";
       constexpr auto kDisplayActivationTimeout = std::chrono::seconds(5);
       const auto deadline = std::chrono::steady_clock::now() + kDisplayActivationTimeout;

@@ -245,6 +245,10 @@ if(PROJECT_VERSION_NUMERIC MATCHES "([0-9]+)\\.([0-9]+)\\.([0-9]+)")
 endif()
 
 # Split PROJECT_VERSION_PATCH for RC file (Windows VERSIONINFO requires values <= 65535)
+# Resource-script integers follow C literal rules, so a calendar-style minor
+# such as "08" must be normalized before windres sees it (08 is invalid octal).
+math(EXPR RC_VERSION_MAJOR "${PROJECT_VERSION_MAJOR} + 0")
+math(EXPR RC_VERSION_MINOR "${PROJECT_VERSION_MINOR} + 0")
 # PROJECT_VERSION_PATCH can be 0-245959, so we split it into two parts:
 # - Last 2 digits for RC_VERSION_REVISION
 # - Leading digits for RC_VERSION_BUILD (0 if original is <= 99)

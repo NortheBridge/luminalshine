@@ -13,6 +13,16 @@
 #include <vector>
 
 namespace display_helper_integration {
+  enum class ApplyFailure {
+    none,
+    helper_unavailable,
+    virtual_display_activation,
+    requested_mode,
+    capture_ring,
+  };
+
+  ApplyFailure last_apply_failure();
+  const char *apply_failure_message(ApplyFailure failure);
   // Launch the helper (if needed) and process the provided builder request.
   // Returns true if the helper accepted the command; false to allow fallback.
   bool apply(const DisplayApplyRequest &request);
@@ -29,6 +39,16 @@ namespace display_helper_integration {
   // Launch the helper (if needed) and send REVERT.
   // Returns true if the helper accepted the command; false to allow fallback.
   bool revert(bool prefer_golden_if_current_missing = false);
+
+  // Replace a stale helper/pipe and wait for the new interactive helper.
+  bool restart_helper_for_recovery();
+
+  // Best-effort emergency activation of the first connected physical output.
+  bool ensure_physical_display_active();
+
+  // Rate-limited, interactive-desktop WDDM reset (Ctrl+Win+Shift+B).
+  // Intended for a confirmed D3D device-creation failure before probing.
+  bool request_wddm_reset_recovery();
 
   // Attempt to cancel any pending restore/revert requests on a running helper.
   // Returns true if a DISARM command was sent successfully.

@@ -1150,7 +1150,10 @@ namespace proc {
         return value * 2;
       };
 
-      if (launch_session->gen1_framegen_fix || launch_session->gen2_framegen_fix) {
+      // Native/game-provided FG fills the client cadence; it does not require
+      // the virtual display itself to run at twice that cadence.
+      const bool game_provided_fg = boost::iequals(launch_session->frame_generation_provider, "game-provided");
+      if (!game_provided_fg && (launch_session->gen1_framegen_fix || launch_session->gen2_framegen_fix)) {
         apply_refresh_override(saturating_double(launch_session->fps));
       }
     }
@@ -1725,10 +1728,9 @@ namespace proc {
                                      (rtss_warmup_limit && *rtss_warmup_limit > 0);
       if (wants_frame_limit) {
         platf::frame_limiter_prepare_launch(_app.gen1_framegen_fix, _app.gen2_framegen_fix, rtss_warmup_limit);
-        const bool provider_auto = config::frame_limiter.provider.empty() ||
-                                   boost::iequals(config::frame_limiter.provider, "auto");
-        const bool provider_rtss = boost::iequals(config::frame_limiter.provider, "rtss");
-        const bool should_wait_rtss = platf::rtss_is_configured() && (provider_auto || provider_rtss || _app.gen1_framegen_fix || _app.gen2_framegen_fix);
+        // RTSS integration is disabled: never inspect, start, or wait for its
+        // process during streamed application launch.
+        const bool should_wait_rtss = false;
         if (should_wait_rtss) {
           const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
           bool running = false;
@@ -2306,6 +2308,52 @@ namespace proc {
       } catch (...) {
         // Ignore JSON parsing failures for the supplemental view; property_tree parse below is authoritative.
         json_tree = nlohmann::json();
+      }
+
+      // Smooth Motion integration has been retired. Migrate persisted entries
+      // before property_tree consumes them so an old apps.json cannot silently
+      // reactivate refresh doubling after an upgrade.
+      bool migrated_smooth_motion = false;
+      if (json_tree.is_object() && json_tree.contains("apps") && json_tree["apps"].is_array()) {
+        auto is_smooth_motion = [](const nlohmann::json &value) {
+          if (!value.is_string()) {
+            return false;
+          }
+          std::string normalized;
+          for (const unsigned char ch : value.get<std::string>()) {
+            if (std::isalnum(ch)) {
+              normalized.push_back(static_cast<char>(std::tolower(ch)));
+            }
+          }
+          return normalized == "nvidia" || normalized == "smoothmotion" ||
+                 normalized == "nvidiasmoothmotion";
+        };
+        for (auto &app : json_tree["apps"]) {
+          if (!app.is_object()) {
+            continue;
+          }
+          const bool legacy_provider = app.contains("frame-generation-provider") &&
+                                       is_smooth_motion(app["frame-generation-provider"]);
+          const bool legacy_mode = app.contains("frame-generation-mode") &&
+                                   is_smooth_motion(app["frame-generation-mode"]);
+          if (!legacy_provider && !legacy_mode) {
+            continue;
+          }
+          app["frame-generation-provider"] = "game-provided";
+          app["frame-generation-mode"] = "off";
+          app["gen1-framegen-fix"] = false;
+          app["gen2-framegen-fix"] = false;
+          app.erase("dlss-framegen-capture-fix");
+          migrated_smooth_motion = true;
+        }
+      }
+      if (migrated_smooth_motion) {
+        file_content = json_tree.dump(4);
+        if (integrity::write_signed(std::filesystem::path(file_name), file_content)) {
+          BOOST_LOG(info) << "Migrated legacy NVIDIA Smooth Motion application settings to game-controlled frame generation."sv;
+        } else {
+          BOOST_LOG(warning) << "Could not persist the Smooth Motion application-settings migration; using migrated values for this run."sv;
+        }
       }
 
       {

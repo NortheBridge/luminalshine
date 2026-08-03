@@ -31,12 +31,6 @@ namespace platf {
     // Serializes limiter lifecycle across the stream-control threads and the
     // encoder thread (frame_limiter_notify_frame_generation).
     std::recursive_mutex g_lifecycle_mutex;
-    // Parameters from the session's original start, so the native frame-gen
-    // fix can re-apply the overrides with the capture fix engaged.
-    int g_last_start_fps = 0;
-    std::optional<int> g_last_lossless_rtss_limit;
-    std::string g_last_frame_generation_provider;
-    bool g_last_smooth_motion = false;
     bool g_framegen_auto_fix_applied = false;
     bool g_nvcp_started = false;
     bool g_gen1_framegen_fix_active = false;
@@ -185,10 +179,6 @@ namespace platf {
       return;
     }
     g_stream_owner_count = 1;
-    g_last_start_fps = fps;
-    g_last_lossless_rtss_limit = lossless_rtss_limit;
-    g_last_frame_generation_provider = frame_generation_provider;
-    g_last_smooth_motion = smooth_motion;
     g_framegen_auto_fix_applied = false;
 
     g_active_provider = frame_limiter_provider::none;
@@ -201,7 +191,9 @@ namespace platf {
     const bool nvidia_gpu_present = platf::has_nvidia_gpu();
     const bool amd_gpu_present = has_amd_gpu();
     const bool nvcp_ready = frame_limiter_nvcp::is_available();
-    const bool want_smooth_motion = smooth_motion && nvidia_gpu_present;
+    // Native FG is owned by the game. LuminalShine must not globally inject
+    // NVIDIA Smooth Motion into titles that did not request frame generation.
+    const bool want_smooth_motion = false;
 
     const bool provider_overridden = config::has_runtime_config_override("frame_limiter_provider");
     const bool rtss_sync_overridden = config::has_runtime_config_override("rtss_frame_limit_type");
@@ -251,7 +243,10 @@ namespace platf {
         case frame_limiter_provider::none:
           break;
         case frame_limiter_provider::auto_detect:
-          order = {frame_limiter_provider::rtss, frame_limiter_provider::nvidia_control_panel};
+          order = {frame_limiter_provider::nvidia_control_panel};
+          break;
+        case frame_limiter_provider::rtss:
+          BOOST_LOG(info) << "RTSS integration is disabled; no RTSS process, profile, or hook will be touched";
           break;
         default:
           order = {configured};
@@ -330,6 +325,11 @@ namespace platf {
   }
 
   bool frame_limiter_prepare_launch(bool gen1_framegen_fix, bool gen2_framegen_fix, std::optional<int> lossless_rtss_limit) {
+    // RTSS interaction is deliberately disabled. In particular, do not warm
+    // its process before launch: injected hooks were a recurring failure
+    // point for streamed titles.
+    return false;
+#if 0
     const bool capture_fix_enabled = gen1_framegen_fix || gen2_framegen_fix;
     const bool frame_limit_enabled = config::frame_limiter.enable || capture_fix_enabled || (lossless_rtss_limit && *lossless_rtss_limit > 0);
     if (!frame_limit_enabled) {
@@ -375,6 +375,7 @@ namespace platf {
     }
 
     return rtss_warmup_process();
+#endif
   }
 
   void frame_limiter_streaming_stop() {
@@ -444,43 +445,16 @@ namespace platf {
       if (g_framegen_auto_fix_applied) {
         return;
       }
-      // The capture fix is RTSS-based. Without RTSS there is nothing better to
-      // apply, and restarting the limiter would drop an NVCP cap without a
-      // replacement — leave the session alone.
-      if (!rtss_is_configured()) {
-        BOOST_LOG(info) << "Frame generation detected in the streamed game, but RTSS is unavailable; leaving the frame limiter unchanged";
-        g_framegen_auto_fix_applied = true;
-        return;
-      }
       g_framegen_auto_fix_applied = true;
     }
 
-    BOOST_LOG(info) << "Frame generation detected in the streamed game; engaging the capture fix natively";
-
-    // The RTSS stop/relaunch cycle can block for seconds; run it off the
-    // encoder thread so the session's first frames aren't stalled.
-    task_pool.push([]() {
-      std::lock_guard<std::recursive_mutex> lk(g_lifecycle_mutex);
-      if (g_stream_owner_count == 0 || g_gen1_framegen_fix_active || g_gen2_framegen_fix_active) {
-        return;
-      }
-
-      // Re-apply the overrides with the gen2 capture fix engaged, reusing the
-      // session's original start parameters. Temporarily collapse the owner
-      // count so stop() performs a full restore before the restart.
-      const unsigned int owners = g_stream_owner_count;
-      const int fps = g_last_start_fps;
-      const auto lossless = g_last_lossless_rtss_limit;
-      const bool smooth = g_last_smooth_motion;
-      std::string provider = g_last_frame_generation_provider.empty() ? std::string {"game-provided"} : g_last_frame_generation_provider;
-
-      g_stream_owner_count = 1;
-      frame_limiter_streaming_stop();
-      frame_limiter_streaming_start(fps, false, true, lossless, provider, smooth);
-      g_stream_owner_count = owners;
-      // streaming_start() reset the flag; re-mark so this runs once per session.
-      g_framegen_auto_fix_applied = true;
-    });
+    // Detection is informational for native FG. The generated frames already
+    // fill the cadence requested by the client, so changing the virtual
+    // monitor from (for example) 120 Hz to 240 Hz creates twice the DWM/IDD
+    // traffic without increasing the encoded stream cadence. It can also
+    // force a destructive swapchain/modeset transition while the game is
+    // presenting. Keep the live display at its existing client rate.
+    BOOST_LOG(info) << "Game-provided frame generation detected; keeping LuminalVGD at the client refresh rate";
   }
 
   frame_limiter_provider frame_limiter_active_provider() {
@@ -494,10 +468,10 @@ namespace platf {
     status.active_provider = g_active_provider;
     status.nvidia_available = platf::has_nvidia_gpu();
     status.nvcp_ready = frame_limiter_nvcp::is_available();
-    status.rtss_available = rtss_is_configured();
+    status.rtss_available = false;
     status.disable_vsync = config::frame_limiter.disable_vsync;
     status.nv_overrides_supported = status.nvidia_available && status.nvcp_ready;
-    status.rtss = rtss_get_status();
+    status.rtss = {};
     return status;
   }
 

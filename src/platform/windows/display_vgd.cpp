@@ -36,6 +36,7 @@
 
 // platform includes
 #include <winsock2.h>
+#include <d3d12.h>
 
 // local includes
 #include "src/logging.h"
@@ -256,8 +257,20 @@ namespace platf::dxgi {
 
   }  // namespace
 
+  void mark_vgd_ring_broken(uint64_t session_id) {
+    if (session_id != 0) {
+      g_broken_session.store(session_id, std::memory_order_release);
+      BOOST_LOG(warning) << "LuminalVGD capture: session 0x" << std::hex << session_id
+                         << std::dec << " failed first-frame admission; direct ring disabled for this session.";
+    }
+  }
+
   display_vgd_vram_t::~display_vgd_vram_t() {
     _slot_textures.clear();
+    if (_consumer_fence_event) {
+      CloseHandle(_consumer_fence_event);
+      _consumer_fence_event = nullptr;
+    }
     if (_cursor) {
       vgd_cursor_close(_cursor);
       _cursor = nullptr;
@@ -311,9 +324,16 @@ namespace platf::dxgi {
     _ring = ring;
     _session_id = target->session_id;
     _ring_slots = target->ring_slots;
+    _fence_transport = (target->transport_flags & VGD_CREATE_D3D12_FENCE_TRANSPORT) != 0;
     _display_name = display_name;
     _tdr_marks_at_open = tdr::event_count();
+    _first_frame_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    _first_frame_timeout_reported = false;
     capture_format = DXGI_FORMAT_UNKNOWN;  // latched from the first claimed frame
+
+    BOOST_LOG(info) << "LuminalVGD capture: "
+                    << (_fence_transport ? "shared timeline-fence transport active"
+                                         : "legacy keyed-mutex transport active") << '.';
 
     // Only vouch for the "REBUILDING + live heartbeat = recovering" reading on
     // a driver that actually behaves that way. Older builds depart the monitor
@@ -326,6 +346,15 @@ namespace platf::dxgi {
     vgd_ring_liveness_config_t liveness_config;
     liveness_config.trust_rebuilding_heartbeat =
       driver_build && *driver_build >= kFirstDuckInPlaceDriverBuild;
+    // Build 20 explicitly deletes a failed IDDCX_SWAPCHAIN and asks IddCx for
+    // a replacement. A healthy reassignment finishes in seconds; if it has
+    // not returned after ten seconds, keeping a frozen direct-ring reader for
+    // the historical eleven-minute TDR budget only strands the client. Latch
+    // this session away from direct capture so the normal display factory
+    // reinit selects WGC/DDA against the same still-arrived VGD monitor.
+    if (driver_build && *driver_build >= 20) {
+      liveness_config.recovery_budget = std::chrono::seconds(10);
+    }
     _liveness = vgd_ring_liveness_t {liveness_config};
     if (!liveness_config.trust_rebuilding_heartbeat) {
       BOOST_LOG(info) << "LuminalVGD capture: driver build "
@@ -538,7 +567,11 @@ namespace platf::dxgi {
     }
 
     uint16_t name[96] {};
-    vgd_slot_texture_name(_session_id, generation, slot, name);
+    if (_fence_transport) {
+      vgd_slot_texture_d3d12_name(_session_id, generation, slot, name);
+    } else {
+      vgd_slot_texture_name(_session_id, generation, slot, name);
+    }
 
     device1_t device1;
     HRESULT status = device->QueryInterface(__uuidof(ID3D11Device1), (void **) &device1);
@@ -573,15 +606,116 @@ namespace platf::dxgi {
     }
 
     keyed_mutex_t mutex;
-    status = texture->QueryInterface(__uuidof(IDXGIKeyedMutex), (void **) &mutex);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "LuminalVGD capture: slot texture has no keyed mutex [0x"sv << util::hex(status).to_string_view() << ']';
-      return nullptr;
+    if (!_fence_transport) {
+      status = texture->QueryInterface(__uuidof(IDXGIKeyedMutex), (void **) &mutex);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "LuminalVGD capture: slot texture has no keyed mutex [0x"sv << util::hex(status).to_string_view() << ']';
+        return nullptr;
+      }
     }
 
     entry.texture.reset(texture.release());
     entry.mutex.reset(mutex.release());
     return &entry;
+  }
+
+  bool display_vgd_vram_t::prepare_fence_transport(uint32_t generation) {
+    if (!_fence_transport) {
+      return true;
+    }
+    if (_producer_fence && _fence_generation == generation) {
+      return true;
+    }
+
+    _producer_fence.reset();
+    _fence_generation = 0;
+
+    device5_t device5;
+    HRESULT status = device->QueryInterface(__uuidof(ID3D11Device5), (void **) &device5);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "LuminalVGD capture: ID3D11Device5 unavailable for fence transport: "
+                       << util::log_hex(status);
+      return false;
+    }
+    if (!_device_ctx4) {
+      status = device_ctx->QueryInterface(__uuidof(ID3D11DeviceContext4), (void **) &_device_ctx4);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "LuminalVGD capture: ID3D11DeviceContext4 unavailable for fence transport: "
+                         << util::log_hex(status);
+        return false;
+      }
+    }
+    if (!_consumer_fence) {
+      status = device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, __uuidof(ID3D11Fence), (void **) &_consumer_fence);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to create consumer completion fence: "
+                         << util::log_hex(status);
+        return false;
+      }
+      _consumer_fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      if (!_consumer_fence_event) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to create consumer fence event (Win32 "
+                         << GetLastError() << ").";
+        _consumer_fence.reset();
+        return false;
+      }
+    }
+
+    uint16_t fence_name[96] {};
+    vgd_ring_fence_name(_session_id, generation, fence_name);
+
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    Microsoft::WRL::ComPtr<ID3D12Device> d3d12_device;
+    Microsoft::WRL::ComPtr<ID3D12Device1> d3d12_device1;
+    status = device->QueryInterface(IID_PPV_ARGS(&dxgi_device));
+    if (SUCCEEDED(status)) status = dxgi_device->GetAdapter(&adapter);
+    if (SUCCEEDED(status)) status = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d12_device));
+    if (SUCCEEDED(status)) status = d3d12_device.As(&d3d12_device1);
+
+    HANDLE shared_handle = nullptr;
+    if (SUCCEEDED(status)) {
+      status = d3d12_device1->OpenSharedHandleByName(
+        reinterpret_cast<LPCWSTR>(fence_name), GENERIC_ALL, &shared_handle);
+    }
+    if (SUCCEEDED(status)) {
+      status = device5->OpenSharedFence(shared_handle, __uuidof(ID3D11Fence), (void **) &_producer_fence);
+    }
+    if (shared_handle) {
+      CloseHandle(shared_handle);
+    }
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "LuminalVGD capture: failed to open generation " << generation
+                       << " producer fence: " << util::log_hex(status);
+      _producer_fence.reset();
+      return false;
+    }
+
+    _fence_generation = generation;
+    BOOST_LOG(info) << "LuminalVGD capture: opened producer timeline fence for generation "
+                    << generation << '.';
+    return true;
+  }
+
+  bool display_vgd_vram_t::finish_slot_copy() {
+    const uint64_t value = ++_consumer_fence_value;
+    HRESULT status = _device_ctx4->Signal(_consumer_fence.get(), value);
+    if (SUCCEEDED(status)) {
+      status = _consumer_fence->SetEventOnCompletion(value, _consumer_fence_event);
+    }
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "LuminalVGD capture: failed to arm consumer-copy fence: "
+                       << util::log_hex(status);
+      return false;
+    }
+    const DWORD wait = WaitForSingleObject(_consumer_fence_event, 500);
+    if (wait != WAIT_OBJECT_0) {
+      const HRESULT removed = device->GetDeviceRemovedReason();
+      BOOST_LOG(error) << "LuminalVGD capture: GPU did not finish reading the claimed slot within 500 ms"
+                          " (wait=" << wait << ", device=" << util::log_hex(removed) << ").";
+      return false;
+    }
+    return true;
   }
 
   void display_vgd_vram_t::release_shared_allocations() {
@@ -699,6 +833,17 @@ namespace platf::dxgi {
     }
 
     const auto now = std::chrono::steady_clock::now();
+    if (_last_sequence == 0 && sample.latest_sequence == 0 &&
+        _first_frame_deadline != std::chrono::steady_clock::time_point {} &&
+        now >= _first_frame_deadline) {
+      if (!_first_frame_timeout_reported) {
+        _first_frame_timeout_reported = true;
+        BOOST_LOG(error) << "LuminalVGD capture: ring was healthy before capture but published no first frame within 5 seconds; disabling direct ring capture for this session and falling back.";
+      }
+      g_broken_session.store(_session_id, std::memory_order_release);
+      release_shared_allocations();
+      return capture_e::reinit;
+    }
     const auto decision = _liveness.evaluate(sample, now);
 
     // Publish the verdict for the ENCODER threads before acting on it. Holding
@@ -904,16 +1049,31 @@ namespace platf::dxgi {
     }
     _open_failures = 0;
 
-    const HRESULT acquire = seh_acquire_sync(slot->mutex.get(), kVgdMutexKeyHost, kVgdMutexTimeoutMs);
-    if (acquire == static_cast<HRESULT>(WAIT_TIMEOUT)) {
-      return capture_e::timeout;
+    if (_fence_transport) {
+      if (frame.ready_fence_value == 0 || !prepare_fence_transport(frame.generation)) {
+        BOOST_LOG(error) << "LuminalVGD capture: fence transport frame lacks a usable producer fence value; reinitializing.";
+        return capture_e::reinit;
+      }
+      const HRESULT wait_status = _device_ctx4->Wait(_producer_fence.get(), frame.ready_fence_value);
+      if (FAILED(wait_status)) {
+        BOOST_LOG(error) << "LuminalVGD capture: failed to queue producer-fence wait: "
+                         << util::log_hex(wait_status);
+        return capture_e::reinit;
+      }
     }
-    if (acquire != S_OK && acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
-      BOOST_LOG(warning) << "LuminalVGD capture: slot mutex acquire failed [0x"sv << util::hex(acquire).to_string_view() << ']';
-      return capture_e::reinit;
+
+    if (!_fence_transport) {
+      const HRESULT acquire = seh_acquire_sync(slot->mutex.get(), kVgdMutexKeyHost, kVgdMutexTimeoutMs);
+      if (acquire == static_cast<HRESULT>(WAIT_TIMEOUT)) {
+        return capture_e::timeout;
+      }
+      if (acquire != S_OK && acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
+        BOOST_LOG(warning) << "LuminalVGD capture: slot mutex acquire failed [0x"sv << util::hex(acquire).to_string_view() << ']';
+        return capture_e::reinit;
+      }
     }
     auto mutex_guard = util::fail_guard([&]() {
-      seh_release_sync(slot->mutex.get(), kVgdMutexKeyHost);
+      if (slot->mutex) seh_release_sync(slot->mutex.get(), kVgdMutexKeyHost);
     });
 
     const auto host_processing_timestamp = std::chrono::steady_clock::now();
@@ -998,9 +1158,13 @@ namespace platf::dxgi {
 
     seh_release_sync(d3d_img->capture_mutex.get(), 0);
 
+    if (_fence_transport && !finish_slot_copy()) {
+      return capture_e::reinit;
+    }
+
     // Copy done: hand the slot back before the encoder ever sees the image.
     mutex_guard.disable();
-    seh_release_sync(slot->mutex.get(), kVgdMutexKeyHost);
+    if (slot->mutex) seh_release_sync(slot->mutex.get(), kVgdMutexKeyHost);
     claim_guard.disable();
     vgd_ring_release(_ring, frame.index);
     _last_sequence = frame.sequence;
