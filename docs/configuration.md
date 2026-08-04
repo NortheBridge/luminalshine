@@ -1547,6 +1547,29 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### dd_dark_recovery_anchor
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            During an exclusive LuminalVGD session, retain one physical display as an isolated WDDM recovery path and cover it with pure RGB black on the interactive desktop. This keeps OLED pixels dark while preserving a hardware-backed scan-out target if the GPU resets.
+            Disable only for compatibility testing; without the anchor, a GPU/PCIe fault while VGD is the sole active target can leave Windows unable to restore any display until reboot.
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}true@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            dd_dark_recovery_anchor = false
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_snapshot_exclude_devices
 
 <table>

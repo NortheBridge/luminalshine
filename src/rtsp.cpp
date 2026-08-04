@@ -29,10 +29,17 @@ extern "C" {
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "requested_display_mode.h"
 #include "rtsp.h"
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
+
+#ifdef _WIN32
+  #include "src/platform/windows/display_helper_integration.h"
+  #include "src/platform/windows/display_helper_request_helpers.h"
+  #include "src/platform/windows/virtual_display.h"
+#endif
 
 namespace asio = boost::asio;
 
@@ -42,6 +49,82 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace rtsp_stream {
+#ifdef _WIN32
+  namespace {
+    bool reconcile_virtual_display_mode(
+      launch_session_t &session,
+      int width,
+      int height,
+      int fps
+    ) {
+      const display_mode_policy::Mode launch_mode {session.width, session.height, session.fps};
+      const display_mode_policy::Mode rtsp_mode {width, height, fps};
+      if (!display_mode_policy::should_reconcile(
+            session.virtual_display,
+            session.client_display_mode_override,
+            launch_mode,
+            rtsp_mode)) {
+        if (session.virtual_display && !session.client_display_mode_override &&
+            launch_mode == rtsp_mode) {
+          BOOST_LOG(info) << "Requested display mode reconciled: HTTP and RTSP agree at "
+                          << width << 'x' << height << '@' << fps << "Hz.";
+        }
+        return true;
+      }
+
+      BOOST_LOG(warning) << "Requested display mode changed between HTTP launch ("
+                         << session.width << 'x' << session.height << '@' << session.fps
+                         << "Hz) and RTSP ANNOUNCE (" << width << 'x' << height << '@' << fps
+                         << "Hz); rebuilding LuminalVGD once before capture admission.";
+
+      GUID guid {};
+      static_assert(sizeof(guid) == 16);
+      std::memcpy(&guid, session.virtual_display_guid_bytes.data(), sizeof(guid));
+      if (!VDISPLAY::removeVirtualDisplay(guid)) {
+        BOOST_LOG(error) << "RTSP mode reconciliation could not remove the pre-launch virtual display.";
+        return false;
+      }
+
+      const std::string identity = !session.client_uuid.empty() ? session.client_uuid : session.unique_id;
+      const std::string label = !session.client_name.empty() ? session.client_name : session.device_name;
+      const auto fps_millihz = static_cast<uint32_t>(fps) * 1000u;
+      VDISPLAY::setWatchdogFeedingEnabled(true);
+      auto created = VDISPLAY::createVirtualDisplay(
+        identity.c_str(),
+        label.c_str(),
+        session.hdr_profile ? session.hdr_profile->c_str() : nullptr,
+        static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height),
+        fps_millihz,
+        guid,
+        fps_millihz,
+        false,
+        session.enable_hdr
+      );
+      if (!created) {
+        BOOST_LOG(error) << "RTSP mode reconciliation failed to recreate LuminalVGD at the authoritative client mode.";
+        session.virtual_display_failed = true;
+        return false;
+      }
+
+      session.width = width;
+      session.height = height;
+      session.fps = fps;
+      session.requested_display_mode_source = "client_rtsp";
+      session.virtual_display_ready_since = created->ready_since;
+      session.virtual_display_device_id = created->device_id.value_or(std::string {});
+      auto request = display_helper_integration::helpers::build_request_from_session(config::video, session);
+      if (!request || !display_helper_integration::apply(*request)) {
+        BOOST_LOG(error) << "RTSP mode reconciliation recreated the monitor but failed its display-helper APPLY.";
+        return false;
+      }
+      BOOST_LOG(info) << "Requested display mode committed from client_rtsp: "
+                      << width << 'x' << height << '@' << fps << "Hz.";
+      return true;
+    }
+  }  // namespace
+#endif
+
   void free_msg(PRTSP_MESSAGE msg) {
     freeMessage(msg);
 
@@ -1127,6 +1210,16 @@ namespace rtsp_stream {
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
+
+#ifdef _WIN32
+    const int rtsp_fps = config.monitor.framerateX100 > 0 ?
+                           static_cast<int>(std::lround(config.monitor.framerateX100 / 100.0)) :
+                           config.monitor.framerate;
+    if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
+      respond(sock, session, &option, 503, "Virtual display mode reconciliation failed", req->sequenceNumber, {});
+      return;
+    }
+#endif
 
     // Validate the client-supplied video packet size. It is used downstream in stream.cpp
     // both as a modulus divisor (packetsize - sizeof(NV_VIDEO_PACKET)) and to size RTP block

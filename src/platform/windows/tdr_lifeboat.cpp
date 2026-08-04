@@ -31,10 +31,12 @@
 // local includes
 #include "src/display_helper_builder.h"
 #include "src/globals.h"
+#include "src/gpu_recovery_policy.h"
 #include "src/logging.h"
 #include "src/platform/windows/display.h"
 #include "src/platform/windows/display_helper_integration.h"
 #include "src/platform/windows/virtual_display.h"
+#include "src/platform/windows/whea_diagnostics.h"
 
 namespace tdr_lifeboat {
   namespace {
@@ -137,6 +139,10 @@ namespace tdr_lifeboat {
     /// block — the shared task pool runs input timers on its single thread.
     void start_attempt(tdr::source_t source) {
       try {
+        if (const auto whea = whea_diagnostics::recent_pcie_aer_summary()) {
+          BOOST_LOG(error) << "GPU recovery correlation: " << *whea
+                           << ". This is a platform PCIe fault, not an encoder-preset verdict.";
+        }
         BOOST_LOG(warning) << "TDR lifeboat: GPU/TDR failure detected (" << tdr::source_label(source)
                            << "); best-effort activating a physical display alongside the virtual display so Windows'"
                            << " TDR recovery has a hardware-backed output to recompose onto. In every observed"
@@ -175,6 +181,7 @@ namespace tdr_lifeboat {
     /// push when the gate opens. Never throws, never blocks.
     void on_tdr_event(tdr::source_t source) noexcept {
       try {
+        (void) gpu_recovery_policy::open_d3d11_circuit();
         {
           std::lock_guard<std::mutex> lk(g_gate_mutex);
           if (!g_gate.should_attempt(source, std::chrono::steady_clock::now())) {

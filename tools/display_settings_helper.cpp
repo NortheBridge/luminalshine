@@ -2335,6 +2335,225 @@ namespace {
   bool create_restore_scheduled_task();
   bool delete_restore_scheduled_task();
 
+  /**
+   * Keeps every non-primary scan-out surface solid black while the VGD target
+   * is primary. This runs in the interactive helper (not the SYSTEM service),
+   * so the windows are composed onto the user's actual desktop. OLED pixels
+   * receive RGB zero while the physical VidPn path remains active for WDDM
+   * recovery.
+   */
+  class DarkRecoveryAnchor {
+  public:
+    DarkRecoveryAnchor(): worker_([this](std::stop_token st) { run(st); }) {}
+
+    ~DarkRecoveryAnchor() {
+      worker_.request_stop();
+      enabled_.store(false, std::memory_order_release);
+    }
+
+    void enable(bool enabled) noexcept {
+      enabled_.store(enabled, std::memory_order_release);
+      generation_.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+  private:
+    static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+      if (msg == WM_ERASEBKGND) {
+        RECT rc {};
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wparam), &rc, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        return 1;
+      }
+      if (msg == WM_PAINT) {
+        PAINTSTRUCT ps {};
+        HDC dc = BeginPaint(hwnd, &ps);
+        FillRect(dc, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        EndPaint(hwnd, &ps);
+        return 0;
+      }
+      return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    static BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM context) {
+      auto *rects = reinterpret_cast<std::vector<RECT> *>(context);
+      MONITORINFO info {.cbSize = sizeof(MONITORINFO)};
+      if (GetMonitorInfoW(monitor, &info) && (info.dwFlags & MONITORINFOF_PRIMARY) == 0) {
+        rects->push_back(info.rcMonitor);
+      }
+      return TRUE;
+    }
+
+    static bool same_rects(const std::vector<RECT> &a, const std::vector<RECT> &b) {
+      if (a.size() != b.size()) return false;
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].left != b[i].left || a[i].top != b[i].top ||
+            a[i].right != b[i].right || a[i].bottom != b[i].bottom) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    void destroy_windows() {
+      for (HWND hwnd : windows_) {
+        if (hwnd) DestroyWindow(hwnd);
+      }
+      windows_.clear();
+      covered_rects_.clear();
+    }
+
+    void refresh_windows(HINSTANCE instance, const wchar_t *klass) {
+      std::vector<RECT> rects;
+      EnumDisplayMonitors(nullptr, nullptr, &collect_monitor, reinterpret_cast<LPARAM>(&rects));
+      if (same_rects(rects, covered_rects_) && windows_.size() == rects.size()) return;
+
+      destroy_windows();
+      covered_rects_ = rects;
+      for (const auto &rect : rects) {
+        HWND hwnd = CreateWindowExW(
+          WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+          klass,
+          L"LuminalShine OLED-safe recovery anchor",
+          WS_POPUP,
+          rect.left,
+          rect.top,
+          rect.right - rect.left,
+          rect.bottom - rect.top,
+          nullptr,
+          nullptr,
+          instance,
+          nullptr
+        );
+        if (!hwnd) continue;
+        SetWindowPos(hwnd, HWND_TOPMOST, rect.left, rect.top, rect.right - rect.left,
+                     rect.bottom - rect.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        windows_.push_back(hwnd);
+      }
+    }
+
+    struct ContainmentContext {
+      RECT primary {};
+      HMONITOR primary_monitor {nullptr};
+      DWORD helper_pid {0};
+    };
+
+    static bool excluded_window(HWND hwnd, DWORD helper_pid) {
+      if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) return true;
+      const auto exstyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+      if (exstyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) return true;
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      if (pid == 0 || pid == helper_pid) return true;
+      wchar_t klass[128] {};
+      GetClassNameW(hwnd, klass, static_cast<int>(std::size(klass)));
+      return _wcsicmp(klass, L"Progman") == 0 ||
+             _wcsicmp(klass, L"WorkerW") == 0 ||
+             _wcsicmp(klass, L"Shell_TrayWnd") == 0 ||
+             _wcsicmp(klass, L"Shell_SecondaryTrayWnd") == 0;
+    }
+
+    static BOOL CALLBACK contain_window(HWND hwnd, LPARAM parameter) {
+      auto &ctx = *reinterpret_cast<ContainmentContext *>(parameter);
+      if (excluded_window(hwnd, ctx.helper_pid)) return TRUE;
+      const HMONITOR current = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      if (!current || current == ctx.primary_monitor) return TRUE;
+
+      RECT current_monitor {};
+      MONITORINFO current_info {.cbSize = sizeof(MONITORINFO)};
+      if (!GetMonitorInfoW(current, &current_info)) return TRUE;
+      current_monitor = current_info.rcMonitor;
+
+      WINDOWPLACEMENT placement {.length = sizeof(WINDOWPLACEMENT)};
+      RECT window_rect {};
+      if (!GetWindowPlacement(hwnd, &placement) || !GetWindowRect(hwnd, &window_rect)) return TRUE;
+
+      const int primary_width = ctx.primary.right - ctx.primary.left;
+      const int primary_height = ctx.primary.bottom - ctx.primary.top;
+      const int width = std::max(1L, window_rect.right - window_rect.left);
+      const int height = std::max(1L, window_rect.bottom - window_rect.top);
+      const bool fullscreen = width >= (current_monitor.right - current_monitor.left - 2) &&
+                              height >= (current_monitor.bottom - current_monitor.top - 2);
+      const int target_width = fullscreen ? primary_width : std::min(width, primary_width);
+      const int target_height = fullscreen ? primary_height : std::min(height, primary_height);
+      const int relative_x = window_rect.left - current_monitor.left;
+      const int relative_y = window_rect.top - current_monitor.top;
+      const int target_x = fullscreen ? ctx.primary.left :
+        std::clamp(ctx.primary.left + relative_x, ctx.primary.left, ctx.primary.right - target_width);
+      const int target_y = fullscreen ? ctx.primary.top :
+        std::clamp(ctx.primary.top + relative_y, ctx.primary.top, ctx.primary.bottom - target_height);
+
+      if (placement.showCmd == SW_SHOWMAXIMIZED) {
+        placement.rcNormalPosition = {target_x, target_y, target_x + target_width, target_y + target_height};
+        SetWindowPlacement(hwnd, &placement);
+      } else {
+        SetWindowPos(hwnd, nullptr, target_x, target_y, target_width, target_height,
+                     SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+      }
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      BOOST_LOG(info) << "Virtual-display containment: moved top-level window pid=" << pid
+                      << " from a physical recovery anchor to the primary LuminalVGD desktop.";
+      return TRUE;
+    }
+
+    void contain_applications_on_primary() {
+      POINT origin {0, 0};
+      const HMONITOR primary = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+      MONITORINFO info {.cbSize = sizeof(MONITORINFO)};
+      if (!primary || !GetMonitorInfoW(primary, &info) || (info.dwFlags & MONITORINFOF_PRIMARY) == 0) return;
+      ContainmentContext context {info.rcWork, primary, GetCurrentProcessId()};
+      EnumWindows(&contain_window, reinterpret_cast<LPARAM>(&context));
+    }
+
+    void run(std::stop_token st) {
+      const auto instance = GetModuleHandleW(nullptr);
+      const wchar_t *klass = L"LuminalShineDarkRecoveryAnchor";
+      WNDCLASSEXW wc {.cbSize = sizeof(WNDCLASSEXW)};
+      wc.lpfnWndProc = &wnd_proc;
+      wc.hInstance = instance;
+      wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+      wc.lpszClassName = klass;
+      RegisterClassExW(&wc);
+
+      std::uint64_t observed_generation = 0;
+      while (!st.stop_requested()) {
+        MSG msg {};
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+          TranslateMessage(&msg);
+          DispatchMessageW(&msg);
+        }
+
+        const auto generation = generation_.load(std::memory_order_acquire);
+        if (!enabled_.load(std::memory_order_acquire)) {
+          if (!windows_.empty()) destroy_windows();
+        } else if (generation != observed_generation || windows_.empty()) {
+          refresh_windows(instance, klass);
+        } else {
+          // Re-enumerate periodically so a DWM reset or hotplug cannot expose
+          // a static desktop on the OLED anchor.
+          refresh_windows(instance, klass);
+        }
+        if (enabled_.load(std::memory_order_acquire)) {
+          // Primary is LuminalVGD in anchored-exclusive mode. Re-run this
+          // inexpensive sweep because launchers commonly restore a saved
+          // physical-monitor position and move the game again after creation.
+          contain_applications_on_primary();
+        }
+        observed_generation = generation;
+        std::this_thread::sleep_for(500ms);
+      }
+
+      destroy_windows();
+      UnregisterClassW(klass, instance);
+    }
+
+    std::jthread worker_;
+    std::atomic<bool> enabled_ {false};
+    std::atomic<std::uint64_t> generation_ {0};
+    std::vector<HWND> windows_;
+    std::vector<RECT> covered_rects_;
+  };
+
   struct ServiceState {
     enum class RestoreWindow {
       Primary,
@@ -2342,6 +2561,7 @@ namespace {
     };
 
     DisplayController controller;
+    DarkRecoveryAnchor dark_recovery_anchor;
     DisplayEventPump event_pump;
     std::atomic<bool> event_pump_running {false};
     std::mutex restore_event_mutex;
@@ -4854,6 +5074,19 @@ namespace {
     }
   }
 
+  bool parse_clean_session_revert_payload(std::span<const uint8_t> payload) {
+    if (payload.empty()) return false;
+    try {
+      std::string raw(reinterpret_cast<const char *>(payload.data()), payload.size());
+      auto j = nlohmann::json::parse(raw, nullptr, false);
+      if (!j.is_object()) return false;
+      const auto it = j.find("sunshine_clean_session_revert");
+      return it != j.end() && it->is_boolean() && it->get<bool>();
+    } catch (...) {
+      return false;
+    }
+  }
+
   /**
    * @brief Load snapshot exclusion devices from luminalshine_state.json.
    *
@@ -4870,12 +5103,12 @@ namespace {
     if (path.empty()) {
       return false;
     }
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec) || ec) {
-      return false;
-    }
-    try {
-      FILE *f = _wfopen(path.wstring().c_str(), L"rb");
+    const auto read_candidate = [&](const std::filesystem::path &candidate) {
+      std::error_code exists_ec;
+      if (!std::filesystem::is_regular_file(candidate, exists_ec) || exists_ec) {
+        return false;
+      }
+      FILE *f = _wfopen(candidate.wstring().c_str(), L"rb");
       if (!f) {
         return false;
       }
@@ -4897,9 +5130,55 @@ namespace {
           return !ids_out.empty() || root["snapshot_exclude_devices"].is_array();
         }
       }
-    } catch (const std::exception &e) {
-      BOOST_LOG(warning) << "Failed to parse luminalshine_state.json for snapshot exclusions: " << e.what();
-    } catch (...) {
+      return false;
+    };
+
+    // The helper is a separate process and can observe the small interval
+    // between a state write and its atomic rename. Prefer the committed file,
+    // then accept any complete writer temp (including the legacy fixed .tmp),
+    // and finally the durable backup. This mirrors statefile::load_or_recover
+    // without linking the service's configuration module into this helper.
+    std::vector<std::filesystem::path> candidates {path};
+    std::filesystem::path legacy_tmp = path;
+    legacy_tmp += L".tmp";
+    candidates.push_back(legacy_tmp);
+
+    std::error_code ec;
+    const auto dir = path.parent_path().empty() ? std::filesystem::path {L"."} : path.parent_path();
+    const auto prefix = path.filename().wstring() + L".tmp.";
+    std::vector<std::filesystem::path> unique_temps;
+    for (std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+      const auto name = it->path().filename().wstring();
+      if (name.starts_with(prefix)) {
+        unique_temps.push_back(it->path());
+      }
+    }
+    std::ranges::sort(unique_temps, [](const auto &lhs, const auto &rhs) {
+      std::error_code lhs_ec, rhs_ec;
+      return std::filesystem::last_write_time(lhs, lhs_ec) > std::filesystem::last_write_time(rhs, rhs_ec);
+    });
+    candidates.insert(candidates.end(), unique_temps.begin(), unique_temps.end());
+    std::filesystem::path backup = path;
+    backup += L".bak";
+    candidates.push_back(backup);
+
+    for (const auto &candidate : candidates) {
+      try {
+        if (read_candidate(candidate)) {
+          if (candidate != path) {
+            BOOST_LOG(info) << "Loaded LuminalShine snapshot exclusions from recovery state candidate: "
+                            << candidate.string();
+          }
+          return true;
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(debug) << "Could not parse LuminalShine state candidate " << candidate.string()
+                         << ": " << e.what();
+        ids_out.clear();
+      } catch (...) {
+        ids_out.clear();
+      }
     }
     return false;
   }
@@ -4915,6 +5194,7 @@ namespace {
     std::string json(reinterpret_cast<const char *>(payload.data()), payload.size());
     bool wa_hdr_toggle = false;
     bool transitional_apply = false;
+    bool dark_recovery_anchor = false;
     std::optional<std::string> requested_virtual_layout;
     std::vector<std::pair<std::string, display_device::Point>> monitor_position_overrides;
     std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> refresh_rate_overrides;
@@ -4931,6 +5211,10 @@ namespace {
         if (j.contains("sunshine_transitional_apply") && j["sunshine_transitional_apply"].is_boolean()) {
           transitional_apply = j["sunshine_transitional_apply"].get<bool>();
           j.erase("sunshine_transitional_apply");
+        }
+        if (j.contains("sunshine_dark_recovery_anchor") && j["sunshine_dark_recovery_anchor"].is_boolean()) {
+          dark_recovery_anchor = j["sunshine_dark_recovery_anchor"].get<bool>();
+          j.erase("sunshine_dark_recovery_anchor");
         }
         if (j.contains("sunshine_virtual_layout") && j["sunshine_virtual_layout"].is_string()) {
           requested_virtual_layout = j["sunshine_virtual_layout"].get<std::string>();
@@ -5110,6 +5394,9 @@ namespace {
 
       state.retry_apply_on_topology.store(false, std::memory_order_release);
       if (!transitional_apply) {
+        state.dark_recovery_anchor.enable(dark_recovery_anchor);
+        BOOST_LOG(info) << "Display helper: OLED-safe dark recovery anchor "
+                        << (dark_recovery_anchor ? "enabled" : "disabled") << ".";
         state.schedule_post_apply_tasks(
           apply_generation,
           false,
@@ -5135,8 +5422,13 @@ namespace {
 
   void handle_revert(ServiceState &state, std::atomic<bool> &running, std::span<const uint8_t> payload) {
     const bool prefer_golden_if_current_missing = parse_revert_prefer_golden_payload(payload);
+    const bool clean_session_revert = parse_clean_session_revert_payload(payload);
     BOOST_LOG(info) << "REVERT command received - initiating display settings restoration"
                     << (prefer_golden_if_current_missing ? " (prefer golden if current missing)." : ".");
+    if (clean_session_revert) {
+      state.always_restore_from_golden.store(false, std::memory_order_release);
+      BOOST_LOG(info) << "REVERT policy: clean session shutdown; restoring the current pre-session snapshot before golden fallback.";
+    }
     state.retry_apply_on_topology.store(false, std::memory_order_release);
     state.cancel_delayed_reapply();
     state.cancel_post_apply_tasks();

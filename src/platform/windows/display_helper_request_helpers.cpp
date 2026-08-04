@@ -44,7 +44,10 @@ namespace display_helper_integration::helpers {
       return static_cast<int>(result);
     }
 
-    layout_flags_t describe_layout(const config::video_t::virtual_display_layout_e layout) {
+    layout_flags_t describe_layout(
+      const config::video_t::virtual_display_layout_e layout,
+      const bool dark_recovery_anchor = false
+    ) {
       using enum display_helper_integration::VirtualDisplayArrangement;
       using Prep = display_device::SingleDisplayConfiguration::DevicePreparation;
       switch (layout) {
@@ -58,6 +61,12 @@ namespace display_helper_integration::helpers {
           return {ExtendedPrimaryIsolated, Prep::EnsurePrimary, true};
         case config::video_t::virtual_display_layout_e::exclusive:
         default:
+          if (dark_recovery_anchor) {
+            // Keep a physical WDDM scan-out path attached as an isolated dark
+            // recovery anchor. The helper covers it with RGB black, while the
+            // virtual target remains primary and is placed far away from it.
+            return {ExtendedPrimaryIsolated, Prep::EnsurePrimary, true};
+          }
           return {Exclusive, Prep::EnsureOnlyDisplay, false};
       }
     }
@@ -222,9 +231,16 @@ namespace display_helper_integration::helpers {
     const auto effective_layout =
       session_.virtual_display_layout_override.value_or(effective_video_config_.virtual_display_layout);
     BOOST_LOG(debug) << "effective_layout: " << static_cast<int>(effective_layout);
-    const auto layout_flags = describe_layout(effective_layout);
+    const bool dark_recovery_anchor =
+      session_.virtual_display &&
+      effective_layout == config::video_t::virtual_display_layout_e::exclusive &&
+      effective_video_config_.dd.dark_recovery_anchor;
+    const auto layout_flags = describe_layout(effective_layout, dark_recovery_anchor);
     BOOST_LOG(debug) << "layout_flags.arrangement: " << static_cast<int>(layout_flags.arrangement);
     builder.set_virtual_display_arrangement(layout_flags.arrangement);
+    builder.set_dark_recovery_anchor(
+      dark_recovery_anchor
+    );
 
     auto &overrides = builder.mutable_session_overrides();
     if (session_.width > 0) {
@@ -324,7 +340,11 @@ namespace display_helper_integration::helpers {
       target_device_id = *resolved;
     }
     vd_cfg.m_device_id = target_device_id;
-    const auto layout_flags = describe_layout(layout);
+    const bool dark_recovery_anchor =
+      session_.virtual_display &&
+      layout == config::video_t::virtual_display_layout_e::exclusive &&
+      effective_video_config_.dd.dark_recovery_anchor;
+    const auto layout_flags = describe_layout(layout, dark_recovery_anchor);
     vd_cfg.m_device_prep = layout_flags.device_prep;
     if (minimum_fps > 0 && vd_cfg.m_refresh_rate) {
       ensure_minimum_refresh_if_present(vd_cfg.m_refresh_rate, minimum_fps);
@@ -381,7 +401,10 @@ namespace display_helper_integration::helpers {
                       << " prep=" << static_cast<int>(cfg_effective.m_device_prep);
 
       if (session_.virtual_display) {
-        const auto layout_flags = describe_layout(layout);
+        const bool dark_recovery_anchor =
+          layout == config::video_t::virtual_display_layout_e::exclusive &&
+          effective_video_config_.dd.dark_recovery_anchor;
+        const auto layout_flags = describe_layout(layout, dark_recovery_anchor);
         cfg_effective.m_device_prep = layout_flags.device_prep;
       }
 
@@ -481,7 +504,11 @@ namespace display_helper_integration::helpers {
     BOOST_LOG(debug) << "video_config_.virtual_display_layout: " << static_cast<int>(effective_video_config_.virtual_display_layout);
     const auto effective_layout =
       session_.virtual_display_layout_override.value_or(effective_video_config_.virtual_display_layout);
-    const auto layout_flags = describe_layout(effective_layout);
+    const bool dark_recovery_anchor =
+      session_.virtual_display &&
+      effective_layout == config::video_t::virtual_display_layout_e::exclusive &&
+      effective_video_config_.dd.dark_recovery_anchor;
+    const auto layout_flags = describe_layout(effective_layout, dark_recovery_anchor);
     const auto resolved_virtual_device_id = resolve_virtual_device_id(effective_video_config_, session_);
     const std::string topology_device_id =
       resolved_virtual_device_id && !resolved_virtual_device_id->empty() ? *resolved_virtual_device_id : default_device_id;

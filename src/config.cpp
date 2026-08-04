@@ -44,6 +44,7 @@
 #include "utility.h"
 
 #ifdef _WIN32
+  #include "src/platform/windows/video_worker.h"
   #include "platform/windows/hotkey_manager.h"
   #include "platform/windows/misc.h"
 
@@ -814,6 +815,7 @@ namespace config {
       true,  // config_revert_on_disconnect
       0,  // paused_virtual_display_timeout_secs
       false,  // always_restore_from_golden
+      true,  // dark_recovery_anchor
       0,  // snapshot_restore_hotkey
 #ifdef _WIN32
       MOD_CONTROL | MOD_ALT | MOD_SHIFT,  // snapshot_restore_hotkey_modifiers
@@ -1596,6 +1598,7 @@ namespace config {
       video.dd.paused_virtual_display_timeout_secs = std::max(0, value);
     }
     bool_f(vars, "dd_always_restore_from_golden", video.dd.always_restore_from_golden);
+    bool_f(vars, "dd_dark_recovery_anchor", video.dd.dark_recovery_anchor);
     bool_f(vars, "dd_activate_virtual_display", video.dd.activate_virtual_display);
     generic_f(vars, "dd_snapshot_exclude_devices", video.dd.snapshot_exclude_devices, dd::snapshot_exclude_devices_from_view);
     {
@@ -1996,7 +1999,9 @@ namespace config {
 
       // Persist snapshot exclusion devices to luminalshine_state.json on startup so the display
       // helper can read them directly without depending on IPC from Sunshine.
-      statefile::save_snapshot_exclude_devices(video.dd.snapshot_exclude_devices);
+      if (!platf::video_worker::is_child_process()) {
+        statefile::save_snapshot_exclude_devices(video.dd.snapshot_exclude_devices);
+      }
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
     } catch (const boost::filesystem::filesystem_error &err) {
@@ -2139,6 +2144,7 @@ namespace config {
         "dd_config_revert_on_disconnect",
         "dd_paused_virtual_display_timeout_secs",
         "dd_always_restore_from_golden",
+        "dd_dark_recovery_anchor",
         "dd_snapshot_exclude_devices",
         "dd_snapshot_restore_hotkey",
         "dd_snapshot_restore_hotkey_modifiers",
@@ -2396,7 +2402,9 @@ namespace config {
       // Persist snapshot exclusion devices to luminalshine_state.json so the display helper
       // can read them directly without depending on IPC from Sunshine.
       // This is done unconditionally to ensure the state file is always up-to-date.
-      statefile::save_snapshot_exclude_devices(video.dd.snapshot_exclude_devices);
+      if (!platf::video_worker::is_child_process()) {
+        statefile::save_snapshot_exclude_devices(video.dd.snapshot_exclude_devices);
+      }
 
       // Check if any DD configuration changed and handle hot-apply when no active sessions
       using dd_cfg_e = config::video_t::dd_t::config_option_e;

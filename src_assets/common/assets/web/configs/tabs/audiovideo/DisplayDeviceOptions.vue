@@ -662,6 +662,18 @@ function clearSnapshotHotkey(): void {
             </div>
 
             <div
+              v-if="usingVirtualDisplay && config.virtual_display_layout === 'exclusive'"
+              class="mt-4 border-l-2 border-dark/10 dark:border-light/10 pl-3"
+            >
+              <Checkbox
+                id="dd_dark_recovery_anchor"
+                v-model="config.dd_dark_recovery_anchor"
+                locale-prefix="config"
+                default="true"
+              />
+            </div>
+
+            <div
               v-if="usingVirtualDisplay && config.dd_configuration_option !== 'disabled'"
               class="mt-4 rounded-lg border border-dark/10 dark:border-light/10 p-3 space-y-2"
             >

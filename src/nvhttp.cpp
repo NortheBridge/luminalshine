@@ -1478,17 +1478,29 @@ namespace nvhttp {
       return true;
     };
 
-    // Start with the client requested mode
-    (void) parse_mode_string(get_arg(args, "mode", "0x0x0"));
+    // Start with the client requested mode. Keep the provenance so a later
+    // RTSP viewport disagreement can be diagnosed and reconciled before
+    // capture starts instead of silently streaming the pre-launch fallback.
+    const auto raw_client_mode = get_arg(args, "mode", "0x0x0");
+    if (parse_mode_string(raw_client_mode)) {
+      launch_session->requested_display_mode_source = "client_http";
+    } else {
+      launch_session->requested_display_mode_source = "fallback";
+    }
 
     // Apply client display mode override if present
     if (client_settings && !client_settings->display_mode.empty()) {
       if (parse_mode_string(client_settings->display_mode)) {
         launch_session->client_display_mode_override = true;
+        launch_session->requested_display_mode_source = "per_client_override";
       } else {
         BOOST_LOG(warning) << "Failed to parse client display mode override: " << client_settings->display_mode;
       }
     }
+    BOOST_LOG(info) << "Requested display mode: raw_http='" << raw_client_mode
+                    << "' selected=" << launch_session->width << 'x' << launch_session->height
+                    << '@' << launch_session->fps << "Hz source="
+                    << launch_session->requested_display_mode_source << '.';
 
     if (client_settings) {
       launch_session->client_requests_virtual_display = client_settings->always_use_virtual_display;

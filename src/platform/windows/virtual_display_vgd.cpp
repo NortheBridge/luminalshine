@@ -69,6 +69,8 @@ namespace VDISPLAY::vgd {
     VgdDeviceHandle *g_device = nullptr;
     std::optional<VgdCaps> g_caps;
     std::map<GuidKey, TrackedSession> g_sessions;
+    std::optional<RingTargetInfo> g_worker_ring_target;
+    std::string g_worker_ring_display_name;
     std::thread g_ping_thread;
     std::atomic<bool> g_ping_stop {false};
     std::atomic<bool> g_ping_feeding {true};
@@ -633,6 +635,9 @@ namespace VDISPLAY::vgd {
   std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name) {
     std::wstring wanted(display_name.begin(), display_name.end());
     std::unique_lock lk(g_mutex);
+    if (g_worker_ring_target && !display_name.empty() && display_name == g_worker_ring_display_name) {
+      return g_worker_ring_target;
+    }
     if (g_sessions.empty()) {
       return std::nullopt;
     }
@@ -730,6 +735,57 @@ namespace VDISPLAY::vgd {
     BOOST_LOG(warning) << "LuminalVGD: no tracked session matches display '"
                        << display_name << "' (" << g_sessions.size() << " sessions).";
     return std::nullopt;
+  }
+
+  std::optional<RingTargetInfo> ring_target_for_worker_display(const std::string &display_name) {
+    if (display_name.empty()) return std::nullopt;
+    RingTargetInfo target {};
+    {
+      const std::wstring wanted(display_name.begin(), display_name.end());
+      std::lock_guard lk(g_mutex);
+      const auto found = std::find_if(g_sessions.begin(), g_sessions.end(), [&](const auto &entry) {
+        return !entry.second.display_name.empty() && entry.second.display_name == wanted;
+      });
+      if (found == g_sessions.end()) return std::nullopt;
+      target = {found->second.session_id, found->second.ring_slots, found->second.transport_flags, 0};
+    }
+    if (target.ring_slots < kMinRingSlots || target.ring_slots > kMaxRingSlots ||
+        (target.transport_flags & ~kAllowedRingTransportFlags) != 0) {
+      return std::nullopt;
+    }
+    VgdRingHandle *ring = vgd_ring_open(target.session_id, target.ring_slots);
+    if (!ring) return std::nullopt;
+    VgdRingStatus status {};
+    const auto status_result = vgd_ring_status(ring, &status);
+    vgd_ring_close(ring);
+    if (status_result != 0 || status.state != 1 || status.generation == 0 ||
+        status.latest_sequence == 0 || status.heartbeat_qpc == 0 || status.qpc_frequency == 0 ||
+        (status.transport_flags & ~kAllowedRingTransportFlags) != 0) {
+      return std::nullopt;
+    }
+    LARGE_INTEGER now_qpc {};
+    QueryPerformanceCounter(&now_qpc);
+    if (now_qpc.QuadPart < 0 || static_cast<uint64_t>(now_qpc.QuadPart) < status.heartbeat_qpc ||
+        static_cast<uint64_t>(now_qpc.QuadPart) - status.heartbeat_qpc > status.qpc_frequency * 2ULL) {
+      return std::nullopt;
+    }
+    target.generation = status.generation;
+    // The driver may downgrade the requested fence transport for a live
+    // generation. Hand off what the ring actually selected, not the flags
+    // remembered at monitor creation.
+    target.transport_flags = status.transport_flags;
+    return target;
+  }
+
+  void set_worker_ring_target(std::optional<RingTargetInfo> target, std::string display_name) {
+    std::lock_guard lk(g_mutex);
+    g_worker_ring_target = std::move(target);
+    g_worker_ring_display_name = g_worker_ring_target ? std::move(display_name) : std::string {};
+  }
+
+  bool has_worker_ring_target() {
+    std::lock_guard lk(g_mutex);
+    return g_worker_ring_target.has_value();
   }
 
   std::optional<RingTransitionToken> begin_planned_modeset() {

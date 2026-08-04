@@ -155,6 +155,10 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/vgd_transition.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/tdr_lifeboat.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/tdr_lifeboat.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/video_worker.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/video_worker.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/whea_diagnostics.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/whea_diagnostics.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda-ioctl.h"
         "${CMAKE_SOURCE_DIR}/third-party/sudovda/sudovda.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frame_limiter.h"
@@ -207,6 +211,7 @@ list(PREPEND PLATFORM_LIBRARIES
         shell32
         crypt32
         wintrust
+        wevtapi
         bcrypt
         ncrypt
         synchronization.lib

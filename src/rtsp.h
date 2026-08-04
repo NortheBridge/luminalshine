@@ -41,6 +41,7 @@ namespace rtsp_stream {
     int width;
     int height;
     int fps;
+    std::string requested_display_mode_source;
     int gcmap;
     int appid;
 

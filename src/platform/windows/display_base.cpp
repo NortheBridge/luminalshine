@@ -37,10 +37,12 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "misc.h"
 #include "src/config.h"
 #include "src/display_device.h"
+#include "src/gpu_recovery_policy.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/windows/vgd_transition.h"
 #include "src/platform/windows/virtual_display_backend.h"
+#include "src/platform/windows/virtual_display_vgd.h"
 #include "src/tdr_state.h"
 #include "src/video.h"
 #include "utf_utils.h"
@@ -1131,10 +1133,15 @@ namespace platf::dxgi {
         if (!recovery_deferral_started) {
           recovery_deferral_started = now;
           recovery_deferral_logged = now;
+          const bool first_transport_trip = gpu_recovery_policy::open_d3d11_circuit();
           BOOST_LOG(info) << "Capture source reports a bounded recovery window; deferring the display "
                              "reinit and holding the session (giving up after "sv
                           << std::chrono::duration_cast<std::chrono::minutes>(kMaxRecoveryDeferral).count()
                           << " minutes)."sv;
+          if (first_transport_trip) {
+            BOOST_LOG(warning) << "GPU recovery circuit: cancelling in-flight encoder waits and disabling "
+                                  "native D3D12 NVENC for this host run; rebuilt encoders will use D3D11.";
+          }
         } else if (now - *recovery_deferral_started > kMaxRecoveryDeferral) {
           BOOST_LOG(warning) << "Capture source reported recovery for longer than "sv
                              << std::chrono::duration_cast<std::chrono::minutes>(kMaxRecoveryDeferral).count()
@@ -2034,6 +2041,7 @@ namespace platf {
     const bool default_to_wgc = dxgi::should_use_wgc_default();
     const bool wgc_requested = capture_mode.starts_with("wgc");
     const bool vgd_requested = capture_mode == "vgd";
+    const bool worker_vgd_target = VDISPLAY::vgd::has_worker_ring_target();
     const bool prefer_wgc_backend = !user_requested_ddx && !vgd_requested && (wgc_requested || default_to_wgc);
 
     if (hwdevice_type == mem_type_e::dxgi) {
@@ -2042,7 +2050,9 @@ namespace platf {
       // for non-VGD displays (or if the ring can't be mapped), falling back
       // to WGC/DDA below; explicit capture=vgd also degrades rather than
       // failing the stream.
-      if (!user_requested_ddx && !wgc_requested && (vgd_requested || VDISPLAY::is_luminalvgd_active())) {
+      if (worker_vgd_target ||
+          (!user_requested_ddx && !wgc_requested &&
+           (vgd_requested || VDISPLAY::is_luminalvgd_active()))) {
         if (auto disp = dxgi::display_vgd_vram_t::create(config, display_name)) {
           vgd_transition::note_capture_backend(vgd_transition::kCaptureKindVgdRing, display_name);
           return disp;
@@ -2050,6 +2060,11 @@ namespace platf {
         if (vgd_requested) {
           BOOST_LOG(warning) << "capture=vgd requested but the LuminalVGD ring is unavailable for "
                              << display_name << "; falling back to WGC/DDA.";
+        }
+        if (worker_vgd_target) {
+          BOOST_LOG(error) << "Video worker: transferred LuminalVGD ring could not be opened for "
+                           << display_name << "; refusing silent WGC/DDA substitution.";
+          return nullptr;
         }
       }
       if (prefer_wgc_backend) {

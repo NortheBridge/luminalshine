@@ -75,13 +75,29 @@ namespace VDISPLAY::vgd {
     uint64_t session_id;
     uint32_t ring_slots;
     uint32_t transport_flags;
+    uint32_t generation {0};
   };
+
+  inline constexpr uint32_t kMinRingSlots = 2;
+  inline constexpr uint32_t kMaxRingSlots = 8;
+  inline constexpr uint32_t kAllowedRingTransportFlags = 4;  // VGD_CREATE_D3D12_FENCE_TRANSPORT
 
   /// Resolve the tracked session whose monitor backs `display_name`
   /// (e.g. "\\\\.\\DISPLAY274"). With a single tracked session (the
   /// common per-client case) that session is returned directly;
   /// otherwise the session whose recorded display name matches wins.
   std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name);
+
+  /// Strict IPC handoff lookup: unlike ring_target_for_display(), this never
+  /// adopts a sole/unnamed session. It requires an exact active GDI display
+  /// match and snapshots the current ACTIVE ring generation.
+  std::optional<RingTargetInfo> ring_target_for_worker_display(const std::string &display_name);
+
+  /// Install a process-local ring identity imported by an authenticated
+  /// isolated video worker. The worker has no copy of the parent's tracked
+  /// monitor map, but the named ring/fence resources are cross-process.
+  void set_worker_ring_target(std::optional<RingTargetInfo> target, std::string display_name = {});
+  bool has_worker_ring_target();
 
   struct RingTransitionToken {
     uint64_t session_id {0};

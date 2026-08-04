@@ -115,9 +115,14 @@ namespace platf::virtual_display_cleanup {
 
       result.helper_revert_dispatched = display_helper_integration::revert(prefer_golden_if_current_missing);
       if (result.helper_revert_dispatched) {
-        // REVERT is accepted synchronously but executes after the helper's
-        // reconnect grace period. Observable topology is the completion ACK.
-        result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(12));
+        // A retained OLED recovery anchor is already an active physical
+        // display, so presence is not proof of restoration. The helper exits
+        // only after strict snapshot + layout verification; wait for that
+        // transaction boundary before removing LuminalVGD.
+        const bool restore_completed =
+          display_helper_integration::wait_for_revert_completion(std::chrono::seconds(30));
+        result.physical_display_verified = restore_completed &&
+                                           wait_for_physical_display(std::chrono::seconds(2));
       }
 
       if (!result.physical_display_verified) {
@@ -126,7 +131,10 @@ namespace platf::virtual_display_cleanup {
         if (result.helper_restarted) {
           result.helper_revert_dispatched =
             display_helper_integration::revert(prefer_golden_if_current_missing) || result.helper_revert_dispatched;
-          result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(12));
+          const bool restore_completed =
+            display_helper_integration::wait_for_revert_completion(std::chrono::seconds(30));
+          result.physical_display_verified = restore_completed &&
+                                             wait_for_physical_display(std::chrono::seconds(2));
         }
       }
 

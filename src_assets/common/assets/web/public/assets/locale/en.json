@@ -233,6 +233,8 @@
     "dd_config_revert_delay_desc": "Additional delay in milliseconds to wait before reverting configuration when the app has been closed or the last session terminated. Main purpose is to provide a smoother transition when quickly switching between apps.",
     "dd_config_revert_on_disconnect": "Config revert on disconnect",
     "dd_config_revert_on_disconnect_desc": "Revert configuration upon disconnect of all clients instead of app close or last session termination.",
+    "dd_dark_recovery_anchor": "OLED-safe physical recovery anchor",
+    "dd_dark_recovery_anchor_desc": "During exclusive virtual-display streaming, keep one physical display active but isolated and covered with pure black. This gives Windows a hardware scan-out path for GPU recovery without showing static OLED content.",
     "dd_paused_virtual_display_timeout_secs": "Paused session virtual display timeout (seconds)",
     "dd_paused_virtual_display_timeout_secs_desc": "Optional grace delay before removing virtual displays while a session is paused and revert-on-disconnect is disabled. 0 keeps the virtual display alive until resume or app exit.",
     "dd_paused_virtual_display_timeout_secs_warning": "Removing a virtual display while a game is still running can cause crashes regardless of trigger (timeout, hotkey, or manual restore). This option helps prevent returning to a stuck virtual screen after inactivity.",

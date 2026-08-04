@@ -56,6 +56,7 @@ extern "C" {
   #include "src/platform/windows/display.h"
   #include "src/platform/windows/display_vram.h"
   #include "src/platform/windows/misc.h"
+  #include "src/platform/windows/video_worker.h"
   #include "src/platform/windows/virtual_display.h"
   #include "uuid.h"
 
@@ -1459,6 +1460,91 @@ namespace video {
 
   bool has_attempted_encoder_probe() {
     return encoder_probe_attempted.load(std::memory_order_acquire);
+  }
+
+  bool export_encoder_probe_snapshot(encoder_probe_snapshot_t &snapshot) {
+    std::lock_guard lock(encoder_probe_mutex);
+    if (!chosen_encoder || !encoder_probe_attempted.load(std::memory_order_acquire)) {
+      return false;
+    }
+
+    snapshot = {};
+    snapshot.version = encoder_probe_snapshot_t::wire_version;
+    if (chosen_encoder->name.size() >= snapshot.encoder_name.size()) {
+      return false;
+    }
+    std::copy(chosen_encoder->name.begin(), chosen_encoder->name.end(), snapshot.encoder_name.begin());
+    snapshot.active_hevc_mode = active_hevc_mode;
+    snapshot.active_av1_mode = active_av1_mode;
+    snapshot.codec_capabilities = {
+      static_cast<std::uint32_t>(chosen_encoder->h264.capabilities.to_ulong()),
+      static_cast<std::uint32_t>(chosen_encoder->hevc.capabilities.to_ulong()),
+      static_cast<std::uint32_t>(chosen_encoder->av1.capabilities.to_ulong()),
+    };
+    snapshot.ref_frames_invalidation = last_encoder_probe_supported_ref_frames_invalidation;
+    for (std::size_t i = 0; i < snapshot.yuv444_for_codec.size(); ++i) {
+      snapshot.yuv444_for_codec[i] = last_encoder_probe_supported_yuv444_for_codec[i];
+      snapshot.supported_codec[i] = last_encoder_probe_supported_codec[i];
+    }
+    return true;
+  }
+
+  bool import_encoder_probe_snapshot(const encoder_probe_snapshot_t &snapshot) {
+    if (snapshot.version != encoder_probe_snapshot_t::wire_version) {
+      return false;
+    }
+    if (snapshot.active_hevc_mode < 0 || snapshot.active_hevc_mode > 3 ||
+        snapshot.active_av1_mode < 0 || snapshot.active_av1_mode > 3) {
+      return false;
+    }
+    const auto valid_wire_bool = [](std::uint8_t value) { return value <= 1; };
+    if (!valid_wire_bool(snapshot.ref_frames_invalidation) ||
+        !std::all_of(snapshot.yuv444_for_codec.begin(), snapshot.yuv444_for_codec.end(), valid_wire_bool) ||
+        !std::all_of(snapshot.supported_codec.begin(), snapshot.supported_codec.end(), valid_wire_bool)) {
+      return false;
+    }
+    const auto terminator = std::find(snapshot.encoder_name.begin(), snapshot.encoder_name.end(), '\0');
+    if (terminator == snapshot.encoder_name.end()) {
+      return false;
+    }
+    const std::string_view encoder_name(snapshot.encoder_name.data(),
+                                        static_cast<std::size_t>(terminator - snapshot.encoder_name.begin()));
+    const auto selected = std::find_if(encoders.begin(), encoders.end(), [&](const encoder_t *encoder) {
+      return encoder && encoder->name == encoder_name;
+    });
+    if (selected == encoders.end()) {
+      return false;
+    }
+
+    auto *encoder = *selected;
+    const auto allowed_capabilities = (std::uint32_t {1} << encoder_t::MAX_FLAGS) - 1;
+    if (std::any_of(snapshot.codec_capabilities.begin(), snapshot.codec_capabilities.end(),
+                    [&](std::uint32_t value) { return (value & ~allowed_capabilities) != 0; })) {
+      return false;
+    }
+    const auto passed_mask = std::uint32_t {1} << encoder_t::PASSED;
+    const auto yuv444_mask = std::uint32_t {1} << encoder_t::YUV444;
+    for (std::size_t i = 0; i < snapshot.codec_capabilities.size(); ++i) {
+      if ((snapshot.supported_codec[i] != 0) != ((snapshot.codec_capabilities[i] & passed_mask) != 0) ||
+          (snapshot.yuv444_for_codec[i] != 0) != ((snapshot.codec_capabilities[i] & yuv444_mask) != 0)) {
+        return false;
+      }
+    }
+    encoder->h264.capabilities = snapshot.codec_capabilities[0];
+    encoder->hevc.capabilities = snapshot.codec_capabilities[1];
+    encoder->av1.capabilities = snapshot.codec_capabilities[2];
+    active_hevc_mode = snapshot.active_hevc_mode;
+    active_av1_mode = snapshot.active_av1_mode;
+    last_encoder_probe_supported_ref_frames_invalidation = snapshot.ref_frames_invalidation != 0;
+    for (std::size_t i = 0; i < last_encoder_probe_supported_yuv444_for_codec.size(); ++i) {
+      last_encoder_probe_supported_yuv444_for_codec[i] = snapshot.yuv444_for_codec[i] != 0;
+      last_encoder_probe_supported_codec[i] = snapshot.supported_codec[i] != 0;
+    }
+    chosen_encoder = encoder;
+    encoder_probe_attempted.store(true, std::memory_order_release);
+    BOOST_LOG(info) << "Video worker: imported validated encoder [" << encoder->name
+                    << "] without re-running the capability probe.";
+    return true;
   }
 
   void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {
@@ -3515,6 +3601,11 @@ namespace video {
     config_t config,
     void *channel_data
   ) {
+#ifdef _WIN32
+    if (platf::video_worker::capture(mail, config, channel_data)) {
+      return;
+    }
+#endif
     // Snapshot the encoder pointer to avoid races with concurrent probe_encoders() calls
     auto *encoder = chosen_encoder;
     if (!encoder) {

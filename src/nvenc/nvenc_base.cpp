@@ -41,6 +41,7 @@
 
 // local includes
 #include "src/config.h"
+#include "src/gpu_recovery_policy.h"
 #include "src/tdr_state.h"
 #include "src/logging.h"
 #include "src/utility.h"
@@ -1159,7 +1160,9 @@ namespace nvenc {
       // process is going away and the teardown path handles the rest.
       if (wait_result == encode_wait_result::aborted) {
         BOOST_LOG(info) << "NvEnc: abandoning the wait for frame " << frame_index
-                        << " because the host is shutting down.";
+                        << (g_shutdown_requested.load(std::memory_order_acquire)
+                              ? " because the host is shutting down."
+                              : " because GPU/display recovery requested prompt encoder teardown.");
         encoder_state.has_pending_async = true;
         return {};
       }
@@ -1332,6 +1335,7 @@ namespace nvenc {
     const auto slice = std::max<uint32_t>(10, encoder_state.encode_wait_poll_slice_ms);
     const auto deadline_ms = std::max(slice, encoder_state.encode_wait_timeout_ms);
     const auto started = std::chrono::steady_clock::now();
+    const auto recovery_generation = gpu_recovery_policy::abort_generation();
 
     while (true) {
       const auto slice_started = std::chrono::steady_clock::now();
@@ -1356,6 +1360,11 @@ namespace nvenc {
       // Teardown must not wait out an OS-scale deadline: the force-shutdown
       // watchdog would fire first.
       if (g_shutdown_requested.load(std::memory_order_acquire)) {
+        return encode_wait_result::aborted;
+      }
+      if (gpu_recovery_policy::abort_generation() != recovery_generation) {
+        BOOST_LOG(warning) << "NvEnc: encode wait cancelled by the GPU recovery circuit before the "
+                              "display stack became unavailable.";
         return encode_wait_result::aborted;
       }
 

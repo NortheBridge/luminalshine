@@ -9,6 +9,7 @@
 #include "src/rtsp.h"
 
 #include <display_device/types.h>
+#include <chrono>
 #include <optional>
 #include <vector>
 
@@ -39,6 +40,11 @@ namespace display_helper_integration {
   // Launch the helper (if needed) and send REVERT.
   // Returns true if the helper accepted the command; false to allow fallback.
   bool revert(bool prefer_golden_if_current_missing = false);
+
+  // Wait until the helper process exits after a confirmed snapshot restore.
+  // Explicit REVERT makes the helper exit only after strict topology/layout
+  // verification, so this is the transaction boundary before VGD removal.
+  bool wait_for_revert_completion(std::chrono::milliseconds timeout);
 
   // Replace a stale helper/pipe and wait for the new interactive helper.
   bool restart_helper_for_recovery();
