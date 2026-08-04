@@ -38,6 +38,11 @@ namespace display_helper_integration {
     return *this;
   }
 
+  DisplayApplyBuilder &DisplayApplyBuilder::set_dark_recovery_anchor(const bool enable) {
+    dark_recovery_anchor_ = enable;
+    return *this;
+  }
+
   DisplayApplyBuilder &DisplayApplyBuilder::set_topology(const DisplayTopologyDefinition &topology) {
     topology_ = topology;
     return *this;
@@ -63,6 +68,7 @@ namespace display_helper_integration {
     request.session_overrides = session_overrides_;
     request.enable_virtual_display_watchdog = enable_virtual_display_watchdog_;
     request.attach_hdr_toggle_flag = attach_hdr_toggle_flag_;
+    request.dark_recovery_anchor = dark_recovery_anchor_;
     request.topology = topology_;
     request.session = session_;
     request.virtual_display_arrangement = virtual_display_arrangement_;

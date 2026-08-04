@@ -362,6 +362,23 @@ namespace video {
   // encoder probe of its own.
   extern std::array<bool, 3> last_encoder_probe_supported_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
+  struct encoder_probe_snapshot_t {
+    static constexpr std::uint32_t wire_version = 1;
+
+    std::uint32_t version {wire_version};
+    std::array<char, 32> encoder_name {};
+    std::int32_t active_hevc_mode {};
+    std::int32_t active_av1_mode {};
+    std::array<std::uint32_t, 3> codec_capabilities {};
+    std::uint8_t ref_frames_invalidation {};
+    std::array<std::uint8_t, 3> yuv444_for_codec {};
+    std::array<std::uint8_t, 3> supported_codec {};
+  };
+
+  /** Export/import the already-validated encoder selection for an isolated worker. */
+  bool export_encoder_probe_snapshot(encoder_probe_snapshot_t &snapshot);
+  bool import_encoder_probe_snapshot(const encoder_probe_snapshot_t &snapshot);
+
   bool has_attempted_encoder_probe();
 
   void capture(

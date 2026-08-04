@@ -1712,4 +1712,14 @@ namespace platf {
 
     return co_init;
   }
+
+  std::unique_ptr<deinit_t> init_video_worker() {
+    if (dxgi::init()) {
+      return nullptr;
+    }
+
+    // The worker needs COM for DXGI/capture, but it must not reset audio,
+    // arm topology recovery, or start host-wide VGD transition watchers.
+    return std::make_unique<platf::audio::co_init_t>();
+  }
 }  // namespace platf

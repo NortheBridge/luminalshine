@@ -21,8 +21,24 @@
   // local includes
   #include "../tests_common.h"
   #include "src/platform/windows/vgd_transition.h"
+  #include "src/platform/windows/virtual_display_vgd.h"
 
 namespace {
+
+  TEST(VgdWorkerRingTarget, ImportedTargetOverridesTheEmptyChildSessionMap) {
+    const VDISPLAY::vgd::RingTargetInfo imported {0x123456789abcdef0ULL, 3, 0x4, 7};
+    VDISPLAY::vgd::set_worker_ring_target(imported, "\\\\.\\DISPLAY77");
+    ASSERT_TRUE(VDISPLAY::vgd::has_worker_ring_target());
+    const auto resolved = VDISPLAY::vgd::ring_target_for_display("\\\\.\\DISPLAY77");
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(resolved->session_id, imported.session_id);
+    EXPECT_EQ(resolved->ring_slots, imported.ring_slots);
+    EXPECT_EQ(resolved->transport_flags, imported.transport_flags);
+    EXPECT_EQ(resolved->generation, imported.generation);
+    EXPECT_FALSE(VDISPLAY::vgd::ring_target_for_display("\\\\.\\DISPLAY78").has_value());
+    VDISPLAY::vgd::set_worker_ring_target(std::nullopt);
+    EXPECT_FALSE(VDISPLAY::vgd::has_worker_ring_target());
+  }
 
   TEST(VgdTransitionCaptureNote, RecordsKindDisplayAndBumpsSequence) {
     const auto before = platf::vgd_transition::last_capture_note();

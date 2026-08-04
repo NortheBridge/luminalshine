@@ -6,8 +6,13 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <atomic>
+#include <algorithm>
+#include <ranges>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
   #include <windows.h>
@@ -25,6 +30,60 @@ namespace statefile {
     namespace pt = boost::property_tree;
 
     std::once_flag migration_once;
+    std::atomic<std::uint64_t> temp_sequence {0};
+
+    fs::path unique_temp_path(const fs::path &path, std::string_view role = "tmp") {
+      fs::path candidate = path;
+      candidate += ".";
+      candidate += role;
+#ifdef _WIN32
+      candidate += "." + std::to_string(::GetCurrentProcessId());
+#else
+      candidate += "." + std::to_string(::getpid());
+#endif
+      candidate += "." + std::to_string(temp_sequence.fetch_add(1, std::memory_order_relaxed));
+      return candidate;
+    }
+
+    bool read_json_candidate(const fs::path &path, pt::ptree &out) {
+      try {
+        pt::ptree candidate;
+        pt::read_json(path.string(), candidate);
+        out = std::move(candidate);
+        return true;
+      } catch (const std::exception &) {
+        return false;
+      }
+    }
+
+    std::vector<fs::path> recovery_temp_candidates(const fs::path &path) {
+      std::vector<fs::path> candidates;
+      fs::path legacy = path;
+      legacy += ".tmp";
+      std::error_code ec;
+      if (fs::is_regular_file(legacy, ec)) {
+        candidates.push_back(legacy);
+      }
+
+      const auto dir = path.parent_path().empty() ? fs::path {"."} : path.parent_path();
+      const auto prefix = path.filename().string() + ".tmp.";
+      for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+           !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) {
+          ec.clear();
+          continue;
+        }
+        const auto name = it->path().filename().string();
+        if (name.starts_with(prefix)) {
+          candidates.push_back(it->path());
+        }
+      }
+      std::ranges::sort(candidates, [](const fs::path &lhs, const fs::path &rhs) {
+        std::error_code lhs_ec, rhs_ec;
+        return fs::last_write_time(lhs, lhs_ec) > fs::last_write_time(rhs, rhs_ec);
+      });
+      return candidates;
+    }
 
     pt::ptree &ensure_root(pt::ptree &tree) {
       auto it = tree.find("root");
@@ -44,10 +103,10 @@ namespace statefile {
       return load_or_recover(path, out);
     }
 
-    void write_tree(const fs::path &path, const pt::ptree &tree) {
+    bool write_tree(const fs::path &path, const pt::ptree &tree) {
       // Route through the atomic helper so callers in this file get the same
       // crash-safety guarantee as external callers.
-      atomic_write_json(path, tree);
+      return atomic_write_json(path, tree);
     }
 
     // Force the file's bytes (and Windows metadata) to physical storage. Closes
@@ -103,8 +162,7 @@ namespace statefile {
     void update_backup(const fs::path &path) {
       fs::path bak_path = path;
       bak_path += ".bak";
-      fs::path bak_temp = path;
-      bak_temp += ".bak.tmp";
+      const fs::path bak_temp = unique_temp_path(path, "bak.tmp");
 
       std::error_code copy_ec;
       fs::copy_file(path, bak_temp, fs::copy_options::overwrite_existing, copy_ec);
@@ -149,8 +207,7 @@ namespace statefile {
     // Sibling temp file in the same directory keeps the eventual rename on a
     // single filesystem volume — required for the OS-level rename to be
     // atomic. On Windows this maps to MoveFileExW(MOVEFILE_REPLACE_EXISTING).
-    fs::path temp_path = path;
-    temp_path += ".tmp";
+    const fs::path temp_path = unique_temp_path(path);
 
     try {
       pt::write_json(temp_path.string(), tree);
@@ -167,7 +224,13 @@ namespace statefile {
     (void) fsync_path(temp_path);
 
     std::error_code mv_ec;
+#ifdef _WIN32
+    if (!::MoveFileExW(temp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+      mv_ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+    }
+#else
     fs::rename(temp_path, path, mv_ec);
+#endif
     if (mv_ec) {
       BOOST_LOG(error) << "statefile: atomic rename "sv << temp_path.string() << " -> "sv << path.string()
                        << " failed: "sv << mv_ec.message();
@@ -201,6 +264,23 @@ namespace statefile {
                            << " ("sv << e.what() << "); attempting recovery from .bak"sv;
         out.clear();
       }
+    }
+
+    // An interrupted atomic write can leave a complete temporary file. It is
+    // newer than the backup and was never exposed as the primary, so validate
+    // it before discarding user state. This also recovers the fixed-name .tmp
+    // files produced by releases before unique writer temp names were added.
+    for (const auto &temp_path : recovery_temp_candidates(path)) {
+      if (!read_json_candidate(temp_path, out)) {
+        continue;
+      }
+      BOOST_LOG(warning) << "statefile: recovered "sv << path.string() << " from committed temporary candidate "sv
+                         << temp_path.string() << "; restoring primary"sv;
+      if (atomic_write_json(path, out)) {
+        std::error_code rm_ec;
+        fs::remove(temp_path, rm_ec);
+      }
+      return true;
     }
 
     fs::path bak_path = path;
@@ -299,10 +379,10 @@ namespace statefile {
       }
 
       if (new_modified) {
-        write_tree(new_path, new_tree);
+        (void) write_tree(new_path, new_tree);
       }
       if (old_modified) {
-        write_tree(old_path, old_tree);
+        (void) write_tree(old_path, old_tree);
       }
     });
   }
@@ -334,8 +414,11 @@ namespace statefile {
     auto &root_node = ensure_root(root);
     root_node.put_child("snapshot_exclude_devices", exclusions_pt);
 
-    write_tree(path, root);
-    BOOST_LOG(info) << "statefile: persisted " << devices.size() << " snapshot exclusion device(s) to luminalshine state";
+    if (write_tree(path, root)) {
+      BOOST_LOG(info) << "statefile: persisted " << devices.size() << " snapshot exclusion device(s) to luminalshine state";
+    } else {
+      BOOST_LOG(warning) << "statefile: snapshot exclusions were not persisted because the state path is not writable";
+    }
   }
 
   std::vector<std::string> load_snapshot_exclude_devices() {

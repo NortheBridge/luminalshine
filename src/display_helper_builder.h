@@ -72,6 +72,7 @@ namespace display_helper_integration {
     ActiveSessionState session_overrides {};
     bool enable_virtual_display_watchdog {false};
     bool attach_hdr_toggle_flag {false};
+    bool dark_recovery_anchor {false};
     // Internal pre-capture phase: apply synchronously without scheduling any
     // delayed verification/reapply/HDR/shell work that could overlap the next phase.
     bool transitional_apply {false};
@@ -91,6 +92,7 @@ namespace display_helper_integration {
     DisplayApplyBuilder &clear_configuration();
     DisplayApplyBuilder &set_virtual_display_watchdog(bool enable);
     DisplayApplyBuilder &set_hdr_toggle_flag(bool enable);
+    DisplayApplyBuilder &set_dark_recovery_anchor(bool enable);
     DisplayApplyBuilder &set_topology(const DisplayTopologyDefinition &topology);
     DisplayTopologyDefinition &mutable_topology();
     ActiveSessionState &mutable_session_overrides();
@@ -106,6 +108,7 @@ namespace display_helper_integration {
     DisplayTopologyDefinition topology_ {};
     bool enable_virtual_display_watchdog_ {false};
     bool attach_hdr_toggle_flag_ {false};
+    bool dark_recovery_anchor_ {false};
     std::optional<VirtualDisplayArrangement> virtual_display_arrangement_;
   };
 

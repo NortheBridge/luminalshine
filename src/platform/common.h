@@ -907,6 +907,10 @@ namespace platf {
   }
 
   [[nodiscard]] std::unique_ptr<deinit_t> init();
+#ifdef _WIN32
+  /** Minimal DXGI/COM initialization for the isolated capture/encode worker. */
+  [[nodiscard]] std::unique_ptr<deinit_t> init_video_worker();
+#endif
 
   /**
    * @brief Returns the current computer name in UTF-8.

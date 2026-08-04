@@ -60,6 +60,25 @@ else()
             return()
         endif()
 
+        # An exact stable release tag on HEAD is authoritative. Git's
+        # version:refname ordering places 26.08.0-rc.4 above 26.08.0, which
+        # otherwise makes a checkout of the published stable release identify
+        # and package itself as the older prerelease.
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} tag --points-at HEAD --sort=version:refname
+            OUTPUT_VARIABLE _git_exact_tags_raw
+            RESULT_VARIABLE _git_exact_tags_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT _git_exact_tags_error)
+            string(REPLACE "\n" ";" _git_exact_tags "${_git_exact_tags_raw}")
+            foreach(_git_exact_tag IN LISTS _git_exact_tags)
+                if(_git_exact_tag MATCHES "^v?[0-9]+\.[0-9]+\.[0-9]+$")
+                    set(${out_var} "${_git_exact_tag}" PARENT_SCOPE)
+                    return()
+                endif()
+            endforeach()
+        endif()
+
         set(_tag_patterns "[0-9]*.[0-9]*.[0-9]*" "v[0-9]*.[0-9]*.[0-9]*")
         foreach(_tag_pattern IN LISTS _tag_patterns)
             execute_process(

@@ -2470,6 +2470,7 @@ namespace stream {
         done = 6,
       };
       auto phase = std::make_shared<std::atomic<int>>(static_cast<int>(join_phase_e::starting));
+      auto phase_deadline_seconds = std::make_shared<std::atomic<int>>(10);
       auto phase_name = [](int p) -> const char * {
         switch (static_cast<join_phase_e>(p)) {
           case join_phase_e::starting:        return "starting";
@@ -2483,9 +2484,11 @@ namespace stream {
         return "unknown";
       };
 
-      auto task = [phase, phase_name]() {
+      auto task = [phase, phase_deadline_seconds, phase_name]() {
         const int p = phase->load(std::memory_order_acquire);
-        BOOST_LOG(fatal) << "Hang detected! Session failed to terminate in 10 seconds. Wedged in phase: "
+        BOOST_LOG(fatal) << "Hang detected! Session teardown phase made no progress for "
+                         << phase_deadline_seconds->load(std::memory_order_acquire)
+                         << " seconds. Wedged in phase: "
                          << phase_name(p) << " (" << p << ")"sv;
 #ifdef _WIN32
         // Best-effort: ask the display helper to restore monitor topology immediately. We don't
@@ -2521,20 +2524,30 @@ namespace stream {
         task_pool.cancel(force_kill);
       });
 
-      phase->store(static_cast<int>(join_phase_e::waiting_video), std::memory_order_release);
+      auto advance_phase = [&](join_phase_e next, std::chrono::seconds deadline) {
+        task_pool.cancel(force_kill);
+        phase->store(static_cast<int>(next), std::memory_order_release);
+        phase_deadline_seconds->store(static_cast<int>(deadline.count()), std::memory_order_release);
+        force_kill = task_pool.pushDelayed(task, deadline).task_id;
+      };
+
+      advance_phase(join_phase_e::waiting_video, 10s);
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
       session.videoThread.join();
-      phase->store(static_cast<int>(join_phase_e::waiting_audio), std::memory_order_release);
+      advance_phase(join_phase_e::waiting_audio, 10s);
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
       session.audioThread.join();
-      phase->store(static_cast<int>(join_phase_e::waiting_control), std::memory_order_release);
+      advance_phase(join_phase_e::waiting_control, 10s);
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
-      phase->store(static_cast<int>(join_phase_e::resetting_input), std::memory_order_release);
+      advance_phase(join_phase_e::resetting_input, 10s);
       // Reset input on session stop to avoid stuck repeated keys
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
-      phase->store(static_cast<int>(join_phase_e::cleanup), std::memory_order_release);
+      // Worker teardown and staged physical-display restoration legitimately
+      // take longer than a thread join. Give cleanup its own deadline instead
+      // of inheriting the nearly-expired 10-second video-join timer.
+      advance_phase(join_phase_e::cleanup, 30s);
 
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
@@ -2614,8 +2627,7 @@ namespace stream {
         // undo files as a crash backstop. Re-arm the hang watchdog with a
         // longer bound for this stage so we don't _Exit() out from under a
         // driver call that would complete on its own.
-        task_pool.cancel(force_kill);
-        force_kill = task_pool.pushDelayed(task, 60s).task_id;
+        advance_phase(join_phase_e::cleanup, 60s);
         BOOST_LOG(debug) << "Restoring frame limiter / NVIDIA Control Panel state..."sv;
         platf::frame_limiter_streaming_stop();
 #endif

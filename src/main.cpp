@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <thread>
 
 // local includes
@@ -52,6 +53,7 @@
   #include "src/platform/windows/vgd_transition.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/platform/windows/virtual_display_cleanup.h"
+  #include "src/platform/windows/video_worker.h"
 #endif
 
 extern "C" {
@@ -148,6 +150,21 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
 
 int main(int argc, char *argv[]) {
   lifetime::argv = argv;
+
+#ifdef _WIN32
+  if (argc == 4 && std::string_view(argv[1]) == "--internal-video-worker"sv) {
+    try {
+      const auto parent_pid = std::stoul(argv[3]);
+      if (parent_pid == 0 || parent_pid > std::numeric_limits<std::uint32_t>::max()) {
+        return 9;
+      }
+      platf::video_worker::set_child_pipe(argv[2], static_cast<std::uint32_t>(parent_pid));
+      argc = 1; // internal switch is not part of the public config CLI
+    } catch (...) {
+      return 9;
+    }
+  }
+#endif
 
   // Last-resort diagnostics: if any thread lets an exception escape (e.g.
   // std::bad_alloc under system-wide memory exhaustion), record what it was
@@ -252,6 +269,12 @@ int main(int argc, char *argv[]) {
   if (config::parse(argc, argv)) {
     return 0;
   }
+
+#ifdef _WIN32
+  if (platf::video_worker::is_child_process()) {
+    config::sunshine.log_file += ".video-worker-" + std::to_string(::GetCurrentProcessId()) + ".log";
+  }
+#endif
 
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
   if (!log_deinit_guard) {
@@ -376,6 +399,26 @@ int main(int argc, char *argv[]) {
     // continue; the user can retry the Reset shortcut.
     BOOST_LOG(warning) << "Admin reset marker check failed: " << ex.what()
                        << ". Continuing service startup.";
+  }
+#endif
+
+  // The isolated video worker needs D3D/platform initialization, but none of
+  // the host's service, tray, update, NVIDIA-profile, or display-topology
+  // side effects. Branch before those systems start so every stream does not
+  // accidentally initialize a second host instance.
+#ifdef _WIN32
+  if (platf::video_worker::is_child_process()) {
+    task_pool.start(1);
+    auto task_pool_guard = util::fail_guard([] {
+      task_pool.stop();
+      task_pool.join();
+    });
+    auto worker_platform = platf::init_video_worker();
+    if (!worker_platform) {
+      BOOST_LOG(error) << "Video worker: platform initialization failed.";
+      return 13;
+    }
+    return platf::video_worker::run_child();
   }
 #endif
 

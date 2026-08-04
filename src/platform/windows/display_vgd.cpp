@@ -59,6 +59,11 @@ namespace platf::dxgi {
     // both sides bound every acquire).
     constexpr uint64_t kVgdMutexKeyHost = 1;
     constexpr uint32_t kVgdMutexTimeoutMs = 100;
+    // Encoder mailbox textures are host-owned. A free image returned by the
+    // pool should therefore be immediately acquirable; waiting seconds here
+    // would recouple the display producer to a wedged encoder. Drop/reinit on
+    // a short bound instead and leave every VGD ring claim released.
+    constexpr uint32_t kEncoderMailboxMutexTimeoutMs = 100;
 
     /// Circuit breaker: a session whose ring consistently fails to deliver
     /// (texture opens failing, or frames publishing that we can never claim)
@@ -364,6 +369,16 @@ namespace platf::dxgi {
     }
 
     _ring = ring;
+    if (VDISPLAY::vgd::has_worker_ring_target()) {
+      VgdRingStatus opened_status {};
+      if (vgd_ring_status(ring, &opened_status) != 0 || opened_status.state != 1 ||
+          opened_status.generation != target->generation ||
+          opened_status.transport_flags != target->transport_flags) {
+        BOOST_LOG(error) << "Video worker: transferred LuminalVGD ring changed before open; "
+                            "rejecting stale generation/transport.";
+        return -1;
+      }
+    }
     _session_id = target->session_id;
     _ring_slots = target->ring_slots;
     _fence_transport = (target->transport_flags & VGD_CREATE_D3D12_FENCE_TRANSPORT) != 0;
@@ -438,6 +453,10 @@ namespace platf::dxgi {
     BOOST_LOG(info) << "LuminalVGD capture: consuming frame ring of session 0x"
                     << std::hex << _session_id << std::dec << " (" << _ring_slots
                     << " slots) for " << display_name;
+    if (VDISPLAY::vgd::has_worker_ring_target()) {
+      BOOST_LOG(info) << "Video worker: VGD_RING_OPENED session=0x" << std::hex << _session_id
+                      << std::dec << " slots=" << _ring_slots << " display=" << display_name;
+    }
     return 0;
   }
 
@@ -1053,7 +1072,7 @@ namespace platf::dxgi {
           if (complete_img(d3d_img.get(), false)) {
             return capture_e::reinit;
           }
-          const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, 3000);
+          const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, kEncoderMailboxMutexTimeoutMs);
           if (dst_acquire != S_OK && dst_acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
             BOOST_LOG(warning) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << "]; reinitializing."sv;
             return capture_e::reinit;
@@ -1184,7 +1203,7 @@ namespace platf::dxgi {
     }
 
     // Pooled textures follow the capture<->encoder key-0 convention.
-    const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, 3000);
+    const HRESULT dst_acquire = seh_acquire_sync(d3d_img->capture_mutex.get(), 0, kEncoderMailboxMutexTimeoutMs);
     if (dst_acquire != S_OK && dst_acquire != static_cast<HRESULT>(WAIT_ABANDONED)) {
       BOOST_LOG(warning) << "LuminalVGD capture: pooled texture mutex acquire failed [0x"sv << util::hex(dst_acquire).to_string_view() << "]; reinitializing."sv;
       return capture_e::reinit;

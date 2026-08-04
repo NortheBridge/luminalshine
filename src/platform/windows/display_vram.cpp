@@ -20,6 +20,7 @@ extern "C" {
 #include "display_vram.h"
 #include "misc.h"
 #include "src/config.h"
+#include "src/gpu_recovery_policy.h"
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_d3d11_native.h"
@@ -1126,7 +1127,7 @@ namespace platf::dxgi {
       // Prefer the native D3D12 NVENC contract. D3D11On12 lets the proven
       // Sunshine colour-conversion shaders render directly into the D3D12
       // input allocation while NVENC receives explicit fence points.
-      if (pix_fmt != pix_fmt_e::yuv444p16) {
+      if (pix_fmt != pix_fmt_e::yuv444p16 && !gpu_recovery_policy::force_d3d11()) {
         auto native12 = std::make_unique<nvenc::nvenc_d3d12>(adapter_p);
         if (native12->valid() && !base.init(display, adapter_p, pix_fmt,
                                             native12->d3d11_device(), native12->d3d11_context())) {
@@ -1134,6 +1135,10 @@ namespace platf::dxgi {
           nvenc_d3d = std::move(native12);
           BOOST_LOG(info) << "NvEnc: native D3D12 input/output path selected (explicit fences)";
         }
+      }
+      if (pix_fmt != pix_fmt_e::yuv444p16 && gpu_recovery_policy::force_d3d11()) {
+        BOOST_LOG(warning) << "NvEnc: native D3D12 path suppressed by the GPU recovery circuit; "
+                              "selecting D3D11 compatibility transport.";
       }
       if (!nvenc_d3d) {
         if (base.init(display, adapter_p, pix_fmt)) return false;

@@ -207,6 +207,38 @@ TEST_F(CredentialsPersistenceTest, LoadOrRecoverReadsPrimaryWhenValid) {
   ASSERT_EQ(out.get<std::string>("root.uniqueid"), "uuid-primary");
 }
 
+TEST_F(CredentialsPersistenceTest, LoadOrRecoverPromotesLegacyTemporaryFile) {
+  const auto file = scratch / "state.json";
+  fs::path temp = file;
+  temp += ".tmp";
+
+  pt::ptree expected;
+  expected.put("root.uniqueid", "uuid-from-temp");
+  pt::write_json(temp.string(), expected);
+
+  pt::ptree out;
+  ASSERT_TRUE(statefile::load_or_recover(file, out));
+  EXPECT_EQ(out.get<std::string>("root.uniqueid"), "uuid-from-temp");
+  EXPECT_TRUE(fs::exists(file));
+  EXPECT_FALSE(fs::exists(temp));
+}
+
+TEST_F(CredentialsPersistenceTest, LoadOrRecoverPromotesUniqueWriterTemporaryFile) {
+  const auto file = scratch / "state.json";
+  fs::path temp = file;
+  temp += ".tmp.4242.7";
+
+  pt::ptree expected;
+  expected.put("root.uniqueid", "uuid-from-unique-temp");
+  pt::write_json(temp.string(), expected);
+
+  pt::ptree out;
+  ASSERT_TRUE(statefile::load_or_recover(file, out));
+  EXPECT_EQ(out.get<std::string>("root.uniqueid"), "uuid-from-unique-temp");
+  EXPECT_TRUE(fs::exists(file));
+  EXPECT_FALSE(fs::exists(temp));
+}
+
 TEST_F(CredentialsPersistenceTest, LoadOrRecoverRestoresFromBackupWhenPrimaryCorrupt) {
   // Simulate the canonical "Windows servicing zero-byte file" failure mode:
   // the primary exists but parses to nothing, while the .bak written by the

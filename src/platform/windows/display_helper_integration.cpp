@@ -31,6 +31,7 @@
   // sunshine
   #include "display_helper_integration.h"
   #include "src/globals.h"
+  #include "src/gpu_recovery_policy.h"
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_coordinator.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
@@ -773,6 +774,7 @@ namespace {
   static std::atomic<std::uint64_t> g_restore_generation {0};
   static std::atomic<std::uint64_t> g_disarm_generation_sent {0};
   static std::atomic<std::int64_t> g_last_revert_us {0};
+  static std::atomic<std::int64_t> g_last_revert_completed_us {0};
   static std::atomic<std::int64_t> g_last_disarm_attempt_us {0};
   static std::atomic<std::int64_t> g_last_disarm_success_us {0};
 
@@ -1180,6 +1182,10 @@ namespace {
       j["sunshine_transitional_apply"] = true;
     }
 
+    if (request.dark_recovery_anchor) {
+      j["sunshine_dark_recovery_anchor"] = true;
+    }
+
     if (request.virtual_display_arrangement) {
       j["sunshine_virtual_layout"] = virtual_layout_to_string(*request.virtual_display_arrangement);
     }
@@ -1221,12 +1227,15 @@ namespace {
   }
 
   std::string build_revert_payload(bool prefer_golden_if_current_missing) {
-    if (!prefer_golden_if_current_missing) {
-      return {};
-    }
-
     nlohmann::json j = nlohmann::json::object();
-    j["sunshine_prefer_golden_if_current_missing"] = true;
+    if (prefer_golden_if_current_missing) {
+      j["sunshine_prefer_golden_if_current_missing"] = true;
+    } else {
+      // Clean session shutdowns must restore the baseline captured directly
+      // before this VGD session. Golden is a crash/missing-snapshot fallback,
+      // not an excuse to replace a newer two-monitor layout.
+      j["sunshine_clean_session_revert"] = true;
+    }
     return j.dump();
   }
 
@@ -1626,6 +1635,12 @@ namespace display_helper_integration {
 
   bool revert(bool prefer_golden_if_current_missing) {
     clear_pending_apply();
+    const auto completed_us = g_last_revert_completed_us.load(std::memory_order_acquire);
+    if (!prefer_golden_if_current_missing && completed_us > 0 &&
+        now_steady_us() - completed_us < 5'000'000 && !helper_process_running()) {
+      BOOST_LOG(info) << "Display helper: suppressing duplicate REVERT because the prior transactional restore just completed.";
+      return true;
+    }
     if (!ensure_helper_started()) {
       BOOST_LOG(info) << "Display helper unavailable; cannot send revert.";
       return false;
@@ -1641,6 +1656,29 @@ namespace display_helper_integration {
     }
     clear_active_session();
     return ok;
+  }
+
+  bool wait_for_revert_completion(std::chrono::milliseconds timeout) {
+    HANDLE process = nullptr;
+    {
+      std::lock_guard<std::mutex> lg(helper_mutex());
+      process = helper_proc().get_process_handle();
+      if (!process) {
+        BOOST_LOG(error) << "Display helper: cannot wait for REVERT completion without a helper process handle.";
+        return false;
+      }
+      const auto bounded = std::clamp<long long>(timeout.count(), 0, 120000);
+      const DWORD waited = WaitForSingleObject(process, static_cast<DWORD>(bounded));
+      if (waited != WAIT_OBJECT_0) {
+        BOOST_LOG(error) << "Display helper: timed out waiting for strictly verified REVERT completion.";
+        return false;
+      }
+    }
+    g_restore_expected.store(false, std::memory_order_release);
+    g_last_revert_completed_us.store(now_steady_us(), std::memory_order_release);
+    platf::display_helper_client::reset_connection();
+    BOOST_LOG(info) << "Display helper: transactional REVERT completed and helper exited after verification.";
+    return true;
   }
 
   ApplyFailure last_apply_failure() {
@@ -2110,6 +2148,7 @@ namespace display_helper_integration {
     constexpr std::int64_t kMinMsBetweenDegradedProbes = 30'000;
     /// steady_clock ms of the last degraded probe.
     std::atomic<std::int64_t> g_last_degraded_probe_ms {0};
+    std::atomic<std::int64_t> g_enumeration_retry_after_ms {0};
 
     std::int64_t steady_ms_now() {
       return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2165,6 +2204,28 @@ namespace display_helper_integration {
         return;  // already latched; nothing to add
       }
 
+      const bool active_stream = get_active_session_copy().has_value();
+      if (active_stream && streak == 1) {
+        LONG qdc_status = ERROR_SUCCESS;
+        UINT32 qdc_paths = 0;
+        (void) platf::dxgi::display_config_api_healthy(&qdc_status, &qdc_paths);
+        if (qdc_status == ERROR_NOT_SUPPORTED) {
+          const bool first = gpu_recovery_policy::open_d3d11_circuit();
+          BOOST_LOG(error) << "Display API refused the first active-stream enumeration (status "
+                           << qdc_status << ", " << qdc_paths
+                           << " paths). Cancelling GPU submissions immediately; terminal confirmation "
+                              "continues in the background.";
+          if (first) {
+            BOOST_LOG(warning) << "GPU recovery circuit: native D3D12 NVENC disabled for this host run.";
+          }
+          tdr::mark_event(
+            tdr::source_t::query_display_config,
+            static_cast<long>(qdc_status),
+            "active-stream QueryDisplayConfig became unavailable; GPU work cancelled before terminal classification"
+          );
+        }
+      }
+
       // Degraded check first: it fires ~8 s before the terminal one and is the
       // only signal available while recovery can still work. Purely a report --
       // it must not reach mark_stack_down (tells the user to reboot) or
@@ -2188,8 +2249,10 @@ namespace display_helper_integration {
         }
       }
 
-      if (streak < kEmptyEnumerationsBeforeProbe ||
-          (now_ms - failing_since) < kMinFailingMsBeforeProbe) {
+      const auto required_streak = active_stream ? std::uint64_t {3} : kEmptyEnumerationsBeforeProbe;
+      const auto required_failing_ms = active_stream ? std::int64_t {3'000} : kMinFailingMsBeforeProbe;
+      if (streak < required_streak ||
+          (now_ms - failing_since) < required_failing_ms) {
         return;
       }
 
@@ -2234,6 +2297,10 @@ namespace display_helper_integration {
   std::optional<display_device::EnumeratedDeviceList> enumerate_devices(
     display_device::DeviceEnumerationDetail detail
   ) {
+    const auto now_ms = steady_ms_now();
+    if (now_ms < g_enumeration_retry_after_ms.load(std::memory_order_acquire)) {
+      return std::nullopt;
+    }
     try {
       display_device::DisplayRecoveryBehaviorGuard guard(display_device::DisplayRecoveryBehavior::Skip);
       auto api = std::make_shared<display_device::WinApiLayer>();
@@ -2243,6 +2310,16 @@ namespace display_helper_integration {
       // underlying QueryDisplayConfig fails, so "did it throw" is not the
       // signal -- "did it produce anything" is.
       note_enumeration_result(!devices.empty());
+      if (devices.empty()) {
+        LONG qdc_status = ERROR_SUCCESS;
+        UINT32 qdc_paths = 0;
+        (void) platf::dxgi::display_config_api_healthy(&qdc_status, &qdc_paths);
+        if (qdc_status == ERROR_NOT_SUPPORTED) {
+          g_enumeration_retry_after_ms.store(now_ms + 1'000, std::memory_order_release);
+        }
+      } else {
+        g_enumeration_retry_after_ms.store(0, std::memory_order_release);
+      }
       return devices;
     } catch (...) {
       note_enumeration_result(false);
