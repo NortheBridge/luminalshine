@@ -25,8 +25,8 @@ Property=WIXUI_INSTALLDIR|Value=INSTALL_ROOT
 Property=WixUIRMOption|Value=UseRM
 
 ## TABLE: Upgrade
-UpgradeCode={C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}|VersionMin=26.08.0.0|VersionMax=|Language=|Attributes=2|Remove=|ActionProperty=WIX_DOWNGRADE_DETECTED
-UpgradeCode={C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}|VersionMin=|VersionMax=26.08.0.0|Language=|Attributes=513|Remove=|ActionProperty=WIX_UPGRADE_DETECTED
+UpgradeCode={C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}|VersionMin=26.08.1.0|VersionMax=|Language=|Attributes=2|Remove=|ActionProperty=WIX_DOWNGRADE_DETECTED
+UpgradeCode={C2C36624-2D9C-4AFD-9C79-6B7861AE4A0D}|VersionMin=|VersionMax=26.08.1.0|Language=|Attributes=513|Remove=|ActionProperty=WIX_UPGRADE_DETECTED
 
 ## TABLE: Component
 Component=ArpCustomUninstallEntry|ComponentId={7843F978-AC8D-508C-8973-17EA02CAE565}|Directory_=INSTALL_ROOT|Attributes=260|Condition=|KeyPath=regKWKE1syhS2LUr3ZQtpKBQsQSUlQ
