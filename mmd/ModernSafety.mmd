@@ -1,0 +1,11 @@
+flowchart LR
+    V["LuminalVGD surface"] -->|"Fence completes"| C["Copy"]
+    C --> W["Worker-owned surface"]
+    C --> R["Release VGD ring slot"]
+    W --> E["Hardware encoder"]
+    E --> M["Moonlight video packets"]
+
+    style V fill:#5b2c83,color:#fff
+    style W fill:#145a7d,color:#fff
+    style R fill:#276738,color:#fff
+    style E fill:#8a4d12,color:#fff
