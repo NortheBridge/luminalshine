@@ -147,7 +147,8 @@ jobs:
         # sign/install them in the coverage workflow.
         shell: pwsh
         env:
-          LUMINALVGD_VERSION: 'v0.1.0-alpha.5'
+          LUMINALVGD_VERSION: 'v0.1.0-alpha.8'
+          LUMINALVGD_SHA256: '1cbe52890c732e5dfb6d2455d9035eb4c7881ab19dd49d89343b8b1fdbf807c2'
         run: |
           $ErrorActionPreference = 'Stop'
           $packageDir = Join-Path $PWD 'src_assets/windows/drivers/luminalvgd/driver-package'
@@ -156,6 +157,10 @@ jobs:
           $zipUrl = "https://github.com/NortheBridge/LuminalVGD/releases/download/$($env:LUMINALVGD_VERSION)/LuminalVGD-$($env:LUMINALVGD_VERSION)-x64.zip"
           $zipPath = Join-Path $env:RUNNER_TEMP 'luminalvgd.zip'
           Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:LUMINALVGD_SHA256) {
+            throw "LuminalVGD archive SHA-256 mismatch: expected $($env:LUMINALVGD_SHA256), got $actualHash"
+          }
           $tmp = Join-Path $env:RUNNER_TEMP 'luminalvgd'
           Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
 

@@ -341,11 +341,11 @@ jobs:
           # (github.com/NortheBridge/LuminalVGD releases). Bump on driver
           # releases. SudoVDA is gone by decision (2026-07-23) — the MSI's
           # drivers\luminalvgd\install.ps1 also removes it wherever found.
-          LUMINALVGD_VERSION: 'v0.1.0-alpha.7'
+          LUMINALVGD_VERSION: 'v0.1.0-alpha.8'
           # SHA-256 published in the release's SHA256SUMS asset. Keep this
           # pinned with the tag so a replaced or partial download cannot enter
           # the installer supply chain unnoticed.
-          LUMINALVGD_SHA256: 'afe890d0b0b94232b20eb0b6e3aac738e2f1ea73c66572541b9bb1b2e97d5afe'
+          LUMINALVGD_SHA256: '1cbe52890c732e5dfb6d2455d9035eb4c7881ab19dd49d89343b8b1fdbf807c2'
         run: |
           $ErrorActionPreference = 'Stop'
           $packageDir = Join-Path $PWD 'src_assets/windows/drivers/luminalvgd/driver-package'
