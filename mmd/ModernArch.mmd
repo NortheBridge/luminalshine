@@ -1,0 +1,109 @@
+flowchart LR
+    subgraph GAME["Game and Windows presentation"]
+        G11["Game rendering with D3D11"]
+        G12["Game rendering with D3D12"]
+        DXGI["DXGI swapchain<br/>Present / Present1"]
+        DWM["Windows DWM compositor<br/>Composes complete virtual desktop"]
+
+        G11 --> DXGI
+        G12 --> DXGI
+        DXGI --> DWM
+    end
+
+    subgraph VGD["LuminalVGD — IddCx virtual display driver"]
+        IDD["IddCx monitor and swapchain"]
+        FRAME["Completed display surface<br/>Resolution, refresh, HDR metadata"]
+        RING["Protocol 0.10 / Build 24 ring<br/>Immutable generation<br/>Fence-only synchronization"]
+        SLOT["Published ring slot<br/>Surface handle + fence value"]
+
+        IDD --> FRAME
+        FRAME --> RING
+        RING --> SLOT
+    end
+
+    DWM -->|"Windows supplies composed frames"| IDD
+
+    subgraph SHINE_MAIN["LuminalShine main process"]
+        SESSION["Session and client negotiation<br/>Resolution • refresh • HDR • codec"]
+        MODE["Virtual-display mode management"]
+        SUPERVISOR["Capture-worker supervisor<br/>Start • monitor • restart"]
+        AUDIO["Audio capture"]
+        INPUT["Moonlight input handling"]
+        NETWORK["Moonlight / GameStream transport<br/>Video + audio + control + input"]
+
+        SESSION --> MODE
+        SESSION --> SUPERVISOR
+        AUDIO --> NETWORK
+        NETWORK --> INPUT
+    end
+
+    MODE -->|"Create and configure monitor"| IDD
+    SLOT -->|"Shared surface and completion fence"| SUPERVISOR
+
+    subgraph WORKER["Isolated LuminalShine capture/encode worker"]
+        ADMIT["Ring-generation admission<br/>Two stable snapshots<br/>Six-second bound"]
+        WAIT["Wait for published fence<br/>Never block the game Present thread"]
+        COPY["Copy frame into bounded<br/>worker-owned four-surface pool"]
+        RELEASE["Release LuminalVGD ring slot<br/>before encoding"]
+        SELECT{"Capture/encode path"}
+
+        ADMIT --> WAIT
+        WAIT --> COPY
+        COPY --> RELEASE
+        RELEASE --> SELECT
+
+        subgraph PATH11["Path A — D3D11"]
+            D11TEX["Worker-owned<br/>ID3D11Texture2D"]
+            D11CONV["D3D11 color conversion<br/>RGB / HDR → NV12 or P010"]
+            HW11["NVENC / AMF / QSV<br/>D3D11 resource input"]
+
+            D11TEX --> D11CONV
+            D11CONV --> HW11
+        end
+
+        subgraph PATH12N["Path B — Native D3D12"]
+            D12RES["Worker-owned<br/>ID3D12Resource"]
+            D12QUEUE["Dedicated D3D12 queue<br/>Command list + fence"]
+            D12CONV["D3D12 color conversion<br/>RGB / HDR → NV12 or P010"]
+            NV12["Native D3D12-to-NVENC<br/>Register resource + fence"]
+
+            D12RES --> D12QUEUE
+            D12QUEUE --> D12CONV
+            D12CONV --> NV12
+        end
+
+        subgraph PATH12I["Path C — D3D12 through D3D11 interop"]
+            D12SRC["Worker-owned<br/>D3D12 resource"]
+            WRAP["D3D11On12 wrapped resource<br/>Acquire / Release"]
+            D11ENC["D3D11 encoder interface<br/>NVENC / AMF / QSV"]
+
+            D12SRC --> WRAP
+            WRAP --> D11ENC
+        end
+
+        SELECT -->|"D3D11 device/backend"| D11TEX
+        SELECT -->|"Native D3D12 NVENC supported"| D12RES
+        SELECT -->|"D3D12 source; D3D11 encoder required"| D12SRC
+
+        HW11 --> BITSTREAM["Encoded video bitstream<br/>HEVC / AV1 / H.264"]
+        NV12 --> BITSTREAM
+        D11ENC --> BITSTREAM
+    end
+
+    SUPERVISOR --> ADMIT
+    BITSTREAM --> NETWORK
+
+    subgraph CLIENT["Moonlight client"]
+        RECEIVE["Receive encrypted video,<br/>audio and control packets"]
+        DECODE["Hardware video decoder<br/>HEVC / AV1 / H.264"]
+        OUTPUT["Client rendering API<br/>Metal • D3D11 • D3D12 • Vulkan"]
+        DISPLAY["Client display<br/>4K120 • HDR • 4:4:4 when supported"]
+        CONTROLS["Controller, keyboard and mouse"]
+
+        RECEIVE --> DECODE
+        DECODE --> OUTPUT
+        OUTPUT --> DISPLAY
+        CONTROLS -->|"Encrypted input packets"| NETWORK
+    end
+
+    NETWORK --> RECEIVE
