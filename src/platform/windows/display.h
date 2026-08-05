@@ -709,9 +709,9 @@ namespace platf::dxgi {
     /// a claimed slot before releasing it to the driver.
     bool prepare_fence_transport(uint32_t generation);
 
-    /// Adopt the transport selected by Build 23 for the claimed generation.
-    /// The driver can downgrade a rejected D3D12 fence ring to keyed mutexes
-    /// without recreating the monitor.
+    /// Validate the transport selected for the claimed generation. Build 24
+    /// fence-required rings may never change synchronization contracts in
+    /// place; a violation forces isolated safe-capture recovery.
     bool refresh_transport();
 
     /// Wait for this consumer's copy to leave the source slot. The wait is
@@ -743,6 +743,8 @@ namespace platf::dxgi {
     uint64_t _session_id = 0;
     uint32_t _ring_slots = 0;
     bool _fence_transport = false;
+    bool _fence_required = false;
+    uint32_t _transport_generation = 0;
     uint32_t _fence_generation = 0;
     fence11_t _producer_fence;
     fence11_t _consumer_fence;

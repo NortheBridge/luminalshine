@@ -65,7 +65,8 @@ namespace platf::video_worker {
       video::config_t config;
       video::encoder_probe_snapshot_t encoder;
       std::uint8_t direct_vgd;
-      std::uint8_t reserved[7];
+      std::uint8_t safe_capture;
+      std::uint8_t reserved[6];
       std::uint64_t vgd_session_id;
       std::uint32_t vgd_ring_slots;
       std::uint32_t vgd_transport_flags;
@@ -77,7 +78,7 @@ namespace platf::video_worker {
     std::string g_child_pipe;
     std::uint32_t g_parent_pid {};
     constexpr std::uint32_t kProtocolMagic = 0x4C565750;  // LVWP
-    constexpr std::uint32_t kProtocolVersion = 3;
+    constexpr std::uint32_t kProtocolVersion = 4;
     constexpr std::size_t kMaxPacketPayload = 32u * 1024u * 1024u - sizeof(packet_header_t);
 
     static_assert(std::is_trivially_copyable_v<video::config_t>);
@@ -343,7 +344,8 @@ namespace platf::video_worker {
       return 18;
     }
 
-    if (start.direct_vgd > 1 || std::any_of(std::begin(start.reserved), std::end(start.reserved),
+    if (start.direct_vgd > 1 || start.safe_capture > 1 || (start.direct_vgd && start.safe_capture) ||
+        std::any_of(std::begin(start.reserved), std::end(start.reserved),
                                             [](std::uint8_t value) { return value != 0; })) {
       (void) send(pipe, message_e::startup_error);
       return 19;
@@ -370,6 +372,7 @@ namespace platf::video_worker {
     } else {
       VDISPLAY::vgd::set_worker_ring_target(std::nullopt);
     }
+    VDISPLAY::vgd::set_worker_safe_capture(start.safe_capture != 0);
 
     if (!video::import_encoder_probe_snapshot(start.encoder)) {
       BOOST_LOG(error) << "Video worker: rejected invalid or unavailable encoder capability snapshot.";
@@ -489,45 +492,47 @@ namespace platf::video_worker {
   bool capture(safe::mail_t mail, video::config_t config, void *channel_data) {
     if (is_child_process()) return false;
 
+    const bool direct_vgd = VDISPLAY::is_luminalvgd_active();
     start_t start {};
     start.magic = kProtocolMagic;
     start.protocol_version = kProtocolVersion;
     start.config = config;
     if (!video::export_encoder_probe_snapshot(start.encoder)) {
       BOOST_LOG(error) << "Video worker: parent has no validated encoder snapshot; using in-process pipeline.";
-      return false;
+      return direct_vgd;
     }
-    const bool direct_vgd = VDISPLAY::is_luminalvgd_active();
     if (direct_vgd) {
       const auto display_name = display_device::map_output_name(::config::get_active_output_name());
       const auto target = VDISPLAY::vgd::ring_target_for_worker_display(display_name);
       if (!target) {
         BOOST_LOG(warning) << "Video worker: direct LuminalVGD session has no transferable ring target for '"
-                           << display_name << "'; bypassing worker and using the parent capture pipeline immediately.";
-        return false;
+                           << display_name << "'; starting isolated WGC safe-capture instead.";
+        start.safe_capture = 1;
+      } else {
+        if (display_name.size() >= sizeof(start.vgd_display_name)) {
+          BOOST_LOG(warning) << "Video worker: direct LuminalVGD display name exceeds the IPC limit; "
+                                "starting isolated WGC safe-capture instead.";
+          start.safe_capture = 1;
+        } else {
+          start.direct_vgd = 1;
+          start.vgd_session_id = target->session_id;
+          start.vgd_ring_slots = target->ring_slots;
+          start.vgd_transport_flags = target->transport_flags;
+          start.vgd_generation = target->generation;
+          std::copy(display_name.begin(), display_name.end(), std::begin(start.vgd_display_name));
+        }
       }
-      if (display_name.size() >= sizeof(start.vgd_display_name)) {
-        BOOST_LOG(warning) << "Video worker: direct LuminalVGD display name exceeds the IPC limit; "
-                              "using the parent capture pipeline immediately.";
-        return false;
-      }
-      start.direct_vgd = 1;
-      start.vgd_session_id = target->session_id;
-      start.vgd_ring_slots = target->ring_slots;
-      start.vgd_transport_flags = target->transport_flags;
-      start.vgd_generation = target->generation;
-      std::copy(display_name.begin(), display_name.end(), std::begin(start.vgd_display_name));
     }
 
     const std::string pipe_name = random_pipe_name();
-    if (pipe_name.empty()) return false;
+    if (pipe_name.empty()) return direct_vgd;
     const auto full_name = L"\\\\.\\pipe\\" + widen_ascii(pipe_name);
     child_t child;
     SECURITY_ATTRIBUTES pipe_security {};
     PSECURITY_DESCRIPTOR pipe_descriptor = nullptr;
     if (!make_pipe_security(pipe_security, pipe_descriptor)) {
       BOOST_LOG(error) << "Video worker: failed to construct a restricted named-pipe ACL; using in-process pipeline.";
-      return false;
+      return direct_vgd;
     }
     auto free_pipe_descriptor = util::fail_guard([&] { ::LocalFree(pipe_descriptor); });
     child.pipe = ::CreateNamedPipeW(full_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -535,7 +540,7 @@ namespace platf::video_worker {
                                     1, 4 * 1024 * 1024, 64 * 1024, 0, &pipe_security);
     if (child.pipe == INVALID_HANDLE_VALUE || !launch(child, pipe_name)) {
       BOOST_LOG(error) << "Video worker: failed to establish isolated process; using in-process pipeline.";
-      return false;
+      return direct_vgd;
     }
     OVERLAPPED connect {};
     connect.hEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -559,7 +564,7 @@ namespace platf::video_worker {
       ::TerminateProcess(child.process, 0xE003);
       (void) ::WaitForSingleObject(child.process, 1000);
       BOOST_LOG(error) << "Video worker: child did not connect within 10 seconds.";
-      return false;
+      return direct_vgd;
     }
     if (connect.hEvent) ::CloseHandle(connect.hEvent);
     ULONG client_pid = 0;
@@ -567,7 +572,7 @@ namespace platf::video_worker {
       BOOST_LOG(error) << "Video worker: rejected unexpected pipe client pid=" << client_pid
                        << " expected=" << child.pid;
       ::TerminateProcess(child.process, 0xE004);
-      return false;
+      return direct_vgd;
     }
     BOOST_LOG(info) << "Video worker: isolated capture/encode process started (pid=" << child.pid << ")";
     if (!send(child.pipe, message_e::start, &start, sizeof(start))) {
@@ -598,7 +603,7 @@ namespace platf::video_worker {
       }
       if (!encoder_ready || ready_header.type == message_e::startup_error) {
         BOOST_LOG(warning) << "Video worker: failure occurred before GPU capture startup; using in-process pipeline.";
-        return false;
+        return direct_vgd;
       }
       const auto health = platf::dxgi::D3D11ProbeDeviceHealth();
       if (FAILED(health)) {
@@ -607,7 +612,7 @@ namespace platf::video_worker {
         return true;
       }
       BOOST_LOG(warning) << "Video worker: process exited and display health is good; using in-process pipeline.";
-      return false;
+      return direct_vgd;
     }
     BOOST_LOG(info) << "Video worker: validated encoder snapshot accepted; capture pipeline ready.";
 
