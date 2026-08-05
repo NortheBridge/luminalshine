@@ -80,7 +80,7 @@ namespace VDISPLAY::vgd {
 
   inline constexpr uint32_t kMinRingSlots = 2;
   inline constexpr uint32_t kMaxRingSlots = 8;
-  inline constexpr uint32_t kAllowedRingTransportFlags = 4;  // VGD_CREATE_D3D12_FENCE_TRANSPORT
+  inline constexpr uint32_t kAllowedRingTransportFlags = 12;  // fence transport + fence-required
 
   /// Resolve the tracked session whose monitor backs `display_name`
   /// (e.g. "\\\\.\\DISPLAY274"). With a single tracked session (the
@@ -98,6 +98,13 @@ namespace VDISPLAY::vgd {
   /// monitor map, but the named ring/fence resources are cross-process.
   void set_worker_ring_target(std::optional<RingTargetInfo> target, std::string display_name = {});
   bool has_worker_ring_target();
+
+  /// Process-local policy imported by an isolated worker. It forces the
+  /// worker to capture the VGD desktop through WGC when no immutable direct
+  /// ring generation can be transferred; the parent process never owns the
+  /// replacement GPU pipeline.
+  void set_worker_safe_capture(bool enabled);
+  bool worker_safe_capture_requested();
 
   struct RingTransitionToken {
     uint64_t session_id {0};

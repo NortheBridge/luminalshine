@@ -71,6 +71,7 @@ namespace VDISPLAY::vgd {
     std::map<GuidKey, TrackedSession> g_sessions;
     std::optional<RingTargetInfo> g_worker_ring_target;
     std::string g_worker_ring_display_name;
+    bool g_worker_safe_capture = false;
     std::thread g_ping_thread;
     std::atomic<bool> g_ping_stop {false};
     std::atomic<bool> g_ping_feeding {true};
@@ -395,6 +396,9 @@ namespace VDISPLAY::vgd {
     // older drivers retain their keyed-mutex transport unchanged.
     req.flags = (g_caps && (g_caps->caps & VGD_CAP_D3D12_FENCE_TRANSPORT)) ?
                   VGD_CREATE_D3D12_FENCE_TRANSPORT : 0;
+    if (g_caps && (g_caps->caps & VGD_CAP_FENCE_TRANSPORT_REQUIRED)) {
+      req.flags |= VGD_CREATE_FENCE_TRANSPORT_REQUIRED;
+    }
     req.mode_count = 1;
     // Callers pass millihertz (nvhttp/webrtc normalize Hz → mHz before the
     // call); the spec below must NOT rescale it again.
@@ -739,42 +743,52 @@ namespace VDISPLAY::vgd {
 
   std::optional<RingTargetInfo> ring_target_for_worker_display(const std::string &display_name) {
     if (display_name.empty()) return std::nullopt;
-    RingTargetInfo target {};
-    {
-      const std::wstring wanted(display_name.begin(), display_name.end());
-      std::lock_guard lk(g_mutex);
-      const auto found = std::find_if(g_sessions.begin(), g_sessions.end(), [&](const auto &entry) {
-        return !entry.second.display_name.empty() && entry.second.display_name == wanted;
-      });
-      if (found == g_sessions.end()) return std::nullopt;
-      target = {found->second.session_id, found->second.ring_slots, found->second.transport_flags, 0};
-    }
-    if (target.ring_slots < kMinRingSlots || target.ring_slots > kMaxRingSlots ||
-        (target.transport_flags & ~kAllowedRingTransportFlags) != 0) {
-      return std::nullopt;
-    }
-    VgdRingHandle *ring = vgd_ring_open(target.session_id, target.ring_slots);
-    if (!ring) return std::nullopt;
-    VgdRingStatus status {};
-    const auto status_result = vgd_ring_status(ring, &status);
-    vgd_ring_close(ring);
-    if (status_result != 0 || status.state != 1 || status.generation == 0 ||
-        status.latest_sequence == 0 || status.heartbeat_qpc == 0 || status.qpc_frequency == 0 ||
-        (status.transport_flags & ~kAllowedRingTransportFlags) != 0) {
-      return std::nullopt;
-    }
-    LARGE_INTEGER now_qpc {};
-    QueryPerformanceCounter(&now_qpc);
-    if (now_qpc.QuadPart < 0 || static_cast<uint64_t>(now_qpc.QuadPart) < status.heartbeat_qpc ||
-        static_cast<uint64_t>(now_qpc.QuadPart) - status.heartbeat_qpc > status.qpc_frequency * 2ULL) {
-      return std::nullopt;
-    }
-    target.generation = status.generation;
-    // The driver may downgrade the requested fence transport for a live
-    // generation. Hand off what the ring actually selected, not the flags
-    // remembered at monitor creation.
-    target.transport_flags = status.transport_flags;
-    return target;
+    const std::wstring wanted(display_name.begin(), display_name.end());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+    do {
+      RingTargetInfo target {};
+      {
+        // Never hold the session-map lock while opening or polling a driver
+        // object. Monitor activation and ring publication advance on other
+        // threads during this bounded admission window.
+        std::lock_guard lk(g_mutex);
+        const auto found = std::find_if(g_sessions.begin(), g_sessions.end(), [&](const auto &entry) {
+          return !entry.second.display_name.empty() && entry.second.display_name == wanted;
+        });
+        if (found != g_sessions.end()) {
+          target = {found->second.session_id, found->second.ring_slots, found->second.transport_flags, 0};
+        }
+      }
+      if (target.session_id && target.ring_slots >= kMinRingSlots && target.ring_slots <= kMaxRingSlots &&
+          (target.transport_flags & ~kAllowedRingTransportFlags) == 0) {
+        VgdRingHandle *ring = vgd_ring_open(target.session_id, target.ring_slots);
+        if (ring) {
+          VgdRingStatus first {};
+          VgdRingStatus second {};
+          const bool first_ok = vgd_ring_status(ring, &first) == 0;
+          if (first_ok) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          const bool second_ok = first_ok && vgd_ring_status(ring, &second) == 0;
+          vgd_ring_close(ring);
+          LARGE_INTEGER now_qpc {};
+          QueryPerformanceCounter(&now_qpc);
+          const bool stable = second_ok && first.state == 1 && second.state == 1 &&
+                              first.generation == second.generation && second.generation != 0 &&
+                              first.transport_flags == second.transport_flags &&
+                              second.latest_sequence >= first.latest_sequence && second.latest_sequence != 0 &&
+                              second.heartbeat_qpc != 0 && second.qpc_frequency != 0 &&
+                              (second.transport_flags & ~kAllowedRingTransportFlags) == 0 &&
+                              now_qpc.QuadPart >= 0 && static_cast<uint64_t>(now_qpc.QuadPart) >= second.heartbeat_qpc &&
+                              static_cast<uint64_t>(now_qpc.QuadPart) - second.heartbeat_qpc <= second.qpc_frequency * 2ULL;
+          if (stable) {
+            target.generation = second.generation;
+            target.transport_flags = second.transport_flags;
+            return target;
+          }
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return std::nullopt;
   }
 
   void set_worker_ring_target(std::optional<RingTargetInfo> target, std::string display_name) {
@@ -786,6 +800,16 @@ namespace VDISPLAY::vgd {
   bool has_worker_ring_target() {
     std::lock_guard lk(g_mutex);
     return g_worker_ring_target.has_value();
+  }
+
+  void set_worker_safe_capture(bool enabled) {
+    std::lock_guard lk(g_mutex);
+    g_worker_safe_capture = enabled;
+  }
+
+  bool worker_safe_capture_requested() {
+    std::lock_guard lk(g_mutex);
+    return g_worker_safe_capture;
   }
 
   std::optional<RingTransitionToken> begin_planned_modeset() {

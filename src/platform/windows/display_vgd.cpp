@@ -382,6 +382,8 @@ namespace platf::dxgi {
     _session_id = target->session_id;
     _ring_slots = target->ring_slots;
     _fence_transport = (target->transport_flags & VGD_CREATE_D3D12_FENCE_TRANSPORT) != 0;
+    _fence_required = (target->transport_flags & VGD_CREATE_FENCE_TRANSPORT_REQUIRED) != 0;
+    _transport_generation = target->generation;
     _display_name = display_name;
     _tdr_marks_at_open = tdr::event_count();
     _first_frame_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -764,7 +766,15 @@ namespace platf::dxgi {
       return false;
     }
     const bool fence = (status.transport_flags & VGD_CREATE_D3D12_FENCE_TRANSPORT) != 0;
+    const bool required = (status.transport_flags & VGD_CREATE_FENCE_TRANSPORT_REQUIRED) != 0;
+    if ((_fence_required && (!fence || !required)) ||
+        (status.generation == _transport_generation && fence != _fence_transport)) {
+      BOOST_LOG(error) << "LuminalVGD capture: synchronization contract changed inside ring generation "
+                       << status.generation << "; rejecting the generation.";
+      return false;
+    }
     if (fence == _fence_transport) {
+      _transport_generation = status.generation;
       return true;
     }
 
@@ -772,6 +782,8 @@ namespace platf::dxgi {
                     << (fence ? "shared timeline-fence" : "legacy keyed-mutex")
                     << " transport for ring generation " << status.generation << '.';
     _fence_transport = fence;
+    _fence_required = required;
+    _transport_generation = status.generation;
     _slot_textures.clear();
     _texture_generation = 0;
     _producer_fence.reset();

@@ -2042,7 +2042,9 @@ namespace platf {
     const bool wgc_requested = capture_mode.starts_with("wgc");
     const bool vgd_requested = capture_mode == "vgd";
     const bool worker_vgd_target = VDISPLAY::vgd::has_worker_ring_target();
-    const bool prefer_wgc_backend = !user_requested_ddx && !vgd_requested && (wgc_requested || default_to_wgc);
+    const bool worker_safe_capture = VDISPLAY::vgd::worker_safe_capture_requested();
+    const bool prefer_wgc_backend = worker_safe_capture ||
+                                    (!user_requested_ddx && !vgd_requested && (wgc_requested || default_to_wgc));
 
     if (hwdevice_type == mem_type_e::dxgi) {
       // A LuminalVGD virtual monitor carries its own frame ring — consume it
@@ -2050,9 +2052,9 @@ namespace platf {
       // for non-VGD displays (or if the ring can't be mapped), falling back
       // to WGC/DDA below; explicit capture=vgd also degrades rather than
       // failing the stream.
-      if (worker_vgd_target ||
+      if (!worker_safe_capture && (worker_vgd_target ||
           (!user_requested_ddx && !wgc_requested &&
-           (vgd_requested || VDISPLAY::is_luminalvgd_active()))) {
+           (vgd_requested || VDISPLAY::is_luminalvgd_active())))) {
         if (auto disp = dxgi::display_vgd_vram_t::create(config, display_name)) {
           vgd_transition::note_capture_backend(vgd_transition::kCaptureKindVgdRing, display_name);
           return disp;
