@@ -83,6 +83,8 @@ namespace nvhttp {
         ServerBase<SunshineHTTPS>::ServerBase(443),
         context(boost::asio::ssl::context::tls_server) {
       // Disabling TLS 1.0 and 1.1 (see RFC 8996)
+      context.set_options(boost::asio::ssl::context::no_sslv2);
+      context.set_options(boost::asio::ssl::context::no_sslv3);
       context.set_options(boost::asio::ssl::context::no_tlsv1);
       context.set_options(boost::asio::ssl::context::no_tlsv1_1);
       context.use_certificate_chain_file(certification_file);
