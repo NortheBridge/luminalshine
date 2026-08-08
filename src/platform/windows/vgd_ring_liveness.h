@@ -19,6 +19,41 @@ namespace platf::dxgi {
     inline constexpr uint32_t dead = 3;
   }  // namespace vgd_ring_state
 
+  /// Result of validating the authenticated ring identity imported by an
+  /// isolated video worker. `provisional` is the driver's documented
+  /// pre-first-surface state: generation exists, but its synchronization
+  /// transport has not been published yet.
+  enum class vgd_worker_ring_binding_e {
+    reject,
+    ready,
+    provisional,
+  };
+
+  constexpr vgd_worker_ring_binding_e classify_worker_ring_binding(
+    int32_t status_result,
+    uint32_t state,
+    uint32_t generation,
+    uint64_t latest_sequence,
+    uint32_t transport_flags,
+    uint32_t expected_generation,
+    uint32_t expected_transport_flags
+  ) {
+    if (status_result != 0 ||
+        (state != vgd_ring_state::active && state != vgd_ring_state::rebuilding) ||
+        generation == 0 ||
+        (expected_generation != 0 && generation != expected_generation)) {
+      return vgd_worker_ring_binding_e::reject;
+    }
+    if (state == vgd_ring_state::rebuilding &&
+        latest_sequence == 0 && transport_flags == 0) {
+      return vgd_worker_ring_binding_e::provisional;
+    }
+    return state == vgd_ring_state::active && latest_sequence != 0 &&
+             transport_flags == expected_transport_flags ?
+             vgd_worker_ring_binding_e::ready :
+             vgd_worker_ring_binding_e::reject;
+  }
+
   /// What the ring reader should do with the current observation.
   enum class vgd_ring_verdict_e {
     consume,  ///< Healthy: go claim a frame.

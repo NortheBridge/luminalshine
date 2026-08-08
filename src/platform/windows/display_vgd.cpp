@@ -334,8 +334,11 @@ namespace platf::dxgi {
       if (!token || token->session_id != target->session_id ||
           !VDISPLAY::vgd::wait_for_planned_modeset(*token, std::chrono::seconds(3))) {
         BOOST_LOG(warning) << "LuminalVGD capture: session 0x" << std::hex << target->session_id
-                           << std::dec << " did not recover during its final 3-second qualification; using fallback capture.";
+                           << std::dec << " did not publish a stable frame during final qualification; using fallback capture.";
         return -1;
+      } else {
+        BOOST_LOG(info) << "LuminalVGD capture: session 0x" << std::hex << target->session_id
+                        << std::dec << " published a stable frame during final qualification; direct capture restored.";
       }
 
       uint64_t admitted_session = target->session_id;
@@ -345,12 +348,6 @@ namespace platf::dxgi {
         std::memory_order_acq_rel,
         std::memory_order_acquire
       );
-      BOOST_LOG(info) << "LuminalVGD capture: session 0x" << std::hex << target->session_id
-                      << std::dec << " published a stable frame during final qualification; direct capture restored.";
-    }
-
-    if (display_base_t::init(config, display_name, true /* skip_dd_test: ring capture doesn't use Desktop Duplication */)) {
-      return -1;
     }
 
     // The driver creates the ring section at monitor plug; capture starts
@@ -370,12 +367,117 @@ namespace platf::dxgi {
 
     _ring = ring;
     if (VDISPLAY::vgd::has_worker_ring_target()) {
+      // Holding the ring open is what arms surface publication on supported
+      // IddCx stacks, so the first status reads after open routinely show the
+      // provisional REBUILDING/sequence-zero contract (or another transient of
+      // the post-modeset rebuild, e.g. ACTIVE before the first surface). Wait
+      // a bounded interval for the committed ACTIVE contract instead of
+      // abandoning Direct-to-Encode on the first observation; isolated WGC
+      // remains the fallback if the ring never commits.
       VgdRingStatus opened_status {};
-      if (vgd_ring_status(ring, &opened_status) != 0 || opened_status.state != 1 ||
-          opened_status.generation != target->generation ||
-          opened_status.transport_flags != target->transport_flags) {
-        BOOST_LOG(error) << "Video worker: transferred LuminalVGD ring changed before open; "
-                            "rejecting stale generation/transport.";
+      std::int32_t ring_status = -1;
+      auto binding = vgd_worker_ring_binding_e::reject;
+      bool heartbeat_fresh = false;
+      // One second: long enough for a ring that is actively committing its
+      // post-modeset generation, short enough that a producer that has not
+      // started (observed: provisional for 3+ s after the exclusive APPLY)
+      // pivots to WGC before eating the connection budget. A later modeset
+      // re-enters init and can still re-bind Direct-to-Encode.
+      const auto admission_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+      for (;;) {
+        ring_status = vgd_ring_status(ring, &opened_status);
+        if (ring_status != 0 || opened_status.state == vgd_ring_state::dead) {
+          binding = vgd_worker_ring_binding_e::reject;
+          break;  // The ring is gone or dead; waiting cannot revive it.
+        }
+        if (target->generation != 0 && opened_status.generation != 0 &&
+            opened_status.generation != target->generation) {
+          // A Windows modeset retired the previously bound generation while
+          // the authenticated session identity stayed fixed. Re-defer and let
+          // this admission bind the successor generation instead of
+          // permanently degrading the session to WGC.
+          BOOST_LOG(info) << "LuminalVGD capture: session 0x" << std::hex << target->session_id
+                          << std::dec << " generation " << target->generation
+                          << " was retired by a modeset; re-deferring to bind generation "
+                          << opened_status.generation << '.';
+          target->generation = 0;
+        }
+        binding = classify_worker_ring_binding(
+          ring_status,
+          opened_status.state,
+          opened_status.generation,
+          opened_status.latest_sequence,
+          opened_status.transport_flags,
+          target->generation,
+          target->transport_flags
+        );
+        LARGE_INTEGER now_qpc {};
+        const bool qpc_read = QueryPerformanceCounter(&now_qpc) != FALSE;
+        heartbeat_fresh = qpc_read && now_qpc.QuadPart >= 0 &&
+          opened_status.qpc_frequency != 0 && opened_status.heartbeat_qpc != 0 &&
+          static_cast<uint64_t>(now_qpc.QuadPart) >= opened_status.heartbeat_qpc &&
+          static_cast<uint64_t>(now_qpc.QuadPart) - opened_status.heartbeat_qpc <=
+            opened_status.qpc_frequency * 2ULL;
+        if (binding == vgd_worker_ring_binding_e::ready && heartbeat_fresh) break;
+        if (binding == vgd_worker_ring_binding_e::provisional) {
+          // A producer that has never published stays provisional for many
+          // seconds on the current driver; every second spent here charges
+          // the client's first-video budget. Pivot to WGC immediately — the
+          // mid-session re-defer path upgrades to Direct-to-Encode as soon
+          // as the ring commits a generation.
+          break;
+        }
+        if (std::chrono::steady_clock::now() >= admission_deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      if (binding != vgd_worker_ring_binding_e::ready || !heartbeat_fresh) {
+        BOOST_LOG(warning) << "Video worker: transferred LuminalVGD ring did not become capture-ready within its bounded admission; switching to isolated WGC"
+                         << " (status=" << ring_status
+                         << ", expected_generation=" << target->generation
+                         << ", observed_generation=" << opened_status.generation
+                         << ", state=" << opened_status.state
+                         << ", sequence=" << opened_status.latest_sequence
+                         << ", expected_transport=0x" << std::hex << target->transport_flags
+                         << ", observed_transport=0x" << opened_status.transport_flags
+                         << std::dec << ", heartbeat_fresh=" << heartbeat_fresh << ").";
+        return -1;
+      }
+      if (target->generation == 0) {
+        target->generation = opened_status.generation;
+        VDISPLAY::vgd::set_worker_ring_target(*target, display_name);
+        BOOST_LOG(info) << "Video worker: bound direct LuminalVGD session 0x" << std::hex
+                        << target->session_id << std::dec << " to post-modeset generation "
+                        << target->generation << " (state=" << opened_status.state << ").";
+      }
+    }
+
+    // Do the comparatively expensive DXGI/display initialization only after
+    // a transferred ring has proven it can deliver. A provisional ring used
+    // to spend roughly two seconds here before selecting WGC, consuming the
+    // Xbox/webOS connection budget for no benefit.
+    if (display_base_t::init(config, display_name, true /* skip_dd_test: ring capture doesn't use Desktop Duplication */)) {
+      return -1;
+    }
+
+    // The display initialization above can overlap a Windows modeset. Recheck
+    // the now-fixed generation before advertising direct capture to NVENC.
+    if (VDISPLAY::vgd::has_worker_ring_target()) {
+      VgdRingStatus confirmed {};
+      const auto status = vgd_ring_status(ring, &confirmed);
+      const auto binding = classify_worker_ring_binding(
+        status,
+        confirmed.state,
+        confirmed.generation,
+        confirmed.latest_sequence,
+        confirmed.transport_flags,
+        target->generation,
+        target->transport_flags
+      );
+      if (binding != vgd_worker_ring_binding_e::ready) {
+        BOOST_LOG(warning) << "Video worker: LuminalVGD ring changed during display initialization; switching to isolated WGC"
+                           << " (status=" << status << ", generation=" << confirmed.generation
+                           << ", state=" << confirmed.state << ", sequence=" << confirmed.latest_sequence
+                           << ", transport=0x" << std::hex << confirmed.transport_flags << std::dec << ").";
         return -1;
       }
     }
@@ -889,6 +991,13 @@ namespace platf::dxgi {
     }
     vgd_ring_sample_t sample {};
     if (!read_ring_sample(sample, false)) {
+      return false;
+    }
+    // Recovery is a transition away from a previously publishing source. A
+    // brand-new REBUILDING ring with no sequence has never supplied a frame;
+    // treating it as a 15-minute GPU outage bypasses startup fallback and
+    // strands every client behind a blank placeholder.
+    if (_last_sequence == 0 && sample.latest_sequence == 0) {
       return false;
     }
     const bool recovering = _liveness.recovering(sample, std::chrono::steady_clock::now());
