@@ -327,3 +327,21 @@ TEST(ExtractCommandExeName, TooShortToken) {
 TEST(ExtractCommandExeName, ExeSubstringButNotSuffix) {
   EXPECT_EQ(proc::extract_command_exe_name(R"(C:\Games\game.exe.config)"), "");
 }
+
+TEST(ProcessLifecycle, EmptyAndMovedInstancesTerminateIdempotently) {
+  bp::environment env;
+  proc::proc_t original(std::move(env), {});
+
+  // Regression for prep-command teardown state: a default/empty command
+  // snapshot must never compare or dereference singular vector iterators.
+  original.terminate();
+  original.terminate();
+
+  proc::proc_t moved(std::move(original));
+  moved.terminate();
+
+  proc::proc_t assigned;
+  assigned = std::move(moved);
+  assigned.terminate();
+  assigned.terminate();
+}
