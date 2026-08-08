@@ -17,6 +17,11 @@
 #include "utility.h"
 
 namespace safe {
+  enum class queue_overflow_e {
+    clear,
+    block,
+  };
+
   template<class T>
   class event_t {
   public:
@@ -117,6 +122,7 @@ namespace safe {
     }
 
     bool peek() {
+      std::lock_guard lg {_lock};
       return _continue && (bool) _status;
     }
 
@@ -137,6 +143,7 @@ namespace safe {
     }
 
     [[nodiscard]] bool running() const {
+      std::lock_guard lg {_lock};
       return _continue;
     }
 
@@ -145,7 +152,7 @@ namespace safe {
     status_t _status {util::false_v<status_t>};
 
     std::condition_variable _cv;
-    std::mutex _lock;
+    mutable std::mutex _lock;
   };
 
   template<class T>
@@ -254,19 +261,34 @@ namespace safe {
   public:
     using status_t = util::optional_t<T>;
 
-    queue_t(std::uint32_t max_elements = 32):
-        _max_elements {max_elements} {
+    queue_t(
+      std::uint32_t max_elements = 32,
+      queue_overflow_e overflow = queue_overflow_e::clear
+    ):
+        _max_elements {max_elements == 0 ? 1u : max_elements},
+        _overflow {overflow} {
     }
 
     template<class... Args>
     void raise(Args &&...args) {
-      std::lock_guard ul {_lock};
+      std::unique_lock ul {_lock};
+      const auto generation = _generation;
 
       if (!_continue) {
         return;
       }
 
-      if (_queue.size() == _max_elements) {
+      if (_overflow == queue_overflow_e::block) {
+        ++_waiting_producers;
+        _cv.wait(ul, [this, generation] {
+          return !_continue || generation != _generation ||
+                 _queue.size() < _max_elements;
+        });
+        --_waiting_producers;
+        if (!_continue || generation != _generation) {
+          return;
+        }
+      } else if (_queue.size() >= _max_elements) {
         _queue.clear();
       }
 
@@ -276,19 +298,32 @@ namespace safe {
     }
 
     bool peek() {
+      std::lock_guard lg {_lock};
       return _continue && !_queue.empty();
+    }
+
+    bool at_capacity() {
+      std::lock_guard lg {_lock};
+      return _continue && _queue.size() >= _max_elements;
+    }
+
+    [[nodiscard]] std::uint32_t waiting_producers() const {
+      std::lock_guard lg {_lock};
+      return _waiting_producers;
     }
 
     template<class Rep, class Period>
     status_t pop(std::chrono::duration<Rep, Period> delay) {
       std::unique_lock ul {_lock};
+      const auto generation = _generation;
 
       if (!_continue) {
         return util::false_v<status_t>;
       }
 
       while (_queue.empty()) {
-        if (!_continue || _cv.wait_for(ul, delay) == std::cv_status::timeout) {
+        if (!_continue || generation != _generation ||
+            _cv.wait_for(ul, delay) == std::cv_status::timeout) {
           return util::false_v<status_t>;
         }
       }
@@ -296,11 +331,14 @@ namespace safe {
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
 
+      _cv.notify_all();
+
       return val;
     }
 
     status_t pop() {
       std::unique_lock ul {_lock};
+      const auto generation = _generation;
 
       if (!_continue) {
         return util::false_v<status_t>;
@@ -309,13 +347,15 @@ namespace safe {
       while (_queue.empty()) {
         _cv.wait(ul);
 
-        if (!_continue) {
+        if (!_continue || generation != _generation) {
           return util::false_v<status_t>;
         }
       }
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
+
+      _cv.notify_all();
 
       return val;
     }
@@ -327,7 +367,10 @@ namespace safe {
     void stop() {
       std::lock_guard lg {_lock};
 
-      _continue = false;
+      if (_continue) {
+        _continue = false;
+        ++_generation;
+      }
 
       _cv.notify_all();
     }
@@ -337,17 +380,23 @@ namespace safe {
 
       _continue = true;
       _queue.clear();
+      ++_generation;
+      _cv.notify_all();
     }
 
     [[nodiscard]] bool running() const {
+      std::lock_guard lg {_lock};
       return _continue;
     }
 
   private:
     bool _continue {true};
     std::uint32_t _max_elements;
+    queue_overflow_e _overflow;
+    std::uint64_t _generation = 0;
+    std::uint32_t _waiting_producers = 0;
 
-    std::mutex _lock;
+    mutable std::mutex _lock;
     std::condition_variable _cv;
 
     std::vector<T> _queue;
@@ -518,7 +567,13 @@ namespace safe {
 
       auto it = id_to_post.find(id);
       if (it != std::end(id_to_post)) {
-        return lock<event_t<T>>(it->second);
+        // The map holds only weak_ptrs. An entry whose object has already
+        // been destroyed must be recreated, not returned as null: callers
+        // dereference the result unconditionally.
+        if (auto existing = lock<event_t<T>>(it->second)) {
+          return existing;
+        }
+        id_to_post.erase(it);
       }
 
       auto post = std::make_shared<typename event_t<T>::element_type>(shared_from_this());
@@ -528,15 +583,23 @@ namespace safe {
     }
 
     template<class T>
-    queue_t<T> queue(const std::string_view &id) {
+    queue_t<T> queue(
+      const std::string_view &id,
+      std::uint32_t max_elements = 32,
+      queue_overflow_e overflow = queue_overflow_e::clear
+    ) {
       std::lock_guard lg {mutex};
 
       auto it = id_to_post.find(id);
       if (it != std::end(id_to_post)) {
-        return lock<queue_t<T>>(it->second);
+        // See event(): expired entries must be recreated, never returned null.
+        if (auto existing = lock<queue_t<T>>(it->second)) {
+          return existing;
+        }
+        id_to_post.erase(it);
       }
 
-      auto post = std::make_shared<typename queue_t<T>::element_type>(shared_from_this(), 32);
+      auto post = std::make_shared<typename queue_t<T>::element_type>(shared_from_this(), max_elements, overflow);
       id_to_post.emplace(std::pair<std::string, std::weak_ptr<void>> {std::string {id}, post});
 
       return post;
