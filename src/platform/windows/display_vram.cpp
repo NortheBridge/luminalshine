@@ -27,6 +27,7 @@ extern "C" {
 #include "src/nvenc/nvenc_d3d12.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
+#include "src/platform/windows/virtual_display_vgd.h"
 #include "src/video.h"
 #include "utf_utils.h"
 
@@ -1127,7 +1128,8 @@ namespace platf::dxgi {
       // Prefer the native D3D12 NVENC contract. D3D11On12 lets the proven
       // Sunshine colour-conversion shaders render directly into the D3D12
       // input allocation while NVENC receives explicit fence points.
-      if (pix_fmt != pix_fmt_e::yuv444p16 && !gpu_recovery_policy::force_d3d11()) {
+      const bool safe_capture_d3d11 = VDISPLAY::vgd::worker_safe_capture_requested();
+      if (pix_fmt != pix_fmt_e::yuv444p16 && !gpu_recovery_policy::force_d3d11() && !safe_capture_d3d11) {
         auto native12 = std::make_unique<nvenc::nvenc_d3d12>(adapter_p);
         if (native12->valid() && !base.init(display, adapter_p, pix_fmt,
                                             native12->d3d11_device(), native12->d3d11_context())) {
@@ -1136,9 +1138,10 @@ namespace platf::dxgi {
           BOOST_LOG(info) << "NvEnc: native D3D12 input/output path selected (explicit fences)";
         }
       }
-      if (pix_fmt != pix_fmt_e::yuv444p16 && gpu_recovery_policy::force_d3d11()) {
-        BOOST_LOG(warning) << "NvEnc: native D3D12 path suppressed by the GPU recovery circuit; "
-                              "selecting D3D11 compatibility transport.";
+      if (pix_fmt != pix_fmt_e::yuv444p16 && (gpu_recovery_policy::force_d3d11() || safe_capture_d3d11)) {
+        BOOST_LOG(info) << "NvEnc: native D3D12 path suppressed for "
+                        << (safe_capture_d3d11 ? "isolated WGC safe capture" : "GPU recovery")
+                        << "; selecting D3D11 compatibility transport.";
       }
       if (!nvenc_d3d) {
         if (base.init(display, adapter_p, pix_fmt)) return false;

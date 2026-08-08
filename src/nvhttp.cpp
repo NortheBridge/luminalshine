@@ -52,6 +52,7 @@
   #include "platform/windows/display.h"
   #include "platform/windows/display_helper_request_helpers.h"
   #include "platform/windows/misc.h"
+  #include "platform/windows/video_worker.h"
   #include "platform/windows/virtual_display.h"
   #include "platform/windows/virtual_display_cleanup.h"
 #endif
@@ -82,6 +83,8 @@ namespace nvhttp {
         ServerBase<SunshineHTTPS>::ServerBase(443),
         context(boost::asio::ssl::context::tls_server) {
       // Disabling TLS 1.0 and 1.1 (see RFC 8996)
+      context.set_options(boost::asio::ssl::context::no_sslv2);
+      context.set_options(boost::asio::ssl::context::no_sslv3);
       context.set_options(boost::asio::ssl::context::no_tlsv1);
       context.set_options(boost::asio::ssl::context::no_tlsv1_1);
       context.use_certificate_chain_file(certification_file);
@@ -2408,6 +2411,16 @@ namespace nvhttp {
           active_output.empty() ? nullptr : active_output.c_str()
         );
       }
+
+      // Prewarm the isolated video worker in parallel with app launch and the
+      // client's RTSP handshake: process spawn + DLL load + shader compile
+      // (~1.5-2 s) then move off the post-PLAY first-video budget that strict
+      // Xbox/webOS Moonlight ports enforce. Detached: the launch response
+      // must not wait, and a session that starts before the slot fills simply
+      // spawns its own worker as before.
+      std::thread([] {
+        (void) platf::video_worker::prewarm();
+      }).detach();
 #else
       display_helper_integration::DisplayApplyBuilder noop_builder;
       noop_builder.set_session(*launch_session);
@@ -2766,6 +2779,9 @@ namespace nvhttp {
     tree.put("root.<xmlattr>.status_code", 200);
 
     rtsp_stream::terminate_sessions();
+#ifdef _WIN32
+    platf::video_worker::cancel_prewarm();
+#endif
 
     const bool has_running_app = proc::proc.running() > 0;
 #ifdef _WIN32

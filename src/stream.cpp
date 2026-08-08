@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>  // std::_Exit for fast non-WER process termination on hang
 #include <cstring>
@@ -49,6 +50,7 @@ extern "C" {
 #endif
 #include "update.h"
 #include "utility.h"
+#include "video_packet_qos.h"
 #include "webrtc_stream.h"
 #ifdef _WIN32
   #include <excpt.h>  // __try/__except for the videoThread DXGI-cleanup SEH wrapper.
@@ -409,8 +411,13 @@ namespace stream {
   struct broadcast_ctx_t {
     message_queue_queue_t message_queue_queue;
 
+    // Pin the global audio packet queue for the whole broadcast lifetime.
+    // The mailbox map holds only weak_ptrs: without this anchor the queue can
+    // expire between start_broadcast returning and the consumer thread's own
+    // lookup, leaving the id permanently resolving to null.
+    safe::mail_raw_t::queue_t<audio::packet_t> audio_packets;
+
     std::thread recv_thread;
-    std::thread video_thread;
     std::thread audio_thread;
     std::thread control_thread;
 
@@ -434,6 +441,16 @@ namespace stream {
 
     std::chrono::steady_clock::time_point pingTimeout;
 
+    // The client needs the strict-first-frame accommodations (Xbox/webOS
+    // Moonlight ports whose older moonlight-common-c enforces a hard
+    // 10-second no-video budget): ANNOUNCE is held while the video pipeline
+    // initializes, and every host-side establishment window is extended by
+    // the same allowance so the hold cannot trip a cleanup timer.
+    bool strict_client {false};
+
+    // Lifetime anchor for mail::video_pipeline_ready (see session::alloc).
+    safe::mail_raw_t::event_t<bool> video_pipeline_ready_event;
+
     safe::shared_t<broadcast_ctx_t>::ptr_t broadcast_ref;
 
     boost::asio::ip::address localAddress;
@@ -451,6 +468,35 @@ namespace stream {
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
 
       std::unique_ptr<platf::deinit_t> qos;
+
+      // Per-client post-encode QoS. Encoded HEVC/H.264/AV1 packets are a
+      // reference chain: after any missing frame, predictive packets must be
+      // withheld until a fresh IDR. Keeping pacing clocks here also prevents a
+      // reconnect or second client from inheriting another session's debt.
+      struct {
+        video_qos::state_t qos;
+
+        std::chrono::steady_clock::time_point epoch {};
+        std::chrono::steady_clock::time_point next_frame_start {};
+        std::chrono::steady_clock::time_point last_latency_log {};
+        std::uint64_t last_rtp_timestamp_ticks = 0;
+        bool pacing_logged = false;
+
+        // 30-second capture-to-send age window (2026-08-07 standing-latency
+        // round). The 250 ms backlog warning is threshold-clipped — it only
+        // ever shows the tail of the distribution — so this window keeps
+        // the true age and the real admitted cadence visible at info level.
+        std::chrono::steady_clock::time_point metric_window_start {};
+        std::uint64_t metric_age_sum_ms = 0;
+        std::uint64_t metric_age_max_ms = 0;
+        std::uint32_t metric_aged_frames = 0;
+        std::uint32_t metric_untimestamped_frames = 0;
+      } transport;
+
+      // Set by the egress thread once the first complete frame has been
+      // transmitted. videoThread watches it to decide whether the client's
+      // no-video-traffic clock needs a keepalive extension.
+      std::atomic_bool frame_transmitted {false};
     } video;
 
     struct {
@@ -1678,10 +1724,17 @@ namespace stream {
     session_mon::sample_now(session_mon::make_id(session->launch_session_id), s);
   }
 
-  void videoBroadcastThread(udp::socket &sock) {
-    auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
-    auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
-    auto video_epoch = std::chrono::steady_clock::now();
+  void videoBroadcastThread(
+    udp::socket &sock,
+    safe::mail_t packet_mail,
+    std::string_view shutdown_id
+  ) {
+    auto shutdown_event = packet_mail->event<bool>(shutdown_id);
+    auto packets = video::packet_queue(packet_mail, mail::video_packets);
+    const auto notify_shutdown = util::fail_guard([&] {
+      packets->stop();
+      shutdown_event->raise(true);
+    });
 
     // Video traffic is sent on this thread
     platf::set_thread_name("stream::videoBroadcast");
@@ -1701,8 +1754,6 @@ namespace stream {
       return;
     }
 
-    auto ratecontrol_next_frame_start = std::chrono::steady_clock::now();
-
     while (auto packet = packets->pop()) {
       if (shutdown_event->peek()) {
         break;
@@ -1712,6 +1763,116 @@ namespace stream {
 
       auto session = (session_t *) packet->channel_data;
       if (!session) {
+        continue;
+      }
+
+      auto &transport = session->video.transport;
+      const auto admission_now = std::chrono::steady_clock::now();
+      if (transport.epoch == std::chrono::steady_clock::time_point {}) {
+        transport.epoch = admission_now;
+        transport.next_frame_start = admission_now;
+      }
+
+      // Four encoded frames at the requested cadence, with a 250 ms floor,
+      // High capture-to-send latency is an OBSERVATION here, never an
+      // admission verdict. When the encode pipeline runs below the nominal
+      // frame rate (e.g. 4K HDR on the WGC compatibility path), the bounded
+      // queues legitimately hold several hundred milliseconds of frames;
+      // withholding those deltas at the egress cannot drain a backlog that
+      // lives upstream — it only converts a laggy stream into an IDR storm
+      // (observed live: one recovery IDR every ~500 ms with every delta
+      // dropped). Latency is shed upstream instead: capture-image delivery is
+      // latest-frame-wins and the shallow packet queues backpressure the
+      // encoder. Only real sequence gaps gate admission below.
+      const auto frame_period = std::chrono::microseconds {
+        1'000'000 / std::max(session->config.monitor.framerate, 1)
+      };
+      const auto max_frame_age = std::max(
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(250ms),
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_period * 4)
+      );
+      const auto admission_timestamp = packet->host_processing_timestamp ?
+                                         packet->host_processing_timestamp :
+                                         packet->frame_timestamp;
+      if (admission_timestamp && admission_now - *admission_timestamp > max_frame_age &&
+          admission_now - transport.last_latency_log > 5s) {
+        transport.last_latency_log = admission_now;
+        BOOST_LOG(warning) << "Video transport: encoded frames are arriving "
+                           << std::chrono::duration_cast<std::chrono::milliseconds>(admission_now - *admission_timestamp).count()
+                           << " ms after capture (pipeline backlog); streaming continues.";
+      }
+      // 30 s age/cadence window: the warning above only fires past its
+      // 250 ms floor, so on its own it cannot show where the pipeline
+      // actually sits. Untimed frames are minimum-FPS duplicates and the
+      // bootstrap IDR (both intentionally timestamp-free).
+      if (transport.metric_window_start == std::chrono::steady_clock::time_point {}) {
+        transport.metric_window_start = admission_now;
+      }
+      if (admission_timestamp) {
+        const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              admission_now - *admission_timestamp
+        )
+                              .count();
+        const auto clamped = static_cast<std::uint64_t>(std::max<long long>(age_ms, 0));
+        transport.metric_age_sum_ms += clamped;
+        transport.metric_age_max_ms = std::max(transport.metric_age_max_ms, clamped);
+        ++transport.metric_aged_frames;
+      } else {
+        ++transport.metric_untimestamped_frames;
+      }
+      if (admission_now - transport.metric_window_start >= 30s) {
+        if (transport.metric_aged_frames > 0) {
+          const auto secs = std::max<long long>(
+            std::chrono::duration_cast<std::chrono::seconds>(admission_now - transport.metric_window_start).count(),
+            1
+          );
+          BOOST_LOG(info) << "Video transport window: " << transport.metric_aged_frames << " timed + "
+                          << transport.metric_untimestamped_frames << " untimed frames over " << secs
+                          << " s (~" << (transport.metric_aged_frames + transport.metric_untimestamped_frames) / secs
+                          << " fps arrived); capture-to-send age avg="
+                          << transport.metric_age_sum_ms / transport.metric_aged_frames
+                          << " ms max=" << transport.metric_age_max_ms << " ms.";
+        }
+        transport.metric_window_start = admission_now;
+        transport.metric_age_sum_ms = 0;
+        transport.metric_age_max_ms = 0;
+        transport.metric_aged_frames = 0;
+        transport.metric_untimestamped_frames = 0;
+      }
+      const auto previous_submitted = transport.qos.last_submitted_frame;
+      const auto admission = video_qos::evaluate(
+        transport.qos,
+        packet->frame_index(),
+        packet->is_idr(),
+        false /* latency is logged above, never dropped at the egress */,
+        admission_now
+      );
+      if (!admission.submit) {
+        if (admission.request_idr) {
+          const char *reason = admission.reason == video_qos::reason_e::frame_discontinuity ?
+                                 "encoded-frame sequence gap" :
+                               admission.reason == video_qos::reason_e::stale_frame ?
+                                 "encoded frame exceeded its latency deadline" :
+                                 "transport has no submitted IDR";
+          BOOST_LOG(warning) << "Video QoS: " << reason
+                             << "; withholding predictive frame " << packet->frame_index()
+                             << (previous_submitted ?
+                                   " after " + std::to_string(*previous_submitted) :
+                                   std::string {})
+                             << " and requesting one fresh IDR.";
+
+          // `idr` reaches both in-process encoders and the isolated-worker
+          // controller; the sideband event marks this as a host-detected
+          // discontinuity. The controller applies the same bounded cooldown to
+          // both host- and client-originated recovery so a misdetection can
+          // never escalate into an IDR storm.
+          session->mail->event<bool>(mail::video_discontinuity)->raise(true);
+          if (session->video.idr_events) {
+            session->video.idr_events->raise(true);
+          } else {
+            session->mail->event<bool>(mail::idr)->raise(true);
+          }
+        }
         continue;
       }
       auto lowseq = session->video.lowseq;
@@ -1823,8 +1984,30 @@ namespace stream {
       }
 
       try {
-        // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
-        size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+        bool all_shards_submitted = true;
+        // The encoder bitrate describes compressed picture payload, not the
+        // wire stream.  Budget separately for FEC and RTP/video headers;
+        // otherwise integer packets/ms
+        // floors a 65 Mbps stream to about 56 Mbps before FEC and the bounded
+        // broadcast queue repeatedly overflows under motion.
+        const auto pacing_bitrate_kbps = std::max(session->config.monitor.bitrate, 1000);
+        const auto wire_packet_bytes = blocksize +
+          (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+        // Shape each client independently just above its FEC/header-aware wire
+        // average. The pre-rework drain was a hardcoded 80% of 1 Gbps — ~100 KiB
+        // microbursts every 1 ms regardless of the negotiated bitrate, which a
+        // 100-Mbps TV/Wi-Fi path drops on the floor ("slow connection" despite
+        // adequate average bitrate). A 1-ms quantum with kWirePacingHeadroom
+        // spreads IDRs without making throughput hostage to timer wake latency.
+        const auto pacing = video_qos::pacing_budget(
+          pacing_bitrate_kbps,
+          fecPercentage,
+          wire_packet_bytes,
+          payload_blocksize
+        );
+        const long double pacing_wire_bitrate_bps = pacing.drain_bitrate_bps;
+        const auto packet_wire_interval = pacing.packet_interval;
+        const size_t ratecontrol_packets_per_quantum = pacing.packets_per_quantum;
 
         // Send less than 64K in a single batch.
         // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
@@ -1838,12 +2021,48 @@ namespace stream {
         // unusually small packet size.
         // Generic Segmentation Offload on Linux can't do more than 64.
         send_batch_size = std::min<size_t>(64, send_batch_size);
+        // A batch is submitted atomically by the Windows UDP backend. Limit it
+        // to one pacing quantum of negotiated traffic so pacing actually divides
+        // an IDR instead of sleeping only after the entire burst was sent.
+        send_batch_size = std::min(send_batch_size, ratecontrol_packets_per_quantum);
+        if (!transport.pacing_logged) {
+          transport.pacing_logged = true;
+          BOOST_LOG(info) << "Video packet pacing: negotiated=" << pacing_bitrate_kbps
+                          << " Kbps, wire_drain_cap="
+                          << static_cast<std::uint64_t>(pacing_wire_bitrate_bps / 1000.0L)
+                          << " Kbps, send_batch=" << send_batch_size
+                          << ", pacing_quantum=" << ratecontrol_packets_per_quantum
+                          << " packet(s)/" << video_qos::kWirePacingQuantum.count()
+                          << "us, packet_size=" << wire_packet_bytes << " bytes.";
+        }
 
         // Don't ignore the last ratecontrol group of the previous frame
-        auto ratecontrol_frame_start = std::max(ratecontrol_next_frame_start, std::chrono::steady_clock::now());
+        auto ratecontrol_frame_start = std::max(transport.next_frame_start, std::chrono::steady_clock::now());
 
         size_t ratecontrol_frame_packets_sent = 0;
         size_t ratecontrol_group_packets_sent = 0;
+
+        // All FEC blocks belonging to one encoded frame must carry the same
+        // RTP timestamp.  Advancing this clock inside the FEC-block loop makes
+        // a large 4K/HDR frame look like several different frames to Moonlight,
+        // corrupting its reference tree and provoking a false slow-connection
+        // warning.  Clamp once per encoded frame, then reuse the value below.
+        bool frame_is_dupe = false;
+        if (!packet->frame_timestamp) {
+          packet->frame_timestamp = transport.next_frame_start;
+          frame_is_dupe = true;
+        }
+        using rtp_tick_wide = std::chrono::duration<std::uint64_t, std::ratio<1, 90000>>;
+        auto timestamp_ticks = std::chrono::round<rtp_tick_wide>(
+          std::max(*packet->frame_timestamp, transport.epoch) - transport.epoch
+        ).count();
+        timestamp_ticks = video_qos::next_rtp_timestamp_ticks(
+          timestamp_ticks,
+          transport.last_rtp_timestamp_ticks,
+          session->config.monitor.framerate
+        );
+        transport.last_rtp_timestamp_ticks = timestamp_ticks;
+        const auto timestamp = static_cast<std::uint32_t>(timestamp_ticks);
 
         auto blockIndex = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
@@ -1889,16 +2108,6 @@ namespace stream {
 
           size_t next_shard_to_send = 0;
 
-          // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
-          // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
-          bool frame_is_dupe = false;
-          if (!packet->frame_timestamp) {
-            packet->frame_timestamp = ratecontrol_next_frame_start;
-            frame_is_dupe = true;
-          }
-          using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
-          uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
-
           // set FEC info now that we know for sure what our percentage will be for this frame
           for (auto x = 0; x < shards.size(); ++x) {
             auto *inspect = (video_packet_raw_t *) shards.data(x);
@@ -1941,12 +2150,17 @@ namespace stream {
               // Do pacing within the frame.
               // Also trigger pacing before the first send_batch() of the frame
               // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
+              if (ratecontrol_group_packets_sent >= ratecontrol_packets_per_quantum ||
                   ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
-
+                // Absolute per-frame deadlines: after a late timer wake the
+                // sender catches up exactly its elapsed entitlement
+                // (elapsed x drain), which the bitrate-derived drain keeps
+                // inherently burst-bounded. No rebasing — discarding catch-up
+                // credit makes throughput collapse on coarse-resolution timers.
+                const auto due = ratecontrol_frame_start +
+                                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                   packet_wire_interval * ratecontrol_frame_packets_sent
+                                 );
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
                   timer->sleep_for(due - now);
@@ -1976,7 +2190,7 @@ namespace stream {
                     session->localAddress,
                   };
 
-                  platf::send(send_info);
+                  all_shards_submitted = platf::send(send_info) && all_shards_submitted;
                 }
               }
               frame_send_batch_latency_logger.second_point_now_and_log();
@@ -1988,9 +2202,10 @@ namespace stream {
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          transport.next_frame_start = ratecontrol_frame_start +
+                                       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                         packet_wire_interval * ratecontrol_frame_packets_sent
+                                       );
 
           frame_network_latency_logger.second_point_now_and_log();
 
@@ -2006,18 +2221,46 @@ namespace stream {
 
         session->video.lowseq = lowseq;
 
+        if (all_shards_submitted) {
+          session->video.frame_transmitted.store(true, std::memory_order_release);
+          const auto recovery = video_qos::submitted(
+            transport.qos,
+            packet->frame_index(),
+            packet->is_idr(),
+            std::chrono::steady_clock::now()
+          );
+          if (packet->is_idr()) {
+            session->mail->event<std::int64_t>(mail::video_idr_submitted)->raise(packet->frame_index());
+          }
+          if (recovery && recovery->withheld_frames != 0) {
+            BOOST_LOG(info) << "Video QoS: fresh IDR " << packet->frame_index()
+                            << " restored the decoder chain after withholding "
+                            << recovery->withheld_frames << " predictive frame(s) for "
+                            << std::chrono::duration_cast<std::chrono::milliseconds>(recovery->duration).count()
+                            << " ms.";
+          }
+        } else {
+          // A rejected shard is packet loss at the host socket. Do not stall
+          // the egress loop over it: record the failure so the QoS gate
+          // withholds the now-undecodable successors and requests exactly one
+          // recovery IDR through the normal discontinuity path.
+          video_qos::submission_failed(transport.qos, packet->is_idr());
+          BOOST_LOG(warning) << "Video broadcast: one or more UDP shards of frame "
+                             << packet->frame_index() << " were rejected by the host socket.";
+        }
+
         if (config::stream.session_monitor) {
           session->telemetry.frames.fetch_add(1, std::memory_order_relaxed);
           session->telemetry.payload_bytes.fetch_add(packet->data_size(), std::memory_order_relaxed);
           telemetry_flush(session);
         }
       } catch (const std::exception &e) {
+        video_qos::submission_failed(transport.qos, packet->is_idr());
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
       }
     }
 
-    shutdown_event->raise(true);
   }
 
   void audioBroadcastThread(udp::socket &sock) {
@@ -2134,12 +2377,12 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     broadcast_shutdown_event->reset();
 
-    // Reset the packet queues which were stopped in end_broadcast.
-    // If not reset, the broadcast threads will exit immediately when pop() returns null.
-    auto video_packets = mail::man->queue<video::packet_t>(mail::video_packets);
-    auto audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
-    video_packets->reset();
-    audio_packets->reset();
+    // Reset the audio packet queue which was stopped in end_broadcast.
+    // If not reset, the broadcast thread exits immediately when pop() returns
+    // null. Video egress is session-owned (per-session mailbox queues); no
+    // global video packet queue exists any more.
+    ctx.audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
+    ctx.audio_packets->reset();
 
     auto address_family = net::af_from_enum_string(config::sunshine.address_family);
     auto protocol = address_family == net::IPV4 ? udp::v4() : udp::v6();
@@ -2202,7 +2445,6 @@ namespace stream {
     // After calling stop(), restart() must be called before run() will work again.
     ctx.io_context.restart();
 
-    ctx.video_thread = std::thread {videoBroadcastThread, std::ref(ctx.video_sock)};
     ctx.audio_thread = std::thread {audioBroadcastThread, std::ref(ctx.audio_sock)};
     ctx.control_thread = std::thread {controlBroadcastThread, &ctx.control_server};
 
@@ -2216,12 +2458,10 @@ namespace stream {
 
     broadcast_shutdown_event->raise(true);
 
-    auto video_packets = mail::man->queue<video::packet_t>(mail::video_packets);
-    auto audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
-
-    // Minimize delay stopping video/audio threads
-    video_packets->stop();
-    audio_packets->stop();
+    // Minimize delay stopping the audio thread
+    if (ctx.audio_packets) {
+      ctx.audio_packets->stop();
+    }
 
     ctx.message_queue_queue->stop();
     ctx.io_context.stop();
@@ -2229,13 +2469,8 @@ namespace stream {
     ctx.video_sock.close();
     ctx.audio_sock.close();
 
-    video_packets.reset();
-    audio_packets.reset();
-
     BOOST_LOG(debug) << "Waiting for main listening thread to end..."sv;
     ctx.recv_thread.join();
-    BOOST_LOG(debug) << "Waiting for main video thread to end..."sv;
-    ctx.video_thread.join();
     BOOST_LOG(debug) << "Waiting for main audio thread to end..."sv;
     ctx.audio_thread.join();
     BOOST_LOG(debug) << "Waiting for main control thread to end..."sv;
@@ -2268,10 +2503,10 @@ namespace stream {
     auto start_time = std::chrono::steady_clock::now();
     auto current_time = start_time;
 
-    while (current_time - start_time < config::stream.ping_timeout) {
+    while (current_time - start_time < timeout) {
       auto delta_time = current_time - start_time;
 
-      auto msg_opt = messages->pop(config::stream.ping_timeout - delta_time);
+      auto msg_opt = messages->pop(timeout - delta_time);
       if (!msg_opt) {
         break;
       }
@@ -2358,8 +2593,37 @@ namespace stream {
     while_starting_do_nothing(session->state);
 
     auto ref = broadcast.ref();
-    const auto ping_error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
+
+#ifdef _WIN32
+    // Start a session-owned isolated capture/encode pipeline while the client
+    // establishes its UDP video peer. Process creation, WGC/ring acquisition,
+    // HDR conversion and NVENC setup therefore remain parallel with recv_ping(),
+    // without transferring worker handles between HTTPS and RTSP lifetimes.
+    auto peer_ready = session->mail->event<bool>(mail::video_peer_ready);
+    peer_ready->reset();
+    seh_video_capture_args_t cap_args {session->mail, session->config.monitor, session};
+    std::atomic<unsigned long> capture_seh {0};
+    std::thread capture_thread([&] {
+      capture_seh.store(seh_invoke_video_capture_(&cap_args), std::memory_order_release);
+    });
+
+    const auto join_capture = util::fail_guard([&] {
+      if (capture_thread.joinable()) capture_thread.join();
+    });
+#endif
+
+    const auto ping_error = recv_ping(
+      session,
+      ref,
+      socket_e::video,
+      session->video.ping_payload,
+      session->video.peer,
+      config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
+    );
     if (ping_error < 0) {
+#ifdef _WIN32
+      session->shutdown_event->raise(true);
+#endif
       return;
     }
 
@@ -2367,13 +2631,59 @@ namespace stream {
     auto address = session->video.peer.address();
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
+    // Encoded egress is session-owned. A slow TV or Wi-Fi client can now apply
+    // backpressure only to its own encoder/latest-frame mailbox rather than a
+    // process-global queue shared by every active client.
+    auto session_packets = video::packet_queue(session->mail, mail::video_packets);
+    std::thread egress_thread {
+      videoBroadcastThread,
+      std::ref(ref->video_sock),
+      session->mail,
+      mail::shutdown
+    };
+    const auto join_egress = util::fail_guard([&] {
+      session_packets->stop();
+      if (egress_thread.joinable()) egress_thread.join();
+    });
+
     BOOST_LOG(debug) << "Start capturing Video"sv;
 #ifdef _WIN32
-    // Build the args struct here (in the videoThread stack frame, before
-    // any __try). Its destructor will run when videoThread returns, well
-    // after the SEH wrapper has unwound.
-    seh_video_capture_args_t cap_args {session->mail, session->config.monitor, session};
-    auto seh = seh_invoke_video_capture_(&cap_args);
+    // Attach the authenticated network consumer to the already-starting (and
+    // commonly already-ready) worker. The worker publishes its retained
+    // bootstrap IDR; requesting another one here created a startup IDR burst.
+    peer_ready->raise(true);
+    BOOST_LOG(info) << "Video worker: authenticated UDP peer attached; releasing buffered IDR.";
+
+    // Moonlight terminates with "no video received" if NO datagram arrives on
+    // the video port within 10 s of PLAY, and separately requires a complete
+    // frame within 10 s of the FIRST datagram (moonlight-common-c
+    // VideoStream.c). NVENC session creation alone can take ~7 s on some
+    // driver/GPU combinations, putting the first real packet past the first
+    // clock. A single runt datagram — below the client's minimum RTP size, so
+    // it is discarded before parsing — permanently disarms the no-traffic
+    // clock. Send it as LATE as possible and only when no real frame has been
+    // transmitted, because it also starts the first-frame clock: sent at
+    // ~8 s, it extends the effective budget for the first frame to ~18 s.
+    {
+      const auto keepalive_deadline = std::chrono::steady_clock::now() + 8s;
+      while (!session->video.frame_transmitted.load(std::memory_order_acquire) &&
+             !session->shutdown_event->peek() &&
+             std::chrono::steady_clock::now() < keepalive_deadline) {
+        std::this_thread::sleep_for(250ms);
+      }
+      if (!session->video.frame_transmitted.load(std::memory_order_acquire) &&
+          !session->shutdown_event->peek()) {
+        const std::array<char, 1> keepalive {0};
+        boost::system::error_code ec;
+        ref->video_sock.send_to(boost::asio::buffer(keepalive), session->video.peer, 0, ec);
+        BOOST_LOG(warning) << "videoThread: no video frame transmitted within 8 s of peer attach; "
+                              "sent a runt keepalive to hold the client's no-video deadline open"
+                           << (ec ? " (send failed: " + ec.message() + ")" : "") << '.';
+      }
+    }
+
+    capture_thread.join();
+    const auto seh = capture_seh.load(std::memory_order_acquire);
     if (seh != 0) {
       BOOST_LOG(warning) << "videoThread: SEH 0x" << std::hex << seh << std::dec
                          << " caught during video::capture (likely dxgi.dll AV during display teardown). "
@@ -2393,7 +2703,14 @@ namespace stream {
     while_starting_do_nothing(session->state);
 
     auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::audio, session->audio.ping_payload, session->audio.peer, config::stream.ping_timeout);
+    auto error = recv_ping(
+      session,
+      ref,
+      socket_e::audio,
+      session->audio.ping_payload,
+      session->audio.peer,
+      config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
+    );
     if (error < 0) {
       return;
     }
@@ -2412,6 +2729,42 @@ namespace stream {
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
+    }
+
+    bool strict_first_frame_client(std::string_view client_name) {
+      // Xbox (moonlight-xbox-dx) and webOS (moonlight-tv / LG) ports embed
+      // older moonlight-common-c with a hard ~10-second no-video budget that
+      // does not credit the runt keepalive. Identified by the paired-client
+      // name resolved from the certificate at launch.
+      std::string lowered {client_name};
+      std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      return lowered.find("xbox") != std::string::npos ||
+             lowered.find("webos") != std::string::npos;
+    }
+
+    bool wait_video_pipeline_ready(session_t &session, std::chrono::milliseconds timeout) {
+#ifdef _WIN32
+      auto ready = session.video_pipeline_ready_event ?
+                     session.video_pipeline_ready_event :
+                     session.mail->event<bool>(mail::video_pipeline_ready);
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      while (std::chrono::steady_clock::now() < deadline) {
+        if (ready->peek()) {
+          return true;
+        }
+        if (session.shutdown_event->peek()) {
+          return false;  // The session died during the hold; respond and move on.
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      return ready->peek();
+#else
+      (void) session;
+      (void) timeout;
+      return true;
+#endif
     }
 
     void stop(session_t &session) {
@@ -2742,7 +3095,11 @@ namespace stream {
       session.audio.peer.address(addr);
       session.audio.peer.port(0);
 
-      session.pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      // Strict-first-frame clients get every establishment window extended by
+      // the ANNOUNCE-hold allowance (8 s hold + margin) so the deliberate hold
+      // cannot trip the control-thread cleanup timer.
+      session.pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout +
+                            (session.strict_client ? std::chrono::seconds(18) : std::chrono::seconds(0));
 
       session.audioThread = std::thread {audioThread, &session};
       session.videoThread = std::thread {videoThread, &session};
@@ -2846,9 +3203,19 @@ namespace stream {
       auto mail = std::make_shared<safe::mail_raw_t>();
 
       session->shutdown_event = mail->event<bool>(mail::shutdown);
+      // Anchor the readiness event for the session's lifetime: the mailbox
+      // map holds only weak_ptrs, so a raise through a temporary handle
+      // before the ANNOUNCE hold acquires its own would otherwise be lost
+      // with the expiring event object.
+      session->video_pipeline_ready_event = mail->event<bool>(mail::video_pipeline_ready);
       session->launch_session_id = launch_session.id;
 
       session->config = config;
+#ifdef _WIN32
+      // Strict-first-frame accommodations exist only where the ANNOUNCE hold
+      // exists; other platforms keep upstream-identical windows.
+      session->strict_client = strict_first_frame_client(launch_session.client_name);
+#endif
 
 #ifdef _WIN32
       session->virtual_display.active = launch_session.virtual_display;

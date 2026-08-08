@@ -2064,8 +2064,21 @@ namespace platf {
                              << display_name << "; falling back to WGC/DDA.";
         }
         if (worker_vgd_target) {
-          BOOST_LOG(error) << "Video worker: transferred LuminalVGD ring could not be opened for "
-                           << display_name << "; refusing silent WGC/DDA substitution.";
+          // The parent validated the transport, but a modeset can retire that
+          // generation before the child opens it.  Treat this as an explicit,
+          // observable source handoff instead of repeatedly rebuilding against
+          // the stale generation until the client's first-frame deadline.
+          // The worker remains the isolation boundary and WGC receives the
+          // exact same configured output and encoder contract.
+          BOOST_LOG(warning) << "Video worker: transferred LuminalVGD ring could not be opened for "
+                             << display_name << "; switching this isolated worker to WGC safe-capture.";
+          VDISPLAY::vgd::set_worker_ring_target(std::nullopt, {});
+          VDISPLAY::vgd::set_worker_safe_capture(true);
+          if (auto safe_disp = dxgi::display_wgc_ipc_vram_t::create(config, display_name)) {
+            vgd_transition::note_capture_backend(vgd_transition::kCaptureKindWgc, display_name);
+            return safe_disp;
+          }
+          BOOST_LOG(error) << "Video worker: WGC replacement source also failed for " << display_name << '.';
           return nullptr;
         }
       }

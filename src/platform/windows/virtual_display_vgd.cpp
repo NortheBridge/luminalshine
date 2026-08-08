@@ -120,6 +120,25 @@ namespace VDISPLAY::vgd {
       return h ? h : 1;
     }
 
+    DRIVER_STATUS open_locked();
+
+    /// Close and reopen the control device. Caller holds g_mutex.
+    ///
+    /// For when an ioctl fails at the OS level (VGD_ERR_IO): the driver
+    /// host process crashing invalidates every open handle while leaving
+    /// the devnode reopenable once WUDF relaunches it, and a dead handle
+    /// can never heal on its own — every later call through it fails the
+    /// same way. Never touches the ping thread, so it is safe to call
+    /// FROM the ping thread.
+    DRIVER_STATUS reopen_locked() {
+      if (g_device) {
+        vgd_device_close(g_device);
+        g_device = nullptr;
+        g_caps.reset();
+      }
+      return open_locked();
+    }
+
     DRIVER_STATUS open_locked() {
       if (g_device) {
         return DRIVER_STATUS::OK;
@@ -226,37 +245,94 @@ namespace VDISPLAY::vgd {
     g_ping_stop.store(false);
     g_ping_thread = std::thread([] {
       int consecutive_failures = 0;
+      auto last_credit = std::chrono::steady_clock::now();
+      bool starvation_logged = false;
       while (!g_ping_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         if (!g_ping_feeding.load()) {
+          // Feeding is off on purpose (cleanup wants the driver watchdog to
+          // collect what remains) — not starvation.
+          last_credit = std::chrono::steady_clock::now();
+          starvation_logged = false;
           continue;
         }
         std::vector<uint64_t> sessions;
         {
           std::lock_guard lk(g_mutex);
           if (!g_device) {
-            break;
+            // Closed or awaiting reopen; keep the thread alive so a later
+            // successful open resumes feeding without a restart.
+            continue;
           }
           for (auto &[k, s] : g_sessions) {
             sessions.push_back(s.session_id);
           }
         }
         bool any_failed = false;
+        bool any_credited = false;
+        if (sessions.empty()) {
+          // Nothing to feed, but the driver must still be reachable. This
+          // is exactly the state a driver-host crash leaves behind (a
+          // failed CREATE erases its tracked session), and without a probe
+          // here the 3-strikes detector below could never fire again.
+          std::lock_guard lk(g_mutex);
+          if (g_device) {
+            VgdCaps caps {};
+            if (vgd_handshake(g_device, &caps) == VGD_ERR_IO) {
+              any_failed = true;
+            } else {
+              any_credited = true;
+            }
+          }
+        }
         for (uint64_t sid : sessions) {
           std::lock_guard lk(g_mutex);
           if (!g_device) {
             break;
           }
-          if (vgd_ping(g_device, sid) == VGD_ERR_IO) {
+          const int rc = vgd_ping(g_device, sid);
+          if (rc == VGD_ERR_IO) {
             any_failed = true;
+          } else if (rc == 0) {
+            any_credited = true;
           }
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (any_credited) {
+          last_credit = now;
+          starvation_logged = false;
+        } else if (!sessions.empty() && !starvation_logged &&
+                   now - last_credit > std::chrono::seconds(5)) {
+          // Leases are starving without clean I/O failures (driver control
+          // queue stalled, or pings rejected). Say so BEFORE the driver's
+          // lease watchdog starts reaping live monitors.
+          starvation_logged = true;
+          BOOST_LOG(warning) << "LuminalVGD watchdog: no lease ping has been accepted for over 5 s"
+                                " with " << sessions.size() << " tracked session(s); the driver-side"
+                                " lease watchdog may reap live monitors soon.";
         }
         consecutive_failures = any_failed ? consecutive_failures + 1 : 0;
         if (consecutive_failures >= 3) {
-          BOOST_LOG(error) << "LuminalVGD watchdog: ping failed 3x — driver unreachable.";
           consecutive_failures = 0;
+          BOOST_LOG(error) << "LuminalVGD watchdog: ping failed 3x — driver unreachable; "
+                              "recycling the control device handle.";
+          bool reopened = false;
+          {
+            std::lock_guard lk(g_mutex);
+            reopened = reopen_locked() == DRIVER_STATUS::OK;
+          }
+          if (reopened) {
+            BOOST_LOG(info) << "LuminalVGD watchdog: control device reopened; "
+                               "driver connection re-established.";
+            continue;
+          }
+          // The devnode is not answering either (driver mid-restart, or
+          // truly gone). Surface it through the registered callback — on a
+          // DETACHED thread: the callback closes the device, and
+          // close_device() joins this ping thread, which would self-join
+          // if the callback ran inline here.
           if (g_ping_fail_cb) {
-            g_ping_fail_cb();
+            std::thread(g_ping_fail_cb).detach();
           }
         }
       }
@@ -363,7 +439,13 @@ namespace VDISPLAY::vgd {
     req.session_id = fresh_session_id(guid);
     req.display_id = display_id_for_client(s_client_uid);
     req.adapter_luid = 0;        // driver default (largest VRAM)
-    req.lease_timeout_ms = 0;    // driver default; ping thread feeds it
+    // 30 s instead of the driver default (watchdog_secs, 10 s). The ping
+    // thread feeds the lease every second; the margin exists for driver
+    // control-queue stalls, which are otherwise indistinguishable from a
+    // dead host and reaped a LIVE primary monitor after 10 s on
+    // 2026-08-07. Explicit destroy at cleanup still releases sessions
+    // immediately — the lease is only the crash backstop.
+    req.lease_timeout_ms = 30'000;
     // HDR10 when the client asked for it and the driver advertises the cap;
     // otherwise SDR-8. The driver's EDID grows the CTA-861.3 HDR block and
     // Windows offers advanced color on the monitor.
@@ -444,7 +526,21 @@ namespace VDISPLAY::vgd {
     }
 
     VgdCreateReply reply {};
-    const int io = vgd_create_monitor(g_device, &req, &reply);
+    int io = vgd_create_monitor(g_device, &req, &reply);
+    if (io == VGD_ERR_IO) {
+      // OS-level failure: the control handle is dead (driver host process
+      // crash, PnP removal). The handle never heals on its own — without
+      // this recycle every future create fails the same way until a
+      // service restart (2026-08-07 outage: no client could get a virtual
+      // monitor after a driver crash mid-session). Reopen and retry once;
+      // if the devnode is back, the wedge never becomes user-visible.
+      BOOST_LOG(warning) << "LuminalVGD CREATE_MONITOR hit an OS-level I/O failure; "
+                            "recycling the control device handle and retrying once.";
+      if (reopen_locked() == DRIVER_STATUS::OK) {
+        reply = {};
+        io = vgd_create_monitor(g_device, &req, &reply);
+      }
+    }
     if (io != 0 || reply.result != 0) {
       BOOST_LOG(error) << "LuminalVGD CREATE_MONITOR failed: io=" << io
                        << " result=" << reply.result;
@@ -743,22 +839,23 @@ namespace VDISPLAY::vgd {
 
   std::optional<RingTargetInfo> ring_target_for_worker_display(const std::string &display_name) {
     if (display_name.empty()) return std::nullopt;
-    const std::wstring wanted(display_name.begin(), display_name.end());
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+    // Fast path: transfer a concrete, publishing generation when the ring is
+    // already ACTIVE. When it is not (the common case right after the
+    // exclusive modeset, while IddCx rebuilds the target), fall through below
+    // and export the stable session identity with generation zero: the
+    // isolated child holds the ring open — which is what arms surface
+    // publication — and binds the post-modeset generation itself.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
     do {
-      RingTargetInfo target {};
-      {
-        // Never hold the session-map lock while opening or polling a driver
-        // object. Monitor activation and ring publication advance on other
-        // threads during this bounded admission window.
-        std::lock_guard lk(g_mutex);
-        const auto found = std::find_if(g_sessions.begin(), g_sessions.end(), [&](const auto &entry) {
-          return !entry.second.display_name.empty() && entry.second.display_name == wanted;
-        });
-        if (found != g_sessions.end()) {
-          target = {found->second.session_id, found->second.ring_slots, found->second.transport_flags, 0};
-        }
-      }
+      // Resolve through the normal display lookup before applying the strict
+      // worker-generation checks. In the common one-session case the monitor
+      // can activate after create()'s name poll, leaving the tracked GDI name
+      // empty even though DISPLAY<n> is already usable. The normal resolver
+      // safely adopts that sole active LuminalVGD name (or matches its exact
+      // device id when several sessions exist); bypassing it made every worker
+      // handoff wait six seconds and then fall back despite a live ring.
+      auto resolved = ring_target_for_display(display_name);
+      RingTargetInfo target = resolved.value_or(RingTargetInfo {});
       if (target.session_id && target.ring_slots >= kMinRingSlots && target.ring_slots <= kMaxRingSlots &&
           (target.transport_flags & ~kAllowedRingTransportFlags) == 0) {
         VgdRingHandle *ring = vgd_ring_open(target.session_id, target.ring_slots);
@@ -770,15 +867,17 @@ namespace VDISPLAY::vgd {
           const bool second_ok = first_ok && vgd_ring_status(ring, &second) == 0;
           vgd_ring_close(ring);
           LARGE_INTEGER now_qpc {};
-          QueryPerformanceCounter(&now_qpc);
+          const bool qpc_ok = QueryPerformanceCounter(&now_qpc) != FALSE && now_qpc.QuadPart >= 0;
           const bool stable = second_ok && first.state == 1 && second.state == 1 &&
                               first.generation == second.generation && second.generation != 0 &&
                               first.transport_flags == second.transport_flags &&
-                              second.latest_sequence >= first.latest_sequence && second.latest_sequence != 0 &&
-                              second.heartbeat_qpc != 0 && second.qpc_frequency != 0 &&
+                              second.transport_flags == target.transport_flags &&
                               (second.transport_flags & ~kAllowedRingTransportFlags) == 0 &&
-                              now_qpc.QuadPart >= 0 && static_cast<uint64_t>(now_qpc.QuadPart) >= second.heartbeat_qpc &&
-                              static_cast<uint64_t>(now_qpc.QuadPart) - second.heartbeat_qpc <= second.qpc_frequency * 2ULL;
+                              second.latest_sequence >= first.latest_sequence && second.latest_sequence != 0 &&
+                              second.heartbeat_qpc != 0 && second.qpc_frequency != 0 && qpc_ok &&
+                              static_cast<uint64_t>(now_qpc.QuadPart) >= second.heartbeat_qpc &&
+                              static_cast<uint64_t>(now_qpc.QuadPart) - second.heartbeat_qpc <=
+                                second.qpc_frequency * 2ULL;
           if (stable) {
             target.generation = second.generation;
             target.transport_flags = second.transport_flags;
@@ -788,6 +887,20 @@ namespace VDISPLAY::vgd {
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     } while (std::chrono::steady_clock::now() < deadline);
+
+    // Deferred generation binding: the ring exists but has not published yet.
+    // Export the session identity with generation zero so the child can wait
+    // for (and validate) the post-modeset generation with its own long-lived
+    // ring handle. Returning nullopt here silently abandoned Direct-to-Encode
+    // for the whole session on every cold start.
+    auto resolved = ring_target_for_display(display_name);
+    if (resolved && resolved->session_id &&
+        resolved->ring_slots >= kMinRingSlots && resolved->ring_slots <= kMaxRingSlots &&
+        (resolved->transport_flags & ~kAllowedRingTransportFlags) == 0) {
+      RingTargetInfo target = *resolved;
+      target.generation = 0;
+      return target;
+    }
     return std::nullopt;
   }
 

@@ -243,11 +243,20 @@ namespace video {
       return false;
     }
 
+    std::uint64_t capture_generation_for_current_process() {
+#ifdef _WIN32
+      return platf::video_worker::current_capture_generation();
+#else
+      return 0;
+#endif
+    }
+
     struct encode_bootstrap_state_t {
       bool allow_placeholder_before_first_real = false;
       bool placeholder_encoded = false;
       bool real_frame_seen = false;
       bool current_input_placeholder = true;
+      std::uint64_t current_input_generation = 0;
 
       bool should_encode_placeholder() const {
         return !real_frame_seen && current_input_placeholder &&
@@ -1837,6 +1846,11 @@ namespace video {
           }
 
           if (frame_captured) {
+            // Stamp the source epoch on the capture thread, before the image is
+            // queued. If this display subsequently reports reinit, a late
+            // encode of this image retains the retired epoch and is discarded
+            // by the isolated-worker generation gate.
+            img->capture_generation = capture_generation_for_current_process();
             capture_ctx->images->raise(img);
           }
 
@@ -1870,6 +1884,9 @@ namespace video {
       switch (status) {
         case platf::capture_e::reinit:
           {
+#ifdef _WIN32
+            platf::video_worker::notify_capture_reinitializing();
+#endif
             reinit_event.raise(true);
 
             // Some classes of images contain references to the display --> display won't delete unless img is deleted
@@ -1972,7 +1989,7 @@ namespace video {
     }
   }
 
-  int encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp) {
+  int encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp, bool capture_placeholder, std::uint64_t capture_generation) {
     auto &frame = session.device->frame;
     frame->pts = frame_nr;
 
@@ -2041,6 +2058,8 @@ namespace video {
 
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
+      packet->capture_placeholder = capture_placeholder;
+      packet->capture_generation = capture_generation;
       if (webrtc_stream::has_active_sessions()) {
         webrtc_stream::submit_video_packet(*packet);
       }
@@ -2050,7 +2069,7 @@ namespace video {
     return 0;
   }
 
-  int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp) {
+  int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp, bool capture_placeholder, std::uint64_t capture_generation) {
     auto encoded_frame = session.encode_frame(frame_nr);
     if (encoded_frame.data.empty()) {
       BOOST_LOG(error) << "NvENC returned empty packet";
@@ -2064,6 +2083,8 @@ namespace video {
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
+    packet->capture_placeholder = capture_placeholder;
+    packet->capture_generation = capture_generation;
     packet->frame_timestamp = frame_timestamp;
     packet->host_processing_timestamp = host_processing_timestamp;
     if (webrtc_stream::has_active_sessions()) {
@@ -2074,11 +2095,11 @@ namespace video {
     return 0;
   }
 
-  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp) {
+  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp, bool capture_placeholder = false, std::uint64_t capture_generation = 0) {
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
-      return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp, host_processing_timestamp);
+      return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp, host_processing_timestamp, capture_placeholder, capture_generation);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
-      return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, host_processing_timestamp);
+      return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, host_processing_timestamp, capture_placeholder, capture_generation);
     }
 
     return -1;
@@ -2825,7 +2846,7 @@ namespace video {
     BOOST_LOG(info) << "Minimum FPS target set to ~"sv << (minimum_fps_target / 2) << "fps ("sv << max_frametime.count() * 2 << "ms)"sv;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
-    auto packets = mail::man->queue<packet_t>(mail::video_packets);
+    auto packets = packet_queue(mail, mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
 
@@ -2868,6 +2889,7 @@ namespace video {
     }
 
     encode_bootstrap_state_t bootstrap_state {.allow_placeholder_before_first_real = frame_nr <= 1};
+    bootstrap_state.current_input_generation = capture_generation_for_current_process();
 
     while (true) {
       // Break out of the encoding loop if any of the following are true:
@@ -2916,6 +2938,7 @@ namespace video {
           }
 
           bootstrap_state.current_input_placeholder = placeholder_input;
+          bootstrap_state.current_input_generation = img->capture_generation;
 
           if (!placeholder_input) {
             bootstrap_state.real_frame_seen = true;
@@ -2936,7 +2959,7 @@ namespace video {
         continue;
       }
 
-      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, host_processing_timestamp)) {
+      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, host_processing_timestamp, placeholder_input, bootstrap_state.current_input_generation)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
       }
@@ -3114,8 +3137,22 @@ namespace video {
   std::optional<sync_session_t> make_synced_session(platf::display_t *disp, const encoder_t &encoder, platf::img_t &img, sync_session_ctx_t &ctx) {
     sync_session_t encode_session;
 
+#ifdef _WIN32
+    // Encoder-session creation takes several seconds on some driver/GPU
+    // combinations (7-11 s observed on RTX 5080 at 4K HDR). A REBUILD happens
+    // mid-stream, where the isolated worker's parent applies a 3-second
+    // frame-progress verdict: without a reinit grace it terminates a healthy
+    // worker in the middle of the rebuild (observed live). The FIRST build is
+    // covered by the FIRST_PACKET deadline instead and must not bump the
+    // capture generation before the bootstrap packet is admitted.
+    if (ctx.frame_nr > 1) {
+      platf::video_worker::notify_capture_reinitializing();
+    }
+#endif
+
     encode_session.ctx = &ctx;
 
+    const auto encode_device_started = std::chrono::steady_clock::now();
     auto encode_device = make_encode_device(*disp, encoder, ctx.config);
     if (!encode_device) {
       downgrade_yuv444_to_420(disp, ctx.config, ctx.chroma_downgrade_events, "encode device creation", [&]() {
@@ -3125,6 +3162,15 @@ namespace video {
     }
     if (!encode_device) {
       return std::nullopt;
+    }
+    const auto encode_device_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - encode_device_started
+    ).count();
+    if (encode_device_ms > 1000) {
+      // 7-11 s observed on RTX 5080 (driver-side session-open cost). Logged so
+      // future driver/OS changes to this dominant startup term are visible.
+      BOOST_LOG(warning) << "Encoder device creation took " << encode_device_ms
+                         << " ms; this dominates session time-to-first-frame.";
     }
 
     // absolute mouse coordinates require that the dimensions of the screen are known
@@ -3161,6 +3207,7 @@ namespace video {
     }
 
     encode_session.bootstrap.allow_placeholder_before_first_real = ctx.frame_nr <= 1;
+    encode_session.bootstrap.current_input_generation = capture_generation_for_current_process();
     encode_session.session = std::move(session);
 
     return encode_session;
@@ -3334,6 +3381,7 @@ namespace video {
           bool placeholder_input = pos->bootstrap.current_input_placeholder;
 
           if (frame_captured) {
+            img->capture_generation = capture_generation_for_current_process();
             placeholder_input = is_placeholder_capture_image(*img);
             if (!placeholder_input && pos->bootstrap.current_input_placeholder) {
               pos->session->request_idr_frame();
@@ -3347,6 +3395,7 @@ namespace video {
             }
 
             pos->bootstrap.current_input_placeholder = placeholder_input;
+            pos->bootstrap.current_input_generation = img->capture_generation;
 
             if (!placeholder_input) {
               pos->bootstrap.real_frame_seen = true;
@@ -3362,7 +3411,7 @@ namespace video {
             continue;
           }
 
-          if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp, host_processing_timestamp)) {
+          if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp, host_processing_timestamp, placeholder_input, pos->bootstrap.current_input_generation)) {
             BOOST_LOG(error) << "Could not encode video packet"sv;
             ctx->shutdown_event->raise(true);
 
@@ -3398,6 +3447,10 @@ namespace video {
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
       switch (status) {
         case platf::capture_e::reinit:
+#ifdef _WIN32
+          platf::video_worker::notify_capture_reinitializing();
+#endif
+          [[fallthrough]];
         case platf::capture_e::error:
         case platf::capture_e::ok:
         case platf::capture_e::timeout:
@@ -3602,8 +3655,30 @@ namespace video {
     void *channel_data
   ) {
 #ifdef _WIN32
+    const bool isolated_worker_child = platf::video_worker::is_child_process();
     if (platf::video_worker::capture(mail, config, channel_data)) {
       return;
+    }
+    // A rare worker-launch/bootstrap failure may still use the legacy
+    // in-process path for a non-VGD output. Release any strict-client
+    // ANNOUNCE hold immediately: the in-process pipeline initializes only
+    // after the UDP peer attaches (below), so there is no readiness to wait
+    // for and holding would deadlock against the client's PLAY.
+    if (!isolated_worker_child) {
+      mail->event<bool>(mail::video_pipeline_ready)->raise(true);
+    }
+    // Do not let the in-process path publish to an unset UDP endpoint while
+    // the video thread is still authenticating it. Only RTSP sessions carry
+    // channel_data and a UDP peer to wait for; the WebRTC capture thread
+    // passes nullptr and would otherwise spin forever because nothing raises
+    // video_peer_ready on its mailbox.
+    if (!isolated_worker_child && channel_data != nullptr) {
+      auto peer_ready = mail->event<bool>(mail::video_peer_ready);
+      auto shutdown = mail->event<bool>(mail::shutdown);
+      while (!peer_ready->peek() && !shutdown->peek()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (shutdown->peek()) return;
     }
 #endif
     // Snapshot the encoder pointer to avoid races with concurrent probe_encoders() calls
@@ -3624,7 +3699,7 @@ namespace video {
       ref->encode_session_ctx_queue.raise(sync_session_ctx_t {
         &join_event,
         mail->event<bool>(mail::shutdown),
-        mail::man->queue<packet_t>(mail::video_packets),
+        packet_queue(mail, mail::video_packets),
         std::move(idr_events),
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
@@ -3682,7 +3757,7 @@ namespace video {
 
         // Use a probe-local mail/queue to avoid stale packets from previous encoder sessions.
         auto probe_mail = std::make_shared<safe::mail_raw_t>();
-        auto packets = probe_mail->queue<packet_t>(mail::video_packets);
+        auto packets = packet_queue(probe_mail, mail::video_packets);
 
         while (!packets->peek()) {
           if (encode(1, *session, packets, nullptr, {}, {})) {
