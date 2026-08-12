@@ -1447,8 +1447,7 @@ namespace display_helper_integration {
             BOOST_LOG(info) << "Display helper: requested resolution/refresh already active; skipping redundant mode APPLY.";
           }
 
-          BOOST_LOG(info) << "Display helper: stage 1/3 complete; entering a 2-second quiet settle before making LuminalVGD primary.";
-          std::this_thread::sleep_for(std::chrono::seconds(2));
+          BOOST_LOG(info) << "Display helper: stage 1/3 complete; making LuminalVGD primary after observed activation.";
 
           display_device::SingleDisplayConfiguration primary_config;
           primary_config.m_device_id = verification_configuration->m_device_id;
@@ -1470,26 +1469,36 @@ namespace display_helper_integration {
             g_last_apply_failure.store(ApplyFailure::requested_mode, std::memory_order_release);
             return false;
           }
-          BOOST_LOG(info) << "Display helper: stage 2/3 complete; retaining both displays for a 3-second capture-ready settle.";
-          std::this_thread::sleep_for(std::chrono::seconds(3));
+          if (primary_outcome == platf::display_helper_client::ApplyOutcome::indeterminate) {
+            // Windows already exposes the requested mode, so the operation
+            // succeeded from the stream's perspective. Do NOT hard-restart the
+            // helper here: its SetDisplayConfig may still be settling, and
+            // killing it mid-modeset destabilizes the launch path. Reconnect
+            // the pipe instead so a late acknowledgement cannot be mistaken
+            // for the stage-3 reply.
+            BOOST_LOG(warning) << "Display helper: stage 2/3 mode is active despite an indeterminate helper completion; resetting the IPC connection before the final APPLY.";
+            platf::display_helper_client::reset_connection();
+          }
+          BOOST_LOG(info) << "Display helper: stage 2/3 complete; requested core mode is observable.";
 
           const auto pre_exclusive_ring = VDISPLAY::vgd::begin_planned_modeset();
           (void) apply_best_effort_hdr_now(
             verification_configuration->m_device_id,
             verification_configuration->m_hdr_state
           );
-          if (!pre_exclusive_ring ||
-              !VDISPLAY::vgd::wait_for_planned_modeset(*pre_exclusive_ring, std::chrono::seconds(12))) {
+          if (!pre_exclusive_ring) {
             direct_ring_admitted = false;
-            if (pre_exclusive_ring) {
-              platf::dxgi::mark_vgd_ring_broken(pre_exclusive_ring->session_id);
-            }
-            BOOST_LOG(warning) << "Display helper: LuminalVGD did not publish a pre-exclusive frame; "
-                                  "retaining VGD-primary extended topology and selecting HDR-capable fallback capture.";
+            BOOST_LOG(warning) << "Display helper: LuminalVGD did not expose a ring target; retaining VGD-primary extended topology and selecting HDR-capable fallback capture.";
             final_request.configuration = primary_config;
             final_request.virtual_display_arrangement = VirtualDisplayArrangement::ExtendedPrimary;
           } else {
-            BOOST_LOG(info) << "Display helper: pre-exclusive LuminalVGD frame published after final HDR state; direct capture admitted.";
+            // Preserve the stable session identity across the exclusive APPLY,
+            // but deliberately do not preserve this generation: Windows will
+            // rebuild it as the physical paths are removed. The isolated
+            // worker binds the resulting generation after it opens the same
+            // authenticated session's ring.
+            direct_ring_admitted = true;
+            BOOST_LOG(info) << "Display helper: LuminalVGD session identity admitted; committing requested Exclusive Mode and deferring generation binding to the isolated worker.";
             auto exclusive_config = *verification_configuration;
             exclusive_config.m_resolution.reset();
             exclusive_config.m_refresh_rate.reset();
@@ -1507,8 +1516,11 @@ namespace display_helper_integration {
         BOOST_LOG(info) << (direct_ring_admitted ?
           "Display helper: stage 3/3 committing topology-only exclusive APPLY via helper." :
           "Display helper: stage 3/3 committing safe VGD-primary fallback topology via helper.");
-        const auto ring_before = direct_ring_admitted && request.session && request.session->virtual_display ?
-                                   VDISPLAY::vgd::begin_planned_modeset() : std::nullopt;
+        // Do not wait for a published post-exclusive frame here. On supported
+        // IddCx stacks, opening the consumer is what arms surface publication;
+        // waiting before starting capture is a circular dependency. Requested
+        // mode verification below remains the display-admission gate.
+        const std::optional<VDISPLAY::vgd::RingTransitionToken> ring_before = std::nullopt;
         const auto outcome = platf::display_helper_client::send_apply_json(*payload);
         bool ok = outcome == platf::display_helper_client::ApplyOutcome::applied;
         if (outcome == platf::display_helper_client::ApplyOutcome::indeterminate &&
@@ -1547,6 +1559,11 @@ namespace display_helper_integration {
             BOOST_LOG(info) << "Display helper: LuminalVGD ring is ACTIVE after the planned modeset.";
           }
         }
+        // Do not inspect virtual-desktop coordinates here. The service desktop
+        // is not the interactive capture desktop and previously reported a
+        // false stable rectangle. The isolated worker performs this bounded,
+        // non-fatal observation in the correct user session immediately before
+        // opening WGC.
         BOOST_LOG(info) << "Display helper: APPLY dispatch result=" << (ok ? "true" : "false");
         if (ok && request.session) {
           g_restore_expected.store(false, std::memory_order_relaxed);

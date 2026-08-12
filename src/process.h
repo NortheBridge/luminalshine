@@ -199,6 +199,7 @@ namespace proc {
     std::string _active_client_uuid;
 
     mutable std::mutex _apps_mutex;
+    mutable std::recursive_mutex _lifecycle_mutex;
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
@@ -218,8 +219,8 @@ namespace proc {
 #endif
 
     file_t _pipe;
-    std::vector<cmd_t>::const_iterator _app_prep_it;
-    std::vector<cmd_t>::const_iterator _app_prep_begin;
+    std::size_t _completed_prep_cmds {0};
+    std::optional<bp::environment> _pending_env;
 
 #ifdef _WIN32
     void start_lossless_scaling_support(std::unordered_set<DWORD> baseline_pids, const playnite_launcher::lossless::lossless_scaling_app_metadata &metadata, std::string install_dir_hint_utf8, DWORD root_pid);

@@ -967,9 +967,10 @@ namespace http {
       return false;
     }
 
-    // Perform the download
-    curl_easy_setopt(curl, CURLOPT_SSLVERSION, ssl_version);  // NOSONAR
+    // Perform the download. TLS baseline first, then the caller's explicit
+    // (possibly stricter) version floor so it is never clobbered.
     configure_curl_tls(curl);
+    curl_easy_setopt(curl, CURLOPT_SSLVERSION, ssl_version);  // NOSONAR
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fwrite);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
@@ -989,6 +990,13 @@ namespace http {
       return false;
     }
     ensure_curl_global_init();
+    // TLS 1.2 minimum for every outbound connection; libcurl still negotiates
+    // TLS 1.3 when the peer supports it. Without this floor libcurl's default
+    // ClientHello offers TLS 1.0+, which current Windows builds flag via the
+    // Program Compatibility Assistant ("insecure TLS versions that are
+    // disabled on Windows"). Callers needing a stricter floor may override
+    // AFTER calling this function.
+    curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);  // NOSONAR
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     bool applied = apply_default_ca_store(curl);

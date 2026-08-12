@@ -25,7 +25,14 @@ namespace platf::display_helper_client {
     constexpr int kConnectTimeoutMs = 2000;
     constexpr int kSendTimeoutMs = 5000;
     constexpr int kShutdownIpcTimeoutMs = 500;
-    constexpr int kApplyResultTimeoutMs = 30000;
+    // A display-helper completion is advisory: every caller verifies the
+    // requested Windows topology independently.  Blocking the HTTPS launch
+    // response for 30 seconds makes fixed-deadline Moonlight clients abandon
+    // an otherwise healthy host — but real Windows modesets with driver settle
+    // routinely take several seconds, and classifying them as indeterminate
+    // destabilizes the launch path.  10 seconds covers a legitimate modeset
+    // while remaining inside the clients' launch tolerances.
+    constexpr int kApplyResultTimeoutMs = 10000;
     constexpr int kRevertAcceptedTimeoutMs = 2000;
 
     bool shutdown_requested() {

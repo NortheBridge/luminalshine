@@ -31,6 +31,7 @@ using platf::dxgi::vgd_ring_liveness_t;
 using platf::dxgi::vgd_ring_reason_e;
 using platf::dxgi::vgd_ring_sample_t;
 using platf::dxgi::vgd_ring_verdict_e;
+using platf::dxgi::vgd_worker_ring_binding_e;
 namespace vgd_ring_state = platf::dxgi::vgd_ring_state;
 using namespace std::chrono_literals;
 
@@ -61,6 +62,78 @@ namespace {
     return s;
   }
 }  // namespace
+
+TEST(VgdWorkerRingBinding, AcceptsOnlyThePreFirstSurfaceProvisionalContract) {
+  using platf::dxgi::classify_worker_ring_binding;
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::rebuilding, 3, 0, 0, 0, 0x0c
+    ),
+    vgd_worker_ring_binding_e::provisional
+  );
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::rebuilding, 3, 1, 0, 0, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  ) << "zero flags stop being provisional after any frame has been published";
+}
+
+TEST(VgdWorkerRingBinding, AcceptsTheCommittedPostModesetContract) {
+  using platf::dxgi::classify_worker_ring_binding;
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::active, 9, 42, 0x0c, 0, 0x0c
+    ),
+    vgd_worker_ring_binding_e::ready
+  );
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::active, 9, 42, 0x0c, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::ready
+  );
+}
+
+TEST(VgdWorkerRingBinding, RejectsDeadStaleAndIncompatibleRings) {
+  using platf::dxgi::classify_worker_ring_binding;
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::dead, 9, 42, 0x0c, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  );
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::active, 10, 42, 0x0c, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  );
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::active, 9, 42, 0x04, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  );
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::active, 9, 0, 0x0c, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  ) << "ACTIVE without a published frame is not capture-ready";
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      0, vgd_ring_state::rebuilding, 9, 42, 0x0c, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  ) << "a rebuilding generation is recovery state, not startup admission";
+  EXPECT_EQ(
+    classify_worker_ring_binding(
+      -1, vgd_ring_state::active, 9, 42, 0x0c, 9, 0x0c
+    ),
+    vgd_worker_ring_binding_e::reject
+  );
+}
 
 TEST(VgdRingLiveness, HealthyRingIsConsumed) {
   vgd_ring_liveness_t live;

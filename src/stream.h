@@ -73,6 +73,19 @@ namespace stream {
 
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session);
     int start(session_t &session, const std::string &addr_string);
+
+    /**
+     * @brief True for clients that enforce a hard first-video deadline
+     *        (Xbox / webOS Moonlight ports), identified by paired-client name.
+     */
+    bool strict_first_frame_client(std::string_view client_name);
+
+    /**
+     * @brief Wait (bounded, shutdown-aware) until the session's video
+     *        pipeline reports it can deliver its first packet.
+     */
+    bool wait_video_pipeline_ready(session_t &session, std::chrono::milliseconds timeout);
+
     void stop(session_t &session);
     void join(session_t &session);
     state_e state(session_t &session);

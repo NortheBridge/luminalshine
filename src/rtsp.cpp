@@ -591,15 +591,45 @@ namespace rtsp_stream {
       launch_event.raise(std::move(launch_session));
 
       // Arm the timer to expire this launch session if the client times out
-      raised_timer.expires_after(config::stream.ping_timeout);
-      raised_timer.async_wait([this](const boost::system::error_code &ec) {
-        if (!ec) {
+      arm_launch_timer(config::stream.ping_timeout);
+    }
+
+    /**
+     * @brief Arm (or re-arm) the pending-launch expiry timer.
+     *
+     * The generation counter makes stale handlers inert: a handler whose
+     * deadline elapsed just before a re-arm is queued with a SUCCESS error
+     * code that expires_after cannot revoke — without the generation check it
+     * would pop the launch event despite the extension, rejecting the
+     * client's next RTSP connection with "No pending session". The mutex
+     * serializes the asio timer object across the nvhttp, control and RTSP
+     * threads that all reach it.
+     */
+    void arm_launch_timer(std::chrono::milliseconds timeout) {
+      std::lock_guard lg {_launch_timer_mutex};
+      const auto generation = ++_launch_timer_generation;
+      raised_timer.expires_after(timeout);
+      raised_timer.async_wait([this, generation](const boost::system::error_code &ec) {
+        if (!ec && generation == _launch_timer_generation.load(std::memory_order_acquire)) {
           auto discarded = launch_event.pop(0s);
           if (discarded) {
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
           }
         }
       });
+    }
+
+    /**
+     * @brief Re-arm the pending-launch expiry timer.
+     *
+     * Used when ANNOUNCE has successfully started a session for a
+     * strict-first-frame client and the response is deliberately held while
+     * the video pipeline initializes: the original 10-second timer would pop
+     * the launch event mid-handshake and reject the client's next RTSP
+     * connection with "No pending session".
+     */
+    void extend_launch_timer(std::chrono::milliseconds timeout) {
+      arm_launch_timer(timeout);
     }
 
     /**
@@ -614,7 +644,11 @@ namespace rtsp_stream {
         if (launch_session->id != launch_session_id) {
           BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
         } else {
-          raised_timer.cancel();
+          {
+            std::lock_guard lg {_launch_timer_mutex};
+            ++_launch_timer_generation;  // invalidate any queued expiry handler
+            raised_timer.cancel();
+          }
           launch_event.pop();
         }
       }
@@ -779,6 +813,8 @@ namespace rtsp_stream {
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
     boost::asio::steady_timer raised_timer {io_context};
+    std::mutex _launch_timer_mutex;
+    std::atomic<std::uint64_t> _launch_timer_generation {0};
 
     std::shared_ptr<socket_t> next_socket;
   };
@@ -1361,6 +1397,31 @@ namespace rtsp_stream {
       respond(sock, session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return;
     }
+
+#ifdef _WIN32
+    // Strict-first-frame clients (Xbox and webOS Moonlight ports embedding
+    // older moonlight-common-c) enforce a hard ~10-second no-video budget
+    // from stream start and do not credit the runt keepalive. Hold the
+    // ANNOUNCE response for those clients until the video pipeline reports it
+    // can deliver, so their clock starts when video can actually flow. The
+    // 8-second cap stays inside their 10-second per-RTSP-request budget, and
+    // every host-side clock this hold overlaps is explicitly extended:
+    // the pending-launch timer here, and the recv_ping/pingTimeout windows in
+    // session::alloc/start via session_t::strict_client.
+    if (stream::session::strict_first_frame_client(session.client_name)) {
+      server->extend_launch_timer(std::chrono::seconds(30));
+      const auto hold_started = std::chrono::steady_clock::now();
+      if (stream::session::wait_video_pipeline_ready(*stream_session, std::chrono::milliseconds(8000))) {
+        BOOST_LOG(info) << "RTSP admission: strict client '" << session.client_name
+                        << "'; held ANNOUNCE "
+                        << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - hold_started).count()
+                        << " ms until the video pipeline reported ready.";
+      } else {
+        BOOST_LOG(warning) << "RTSP admission: strict client '" << session.client_name
+                           << "'; video pipeline not ready within the 8-second hold; responding anyway.";
+      }
+    }
+#endif
 
     respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
   }

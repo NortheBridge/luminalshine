@@ -358,6 +358,10 @@ namespace platf {
 
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
+    /// Capture-source epoch assigned before this image leaves its capture
+    /// callback.  An isolated encoder uses it to prove that a packet was not
+    /// produced by a display/encoder session retired during reinitialization.
+    std::uint64_t capture_generation = 0;
 
     virtual ~img_t() = default;
   };

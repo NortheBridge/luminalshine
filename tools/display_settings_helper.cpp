@@ -4342,15 +4342,15 @@ namespace {
           if (cancelled()) {
             return;
           }
-          refresh_shell_after_display_change();
-          if (cancelled()) {
-            return;
-          }
-          schedule_hdr_blank_if_needed(wa_hdr_toggle);
-          if (cancelled()) {
-            return;
-          }
 
+          // Reposition physical monitors BEFORE the shell refresh and HDR
+          // blank passes: repositioning is a desktop-geometry modeset, and
+          // every capture backend (WGC in particular) tears down and
+          // reinitializes when the desktop bounding box changes. Sequenced
+          // after those passes it landed ~9 s into the session — mid
+          // NVENC-build inside the isolated worker — forcing a second
+          // multi-second encoder build and blowing the strict-client
+          // first-video budget (observed live 2026-08-07).
           if (requested_virtual_layout) {
             BOOST_LOG(info) << "Display helper: requested virtual display layout=" << *requested_virtual_layout;
           }
@@ -4426,6 +4426,18 @@ namespace {
             }
             BOOST_LOG(info) << "Display helper: monitor position overrides applied result="
                             << (pending_overrides.empty() ? "true" : "false");
+          }
+
+          if (cancelled()) {
+            return;
+          }
+          refresh_shell_after_display_change();
+          if (cancelled()) {
+            return;
+          }
+          schedule_hdr_blank_if_needed(wa_hdr_toggle);
+          if (cancelled()) {
+            return;
           }
 
           // Restore physical monitor refresh rates from pre-VD-creation snapshot.

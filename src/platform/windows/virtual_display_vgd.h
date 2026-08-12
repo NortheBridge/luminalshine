@@ -88,9 +88,13 @@ namespace VDISPLAY::vgd {
   /// otherwise the session whose recorded display name matches wins.
   std::optional<RingTargetInfo> ring_target_for_display(const std::string &display_name);
 
-  /// Strict IPC handoff lookup: unlike ring_target_for_display(), this never
-  /// adopts a sole/unnamed session. It requires an exact active GDI display
-  /// match and snapshots the current ACTIVE ring generation.
+  /// IPC handoff lookup. It first resolves/adopts the active GDI display using
+  /// the same identity-safe rules as ring_target_for_display(). If the ring is
+  /// already ACTIVE and publishing (bounded 300 ms probe), the concrete
+  /// generation is exported; otherwise the stable session identity is exported
+  /// with generation zero and the isolated child binds and validates the
+  /// post-modeset generation itself, with a bounded wait on its own long-lived
+  /// ring handle (opening the consumer is what arms surface publication).
   std::optional<RingTargetInfo> ring_target_for_worker_display(const std::string &display_name);
 
   /// Install a process-local ring identity imported by an authenticated

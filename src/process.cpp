@@ -795,8 +795,8 @@ namespace proc {
       _virtual_display_active(other._virtual_display_active),
 #endif
       _pipe(std::move(other._pipe)),
-      _app_prep_it(other._app_prep_it),
-      _app_prep_begin(other._app_prep_begin)
+      _completed_prep_cmds(other._completed_prep_cmds),
+      _pending_env(std::move(other._pending_env))
 #ifdef _WIN32
       ,
       _lossless_thread(std::move(other._lossless_thread)),
@@ -810,11 +810,13 @@ namespace proc {
     _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
     other._lossless_profile_applied = false;
 #endif
+    other._completed_prep_cmds = 0;
+    other._app_id = -1;
   }
 
   proc_t &proc_t::operator=(proc_t &&other) noexcept {
     if (this != &other) {
-      std::scoped_lock lk(_apps_mutex, other._apps_mutex);
+      std::scoped_lock lk(_lifecycle_mutex, other._lifecycle_mutex, _apps_mutex, other._apps_mutex);
 #ifdef _WIN32
       stop_lossless_scaling_support();
 #endif
@@ -828,8 +830,8 @@ namespace proc {
       _process = std::move(other._process);
       _process_group = std::move(other._process_group);
       _pipe = std::move(other._pipe);
-      _app_prep_it = other._app_prep_it;
-      _app_prep_begin = other._app_prep_begin;
+      _completed_prep_cmds = other._completed_prep_cmds;
+      _pending_env = std::move(other._pending_env);
 #ifdef _WIN32
       _lossless_thread = std::move(other._lossless_thread);
       _lossless_stop_requested.store(other._lossless_stop_requested.load(std::memory_order_acquire), std::memory_order_release);
@@ -841,6 +843,8 @@ namespace proc {
       _virtual_display_active = other._virtual_display_active;
       other._lossless_profile_applied = false;
 #endif
+      other._completed_prep_cmds = 0;
+      other._app_id = -1;
     }
     return *this;
   }
@@ -1077,9 +1081,14 @@ namespace proc {
   }
 
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     // Ensure starting from a clean slate
     const bool skip_display_revert = launch_session && launch_session->display_config_preapplied;
     terminate(skip_display_revert);
+    if (_pending_env) {
+      _env = std::move(*_pending_env);
+      _pending_env.reset();
+    }
 
 #ifdef _WIN32
     std::optional<std::filesystem::path> resolved_lossless_exe_path;
@@ -1157,8 +1166,7 @@ namespace proc {
         apply_refresh_override(saturating_double(launch_session->fps));
       }
     }
-    _app_prep_begin = std::begin(_app.prep_cmds);
-    _app_prep_it = _app_prep_begin;
+    _completed_prep_cmds = 0;
 
     // Add Stream-specific environment variables
     _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
@@ -1394,8 +1402,8 @@ namespace proc {
     std::string lossless_install_dir_hint;
 #endif
 
-    for (; _app_prep_it != std::end(_app.prep_cmds); ++_app_prep_it) {
-      auto &cmd = *_app_prep_it;
+    for (; _completed_prep_cmds < _app.prep_cmds.size(); ++_completed_prep_cmds) {
+      const auto &cmd = _app.prep_cmds[_completed_prep_cmds];
 
       // Skip empty commands
       if (cmd.do_cmd.empty()) {
@@ -1699,6 +1707,7 @@ namespace proc {
   }
 
   int proc_t::running() {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
 #ifndef _WIN32
     // On POSIX OSes, we must periodically wait for our children to avoid
     // them becoming zombies. This must be synchronized carefully with
@@ -1781,6 +1790,7 @@ namespace proc {
   }
 
   void proc_t::terminate(bool skip_display_revert) {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     std::error_code ec;
     const bool had_active_app = _app_id > 0;
     placebo = false;
@@ -1828,8 +1838,16 @@ namespace proc {
     const bool should_dispatch_revert = has_run && !proc::proc.get_last_run_app_name().empty();
     const auto undo_timeout = std::max(_app.exit_timeout, std::chrono::seconds(15));
 
-    for (; _app_prep_it != _app_prep_begin; --_app_prep_it) {
-      auto &cmd = *(_app_prep_it - 1);
+    if (_completed_prep_cmds > _app.prep_cmds.size()) {
+      BOOST_LOG(error) << "Prep command completion count exceeded the active command snapshot; clamping teardown safely.";
+      _completed_prep_cmds = _app.prep_cmds.size();
+    }
+    while (_completed_prep_cmds > 0) {
+      const auto index = --_completed_prep_cmds;
+      // Own the command for the entire asynchronous launch/wait interval.
+      // Configuration refreshes and proc moves must never invalidate command
+      // text that an elevated teardown path is still using.
+      const cmd_t cmd = _app.prep_cmds[index];
 
       if (cmd.undo_cmd.empty()) {
         continue;
@@ -1942,7 +1960,7 @@ namespace proc {
   }
 
   active_session_guard_t proc_t::active_session_guard() const {
-    std::scoped_lock lk(_apps_mutex);
+    std::scoped_lock lk(_lifecycle_mutex, _apps_mutex);
     active_session_guard_t guard;
     guard.has_active_app = _app_id > 0;
     guard.playnite_id = guard.has_active_app ? _app.playnite_id : std::string();
@@ -1972,6 +1990,7 @@ namespace proc {
   }
 
   std::string proc_t::get_last_run_app_name() {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     return _app.name;
   }
 
@@ -2015,6 +2034,7 @@ namespace proc {
   }
 
   std::string proc_t::get_running_app_exe_name() {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     if (_app_id <= 0) {
       return {};
     }
@@ -2022,12 +2042,13 @@ namespace proc {
   }
 
   bool proc_t::last_run_app_frame_gen_limiter_fix() const {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     return _app.frame_gen_limiter_fix;
   }
 
   bool proc_t::is_launch_deferred() const {
 #ifdef _WIN32
-    std::scoped_lock lk(_apps_mutex);
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     return _deferred_launch;
 #else
     return false;
@@ -2828,19 +2849,29 @@ namespace proc {
   }
 
   void proc_t::update_apps(std::vector<ctx_t> &&apps, bp::environment &&env) {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     // Replace app list and environment while keeping current running app intact
     {
       std::scoped_lock lk(_apps_mutex);
       _apps = std::move(apps);
-      _env = std::move(env);
+      if (_app_id > 0) {
+        // The active app's environment is an immutable execution snapshot.
+        // Apply refreshed values to the next launch after teardown completes.
+        _pending_env = std::move(env);
+      } else {
+        _env = std::move(env);
+        _pending_env.reset();
+      }
     }
   }
 
   std::vector<ctx_t> proc_t::release_apps() {
+    std::scoped_lock lk(_lifecycle_mutex, _apps_mutex);
     return std::move(_apps);
   }
 
   bp::environment proc_t::release_env() {
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
     return std::move(_env);
   }
 }  // namespace proc

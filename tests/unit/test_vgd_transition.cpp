@@ -21,6 +21,7 @@
   // local includes
   #include "../tests_common.h"
   #include "src/platform/windows/vgd_transition.h"
+  #include "src/platform/windows/video_worker.h"
   #include "src/platform/windows/virtual_display_vgd.h"
 
 namespace {
@@ -38,6 +39,81 @@ namespace {
     EXPECT_FALSE(VDISPLAY::vgd::ring_target_for_display("\\\\.\\DISPLAY78").has_value());
     VDISPLAY::vgd::set_worker_ring_target(std::nullopt);
     EXPECT_FALSE(VDISPLAY::vgd::has_worker_ring_target());
+  }
+
+  TEST(VgdWorkerRingTarget, DeferredGenerationIdentitySurvivesExclusiveHandoff) {
+    const VDISPLAY::vgd::RingTargetInfo imported {0xfedcba9876543210ULL, 4, 0x4, 0};
+    VDISPLAY::vgd::set_worker_ring_target(imported, "\\\\.\\DISPLAY91");
+
+    const auto resolved = VDISPLAY::vgd::ring_target_for_display("\\\\.\\DISPLAY91");
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(resolved->session_id, imported.session_id);
+    EXPECT_EQ(resolved->ring_slots, imported.ring_slots);
+    EXPECT_EQ(resolved->transport_flags, imported.transport_flags);
+    EXPECT_EQ(resolved->generation, 0u);
+    EXPECT_FALSE(VDISPLAY::vgd::ring_target_for_display("\\\\.\\DISPLAY92").has_value());
+
+    VDISPLAY::vgd::set_worker_ring_target(std::nullopt);
+  }
+
+  TEST(VideoWorkerReadiness, AnyDecodableIdrCanAdmitAClient) {
+    // The synthetic bootstrap IDR is a decodable frame: admitting it keeps the
+    // client's connection budget independent of a slow capture source, exactly
+    // like the pre-worker pipeline's blank "alive" frame.
+    video::packet_raw_generic placeholder {{0x01}, 1, true};
+    placeholder.capture_placeholder = true;
+    EXPECT_TRUE(platf::video_worker::packet_can_signal_capture_ready(placeholder));
+
+    video::packet_raw_generic idr {{0x01, 0x02}, 3, true};
+    idr.capture_placeholder = false;
+    EXPECT_TRUE(platf::video_worker::packet_can_signal_capture_ready(idr));
+  }
+
+  TEST(VideoWorkerReadiness, DeltaFramesCannotAdmitAClient) {
+    video::packet_raw_generic delta {{0x02}, 2, false};
+    EXPECT_FALSE(platf::video_worker::packet_can_signal_capture_ready(delta));
+  }
+
+  TEST(VideoWorkerGeneration, RetiredEncoderPacketCannotEnterReplacementGeneration) {
+    EXPECT_FALSE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      4, false, true, 5, true, false
+    ));
+    EXPECT_FALSE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      4, false, true, 5, true, true
+    ));
+  }
+
+  TEST(VideoWorkerGeneration, PlaceholderIdrBootstrapsOnlyTheFirstAdmission) {
+    // First admission ever: the synthetic bootstrap IDR may open the pipe.
+    EXPECT_TRUE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      1, true, true, 1, true, true
+    ));
+    // A generation transition (capture reinit) still requires a real IDR.
+    EXPECT_FALSE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      5, true, true, 5, true, false
+    ));
+    // A zero generation is never admissible, bootstrap or not.
+    EXPECT_FALSE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      0, true, true, 1, true, true
+    ));
+  }
+
+  TEST(VideoWorkerGeneration, DeltaCannotAdmitGeneration) {
+    EXPECT_FALSE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      5, false, false, 5, true, false
+    ));
+    EXPECT_FALSE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      5, false, false, 5, true, true
+    ));
+  }
+
+  TEST(VideoWorkerGeneration, RealIdrAdmitsGenerationAndThenDeltasContinue) {
+    EXPECT_TRUE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      6, false, true, 5, true, false
+    ));
+    EXPECT_TRUE(platf::video_worker::packet_metadata_can_enter_capture_generation(
+      6, false, false, 6, false, false
+    ));
   }
 
   TEST(VgdTransitionCaptureNote, RecordsKindDisplayAndBumpsSequence) {

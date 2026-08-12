@@ -276,6 +276,12 @@ namespace video {
     std::vector<replace_t> *replacements = nullptr;
     void *channel_data = nullptr;
     bool after_ref_frame_invalidation = false;
+    /// True when this packet was encoded from the synthetic bootstrap image
+    /// before the capture backend delivered its first real frame.
+    bool capture_placeholder = false;
+    /// Capture-source epoch inherited from the image/session that produced the
+    /// packet. The isolated worker must never replace this at IPC-send time.
+    std::uint64_t capture_generation = 0;
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
   };
@@ -337,6 +343,35 @@ namespace video {
   };
 
   using packet_t = std::unique_ptr<packet_raw_t>;
+
+  // Encoded frames form a reference chain. Clearing a full queue (the generic
+  // mailbox default) silently removes those references and makes every later
+  // predictive frame undecodable until the next IDR. Keep only a few encoded
+  // frames in flight and apply stop-aware backpressure instead. Capture image
+  // delivery is already latest-frame-wins, so pressure is shed before encode
+  // without growing latency or damaging the bitstream. Depth matters doubly
+  // because the worker child and the session each hold one of these queues in
+  // series: every queued frame is standing capture-to-send latency at the
+  // REAL encode cadence (observed ~21 fps on the 4K HDR compatibility path,
+  // i.e. ~47 ms per slot). Deeper queues turned sub-nominal encode rates
+  // into a permanent latency FIFO. Two frames per queue still decouples the
+  // encoder from IPC/egress jitter (one being consumed + one queued behind
+  // it) while capping the pair's standing contribution at 4 slots — in the
+  // 2026-08-07 standing-latency round the 3+3 pair plus the in-flight hops
+  // held ~10 slots of post-encoder inventory and the capture-to-send age
+  // equilibrated right at the 250 ms warning floor.
+  inline constexpr std::uint32_t kPacketQueueDepth = 2;
+
+  inline safe::mail_raw_t::queue_t<packet_t> packet_queue(
+    const safe::mail_t &mailbox,
+    std::string_view id
+  ) {
+    return mailbox->queue<packet_t>(
+      id,
+      kPacketQueueDepth,
+      safe::queue_overflow_e::block
+    );
+  }
 
   struct hdr_info_raw_t {
     explicit hdr_info_raw_t(bool enabled):
