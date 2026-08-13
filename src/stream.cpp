@@ -491,6 +491,18 @@ namespace stream {
         std::uint64_t metric_age_max_ms = 0;
         std::uint32_t metric_aged_frames = 0;
         std::uint32_t metric_untimestamped_frames = 0;
+
+        // Broadcast-cycle breakdown, same 30 s window. The broadcast loop is
+        // single-threaded, so whenever the upstream queues are full the
+        // arrival cadence EQUALS this loop's cycle time — these buckets name
+        // the egress-side bottleneck directly: pop-wait (idle, upstream
+        // starved), pace (wire-pacing sleeps), send (socket submits), and
+        // everything else (FEC/encrypt/prep) derived as frame minus the rest.
+        std::uint64_t metric_cycle_pop_ns = 0;
+        std::uint64_t metric_cycle_pace_ns = 0;
+        std::uint64_t metric_cycle_send_ns = 0;
+        std::uint64_t metric_cycle_frame_ns = 0;
+        std::uint32_t metric_cycle_frames = 0;
       } transport;
 
       // Set by the egress thread once the first complete frame has been
@@ -1754,8 +1766,10 @@ namespace stream {
       return;
     }
 
-    while (auto packet = packets->pop()) {
-      if (shutdown_event->peek()) {
+    while (true) {
+      const auto cycle_pop_started = std::chrono::steady_clock::now();
+      auto packet = packets->pop();
+      if (!packet || shutdown_event->peek()) {
         break;
       }
 
@@ -1768,6 +1782,9 @@ namespace stream {
 
       auto &transport = session->video.transport;
       const auto admission_now = std::chrono::steady_clock::now();
+      transport.metric_cycle_pop_ns += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(admission_now - cycle_pop_started).count()
+      );
       if (transport.epoch == std::chrono::steady_clock::time_point {}) {
         transport.epoch = admission_now;
         transport.next_frame_start = admission_now;
@@ -1826,18 +1843,32 @@ namespace stream {
             std::chrono::duration_cast<std::chrono::seconds>(admission_now - transport.metric_window_start).count(),
             1
           );
+          const auto popped = std::max<std::uint32_t>(transport.metric_aged_frames + transport.metric_untimestamped_frames, 1);
+          const auto sent = std::max<std::uint32_t>(transport.metric_cycle_frames, 1);
+          const auto other_ns = transport.metric_cycle_frame_ns -
+                                std::min(transport.metric_cycle_frame_ns, transport.metric_cycle_pace_ns + transport.metric_cycle_send_ns);
           BOOST_LOG(info) << "Video transport window: " << transport.metric_aged_frames << " timed + "
                           << transport.metric_untimestamped_frames << " untimed frames over " << secs
                           << " s (~" << (transport.metric_aged_frames + transport.metric_untimestamped_frames) / secs
                           << " fps arrived); capture-to-send age avg="
                           << transport.metric_age_sum_ms / transport.metric_aged_frames
-                          << " ms max=" << transport.metric_age_max_ms << " ms.";
+                          << " ms max=" << transport.metric_age_max_ms
+                          << " ms. Broadcast cycle avg ms: pop-wait=" << (transport.metric_cycle_pop_ns / 1e6 / popped)
+                          << " prep=" << (other_ns / 1e6 / sent)
+                          << " pace=" << (transport.metric_cycle_pace_ns / 1e6 / sent)
+                          << " send=" << (transport.metric_cycle_send_ns / 1e6 / sent)
+                          << " (" << transport.metric_cycle_frames << " sent frames).";
         }
         transport.metric_window_start = admission_now;
         transport.metric_age_sum_ms = 0;
         transport.metric_age_max_ms = 0;
         transport.metric_aged_frames = 0;
         transport.metric_untimestamped_frames = 0;
+        transport.metric_cycle_pop_ns = 0;
+        transport.metric_cycle_pace_ns = 0;
+        transport.metric_cycle_send_ns = 0;
+        transport.metric_cycle_frame_ns = 0;
+        transport.metric_cycle_frames = 0;
       }
       const auto previous_submitted = transport.qos.last_submitted_frame;
       const auto admission = video_qos::evaluate(
@@ -2164,6 +2195,9 @@ namespace stream {
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
                   timer->sleep_for(due - now);
+                  transport.metric_cycle_pace_ns += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - now).count()
+                  );
                 }
 
                 ratecontrol_group_packets_sent = 0;
@@ -2174,6 +2208,7 @@ namespace stream {
               batch_info.block_count = current_batch_size;
 
               frame_send_batch_latency_logger.first_point_now();
+              const auto cycle_send_started = std::chrono::steady_clock::now();
               // Use a batched send if it's supported on this platform
               if (!platf::send_batch(batch_info)) {
                 // Batched send is not available, so send each packet individually
@@ -2194,6 +2229,9 @@ namespace stream {
                 }
               }
               frame_send_batch_latency_logger.second_point_now_and_log();
+              transport.metric_cycle_send_ns += static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - cycle_send_started).count()
+              );
 
               ratecontrol_group_packets_sent += current_batch_size;
               ratecontrol_frame_packets_sent += current_batch_size;
@@ -2254,6 +2292,11 @@ namespace stream {
           session->telemetry.payload_bytes.fetch_add(packet->data_size(), std::memory_order_relaxed);
           telemetry_flush(session);
         }
+
+        transport.metric_cycle_frame_ns += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - admission_now).count()
+        );
+        ++transport.metric_cycle_frames;
       } catch (const std::exception &e) {
         video_qos::submission_failed(transport.qos, packet->is_idr());
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();

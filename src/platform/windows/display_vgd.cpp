@@ -1137,9 +1137,18 @@ namespace platf::dxgi {
     // There is no wake event — the section is pure shared memory — so poll at
     // 1 ms granularity; the base capture loop paces us to the client rate and
     // usually calls with timeout 0.
+    //
+    // The poll sleep MUST be the high-resolution waitable timer: a plain
+    // 1 ms std sleep in this windowless worker process costs a full timer
+    // quantum (15.6 ms — more under Windows 11 background timer coalescing),
+    // which capped fresh-frame arrivals at a hard ~21 fps in the field.
+    if (!_claim_poll_timer) {
+      _claim_poll_timer = platf::create_high_precision_timer();
+    }
     VgdFrame frame {};
     bool claimed = false;
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto claim_wait_started = std::chrono::steady_clock::now();
+    const auto deadline = claim_wait_started + timeout;
     while (true) {
       if (vgd_ring_claim(_ring, &frame)) {
         if (frame.sequence > _last_sequence) {
@@ -1171,8 +1180,15 @@ namespace platf::dxgi {
           break;
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      if (_claim_poll_timer && *_claim_poll_timer) {
+        _claim_poll_timer->sleep_for(std::chrono::milliseconds(1));
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
     }
+    // Taken at loop exit so the telemetry's claim-wait covers only the poll,
+    // not the copy/fence work that follows.
+    const auto claim_acquired_at = std::chrono::steady_clock::now();
     if (!claimed) {
       // Nothing published — but with the cursor on its own plane, cursor
       // motion over an idle desktop produces no frames at all. Redeliver
@@ -1377,6 +1393,49 @@ namespace platf::dxgi {
     vgd_ring_release(_ring, frame.index);
     _last_sequence = frame.sequence;
     _liveness.note_delivered();
+
+    // Cadence telemetry: separates "the driver only published N fps" from
+    // "the host only claimed N fps" — the two halves of the 21 fps ceiling
+    // question — and shows what the claim poll actually cost per frame.
+    {
+      const auto cadence_now = std::chrono::steady_clock::now();
+      const auto claim_wait = claim_acquired_at - claim_wait_started;
+      if (_cadence_window_start == std::chrono::steady_clock::time_point {} ||
+          frame.sequence < _cadence_window_base_seq) {
+        // First frame of this reader, or the ring generation restarted its
+        // sequence counter — open a fresh window.
+        _cadence_window_start = cadence_now;
+        _cadence_window_base_seq = frame.sequence > 0 ? frame.sequence - 1 : 0;
+        _cadence_claimed = 0;
+        _cadence_claim_wait = {};
+        _cadence_claim_wait_max = {};
+      }
+      ++_cadence_claimed;
+      _cadence_claim_wait += claim_wait;
+      _cadence_claim_wait_max = std::max<std::chrono::nanoseconds>(_cadence_claim_wait_max, claim_wait);
+
+      const auto window_elapsed = cadence_now - _cadence_window_start;
+      if (window_elapsed >= std::chrono::seconds(30)) {
+        const auto seconds = std::chrono::duration_cast<std::chrono::duration<double>>(window_elapsed).count();
+        const auto published = frame.sequence - _cadence_window_base_seq;
+        const auto claim_wait_avg_ms = _cadence_claimed ?
+                                         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(_cadence_claim_wait).count() / _cadence_claimed :
+                                         0.0;
+        BOOST_LOG(info) << "LuminalVGD capture cadence: claimed " << _cadence_claimed
+                        << " of " << published << " published frames over "
+                        << static_cast<int>(seconds) << " s (~"
+                        << static_cast<int>(_cadence_claimed / seconds) << " claimed fps, ~"
+                        << static_cast<int>(published / seconds) << " published fps); claim-wait avg="
+                        << claim_wait_avg_ms << " ms max="
+                        << std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(_cadence_claim_wait_max).count()
+                        << " ms.";
+        _cadence_window_start = cadence_now;
+        _cadence_window_base_seq = frame.sequence;
+        _cadence_claimed = 0;
+        _cadence_claim_wait = {};
+        _cadence_claim_wait_max = {};
+      }
+    }
 
     d3d_img->blank = false;
     d3d_img->format = capture_format;

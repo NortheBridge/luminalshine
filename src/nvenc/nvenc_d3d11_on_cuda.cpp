@@ -17,6 +17,16 @@
 
   // local includes
   #include "nvenc_utils.h"
+  #include "src/platform/common.h"
+
+  #include <chrono>
+  #include <thread>
+
+  // ffnvcodec's minimal dynlink_cuda.h defines only CU_CTX_SCHED_BLOCKING_SYNC.
+  // The value is fixed CUDA driver ABI (cuda.h, CUctx_flags).
+  #ifndef CU_CTX_SCHED_YIELD
+    #define CU_CTX_SCHED_YIELD 2
+  #endif
 
 namespace nvenc {
 
@@ -34,6 +44,18 @@ namespace nvenc {
       {
         auto autopop_context = push_context();
 
+        // A failed frame can leave the copy targeting cuda_surface pending
+        // on the interop stream (only reachable when the GPU wedged). Give
+        // it a bounded drain so the cuMemFree below relies on documented
+        // ordering instead of the driver's implicit synchronization.
+        if (interop_stream && cuda_functions.cuStreamQuery) {
+          const auto drain_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+          while (cuda_functions.cuStreamQuery(interop_stream) == CUDA_ERROR_NOT_READY &&
+                 std::chrono::steady_clock::now() < drain_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+        }
+
         if (cuda_d3d_input_texture) {
           if (cuda_failed(cuda_functions.cuGraphicsUnregisterResource(cuda_d3d_input_texture))) {
             BOOST_LOG(error) << "NvEnc: cuGraphicsUnregisterResource() failed: error " << last_cuda_error;
@@ -46,6 +68,13 @@ namespace nvenc {
             BOOST_LOG(error) << "NvEnc: cuMemFree() failed: error " << last_cuda_error;
           }
           cuda_surface = 0;
+        }
+
+        if (interop_stream) {
+          if (cuda_functions.cuStreamDestroy && cuda_failed(cuda_functions.cuStreamDestroy(interop_stream))) {
+            BOOST_LOG(error) << "NvEnc: cuStreamDestroy() failed: error " << last_cuda_error;
+          }
+          interop_stream = nullptr;
         }
       }
 
@@ -102,6 +131,18 @@ namespace nvenc {
         BOOST_LOG(error) << "NvEnc: missing CUDA functions in " << dll_name;
         FreeLibrary(cuda_functions.dll);
         cuda_functions = {};
+      } else if (!load_function(cuda_functions.cuStreamCreate, "cuStreamCreate") ||
+                 !load_function(cuda_functions.cuStreamDestroy, "cuStreamDestroy_v2") ||
+                 !load_function(cuda_functions.cuMemcpy2DAsync, "cuMemcpy2DAsync_v2") ||
+                 !load_function(cuda_functions.cuStreamQuery, "cuStreamQuery")) {
+        // Optional stream-ordered set: every driver this host supports has
+        // them, but their absence must degrade to the synchronous interop
+        // path, not disable the encoder.
+        BOOST_LOG(warning) << "NvEnc: stream-ordered CUDA interop unavailable; using synchronous interop.";
+        cuda_functions.cuStreamCreate = nullptr;
+        cuda_functions.cuStreamDestroy = nullptr;
+        cuda_functions.cuMemcpy2DAsync = nullptr;
+        cuda_functions.cuStreamQuery = nullptr;
       }
     } else {
       BOOST_LOG(debug) << "NvEnc: couldn't load CUDA dynamic library " << dll_name;
@@ -114,9 +155,19 @@ namespace nvenc {
           SUCCEEDED(d3d_device->QueryInterface(IID_PPV_ARGS(&dxgi_device))) &&
           SUCCEEDED(dxgi_device->GetAdapter(&dxgi_adapter))) {
         CUdevice cuda_device;
+        // SCHED_YIELD, not SCHED_BLOCKING_SYNC: synchronize_input_buffer()
+        // performs three synchronous CUDA calls per frame (map, copy,
+        // unmap), and on OS builds that quantize blocking-primitive wakes
+        // to the timer interrupt (observed on Windows 11 Canary, which also
+        // ignores timer-resolution raises), BLOCKING_SYNC cost a full
+        // ~15.6 ms quantum per call — a hard 3x15.6 = 47 ms/frame encode
+        // cadence (~21 fps) on the yuv444 10-bit path while the GPU work
+        // being awaited measured sub-millisecond. YIELD spin-yields instead:
+        // wake latency is scheduler-granular and the CPU cost is bounded by
+        // those sub-millisecond waits on this format's path only.
         if (cuda_succeeded(cuda_functions.cuInit(0)) &&
             cuda_succeeded(cuda_functions.cuD3D11GetDevice(&cuda_device, dxgi_adapter)) &&
-            cuda_succeeded(cuda_functions.cuCtxCreate(&cuda_context, CU_CTX_SCHED_BLOCKING_SYNC, cuda_device)) &&
+            cuda_succeeded(cuda_functions.cuCtxCreate(&cuda_context, CU_CTX_SCHED_YIELD, cuda_device)) &&
             cuda_succeeded(cuda_functions.cuCtxPopCurrent(&cuda_context))) {
           device = cuda_context;
         } else {
@@ -183,6 +234,17 @@ namespace nvenc {
           return false;
         }
       }
+
+      if (!interop_stream && cuda_functions.cuStreamCreate) {
+        if (cuda_failed(cuda_functions.cuStreamCreate(&interop_stream, CU_STREAM_NON_BLOCKING))) {
+          BOOST_LOG(warning) << "NvEnc: cuStreamCreate() failed (error " << last_cuda_error
+                             << "); falling back to synchronous CUDA interop.";
+          interop_stream = nullptr;
+        }
+      }
+      if (!interop_poll_timer) {
+        interop_poll_timer = platf::create_high_precision_timer();
+      }
     }
 
     if (!registered_input_buffer) {
@@ -212,13 +274,30 @@ namespace nvenc {
       return false;
     }
 
-    if (cuda_failed(cuda_functions.cuGraphicsMapResources(1, &cuda_d3d_input_texture, 0))) {
+    // Stream-ordered interop: enqueue map/copy/unmap on the non-blocking
+    // stream and poll completion with the high-resolution timer. The legacy
+    // synchronous sequence parked the host in a WDDM interop wait THREE
+    // times per frame, and OS builds that quantize those wakes to the timer
+    // interrupt (observed on Windows 11 Canary, where timer-resolution
+    // raises and CUDA scheduling flags are both ignored) turned that into a
+    // hard 3 x 15.6 = 47 ms/frame encode cadence (~21 fps) on the yuv444
+    // 10-bit path — for sub-millisecond GPU work. Falls back to the
+    // synchronous sequence when the stream, entry points, or timer are
+    // unavailable.
+    const bool stream_ordered = interop_stream && cuda_functions.cuMemcpy2DAsync &&
+                                cuda_functions.cuStreamQuery &&
+                                interop_poll_timer && *interop_poll_timer;
+    const CUstream stream = stream_ordered ? interop_stream : nullptr;
+
+    const auto phase_started = std::chrono::steady_clock::now();
+    if (cuda_failed(cuda_functions.cuGraphicsMapResources(1, &cuda_d3d_input_texture, stream))) {
       BOOST_LOG(error) << "NvEnc: cuGraphicsMapResources() failed: error " << last_cuda_error;
       return false;
     }
+    const auto phase_mapped = std::chrono::steady_clock::now();
 
     auto unmap = [&]() -> bool {
-      if (cuda_failed(cuda_functions.cuGraphicsUnmapResources(1, &cuda_d3d_input_texture, 0))) {
+      if (cuda_failed(cuda_functions.cuGraphicsUnmapResources(1, &cuda_d3d_input_texture, stream))) {
         BOOST_LOG(error) << "NvEnc: cuGraphicsUnmapResources() failed: error " << last_cuda_error;
         return false;
       }
@@ -243,14 +322,77 @@ namespace nvenc {
       copy_params.WidthInBytes = encoder_params.width * 2;
       copy_params.Height = encoder_params.height * 3;
 
-      if (cuda_failed(cuda_functions.cuMemcpy2D(&copy_params))) {
-        BOOST_LOG(error) << "NvEnc: cuMemcpy2D() failed: error " << last_cuda_error;
+      const CUresult copy_result = stream_ordered ?
+                                     cuda_functions.cuMemcpy2DAsync(&copy_params, stream) :
+                                     cuda_functions.cuMemcpy2D(&copy_params);
+      if (cuda_failed(copy_result)) {
+        BOOST_LOG(error) << "NvEnc: cuMemcpy2D" << (stream_ordered ? "Async" : "")
+                         << "() failed: error " << last_cuda_error;
         return false;
       }
     }
+    const auto phase_copied = std::chrono::steady_clock::now();
 
     unmap_guard.disable();
-    return unmap();
+    if (!unmap()) {
+      return false;
+    }
+    const auto phase_unmapped = std::chrono::steady_clock::now();
+
+    if (stream_ordered) {
+      // NVENC consumes cuda_surface right after this returns; the copy must
+      // be complete first. Poll instead of blocking: cuStreamQuery is a
+      // non-waiting status read, and the poll sleep uses the high-resolution
+      // waitable timer — the one wait primitive this OS build does not
+      // quantize. The deadline mirrors the encoder's own hang philosophy:
+      // a stream that needs a full second for a sub-millisecond copy means
+      // the GPU is wedged, and failing the frame routes into the normal
+      // encoder error/reinit path.
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+      while (true) {
+        const CUresult status = cuda_functions.cuStreamQuery(interop_stream);
+        if (status == CUDA_SUCCESS) {
+          break;
+        }
+        if (status != CUDA_ERROR_NOT_READY) {
+          last_cuda_error = status;
+          BOOST_LOG(error) << "NvEnc: cuStreamQuery() failed: error " << last_cuda_error;
+          return false;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+          BOOST_LOG(error) << "NvEnc: CUDA interop stream did not complete within 1 s; failing this frame.";
+          return false;
+        }
+        interop_poll_timer->sleep_for(std::chrono::microseconds(500));
+      }
+    }
+
+    {
+      const auto phase_done = std::chrono::steady_clock::now();
+      const auto ns = [](auto a, auto b) {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());
+      };
+      interop_phase_map_ns += ns(phase_started, phase_mapped);
+      interop_phase_copy_ns += ns(phase_mapped, phase_copied);
+      interop_phase_unmap_ns += ns(phase_copied, phase_unmapped);
+      interop_phase_poll_ns += ns(phase_unmapped, phase_done);
+      ++interop_phase_frames;
+      if (interop_phase_window_start == std::chrono::steady_clock::time_point {}) {
+        interop_phase_window_start = phase_done;
+      } else if (phase_done - interop_phase_window_start >= std::chrono::seconds(30)) {
+        BOOST_LOG(info) << "CUDA interop phases (" << (stream_ordered ? "stream-ordered" : "synchronous")
+                        << "): " << interop_phase_frames << " frames; avg ms: map="
+                        << (interop_phase_map_ns / 1e6 / interop_phase_frames) << " copy-submit="
+                        << (interop_phase_copy_ns / 1e6 / interop_phase_frames) << " unmap="
+                        << (interop_phase_unmap_ns / 1e6 / interop_phase_frames) << " poll="
+                        << (interop_phase_poll_ns / 1e6 / interop_phase_frames) << ".";
+        interop_phase_window_start = phase_done;
+        interop_phase_map_ns = interop_phase_copy_ns = interop_phase_unmap_ns = interop_phase_poll_ns = 0;
+        interop_phase_frames = 0;
+      }
+    }
+
+    return true;
   }
 
   bool nvenc_d3d11_on_cuda::cuda_succeeded(CUresult result) {

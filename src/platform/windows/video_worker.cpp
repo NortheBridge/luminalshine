@@ -24,6 +24,7 @@
 #include "src/input.h"
 #include "src/logging.h"
 #include "src/platform/windows/display.h"
+#include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 
@@ -360,9 +361,14 @@ namespace platf::video_worker {
       PSECURITY_DESCRIPTOR pipe_descriptor = nullptr;
       if (!make_pipe_security(pipe_security, pipe_descriptor)) return false;
       auto free_pipe_descriptor = util::fail_guard([&] { ::LocalFree(pipe_descriptor); });
+      // Both directions get 4 MiB. The child->parent (inbound) direction is
+      // the VIDEO path: at 25-40 KB per encoded 4K HDR frame the previous
+      // 64 KiB buffer held under two frames, which hard-coupled the worker's
+      // encode cadence to the parent reader's drain cadence — any stall or
+      // quantized wait on either side clock-gated the whole pipeline.
       child.pipe = ::CreateNamedPipeW(full_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                      1, 4 * 1024 * 1024, 64 * 1024, 0, &pipe_security);
+                                      1, 4 * 1024 * 1024, 4 * 1024 * 1024, 0, &pipe_security);
       if (child.pipe == INVALID_HANDLE_VALUE || !launch(child, pipe_name)) return false;
 
       OVERLAPPED connect {};
@@ -501,6 +507,26 @@ namespace platf::video_worker {
   }
 
   int run_child() {
+    // Field diagnosis of the ~21 fps arrival ceiling: one nominal-1ms sleep
+    // in this process cost a full (possibly coalesced) timer quantum. Log
+    // the measured quantum before and after applying the timing profile so
+    // support bundles prove whether the raise was honored on this OS build.
+    const auto measure_sleep_quantum = [](int samples) {
+      std::vector<std::int64_t> us(static_cast<std::size_t>(samples));
+      for (auto &sample : us) {
+        const auto t0 = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(1ms);
+        sample = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+      }
+      std::sort(us.begin(), us.end());
+      return us[us.size() / 2];
+    };
+    const auto quantum_before_us = measure_sleep_quantum(3);
+    platf::apply_video_worker_process_timing();
+    const auto quantum_after_us = measure_sleep_quantum(5);
+    BOOST_LOG(info) << "Video worker: sleep(1ms) quantum " << (quantum_before_us / 1000.0) << " ms before timing profile, "
+                    << (quantum_after_us / 1000.0) << " ms after.";
+
     const auto full_name = L"\\\\.\\pipe\\" + widen_ascii(g_child_pipe);
     HANDLE pipe = INVALID_HANDLE_VALUE;
     const auto deadline = std::chrono::steady_clock::now() + 10s;
@@ -627,6 +653,12 @@ namespace platf::video_worker {
       auto touch = session_mail->event<input::touch_port_t>(mail::touch_port);
       auto chroma = session_mail->event<bool>(mail::chroma_downgrade);
       std::uint64_t admitted_generation = 0;
+      // R15 egress-cycle telemetry: whether this thread spends its time
+      // waiting for the encoder (queue-wait) or for the parent to drain the
+      // pipe (pipe-write). One line per 30 s.
+      auto egress_window_start = std::chrono::steady_clock::now();
+      std::uint64_t egress_queue_wait_ns = 0, egress_write_ns = 0, egress_write_max_ns = 0;
+      std::uint32_t egress_packets = 0;
       while (!shutdown->peek()) {
         bool capture_reinitialized = false;
         generation_t reinitialized_generation {};
@@ -645,7 +677,11 @@ namespace platf::video_worker {
           if (!send(pipe, message_e::capture_reinitializing, &reinitialized_generation, sizeof(reinitialized_generation), kChildPacketSendTimeoutMs)) break;
           continue;
         }
+        const auto egress_pop_started = std::chrono::steady_clock::now();
         if (auto packet = packets->pop(20ms)) {
+          egress_queue_wait_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - egress_pop_started).count()
+          );
           std::lock_guard generation_lock(g_capture_generation_mutex);
           // A reinit can race the queue pop. Drop this now-stale packet; the
           // next loop drains the old generation and publishes its marker
@@ -701,19 +737,51 @@ namespace platf::video_worker {
             if (!send(pipe, message_e::capture_ready, &generation, sizeof(generation), kChildPacketSendTimeoutMs)) break;
             capture_ready_sent.store(true, std::memory_order_release);
           }
+          const auto egress_write_started = std::chrono::steady_clock::now();
           if (!send(pipe, message_e::packet, body.data(), static_cast<std::uint32_t>(body.size()), kChildPacketSendTimeoutMs)) break;
+          const auto egress_write_done = std::chrono::steady_clock::now();
+          const auto write_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(egress_write_done - egress_write_started).count()
+          );
+          egress_write_ns += write_ns;
+          egress_write_max_ns = std::max(egress_write_max_ns, write_ns);
+          ++egress_packets;
+          if (egress_write_done - egress_window_start >= 30s && egress_packets > 0) {
+            BOOST_LOG(info) << "Worker egress cycle: " << egress_packets << " packets in 30 s; avg ms: queue-wait="
+                            << (egress_queue_wait_ns / 1e6 / egress_packets) << " pipe-write="
+                            << (egress_write_ns / 1e6 / egress_packets) << " (pipe-write max="
+                            << (egress_write_max_ns / 1e6) << " ms).";
+            egress_window_start = egress_write_done;
+            egress_queue_wait_ns = egress_write_ns = egress_write_max_ns = 0;
+            egress_packets = 0;
+          }
         }
-        if (auto value = hdr->pop(0ms)) {
-          std::lock_guard lock(write_mutex);
-          if (!send(pipe, message_e::hdr, value.get(), sizeof(video::hdr_info_raw_t), kChildPacketSendTimeoutMs)) break;
+        // peek() before every sideband pop: a timed CV wait that expires on
+        // an EMPTY event costs a full timer quantum on OS builds that
+        // quantize timeout expiry (measured on Windows 11 Canary: even
+        // wait_for(0ms) sleeps ~15.1 ms, while notify-driven wakes stay at
+        // ~0.02 ms). Three unguarded pop(0ms) calls per loop made this
+        // egress cycle a hard ~47 ms — the encoder blocked on the full
+        // packet queue behind it, capping the whole session at ~21 fps.
+        // pop(0ms) on a non-empty event returns without waiting, so the
+        // peek guard removes the stall without changing semantics.
+        if (hdr->peek()) {
+          if (auto value = hdr->pop(0ms)) {
+            std::lock_guard lock(write_mutex);
+            if (!send(pipe, message_e::hdr, value.get(), sizeof(video::hdr_info_raw_t), kChildPacketSendTimeoutMs)) break;
+          }
         }
-        if (auto value = touch->pop(0ms)) {
-          std::lock_guard lock(write_mutex);
-          if (!send(pipe, message_e::touch, &*value, sizeof(*value), kChildPacketSendTimeoutMs)) break;
+        if (touch->peek()) {
+          if (auto value = touch->pop(0ms)) {
+            std::lock_guard lock(write_mutex);
+            if (!send(pipe, message_e::touch, &*value, sizeof(*value), kChildPacketSendTimeoutMs)) break;
+          }
         }
-        if (chroma->pop(0ms)) {
-          std::lock_guard lock(write_mutex);
-          if (!send(pipe, message_e::chroma_downgrade, nullptr, 0, kChildPacketSendTimeoutMs)) break;
+        if (chroma->peek()) {
+          if (chroma->pop(0ms)) {
+            std::lock_guard lock(write_mutex);
+            if (!send(pipe, message_e::chroma_downgrade, nullptr, 0, kChildPacketSendTimeoutMs)) break;
+          }
         }
       }
       // A failed pipe write means the parent is gone or has given up on this

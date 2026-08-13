@@ -10,6 +10,12 @@
   // local includes
   #include "nvenc_d3d11.h"
 
+  #include <memory>
+
+namespace platf {
+  struct high_precision_timer;
+}
+
 namespace nvenc {
 
   /**
@@ -78,6 +84,12 @@ namespace nvenc {
       tcuGraphicsUnmapResources *cuGraphicsUnmapResources;
       tcuGraphicsSubResourceGetMappedArray *cuGraphicsSubResourceGetMappedArray;
       tcuMemcpy2D_v2 *cuMemcpy2D;
+      // Optional stream-ordered interop entry points (loaded best-effort;
+      // absence degrades synchronize_input_buffer to the synchronous path).
+      tcuStreamCreate *cuStreamCreate;
+      tcuStreamDestroy_v2 *cuStreamDestroy;
+      tcuMemcpy2DAsync_v2 *cuMemcpy2DAsync;
+      tcuStreamQuery *cuStreamQuery;
       HMODULE dll;
     } cuda_functions = {};
 
@@ -86,6 +98,26 @@ namespace nvenc {
     CUgraphicsResource cuda_d3d_input_texture = nullptr;
     CUdeviceptr cuda_surface = 0;
     size_t cuda_surface_pitch = 0;
+
+    /// Non-blocking stream carrying the per-frame map/copy/unmap sequence;
+    /// completion is polled with the high-resolution timer instead of the
+    /// host-blocking interop waits, which cost a full timer quantum each on
+    /// OS builds that quantize them (3 calls x 15.6 ms = the 2026-08 hard
+    /// ~21 fps encode cadence on the yuv444 10-bit path).
+    CUstream interop_stream = nullptr;
+    std::unique_ptr<platf::high_precision_timer> interop_poll_timer;
+
+    /// 30 s phase breakdown of synchronize_input_buffer: which interop call
+    /// actually hosts the quantized WDDM waits (map / copy submit / unmap /
+    /// completion poll). Stream-ordering the sequence did not remove the
+    /// stalls, so the next fix is chosen from these numbers, not from API
+    /// documentation.
+    std::chrono::steady_clock::time_point interop_phase_window_start {};
+    std::uint64_t interop_phase_map_ns = 0;
+    std::uint64_t interop_phase_copy_ns = 0;
+    std::uint64_t interop_phase_unmap_ns = 0;
+    std::uint64_t interop_phase_poll_ns = 0;
+    std::uint32_t interop_phase_frames = 0;
   };
 
 }  // namespace nvenc

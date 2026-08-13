@@ -1049,10 +1049,12 @@ namespace nvenc {
     assert(registered_input_buffer);
     assert(output_bitstream);
 
+    const auto phase_start = std::chrono::steady_clock::now();
     if (!synchronize_input_buffer()) {
       BOOST_LOG(error) << "NvEnc: failed to synchronize input buffer";
       return {};
     }
+    const auto phase_input_synced = std::chrono::steady_clock::now();
 
     NV_ENC_MAP_INPUT_RESOURCE mapped_input_buffer = {api::map_input_resource_version(selected_api_version)};
     mapped_input_buffer.registeredResource = registered_input_buffer;
@@ -1061,6 +1063,7 @@ namespace nvenc {
       BOOST_LOG(error) << "NvEnc: NvEncMapInputResource() failed: " << last_nvenc_error_string;
       return {};
     }
+    const auto phase_mapped = std::chrono::steady_clock::now();
     // Record the mapped resource so the encode-wait-timeout path below
     // (and, transitively, destroy_encoder via the PR-C3 async drain) can
     // unmap it AFTER the GPU is provably done with it. Cleared on every
@@ -1101,6 +1104,7 @@ namespace nvenc {
     // mode this defends against. No-op on sync-mode encoders.
     reset_async_event();
 
+    const auto phase_presubmit = std::chrono::steady_clock::now();
     if (nvenc_failed(nvenc->nvEncEncodePicture(encoder, &pic_params))) {
       BOOST_LOG(error) << "NvEnc: NvEncEncodePicture() failed: " << last_nvenc_error_string;
       // The submit itself failed — the GPU never queued anything against
@@ -1108,11 +1112,13 @@ namespace nvenc {
       unmap_now();
       return {};
     }
+    const auto phase_submitted = std::chrono::steady_clock::now();
 
     std::uint32_t wait_removed_reason = 0;
     const auto wait_result = async_event_handle ?
                                wait_for_encode_completion(wait_removed_reason) :
                                encode_wait_result::completed;
+    const auto phase_waited = std::chrono::steady_clock::now();
     if (wait_result != encode_wait_result::completed) {
       // Capture diagnostic context on the timeout. The previous one-line
       // log gave no signal about whether this was a transient bubble or
@@ -1287,7 +1293,34 @@ namespace nvenc {
     // The GPU is provably done with the mapped resource by virtue of the
     // completion event having signaled, so unmap synchronously rather
     // than handing this frame's mapping over to destroy_encoder's drain.
+    const auto phase_locked = std::chrono::steady_clock::now();
     unmap_now();
+
+    {
+      const auto phase_done = std::chrono::steady_clock::now();
+      const auto ns = [](auto a, auto b) {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());
+      };
+      auto &t = encode_phase_telemetry;
+      t.input_sync_ns += ns(phase_start, phase_input_synced);
+      t.map_ns += ns(phase_input_synced, phase_mapped);
+      t.submit_ns += ns(phase_presubmit, phase_submitted);
+      t.wait_ns += ns(phase_submitted, phase_waited);
+      t.lock_ns += ns(phase_waited, phase_locked);
+      t.unmap_ns += ns(phase_locked, phase_done);
+      ++t.frames;
+      if (t.window_start == std::chrono::steady_clock::time_point {}) {
+        t.window_start = phase_done;
+      } else if (phase_done - t.window_start >= std::chrono::seconds(30)) {
+        BOOST_LOG(info) << "NvEnc phases: " << t.frames << " frames; avg ms: input-sync="
+                        << (t.input_sync_ns / 1e6 / t.frames) << " map=" << (t.map_ns / 1e6 / t.frames)
+                        << " submit=" << (t.submit_ns / 1e6 / t.frames) << " wait=" << (t.wait_ns / 1e6 / t.frames)
+                        << " lock+copy=" << (t.lock_ns / 1e6 / t.frames) << " unmap=" << (t.unmap_ns / 1e6 / t.frames)
+                        << ".";
+        t = {};
+        t.window_start = phase_done;
+      }
+    }
 
     return encoded_frame;
   }

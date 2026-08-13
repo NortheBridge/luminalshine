@@ -759,6 +759,23 @@ namespace platf::dxgi {
     bool _first_frame_timeout_reported = false;
     std::string _display_name;
 
+    /// Poll sleeps in the claim loop use a high-resolution waitable timer:
+    /// immune to the interrupt period AND to Windows 11 background timer
+    /// coalescing, either of which turns a nominal 1 ms std sleep into a
+    /// 15.6+ ms quantum in this windowless worker process (the ~21 fps
+    /// arrival-cadence ceiling of 2026-08).
+    std::unique_ptr<high_precision_timer> _claim_poll_timer;
+
+    /// 30 s cadence-telemetry window: how many frames this consumer claimed
+    /// versus how many sequences the driver published, and how long the
+    /// claim poll actually waited. Separates "the ring produced 21 fps"
+    /// from "the host consumed at 21 fps" in one log line.
+    std::chrono::steady_clock::time_point _cadence_window_start {};
+    uint64_t _cadence_window_base_seq = 0;
+    uint32_t _cadence_claimed = 0;
+    std::chrono::nanoseconds _cadence_claim_wait {};
+    std::chrono::nanoseconds _cadence_claim_wait_max {};
+
     // TDR blast-radius shrink: tdr::event_count() snapshot taken at init.
     // When it advances, snapshot() drops every shared GPU allocation this
     // reader holds (see display_vgd.cpp). The reinit that follows is DEFERRED
