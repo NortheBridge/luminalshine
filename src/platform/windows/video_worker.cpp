@@ -361,9 +361,14 @@ namespace platf::video_worker {
       PSECURITY_DESCRIPTOR pipe_descriptor = nullptr;
       if (!make_pipe_security(pipe_security, pipe_descriptor)) return false;
       auto free_pipe_descriptor = util::fail_guard([&] { ::LocalFree(pipe_descriptor); });
+      // Both directions get 4 MiB. The child->parent (inbound) direction is
+      // the VIDEO path: at 25-40 KB per encoded 4K HDR frame the previous
+      // 64 KiB buffer held under two frames, which hard-coupled the worker's
+      // encode cadence to the parent reader's drain cadence — any stall or
+      // quantized wait on either side clock-gated the whole pipeline.
       child.pipe = ::CreateNamedPipeW(full_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                      1, 4 * 1024 * 1024, 64 * 1024, 0, &pipe_security);
+                                      1, 4 * 1024 * 1024, 4 * 1024 * 1024, 0, &pipe_security);
       if (child.pipe == INVALID_HANDLE_VALUE || !launch(child, pipe_name)) return false;
 
       OVERLAPPED connect {};
@@ -751,17 +756,32 @@ namespace platf::video_worker {
             egress_packets = 0;
           }
         }
-        if (auto value = hdr->pop(0ms)) {
-          std::lock_guard lock(write_mutex);
-          if (!send(pipe, message_e::hdr, value.get(), sizeof(video::hdr_info_raw_t), kChildPacketSendTimeoutMs)) break;
+        // peek() before every sideband pop: a timed CV wait that expires on
+        // an EMPTY event costs a full timer quantum on OS builds that
+        // quantize timeout expiry (measured on Windows 11 Canary: even
+        // wait_for(0ms) sleeps ~15.1 ms, while notify-driven wakes stay at
+        // ~0.02 ms). Three unguarded pop(0ms) calls per loop made this
+        // egress cycle a hard ~47 ms — the encoder blocked on the full
+        // packet queue behind it, capping the whole session at ~21 fps.
+        // pop(0ms) on a non-empty event returns without waiting, so the
+        // peek guard removes the stall without changing semantics.
+        if (hdr->peek()) {
+          if (auto value = hdr->pop(0ms)) {
+            std::lock_guard lock(write_mutex);
+            if (!send(pipe, message_e::hdr, value.get(), sizeof(video::hdr_info_raw_t), kChildPacketSendTimeoutMs)) break;
+          }
         }
-        if (auto value = touch->pop(0ms)) {
-          std::lock_guard lock(write_mutex);
-          if (!send(pipe, message_e::touch, &*value, sizeof(*value), kChildPacketSendTimeoutMs)) break;
+        if (touch->peek()) {
+          if (auto value = touch->pop(0ms)) {
+            std::lock_guard lock(write_mutex);
+            if (!send(pipe, message_e::touch, &*value, sizeof(*value), kChildPacketSendTimeoutMs)) break;
+          }
         }
-        if (chroma->pop(0ms)) {
-          std::lock_guard lock(write_mutex);
-          if (!send(pipe, message_e::chroma_downgrade, nullptr, 0, kChildPacketSendTimeoutMs)) break;
+        if (chroma->peek()) {
+          if (chroma->pop(0ms)) {
+            std::lock_guard lock(write_mutex);
+            if (!send(pipe, message_e::chroma_downgrade, nullptr, 0, kChildPacketSendTimeoutMs)) break;
+          }
         }
       }
       // A failed pipe write means the parent is gone or has given up on this
