@@ -1786,6 +1786,18 @@ namespace video {
       }
     };
 
+    // Pool-starvation waits use the high-resolution timer: a plain 1 ms
+    // sleep in a process that has not raised its timer resolution costs a
+    // full timer quantum (15.6+ ms on Windows), and this wait sits on the
+    // capture hot path whenever the encode side holds every pooled surface.
+    // The aggregate is logged every 30 s so pool-bound capture cadence is
+    // visible in support bundles.
+    auto pool_wait_timer = platf::create_high_precision_timer();
+    std::chrono::nanoseconds pool_wait_window {};
+    std::uint32_t pool_wait_sleeps = 0;
+    auto pool_wait_last_log = std::chrono::steady_clock::now();
+    auto pool_wait_first_sleep = pool_wait_last_log;
+
     auto pull_free_image_callback = [&](std::shared_ptr<platf::img_t> &img_out) -> bool {
       img_out.reset();
       while (capture_ctx_queue->running()) {
@@ -1821,10 +1833,37 @@ namespace video {
           // trim allocated but unused portion of the pool based on timeouts
           trim_imgs();
           img_out->frame_timestamp.reset();
+          if (pool_wait_window > std::chrono::nanoseconds::zero()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - pool_wait_last_log >= 30s) {
+              BOOST_LOG(info) << "Capture image pool: waited "
+                              << std::chrono::duration_cast<std::chrono::milliseconds>(pool_wait_window).count()
+                              << " ms across " << pool_wait_sleeps
+                              << " sleeps in the last "
+                              << std::chrono::duration_cast<std::chrono::seconds>(now - pool_wait_first_sleep).count()
+                              << " s (pool exhausted; encode side holding all surfaces).";
+              pool_wait_window = {};
+              pool_wait_sleeps = 0;
+              pool_wait_last_log = now;
+            }
+          }
           return true;
         } else {
           // sleep and retry if image pool is full
-          std::this_thread::sleep_for(1ms);
+          const auto wait_started = std::chrono::steady_clock::now();
+          if (pool_wait_sleeps == 0) {
+            // Anchor the log window at the first starvation sleep so a
+            // long-quiet stream cannot report "waited 40 ms in the last
+            // 3600 s".
+            pool_wait_first_sleep = wait_started;
+          }
+          if (pool_wait_timer && *pool_wait_timer) {
+            pool_wait_timer->sleep_for(1ms);
+          } else {
+            std::this_thread::sleep_for(1ms);
+          }
+          pool_wait_window += std::chrono::steady_clock::now() - wait_started;
+          ++pool_wait_sleeps;
         }
       }
       return false;

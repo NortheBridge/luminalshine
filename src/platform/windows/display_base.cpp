@@ -1126,6 +1126,11 @@ namespace platf::dxgi {
         if (!recovering) {
           recovery_deferral_started.reset();
           recovery_deferral_logged.reset();
+          // This reinit was previously silent, which made the field's
+          // recurring mid-stream encoder rebuilds (~5 s NVENC re-open each)
+          // undiagnosable: nothing in the log named the trigger.
+          BOOST_LOG(info) << "Capture reinit: DXGI factory reported stale "
+                             "(display topology, mode, HDR, or GPU state changed)."sv;
           return platf::capture_e::reinit;
         }
 
