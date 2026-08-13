@@ -2930,6 +2930,16 @@ namespace video {
     encode_bootstrap_state_t bootstrap_state {.allow_placeholder_before_first_real = frame_nr <= 1};
     bootstrap_state.current_input_generation = capture_generation_for_current_process();
 
+    // Encode-cycle breakdown, one line per 30 s: image-wait (starved by
+    // capture), convert (GPU color conversion incl. keyed-mutex acquire),
+    // and encode+deliver (NVENC submit, completion wait, bitstream copy AND
+    // the possibly-blocking raise into the bounded packet queue). Together
+    // with the egress and broadcast cycle lines this names which stage owns
+    // the arrival cadence.
+    auto encode_cycle_window_start = std::chrono::steady_clock::now();
+    std::uint64_t encode_cycle_pop_ns = 0, encode_cycle_convert_ns = 0, encode_cycle_encode_ns = 0, encode_cycle_encode_max_ns = 0;
+    std::uint32_t encode_cycle_frames = 0;
+
     while (true) {
       // Break out of the encoding loop if any of the following are true:
       // a) The stream is ending
@@ -2965,7 +2975,12 @@ namespace video {
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
+        const auto encode_cycle_pop_started = std::chrono::steady_clock::now();
         if (auto img = images->pop(max_frametime)) {
+          const auto encode_cycle_popped = std::chrono::steady_clock::now();
+          encode_cycle_pop_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(encode_cycle_popped - encode_cycle_pop_started).count()
+          );
           placeholder_input = is_placeholder_capture_image(*img);
           if (!placeholder_input && bootstrap_state.current_input_placeholder) {
             session->request_idr_frame();
@@ -2975,6 +2990,9 @@ namespace video {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
           }
+          encode_cycle_convert_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - encode_cycle_popped).count()
+          );
 
           bootstrap_state.current_input_placeholder = placeholder_input;
           bootstrap_state.current_input_generation = img->capture_generation;
@@ -2998,9 +3016,27 @@ namespace video {
         continue;
       }
 
+      const auto encode_cycle_encode_started = std::chrono::steady_clock::now();
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, host_processing_timestamp, placeholder_input, bootstrap_state.current_input_generation)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
+      }
+      const auto encode_cycle_encode_done = std::chrono::steady_clock::now();
+      const auto encode_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(encode_cycle_encode_done - encode_cycle_encode_started).count()
+      );
+      encode_cycle_encode_ns += encode_ns;
+      encode_cycle_encode_max_ns = std::max(encode_cycle_encode_max_ns, encode_ns);
+      ++encode_cycle_frames;
+      if (encode_cycle_encode_done - encode_cycle_window_start >= 30s && encode_cycle_frames > 0) {
+        BOOST_LOG(info) << "Encode cycle: " << encode_cycle_frames << " frames in 30 s; avg ms: image-wait="
+                        << (encode_cycle_pop_ns / 1e6 / encode_cycle_frames) << " convert="
+                        << (encode_cycle_convert_ns / 1e6 / encode_cycle_frames) << " encode+deliver="
+                        << (encode_cycle_encode_ns / 1e6 / encode_cycle_frames) << " (encode+deliver max="
+                        << (encode_cycle_encode_max_ns / 1e6) << " ms).";
+        encode_cycle_window_start = encode_cycle_encode_done;
+        encode_cycle_pop_ns = encode_cycle_convert_ns = encode_cycle_encode_ns = encode_cycle_encode_max_ns = 0;
+        encode_cycle_frames = 0;
       }
 
       if (placeholder_input) {

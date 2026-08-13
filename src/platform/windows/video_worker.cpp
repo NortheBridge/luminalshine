@@ -648,6 +648,12 @@ namespace platf::video_worker {
       auto touch = session_mail->event<input::touch_port_t>(mail::touch_port);
       auto chroma = session_mail->event<bool>(mail::chroma_downgrade);
       std::uint64_t admitted_generation = 0;
+      // R15 egress-cycle telemetry: whether this thread spends its time
+      // waiting for the encoder (queue-wait) or for the parent to drain the
+      // pipe (pipe-write). One line per 30 s.
+      auto egress_window_start = std::chrono::steady_clock::now();
+      std::uint64_t egress_queue_wait_ns = 0, egress_write_ns = 0, egress_write_max_ns = 0;
+      std::uint32_t egress_packets = 0;
       while (!shutdown->peek()) {
         bool capture_reinitialized = false;
         generation_t reinitialized_generation {};
@@ -666,7 +672,11 @@ namespace platf::video_worker {
           if (!send(pipe, message_e::capture_reinitializing, &reinitialized_generation, sizeof(reinitialized_generation), kChildPacketSendTimeoutMs)) break;
           continue;
         }
+        const auto egress_pop_started = std::chrono::steady_clock::now();
         if (auto packet = packets->pop(20ms)) {
+          egress_queue_wait_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - egress_pop_started).count()
+          );
           std::lock_guard generation_lock(g_capture_generation_mutex);
           // A reinit can race the queue pop. Drop this now-stale packet; the
           // next loop drains the old generation and publishes its marker
@@ -722,7 +732,24 @@ namespace platf::video_worker {
             if (!send(pipe, message_e::capture_ready, &generation, sizeof(generation), kChildPacketSendTimeoutMs)) break;
             capture_ready_sent.store(true, std::memory_order_release);
           }
+          const auto egress_write_started = std::chrono::steady_clock::now();
           if (!send(pipe, message_e::packet, body.data(), static_cast<std::uint32_t>(body.size()), kChildPacketSendTimeoutMs)) break;
+          const auto egress_write_done = std::chrono::steady_clock::now();
+          const auto write_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(egress_write_done - egress_write_started).count()
+          );
+          egress_write_ns += write_ns;
+          egress_write_max_ns = std::max(egress_write_max_ns, write_ns);
+          ++egress_packets;
+          if (egress_write_done - egress_window_start >= 30s && egress_packets > 0) {
+            BOOST_LOG(info) << "Worker egress cycle: " << egress_packets << " packets in 30 s; avg ms: queue-wait="
+                            << (egress_queue_wait_ns / 1e6 / egress_packets) << " pipe-write="
+                            << (egress_write_ns / 1e6 / egress_packets) << " (pipe-write max="
+                            << (egress_write_max_ns / 1e6) << " ms).";
+            egress_window_start = egress_write_done;
+            egress_queue_wait_ns = egress_write_ns = egress_write_max_ns = 0;
+            egress_packets = 0;
+          }
         }
         if (auto value = hdr->pop(0ms)) {
           std::lock_guard lock(write_mutex);

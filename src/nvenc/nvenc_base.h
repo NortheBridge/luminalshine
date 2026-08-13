@@ -290,6 +290,26 @@ namespace nvenc {
       // (an opaque void* in the NVENC ABI).
       void *pending_mapped_resource = nullptr;
     } encoder_state;
+
+    /// 30 s phase breakdown of the NVENC API section of encode_frame:
+    /// input-sync (backend synchronize_input_buffer), map
+    /// (nvEncMapInputResource), submit (nvEncEncodePicture), wait
+    /// (completion event), lock+copy (LockBitstream through Unlock), unmap
+    /// (nvEncUnmapInputResource). Field diagnosis instrumentation: the
+    /// yuv444 10-bit path's 47 ms/frame cadence survived both the CUDA
+    /// sched-flag and stream-ordering fixes, and the backend's own interop
+    /// phases measure sub-millisecond — so the quantized waits must sit in
+    /// one or more of these driver entry points.
+    struct {
+      std::chrono::steady_clock::time_point window_start {};
+      std::uint64_t input_sync_ns = 0;
+      std::uint64_t map_ns = 0;
+      std::uint64_t submit_ns = 0;
+      std::uint64_t wait_ns = 0;
+      std::uint64_t lock_ns = 0;
+      std::uint64_t unmap_ns = 0;
+      std::uint32_t frames = 0;
+    } encode_phase_telemetry;
   };
 
   /**
