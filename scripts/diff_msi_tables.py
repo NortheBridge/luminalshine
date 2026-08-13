@@ -160,6 +160,27 @@ def normalize_table(name: str, rows: "list[str]") -> "list[str]":
     if name in _WEB_ASSET_TABLES:
         return sorted(_normalize_web_asset_row(row) for row in rows)
 
+    if name == "Upgrade":
+        # The Upgrade table's VersionMin/VersionMax cells carry the
+        # ProductVersion (WiX MajorUpgrade emits VersionMax=<current> for
+        # WIX_UPGRADE_DETECTED and VersionMin=<current> for
+        # WIX_DOWNGRADE_DETECTED), so they legitimately change on every
+        # release — the same volatility class as ProductVersion, which the
+        # oracle already normalizes. Enforcing them byte-identically made
+        # the gate fail on the first version bump after it went hard
+        # (26.08.2 baseline vs 26.08.3 candidate, run 31690595030).
+        # UpgradeCode, Attributes, Language, Remove and ActionProperty stay
+        # enforced here, and the invariants gate independently asserts the
+        # UpgradeCode value itself.
+        normalized = []
+        for row in rows:
+            cells = _row_to_dict(row)
+            for cell in ("VersionMin", "VersionMax"):
+                if cells.get(cell):
+                    cells[cell] = "#PRODUCTVERSION#"
+            normalized.append("|".join(f"{k}={v}" for k, v in cells.items()))
+        return sorted(normalized)
+
     # Default: faithful, order-insensitive comparison.
     return sorted(rows)
 
