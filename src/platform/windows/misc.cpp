@@ -4,6 +4,8 @@
  */
 // standard includes
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <iomanip>
@@ -11,6 +13,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 // lib includes
@@ -101,6 +104,20 @@ namespace {
       return false;
     }
     return true;
+  }
+
+  // Windows 11 is free to ignore a background process's raised timer
+  // resolution and to coalesce its timer expirations unless the process
+  // explicitly opts out of power throttling. Both LuminalShine processes are
+  // windowless session-0 service processes — exactly the class the kernel
+  // throttles — so the NtSetTimerResolution above is not honored without
+  // this companion call.
+  bool opt_out_of_process_power_throttling() {
+    PROCESS_POWER_THROTTLING_STATE state {};
+    state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    state.StateMask = 0;  // 0 with the bit in ControlMask = throttling disabled
+    return SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state)) != 0;
   }
 
 }  // namespace
@@ -1515,6 +1532,31 @@ namespace platf {
     }
   }
 
+  void apply_video_worker_process_timing() {
+    // The isolated video worker is a windowless, session-0 child of a SYSTEM
+    // service and never runs streaming_will_start(), so until now it kept the
+    // default 15.625 ms timer resolution — and Windows 11 additionally
+    // coalesces timer expirations for throttled background processes. Every
+    // nominal 1 ms polling sleep on the capture hot path (ring-claim poll,
+    // image-pool wait) then costs one or more full quanta, which is the
+    // field-observed hard ~21 fps arrival cadence (~47 ms/frame) regardless
+    // of capture backend. Raise the resolution, opt out of power throttling
+    // so the raise is actually honored, and match the main process's
+    // HIGH_PRIORITY_CLASS (upstream Sunshine runs capture+encode in one
+    // HIGH-priority process; the worker split silently dropped that).
+    if (!nt_set_timer_resolution_max()) {
+      BOOST_LOG(warning) << "Video worker: NtSetTimerResolution() failed, falling back to timeBeginPeriod(1).";
+      timeBeginPeriod(1);
+    }
+    if (!opt_out_of_process_power_throttling()) {
+      BOOST_LOG(warning) << "Video worker: SetProcessInformation(ProcessPowerThrottling) failed: " << GetLastError()
+                         << "; timer coalescing may still apply.";
+    }
+    if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+      BOOST_LOG(warning) << "Video worker: SetPriorityClass(HIGH_PRIORITY_CLASS) failed: " << GetLastError();
+    }
+  }
+
   void streaming_will_start() {
     static std::once_flag load_wlanapi_once_flag;
     std::call_once(load_wlanapi_once_flag, []() {
@@ -1556,6 +1598,32 @@ namespace platf {
       timeBeginPeriod(1);
       used_nt_set_timer_resolution = false;
     }
+
+    // Without this, Windows 11 may silently disregard the raised resolution
+    // for this windowless service process (timer coalescing for throttled
+    // background processes).
+    if (!opt_out_of_process_power_throttling()) {
+      BOOST_LOG(warning) << "SetProcessInformation(ProcessPowerThrottling) failed: " << GetLastError()
+                         << "; the raised timer resolution may not be honored.";
+    }
+
+    // One-shot quantum probe (the worker logs the same at its startup): on
+    // OS builds that ignore the raise, every plain 1 ms sleep in THIS
+    // process still costs a ~15.6 ms quantum, and only high-resolution
+    // waitable timers pace correctly. Knowing which regime the main process
+    // is in turns pacing-related field reports from guesses into facts.
+    static std::once_flag quantum_probe_flag;
+    std::call_once(quantum_probe_flag, []() {
+      std::array<std::int64_t, 3> samples {};
+      for (auto &sample : samples) {
+        const auto t0 = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        sample = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+      }
+      std::sort(samples.begin(), samples.end());
+      BOOST_LOG(info) << "Main process sleep(1ms) quantum: " << (samples[1] / 1000.0)
+                      << " ms (after timer-resolution raise).";
+    });
 
     // Promote ourselves to high priority class
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);

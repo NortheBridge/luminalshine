@@ -36,6 +36,18 @@ namespace platf {
    */
   void reset_gpu_scheduling_priority();
 
+  /**
+   * @brief Give the isolated video worker process the timing profile that
+   * real-time capture requires.
+   *
+   * Raises the kernel timer resolution, opts the process out of Windows 11
+   * background power throttling (which otherwise silently ignores the raise
+   * and coalesces timers for windowless session-0 processes), and promotes
+   * the process to HIGH_PRIORITY_CLASS for parity with the main service
+   * process. Call once at worker startup, before the capture pipeline runs.
+   */
+  void apply_video_worker_process_timing();
+
   int64_t qpc_counter();
 
   std::chrono::nanoseconds qpc_time_difference(int64_t performance_counter1, int64_t performance_counter2);

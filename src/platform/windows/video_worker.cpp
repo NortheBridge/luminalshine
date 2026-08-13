@@ -24,6 +24,7 @@
 #include "src/input.h"
 #include "src/logging.h"
 #include "src/platform/windows/display.h"
+#include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 
@@ -501,6 +502,26 @@ namespace platf::video_worker {
   }
 
   int run_child() {
+    // Field diagnosis of the ~21 fps arrival ceiling: one nominal-1ms sleep
+    // in this process cost a full (possibly coalesced) timer quantum. Log
+    // the measured quantum before and after applying the timing profile so
+    // support bundles prove whether the raise was honored on this OS build.
+    const auto measure_sleep_quantum = [](int samples) {
+      std::vector<std::int64_t> us(static_cast<std::size_t>(samples));
+      for (auto &sample : us) {
+        const auto t0 = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(1ms);
+        sample = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+      }
+      std::sort(us.begin(), us.end());
+      return us[us.size() / 2];
+    };
+    const auto quantum_before_us = measure_sleep_quantum(3);
+    platf::apply_video_worker_process_timing();
+    const auto quantum_after_us = measure_sleep_quantum(5);
+    BOOST_LOG(info) << "Video worker: sleep(1ms) quantum " << (quantum_before_us / 1000.0) << " ms before timing profile, "
+                    << (quantum_after_us / 1000.0) << " ms after.";
+
     const auto full_name = L"\\\\.\\pipe\\" + widen_ascii(g_child_pipe);
     HANDLE pipe = INVALID_HANDLE_VALUE;
     const auto deadline = std::chrono::steady_clock::now() + 10s;
