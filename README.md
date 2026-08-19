@@ -35,7 +35,7 @@ LuminalShine began as a fork of Vibeshine specifically to address deficiencies o
 
 ## The LuminalVGD Virtual Display Driver
 
-LuminalShine ships with and is built around **[LuminalVGD](https://apps.northebridge.com/en/LuminalVGD/)** — the *Luminal Video Graphics Display Driver* — NortheBridge's first-party IddCx virtual display driver, and uses it as the **default virtual display backend**.
+LuminalShine ships with and is built around **[LuminalVGD](https://apps.northebridge.com/en/LuminalVGD/)** — the *Luminal Video Graphics Display Driver* — NortheBridge's first-party IddCx virtual display driver, and uses it as the **virtual display backend**.
 
 - **On-demand virtual displays.** LuminalVGD creates HDR-capable, high-refresh virtual displays matched to the connecting client's resolution, refresh rate, and HDR capabilities — ideal for headless hosts and for streaming at modes your physical monitor can't do.
 - **Developed in-house, vendored in-tree.** The driver core is written in Rust and vendored into this repository as a submodule at `src/drivers/luminal-display`, linked into the host through a C-ABI FFI layer. Host and driver evolve in lockstep, which is how tight integrations like GPU-reset self-healing and the Direct-to-Encoder VGD ring transport are possible.
@@ -43,7 +43,7 @@ LuminalShine ships with and is built around **[LuminalVGD](https://apps.northebr
 - **Resilient by design.** GPU resets and driver restarts are detected and recovered from without wedging the host; display layouts are restored after crashes, shutdowns, and reboots.
 - **Installed for you.** The signed driver is bundled with and installed by the LuminalShine MSI — no separate download.
 
-SudoVDA remains available as a legacy fallback backend, but new setups should use LuminalVGD. Full driver documentation lives on the [LuminalVGD site](https://apps.northebridge.com/en/LuminalVGD/).
+Full driver documentation lives on the [LuminalVGD site](https://apps.northebridge.com/en/LuminalVGD/).
 
 ---
 
@@ -52,7 +52,7 @@ SudoVDA remains available as a legacy fallback backend, but new setups should us
 - **Native Windows 11 + Insider Preview Support** — Engineered against the latest Insider Preview flights, with workarounds for platform regressions upstream projects won't touch.
 - **HEVC and AV1 First, with HDR** — Modern codec paths are the default, including 10-bit and 4:4:4 chroma on capable encoders. H.264 remains supported for older clients.
 - **Low-Latency Pipeline** — The capture → encode → egress path is tuned end-to-end (high-resolution timers, backlog control, stream-ordered GPU interop) to deliver full frame rates with single-digit-millisecond frame ages.
-- **[LuminalVGD](https://apps.northebridge.com/en/LuminalVGD/) as the Primary Virtual Display Driver** — First-party, HDR-capable, self-healing; see above. SudoVDA is retained as a legacy fallback.
+- **[LuminalVGD](https://apps.northebridge.com/en/LuminalVGD/) as the Virtual Display Driver** — First-party, HDR-capable, self-healing; see above.
 - **Direct-to-Encoder (D2E) Capture** — LuminalShine's primary capture path bypasses Windows desktop-capture APIs entirely. DWM renders into the [LuminalVGD](https://apps.northebridge.com/en/LuminalVGD/) virtual display and the driver publishes finished frames — with frame sequence, presentation timing, and HDR10 metadata — into a cross-process shared-texture **VGD ring** that the encoder consumes directly. On the encode side, D2E drives **D3D11**, **D3D11onD3D12**, and native **D3D12** engines: the native D3D12 path hands NVENC explicit timeline-fence points, D3D11onD3D12 lets the proven D3D11 color-conversion shaders render straight into the D3D12 encoder input, and the D3D11 engine remains as the compatibility transport. The result is full-rate capture of frame-generated titles with minimal copies and no capture-API overhead in the hot loop.
 - **Seamless Capture Fallback & Recovery** — If the VGD ring degrades mid-stream (driver reset, GPU TDR), Windows Graphics Capture takes over between frames against the still-attached virtual display with no client-visible interruption — and the host actively probes and swaps back to D2E the moment the driver is healthy again. DXGI Desktop Duplication remains as a last-resort tier, keeping the login screen and UAC prompts capturable.
 - **WebRTC Browser Streaming** — Stream directly to any modern browser via the `/webrtc` route — no client install needed. The classic Moonlight path is fully supported alongside it.
