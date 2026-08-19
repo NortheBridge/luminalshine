@@ -118,9 +118,9 @@ LuminalShine remains free and open source and will not be sold or offered commer
 
 Full documentation — installation, configuration, driver selection, WebRTC setup, troubleshooting, and developer guides — lives at:
 
-### [gitdocs.northebridge.com/luminalshine](https://gitdocs.northebridge.com/luminalshine)
+### [appdocs.northebridge.com/projects/luminalshine](https://appdocs.northebridge.com/projects/luminalshine/en/latest/)
 
-`gitdocs.northebridge.com/luminalshine` is the **official documentation site for LuminalShine**, hosted under the NortheBridge Foundation documentation portal. Issues, contributing guidelines, and release notes are mirrored there alongside this repository's GitHub Issues tracker. Contributors should also read [`architecture.md`](architecture.md) — the authoritative deep-dive into the streaming pipeline.
+`appdocs.northebridge.com/projects/luminalshine` is the **official documentation site for LuminalShine**, hosted under the NortheBridge Foundation documentation portal. Issues, contributing guidelines, and release notes are mirrored there alongside this repository's GitHub Issues tracker. Contributors should also read [`architecture.md`](architecture.md) — the authoritative deep-dive into the streaming pipeline.
 
 ---
 
