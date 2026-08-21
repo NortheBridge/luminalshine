@@ -606,29 +606,31 @@ int main(int argc, char *argv[]) {
 
   // Create signal handler after logging has been initialized
   auto shutdown_event = mail::man->event<bool>(mail::shutdown);
-  on_signal(SIGINT, [&force_shutdown, shutdown_event]() {
+  // Same rationale as the session-teardown force-kill in stream.cpp: a wedged
+  // display/DXGI stack can block orderly teardown indefinitely, and the old
+  // lifetime::debug_trap() here surfaced as a WER crash (0x80000003) with a
+  // dump write attempt in the middle of every collapse aftermath. _Exit dies
+  // without running destructors or generating a crash report; the service
+  // wrapper relaunches us.
+  auto force_shutdown_task = []() {
+    BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+    logging::log_flush();
+    std::_Exit(1);
+  };
+
+  on_signal(SIGINT, [&force_shutdown, force_shutdown_task, shutdown_event]() {
     BOOST_LOG(info) << "Interrupt handler called"sv;
 
-    auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
-      logging::log_flush();
-      lifetime::debug_trap();
-    };
-    force_shutdown = task_pool.pushDelayed(task, 10s).task_id;
+    force_shutdown = task_pool.pushDelayed(force_shutdown_task, 10s).task_id;
 
     // Break out of the main loop
     shutdown_event->raise(true);
   });
 
-  on_signal(SIGTERM, [&force_shutdown, shutdown_event]() {
+  on_signal(SIGTERM, [&force_shutdown, force_shutdown_task, shutdown_event]() {
     BOOST_LOG(info) << "Terminate handler called"sv;
 
-    auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
-      logging::log_flush();
-      lifetime::debug_trap();
-    };
-    force_shutdown = task_pool.pushDelayed(task, 10s).task_id;
+    force_shutdown = task_pool.pushDelayed(force_shutdown_task, 10s).task_id;
 
     // Break out of the main loop
     shutdown_event->raise(true);

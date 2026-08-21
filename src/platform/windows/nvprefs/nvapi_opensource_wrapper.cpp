@@ -18,7 +18,14 @@ namespace {
   std::map<const char *, void *> interfaces;
   HMODULE dll = nullptr;
 
+  // NVIDIA-App-era drivers also export NvAPI_DRS_SetSetting under this id, and
+  // Smooth Motion support originally resolved it PREFERENTIALLY. On R610 that
+  // entry point rejects legacy settings with NVAPI_INVALID_ARGUMENT (probed on
+  // 610.88: PREFERRED_PSTATE fails through it while the official 0x577DD202
+  // succeeds), which silently disabled the streaming high-power-mode pin. The
+  // official id is therefore the primary and this one only a call-time fallback.
   constexpr NvU32 NVAPI_DRS_SETSETTING_NEW_ID = 0x8A2CF5F5;
+  void *drs_set_setting_fallback = nullptr;
 
   template<typename Func, typename... Args>
   NvAPI_Status call_interface(const char *name, Args... args) {
@@ -57,19 +64,9 @@ NvAPI_Initialize() {
     }
     if (query_interface) {
       for (const auto &item : nvapi_interface_table) {
-        void *resolved = nullptr;
-
-        if (std::strcmp(item.func, "NvAPI_DRS_SetSetting") == 0) {
-          resolved = query_interface(NVAPI_DRS_SETSETTING_NEW_ID);
-          if (!resolved) {
-            resolved = query_interface(item.id);
-          }
-        } else {
-          resolved = query_interface(item.id);
-        }
-
-        interfaces[item.func] = resolved;
+        interfaces[item.func] = query_interface(item.id);
       }
+      drs_set_setting_fallback = query_interface(NVAPI_DRS_SETSETTING_NEW_ID);
       return NVAPI_OK;
     }
   }
@@ -81,6 +78,7 @@ NvAPI_Initialize() {
 NVAPI_INTERFACE NvAPI_Unload() {
   if (dll) {
     interfaces.clear();
+    drs_set_setting_fallback = nullptr;
     FreeLibrary(dll);
     dll = nullptr;
   }
@@ -126,7 +124,14 @@ NVAPI_INTERFACE NvAPI_DRS_GetApplicationInfo(NvDRSSessionHandle hSession, NvDRSP
 }
 
 NVAPI_INTERFACE NvAPI_DRS_SetSetting(NvDRSSessionHandle hSession, NvDRSProfileHandle hProfile, NVDRS_SETTING *pSetting) {
-  return call_interface<decltype(NvAPI_DRS_SetSetting)>("NvAPI_DRS_SetSetting", hSession, hProfile, pSetting);
+  auto status = call_interface<decltype(NvAPI_DRS_SetSetting)>("NvAPI_DRS_SetSetting", hSession, hProfile, pSetting);
+  if (status != NVAPI_OK && drs_set_setting_fallback) {
+    auto fallback_status = ((decltype(NvAPI_DRS_SetSetting) *) drs_set_setting_fallback)(hSession, hProfile, pSetting);
+    if (fallback_status == NVAPI_OK) {
+      return fallback_status;
+    }
+  }
+  return status;
 }
 
 NVAPI_INTERFACE NvAPI_DRS_GetSetting(NvDRSSessionHandle hSession, NvDRSProfileHandle hProfile, NvU32 settingId, NVDRS_SETTING *pSetting) {
