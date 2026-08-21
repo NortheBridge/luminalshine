@@ -3,6 +3,7 @@
  * @brief Definitions for the Windows display base code.
  */
 // standard includes
+#include <algorithm>
 #include <cctype>
 #include <atomic>
 #include <cmath>
@@ -11,11 +12,14 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 
 // platform includes
 #include <winsock2.h>
 #include <excpt.h>  // __try/__except, EXCEPTION_EXECUTE_HANDLER (MSVC + MinGW-w64 x64 SEH)
 #include <initguid.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 
 // lib includes
 #include <boost/algorithm/string/join.hpp>
@@ -277,6 +281,176 @@ namespace platf::dxgi {
   std::optional<LUID> get_dxgi_adapter_luid_override() {
     std::lock_guard<std::mutex> lock(g_adapter_luid_mutex);
     return g_dxgi_adapter_luid_override;
+  }
+
+  namespace {
+    std::mutex vram_keeper_mutex;
+    std::vector<int64_t> vram_keeper_active_luids;
+
+    constexpr UINT64 vram_keeper_mib = 1024ull * 1024ull;
+
+    // Paging-storm publication: three budget moves inside the window arm the
+    // storm flag; each further move re-extends the hold. GetTickCount64-based
+    // so the capture loop's check is a single relaxed load plus a tick read.
+    constexpr uint64_t vram_storm_window_ms = 5000;
+    constexpr uint64_t vram_storm_hold_ms = 3000;
+    std::atomic<uint64_t> vram_storm_until_ms {0};
+
+    void vram_keeper_thread(Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter) {
+      HANDLE budget_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      DWORD budget_cookie = 0;
+      const bool have_notification = budget_event &&
+                                     SUCCEEDED(adapter->RegisterVideoMemoryBudgetChangeNotificationEvent(budget_event, &budget_cookie));
+      if (!have_notification) {
+        BOOST_LOG(warning) << "VRAM keeper: budget-change notification unavailable; polling every 30 s instead"sv;
+      }
+
+      UINT64 reservation = 0;
+      UINT64 last_logged_usage = 0;
+      UINT64 last_logged_budget = 0;
+      bool last_over_budget = false;
+
+      UINT64 last_seen_budget = 0;
+      bool have_last_budget = false;
+      uint64_t budget_change_ticks[3] = {0, 0, 0};
+      bool storm_logged = false;
+      uint64_t storm_first_tick = 0;
+      unsigned storm_moves = 0;
+
+      while (true) {
+        if (have_notification) {
+          WaitForSingleObject(budget_event, 30000);
+        } else {
+          Sleep(30000);
+        }
+
+        DXGI_QUERY_VIDEO_MEMORY_INFO mem {};
+        if (FAILED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mem))) {
+          continue;
+        }
+
+        const auto delta = [](UINT64 a, UINT64 b) {
+          return a > b ? a - b : b - a;
+        };
+
+        // Paging-storm detection: VidMm re-budgeting several times within a few
+        // seconds means allocations are being moved in bulk (game level/menu
+        // transitions). On this host such storms precede the PCIe completion
+        // timeouts that hang the GPU, so publish the storm and let the capture
+        // loop halve its claim rate until the budget settles.
+        const uint64_t now_ms = GetTickCount64();
+        const bool budget_moved = have_last_budget && delta(mem.Budget, last_seen_budget) >= 64 * vram_keeper_mib;
+        have_last_budget = true;
+        last_seen_budget = mem.Budget;
+        if (budget_moved) {
+          budget_change_ticks[2] = budget_change_ticks[1];
+          budget_change_ticks[1] = budget_change_ticks[0];
+          budget_change_ticks[0] = now_ms;
+          const bool storm_now = budget_change_ticks[2] != 0 && now_ms - budget_change_ticks[2] <= vram_storm_window_ms;
+          if (storm_now || storm_logged) {
+            vram_storm_until_ms.store(now_ms + vram_storm_hold_ms, std::memory_order_relaxed);
+          }
+          if (storm_now && !storm_logged) {
+            storm_logged = true;
+            storm_first_tick = budget_change_ticks[2];
+            storm_moves = 3;
+            BOOST_LOG(warning) << "VRAM keeper: paging storm detected (3 budget changes within "sv
+                               << (now_ms - budget_change_ticks[2])
+                               << " ms) - capture yields to half rate until the budget settles"sv;
+          } else if (storm_logged) {
+            storm_moves += 1;
+          }
+        }
+        if (storm_logged && now_ms >= vram_storm_until_ms.load(std::memory_order_relaxed)) {
+          BOOST_LOG(info) << "VRAM keeper: paging storm ended after "sv << (now_ms - storm_first_tick)
+                          << " ms ("sv << storm_moves << " budget moves); capture back to full rate"sv;
+          storm_logged = false;
+        }
+
+        // Reservation is cooperative: the OS tries to keep the reserved amount resident
+        // but can still demote it under extreme pressure. Target the current working set
+        // plus 12.5% headroom, clamped to what VidMm permits a process to reserve.
+        // Hysteresis (grow past 64 MiB, shrink only past 256 MiB of slack) keeps normal
+        // frame-to-frame fluctuation from churning VidMm with reservation updates.
+        const UINT64 target = std::min<UINT64>(mem.CurrentUsage + mem.CurrentUsage / 8, mem.AvailableForReservation);
+        if (target > reservation + 64 * vram_keeper_mib || target + 256 * vram_keeper_mib < reservation) {
+          if (SUCCEEDED(adapter->SetVideoMemoryReservation(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, target))) {
+            BOOST_LOG(info) << "VRAM keeper: reservation "sv << reservation / vram_keeper_mib << " -> "sv << target / vram_keeper_mib
+                            << " MiB (usage "sv << mem.CurrentUsage / vram_keeper_mib
+                            << " MiB, budget "sv << mem.Budget / vram_keeper_mib << " MiB)"sv;
+            reservation = target;
+          }
+        }
+
+        const bool over_budget = mem.CurrentUsage > mem.Budget;
+        const bool moved = delta(mem.CurrentUsage, last_logged_usage) >= 128 * vram_keeper_mib ||
+                           delta(mem.Budget, last_logged_budget) >= 128 * vram_keeper_mib;
+
+        if (over_budget != last_over_budget) {
+          if (over_budget) {
+            BOOST_LOG(warning) << "VRAM keeper: usage exceeds OS budget (usage "sv << mem.CurrentUsage / vram_keeper_mib
+                               << " MiB, budget "sv << mem.Budget / vram_keeper_mib
+                               << " MiB, reservation "sv << reservation / vram_keeper_mib
+                               << " MiB) - VidMm is demoting; capture/encode stalls possible"sv;
+          } else {
+            BOOST_LOG(info) << "VRAM keeper: back within OS budget (usage "sv << mem.CurrentUsage / vram_keeper_mib
+                            << " MiB, budget "sv << mem.Budget / vram_keeper_mib << " MiB)"sv;
+          }
+          last_logged_usage = mem.CurrentUsage;
+          last_logged_budget = mem.Budget;
+        } else if (moved) {
+          BOOST_LOG(info) << "VRAM keeper: usage "sv << mem.CurrentUsage / vram_keeper_mib
+                          << " MiB, budget "sv << mem.Budget / vram_keeper_mib
+                          << " MiB, reservation "sv << reservation / vram_keeper_mib << " MiB"sv;
+          last_logged_usage = mem.CurrentUsage;
+          last_logged_budget = mem.Budget;
+        }
+        last_over_budget = over_budget;
+      }
+    }
+  }  // namespace
+
+  void ensure_vram_keeper(IDXGIAdapter *adapter_p) {
+    if (!adapter_p) {
+      return;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter3;
+    if (FAILED(adapter_p->QueryInterface(IID_PPV_ARGS(&adapter3)))) {
+      BOOST_LOG(debug) << "VRAM keeper: IDXGIAdapter3 unavailable; not starting"sv;
+      return;
+    }
+
+    DXGI_ADAPTER_DESC desc {};
+    if (FAILED(adapter3->GetDesc(&desc))) {
+      return;
+    }
+    const auto packed_luid = (static_cast<int64_t>(desc.AdapterLuid.HighPart) << 32) |
+                             static_cast<uint32_t>(desc.AdapterLuid.LowPart);
+
+    {
+      std::lock_guard<std::mutex> lock(vram_keeper_mutex);
+      if (std::find(vram_keeper_active_luids.begin(), vram_keeper_active_luids.end(), packed_luid) != vram_keeper_active_luids.end()) {
+        return;
+      }
+      vram_keeper_active_luids.push_back(packed_luid);
+    }
+
+    DXGI_QUERY_VIDEO_MEMORY_INFO mem {};
+    if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mem))) {
+      BOOST_LOG(info) << "VRAM keeper: starting (budget "sv << mem.Budget / vram_keeper_mib
+                      << " MiB, usage "sv << mem.CurrentUsage / vram_keeper_mib
+                      << " MiB, reservable "sv << mem.AvailableForReservation / vram_keeper_mib << " MiB)"sv;
+    }
+
+    // Process-lifetime thread by design: the reservation must outlive any single display
+    // object (displays are torn down and recreated on mode changes), and VidMm clears
+    // both the reservation and the notification registration at process exit.
+    std::thread(vram_keeper_thread, std::move(adapter3)).detach();
+  }
+
+  bool vram_paging_storm_active() {
+    return GetTickCount64() < vram_storm_until_ms.load(std::memory_order_relaxed);
   }
 
   // SPECULATIVE (Win11 Insider 29570 dxgi.dll AV mitigation):
@@ -1209,6 +1383,12 @@ namespace platf::dxgi {
 
             if (status == capture_e::ok && img_out) {
               frame_pacing_group_frames += 1;
+              if (vram_paging_storm_active()) {
+                // Advance one extra frame interval: half capture rate while VidMm
+                // moves allocations in bulk, keeping our copy/encode engine work
+                // out of the paging burst's way (see the keeper's storm detector).
+                frame_pacing_group_frames += 1;
+              }
             } else {
               frame_pacing_group_start = std::nullopt;
               frame_pacing_group_frames = 0;
@@ -1619,6 +1799,8 @@ namespace platf::dxgi {
       << "Capture size       : "sv << width << 'x' << height << std::endl
       << "Offset             : "sv << offset_x << 'x' << offset_y << std::endl
       << "Virtual Desktop    : "sv << env_width << 'x' << env_height;
+
+    ensure_vram_keeper(adapter.get());
 
     // Bump up thread priority
     {

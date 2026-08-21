@@ -173,6 +173,26 @@ namespace platf::dxgi {
   std::optional<LUID> get_last_wgc_adapter_luid();
   void set_dxgi_adapter_luid_override(std::optional<LUID> luid);
   std::optional<LUID> get_dxgi_adapter_luid_override();
+
+  /**
+   * @brief Ask the OS to keep this process's VRAM working set resident under memory pressure.
+   *
+   * Starts one process-lifetime keeper thread per adapter LUID (idempotent). The thread
+   * maintains an IDXGIAdapter3 video memory reservation sized to current usage plus
+   * headroom and logs OS budget-change notifications (the VidMm pressure signal).
+   * Without a reservation, a background process's allocations are the preferred
+   * eviction victims when a foreground game oversubscribes VRAM.
+   */
+  void ensure_vram_keeper(IDXGIAdapter *adapter_p);
+
+  /**
+   * @brief True while the VRAM keeper observes a VidMm paging storm (several
+   * budget re-balances within a few seconds — bulk allocation movement during
+   * game level/menu transitions). On this class of host such storms precede
+   * PCIe completion timeouts that hang the GPU, so the capture loop halves its
+   * claim rate while this holds to keep our engine work out of the burst's way.
+   */
+  bool vram_paging_storm_active();
   using dxgi1_t = util::safe_ptr<IDXGIDevice1, Release<IDXGIDevice1>>;
   using device_t = util::safe_ptr<ID3D11Device, Release<ID3D11Device>>;
   using device1_t = util::safe_ptr<ID3D11Device1, Release<ID3D11Device1>>;
