@@ -21,6 +21,7 @@ extern "C" {
 #include "misc.h"
 #include "src/config.h"
 #include "src/gpu_recovery_policy.h"
+#include "src/platform/windows/nvidia_codec_support.h"
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_d3d11_native.h"
@@ -2044,6 +2045,14 @@ namespace platf::dxgi {
     } else if (adapter_desc.VendorId == 0x10de) {  // Nvidia
       // If it's not an NVENC encoder, it's not compatible with an Nvidia GPU
       if (!boost::algorithm::ends_with(name, "_nvenc")) {
+        return false;
+      }
+      // Ampere (including the RTX 3080 Ti) supports AV1 decoding but not
+      // AV1 encoding. Avoid entering the NVENC AV1 probe at all: the driver
+      // rejects the codec during encoder creation, and that rejection can
+      // escalate through the Windows terminate/SEH crash path.
+      if (config.videoFormat == 2 && !nvidia::supports_av1_encode(adapter_desc.DeviceId)) {
+        BOOST_LOG(info) << "AV1 encoding is not supported by this NVIDIA GPU; skipping " << name;
         return false;
       }
     } else if (adapter_desc.VendorId == 0x4D4F4351 ||  // Qualcomm (QCOM as MOQC reversed)
