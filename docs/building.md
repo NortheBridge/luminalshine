@@ -182,6 +182,12 @@ the `third-party/libwebrtc` submodule, but you must build WebRTC separately and 
 contains `include/` and `lib/` (e.g., `libwebrtc.dll` and its import library). We use the `third-party/depot_tools`
 submodule for `gclient`/`gn`.
 
+> **You usually do not need to build this yourself.** `NortheBridge/libwebrtc` builds the wrapper in its own GitHub
+> Actions workflow and publishes `libwebrtc-win-x64-release.zip` as a release asset, already staged as `include/` +
+> `lib/`. Download it, unzip it, and point `-DWEBRTC_ROOT=<dir>` at the result. Windows CI does exactly this; see the
+> `LIBWEBRTC_TAG` variable in `.github/workflows/ci-windows.yml` for the pinned tag. Build from source only when you
+> need to change the wrapper itself.
+
 ###### Quickstart (recommended)
 A helper script automates the full depot_tools / gclient / gn / ninja flow:
 
@@ -208,11 +214,12 @@ For finer control the script accepts overrides via `-BuildDir`/`-OutDir` paramet
 If you cannot use the helper script, the underlying steps are:
 
 1. Create a checkout directory and add a `.gclient` that points to
-   `https://github.com/webrtc-sdk/webrtc.git@m137_release` with `target_os = ['win']`.
+   `https://github.com/webrtc-sdk/webrtc.git@m150_release` with `target_os = ['win']`.
 2. Run `gclient sync`.
 3. In `src`, add the libwebrtc sources (you can copy or link `third-party/libwebrtc` into `src/libwebrtc`).
 4. Apply the audio patch:
-   `git apply libwebrtc/patchs/custom_audio_source_m137.patch`
+   `git apply libwebrtc/patches/custom_audio_source_m150.patch`
+   `git apply libwebrtc/patches/add_libwebrtc_build_target.patch`
 5. Update `src/BUILD.gn` to include `//libwebrtc` in `group("default")`.
 6. Generate and build (adjust `GYP_MSVS_OVERRIDE_PATH` if Visual Studio is installed elsewhere; our local install is
    under `D:\Software\Visual Studio`):
