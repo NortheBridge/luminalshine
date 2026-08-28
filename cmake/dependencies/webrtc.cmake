@@ -32,7 +32,7 @@ set(WEBRTC_INCLUDE_DIR "" CACHE PATH "Path to libwebrtc include directory.")
 set(WEBRTC_EXTRA_LIBRARIES "" CACHE STRING "Extra libraries required by libwebrtc.")
 set(WEBRTC_BUILD_DIR "" CACHE PATH "Working directory for the WebRTC build script.")
 set(WEBRTC_OUT_DIR "" CACHE PATH "Output directory for the WebRTC build script.")
-set(WEBRTC_BRANCH "m125_release" CACHE STRING "WebRTC branch for the build script.")
+set(WEBRTC_BRANCH "m150_release" CACHE STRING "WebRTC branch for the build script.")
 set(WEBRTC_REPO_URL "" CACHE STRING "WebRTC repo URL for the build script.")
 set(WEBRTC_CONFIGURATION "" CACHE STRING "WebRTC build configuration (Debug/Release).")
 set(WEBRTC_MSYS2_BIN "" CACHE PATH "MSYS2 ucrt64 bin path for the build script.")
@@ -185,8 +185,14 @@ if(NOT WEBRTC_INCLUDE_DIR OR NOT WEBRTC_LIBRARY)
     endif()
 endif()
 
+# Locate the runtime DLL for every Windows toolchain, not just MinGW-GCC.
+# cmake/packaging/windows.cmake keys both the install() rule and the
+# copy-next-to-the-exe step off this variable, so leaving it empty under
+# clang produced a package with no libwebrtc.dll beside luminalshine.exe --
+# a binary that cannot start at all. The gendef/dlltool import-library
+# generation below stays GNU-only; only the DLL lookup is shared.
 set(WEBRTC_RUNTIME_DLL "")
-if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(WIN32)
     if(WEBRTC_ROOT AND NOT WEBRTC_RUNTIME_DLL)
         if(EXISTS "${WEBRTC_ROOT}/lib/libwebrtc.dll")
             set(WEBRTC_RUNTIME_DLL "${WEBRTC_ROOT}/lib/libwebrtc.dll")
@@ -194,6 +200,16 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             set(WEBRTC_RUNTIME_DLL "${WEBRTC_ROOT}/bin/libwebrtc.dll")
         endif()
     endif()
+    if(NOT WEBRTC_RUNTIME_DLL)
+        message(FATAL_ERROR
+                "libwebrtc.dll not found under WEBRTC_ROOT (${WEBRTC_ROOT}).\n"
+                "  Expected WEBRTC_ROOT/lib/libwebrtc.dll or WEBRTC_ROOT/bin/libwebrtc.dll.\n"
+                "  Without it the packaged build would ship an executable that\n"
+                "  imports libwebrtc.dll with no DLL beside it.")
+    endif()
+endif()
+
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(WEBRTC_LIBRARY MATCHES "\\.dll\\.lib$" OR WEBRTC_LIBRARY MATCHES "\\.lib$")
         find_program(GENDEF_EXECUTABLE gendef)
         find_program(DLLTOOL_EXECUTABLE dlltool)
@@ -202,12 +218,6 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
                     "libwebrtc uses MSVC import libs. Install gendef and dlltool "
                     "(MSYS2 binutils) to generate a MinGW import library.")
         endif()
-        if(NOT WEBRTC_RUNTIME_DLL)
-            message(FATAL_ERROR
-                    "libwebrtc.dll not found under WEBRTC_ROOT. "
-                    "Expected WEBRTC_ROOT/lib/libwebrtc.dll or WEBRTC_ROOT/bin/libwebrtc.dll.")
-        endif()
-
         set(WEBRTC_IMPORT_DIR "${CMAKE_BINARY_DIR}/libwebrtc")
         file(MAKE_DIRECTORY "${WEBRTC_IMPORT_DIR}")
         set(WEBRTC_DEF "${WEBRTC_IMPORT_DIR}/libwebrtc.def")
