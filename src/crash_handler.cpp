@@ -194,7 +194,8 @@ namespace crash_handler {
 
     [[noreturn]] void terminate_handler() {
       // Re-entry (e.g. the logging below itself throwing) falls through to
-      // an immediate abort rather than recursing.
+      // an immediate abort rather than recursing. The flag is cleared once
+      // the risky part is behind us — see the reset before RaiseException.
       if (InterlockedExchange(&g_terminate_in_progress, 1) != 0) {
         std::abort();
       }
@@ -231,6 +232,23 @@ namespace crash_handler {
                        << ". Raising exception 0x" << std::hex << kTerminateExceptionCode << std::dec
                        << " to capture a minidump.";
       logging::log_flush();
+
+      // Every step that could itself throw (std::current_exception, the
+      // stderr writes, BOOST_LOG, log_flush) is now behind us, so the
+      // re-entry guard has done its job and must be released.
+      //
+      // It has to be released *here* rather than on the way out because
+      // RaiseException does not return: a caller that absorbs
+      // kTerminateExceptionCode — video::validate_encoder_safe's __except is
+      // the one that matters -- resumes in its own handler and this function
+      // never unwinds. Leaving the flag latched turned the second terminate
+      // anywhere in the process into a bare std::abort(): no fatal log line,
+      // no minidump, and on a SYSTEM service that reads as a silent
+      // disappearance. That is why issue #147 survived the startup encoder
+      // probe but killed the process outright when the probe re-ran at stream
+      // init — the probe is re-run on every launch and resume, and negative
+      // results are deliberately not cached.
+      InterlockedExchange(&g_terminate_in_progress, 0);
 
       // Route through the SEH filter above so the abort produces the same
       // fatal log line + minidump a hardware fault would.
