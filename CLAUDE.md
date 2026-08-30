@@ -22,7 +22,7 @@ Key CMake options (`cmake/prep/options.cmake`):
 
 - `SUNSHINE_ENABLE_WEBRTC=ON` — Windows-only; links against a separately-built libwebrtc wrapper. See `docs/building.md` and `scripts/build_mingw_webrtc.ps1`. The build cache lives at `%LOCALAPPDATA%\LuminalShine\deps\libwebrtc\{src,out}` and is **shared across worktrees** — wiping `build/` does not invalidate it.
 - `BUILD_DOCS=OFF` — required on Windows CI because the `third-party/doxyconfig` submodule pin is dead. Default is ON; flip OFF if doxygen build fails.
-- `BUILD_TESTS_WITH_COVERAGE=ON` — opt-in gcov instrumentation. Off by default because MSYS2's clang lacks the profile runtime, which would break the Windows-clang build if unconditional.
+- `BUILD_TESTS_WITH_COVERAGE=ON` — opt-in gcov instrumentation (`-fprofile-arcs -ftest-coverage`, forced `-O0`). Off by default because the flags need a profile runtime at link time and the base `mingw-w64-<toolchain>-clang` package ships headers only — without `mingw-w64-<toolchain>-compiler-rt` the link fails outright (`cannot find …/libclang_rt.profile.a`), so making it unconditional would break the Windows-clang build. Install `compiler-rt` to use it; `.github/workflows/coverage-windows.yml` does. Note that gcov writes its `.gcda` counters from an `atexit` handler, so a test process that dies on a signal contributes **nothing** — gcovr then silently reconstructs a 0%-covered report from the `.gcno` notes alone. That workflow shards the run and hard-fails on zero `.gcda` for exactly this reason; keep both if you touch it.
 
 Web UI commands run from `src_assets/common/assets/web/` (where its own `package.json` lives — there is no root-level `package.json`):
 
