@@ -16,15 +16,34 @@ include_directories("${GTEST_SOURCE_DIR}/googletest/include" "${GTEST_SOURCE_DIR
 
 # coverage (opt-in)
 # https://gcovr.com/en/stable/guide/compiling.html#compiler-options
-# Gating: the gcov flags require libgcov (gcc) or libclang_rt.profile (clang).
-# msys2's mingw-w64-ucrt-x86_64-clang package does not ship the profile runtime,
-# so unconditional instrumentation breaks the Windows-clang build. CI no longer
-# uploads coverage artifacts, so leave this OFF by default and let local
+#
+# Gating: the gcov flags require a profile runtime at link time -- libgcov
+# (gcc) or libclang_rt.profile (clang). On MSYS2 the base
+# mingw-w64-<toolchain>-clang package ships headers only; the runtime lives
+# in the separate mingw-w64-<toolchain>-compiler-rt package. Without that
+# package the link fails outright with
+#   cannot find .../libclang_rt.profile.a: No such file or directory
+# rather than degrading quietly, so leave this OFF by default and let
 # coverage runs opt in via -DBUILD_TESTS_WITH_COVERAGE=ON.
+# .github/workflows/coverage-windows.yml installs compiler-rt and does exactly
+# that. (clang finds the package's legacy-layout
+# lib/clang/<v>/lib/windows/libclang_rt.profile-x86_64.a via its per-target
+# runtime-dir fallback, so the layout difference is not a problem.)
 option(BUILD_TESTS_WITH_COVERAGE "Instrument tests with gcov-style coverage flags" OFF)
 if(BUILD_TESTS_WITH_COVERAGE)
-    set(CMAKE_CXX_FLAGS "-fprofile-arcs -ftest-coverage -ggdb -O0")
-    set(CMAKE_C_FLAGS "-fprofile-arcs -ftest-coverage -ggdb -O0")
+    # Append rather than assign. A bare set() discarded everything the
+    # toolchain file and the environment had already put in CMAKE_CXX_FLAGS
+    # (CI passes CXXFLAGS=-fms-extensions) for every source compiled in this
+    # directory -- which is not just tests/, but the whole of src/, since
+    # SUNSHINE_TARGET_FILES is compiled into test_sunshine here.
+    string(APPEND CMAKE_CXX_FLAGS " -fprofile-arcs -ftest-coverage -ggdb -O0")
+    string(APPEND CMAKE_C_FLAGS " -fprofile-arcs -ftest-coverage -ggdb -O0")
+
+    # Instrumented objects emit references to the profile runtime
+    # (llvm_gcda_* / __gcov_*), which the compiler driver only links in when a
+    # coverage flag is on the *link* line too. State it explicitly instead of
+    # relying on the generator threading CMAKE_CXX_FLAGS into the link rule.
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " --coverage")
 endif()
 
 # Find the correct libgcov library path matching the gcc compiler version
