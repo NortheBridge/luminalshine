@@ -31,6 +31,7 @@ extern "C" {
 #include "config.h"
 #include "display_device.h"
 #include "encoder_probe_shield.h"
+#include "encoder_probe_suppression.h"
 #include "encoder_recovery_gate.h"
 #include "globals.h"
 #include "input.h"
@@ -3881,6 +3882,20 @@ namespace video {
   static thread_local std::shared_ptr<platf::display_t> cached_probe_display;
   static thread_local platf::mem_type_e cached_display_type = platf::mem_type_e::system;
 
+  /**
+   * @brief Which codec's probe is running on this thread right now.
+   *
+   * Read by validate_encoder_safe() after the shield catches a fault, so the
+   * fault can be attributed to a codec. Thread-local rather than an
+   * out-parameter because it has to survive a Windows SEH unwind: that unwind
+   * runs no destructors (the build sets no /EHa) and skips straight past
+   * validate_encoder's frame, but thread-local storage is untouched by it.
+   *
+   * validate_encoder_safe() resets it before each probe, so a stale value from
+   * a previous encoder can never be blamed for a new fault.
+   */
+  static thread_local probe_suppression::codec_e probe_codec_in_flight = probe_suppression::codec_e::unattributed;
+
   bool validate_encoder(encoder_t &encoder, bool expect_failure) {
     // During encoder probing, always use the current active display and do not
     // attempt to select/swap displays based on configured output_name. Display
@@ -3894,8 +3909,32 @@ namespace video {
       BOOST_LOG(info) << "Encoder ["sv << encoder.name << "] failed"sv;
     });
 
+    // Skip codecs that faulted the graphics driver on an earlier pass in this
+    // process. Suppressing the one bad codec lets this pass run to completion,
+    // which is the only way the capability bits end up trustworthy: they are
+    // fail-open (the set() below turns every bit on) and are only ever
+    // corrected downward, so a probe cut short leaves them claiming support the
+    // GPU does not have. See src/encoder_probe_suppression.h.
+    //
+    // Only HEVC and AV1 are ever suppressed; an H.264 fault keeps the existing
+    // self-healing behaviour of re-probing in full. See is_suppressible().
+    auto &suppression = probe_suppression::process_registry();
+
     auto test_hevc = active_hevc_mode >= 2 || (active_hevc_mode == 0 && !(encoder.flags & H264_ONLY));
     auto test_av1 = active_av1_mode >= 2 || (active_av1_mode == 0 && !(encoder.flags & H264_ONLY));
+
+    if (test_hevc && suppression.is_suppressed(encoder.name, probe_suppression::codec_e::hevc)) {
+      BOOST_LOG(warning) << "Encoder ["sv << encoder.name
+                         << "] faulted while probing HEVC earlier in this process; skipping HEVC so "
+                            "the remaining codecs can be validated."sv;
+      test_hevc = false;
+    }
+    if (test_av1 && suppression.is_suppressed(encoder.name, probe_suppression::codec_e::av1)) {
+      BOOST_LOG(warning) << "Encoder ["sv << encoder.name
+                         << "] faulted while probing AV1 earlier in this process; skipping AV1 so "
+                            "the remaining codecs can be validated."sv;
+      test_av1 = false;
+    }
 
     encoder.h264.capabilities.set();
     encoder.hevc.capabilities.set();
@@ -3932,6 +3971,12 @@ namespace video {
       return false;
     }
 
+    // Only now does codec-specific work begin. Everything above — acquiring
+    // the display, creating the D3D device, DXGI duplication, is_codec_supported
+    // — is shared setup for all three codecs and is also the most fault-prone
+    // part of the probe, so it must stay `unattributed` and incriminate nothing.
+    probe_codec_in_flight = probe_suppression::codec_e::h264;
+
     // If we're expecting failure, use the autoselect ref config first since that will always succeed
     // if the encoder is available.
     auto max_ref_frames_h264 = expect_failure ? -1 : validate_config(disp, encoder, config_max_ref_frames);
@@ -3958,6 +4003,7 @@ namespace video {
     encoder.h264[encoder_t::PASSED] = true;
 
     if (test_hevc) {
+      probe_codec_in_flight = probe_suppression::codec_e::hevc;
       config_max_ref_frames.videoFormat = 1;
       config_autoselect.videoFormat = 1;
 
@@ -3986,6 +4032,7 @@ namespace video {
     }
 
     if (test_av1) {
+      probe_codec_in_flight = probe_suppression::codec_e::av1;
       config_max_ref_frames.videoFormat = 2;
       config_autoselect.videoFormat = 2;
 
@@ -4016,6 +4063,7 @@ namespace video {
     // Test HDR and YUV444 support
     {
       // H.264 is special because encoders may support YUV 4:4:4 without supporting 10-bit color depth
+      probe_codec_in_flight = probe_suppression::codec_e::h264;
       if (encoder.flags & YUV444_SUPPORT) {
         // All 13 config_t fields must be spelled out: an earlier 11-value
         // initializer silently landed the trailing 1 on prefer_sdr_10bit,
@@ -4032,7 +4080,10 @@ namespace video {
 
       // Reset the display since we're switching from SDR to HDR. Keep probing on the
       // current active display without attempting a display swap.
-      // Clear the cache since we need a fresh display for HDR testing
+      // Clear the cache since we need a fresh display for HDR testing.
+      // This reset and reset_display() are shared setup, not any one codec's
+      // work, so a fault here must not incriminate a codec.
+      probe_codec_in_flight = probe_suppression::codec_e::unattributed;
       cached_probe_display.reset();
       reset_display(disp, encoder.platform_formats->dev_type, probe_display_name, generic_hdr_config);
       if (!disp) {
@@ -4074,8 +4125,11 @@ namespace video {
       // HDR is not supported with H.264. Don't bother even trying it.
       encoder.h264[encoder_t::DYNAMIC_RANGE] = false;
 
+      probe_codec_in_flight = probe_suppression::codec_e::hevc;
       test_hdr_and_yuv444(encoder.hevc, 1);
+      probe_codec_in_flight = probe_suppression::codec_e::av1;
       test_hdr_and_yuv444(encoder.av1, 2);
+      probe_codec_in_flight = probe_suppression::codec_e::unattributed;
     }
 
     encoder.h264[encoder_t::VUI_PARAMETERS] = encoder.h264[encoder_t::VUI_PARAMETERS] && !config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE];
@@ -4149,6 +4203,34 @@ namespace video {
   // video::probe_shield::run_cpp_exception_shield so the same policy can
   // be unit-tested against stub probes without real encoder hardware.
   bool validate_encoder_safe(encoder_t &encoder, bool expect_failure) {
+    // Attribute the fault to whichever codec was in flight, so the NEXT probe
+    // pass can skip just that codec instead of losing the encoder again.
+    //
+    // Note what this deliberately does NOT do: it does not keep any part of
+    // this probe's result. reset_state() still clears all three codecs and the
+    // caller still erases the encoder, exactly as before — this pass falls
+    // back to the next candidate unchanged. Salvaging the faulted pass in
+    // place is not possible: capability bits are fail-open, H.264's own bits
+    // are not finalised until after the AV1 probe, and on Windows the shield
+    // is a bare __except under a build with no /EHa, so no destructors ran and
+    // the encode session and display from the faulted attempt are leaked
+    // rather than released. The only trustworthy result is a probe that ran to
+    // completion, which is what suppression buys on the next pass.
+    auto note_probe_fault = [&]() {
+      const auto faulted = probe_codec_in_flight;
+      if (faulted == probe_suppression::codec_e::unattributed) {
+        BOOST_LOG(warning) << "Encoder probe for ["sv << encoder.name
+                           << "] faulted outside any single codec's probe; the encoder will be "
+                              "retried in full on the next probe pass."sv;
+        return;
+      }
+      probe_suppression::process_registry().suppress(encoder.name, faulted);
+      BOOST_LOG(warning) << "Encoder ["sv << encoder.name << "] faulted while probing "sv
+                         << probe_suppression::codec_name(faulted)
+                         << "; that codec will be skipped for this encoder for the rest of this "
+                            "process so the next probe pass can validate the others."sv;
+    };
+
     auto reset_state = [&]() {
       encoder.h264.capabilities.reset();
       encoder.hevc.capabilities.reset();
@@ -4164,18 +4246,21 @@ namespace video {
     // SEH first: graphics-driver faults arrive as Windows SEH access
     // violations, not C++ exceptions, and must be caught by __except in
     // a frame with no C++ unwind targets.
+    probe_codec_in_flight = probe_suppression::codec_e::unattributed;
     seh_validate_encoder_args_t args {&encoder, expect_failure, false};
     const auto seh = seh_invoke_validate_encoder_(&args);
     if (seh != 0) {
       BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
                          << "] terminated by SEH 0x" << std::hex << seh << std::dec
                          << " (likely a graphics-driver fault during encoder init); skipping this encoder.";
+      note_probe_fault();
       reset_state();
       return false;
     }
     return args.result;
 #else
     // Non-Windows: the C++ exception shield is sufficient.
+    probe_codec_in_flight = probe_suppression::codec_e::unattributed;
     const auto shield = probe_shield::run_cpp_exception_shield([&] {
       return validate_encoder(encoder, expect_failure);
     });
@@ -4190,6 +4275,7 @@ namespace video {
       BOOST_LOG(warning) << "Encoder probe for [" << encoder.name
                          << "] threw an unknown exception; skipping this encoder.";
     }
+    note_probe_fault();
     reset_state();
     return false;
 #endif
