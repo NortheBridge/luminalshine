@@ -105,6 +105,27 @@ namespace nvenc {
     virtual void cleanup_rejected_initialize();
 
     /**
+     * @brief Close a session that was opened but never initialized.
+     *
+     * `nvEncOpenEncodeSessionEx()` succeeded but `nvEncInitializeEncoder()`
+     * was never *reached* — a codec or capability check rejected the request
+     * first — so no async event and no input/output resources were ever
+     * registered against the handle. `destroy_encoder()` would still call
+     * `nvEncUnregisterAsyncEvent()` on it, because `async_event_handle` is
+     * created by the `nvenc_d3d11` constructor that `nvenc_d3d12` also
+     * inherits, and some NVIDIA driver branches answer that invalid cleanup
+     * sequence with a non-C++ exception. Destroying the handle directly is the
+     * documented counterpart to `nvEncOpenEncodeSessionEx()` and is all such a
+     * session needs.
+     *
+     * Distinct from `cleanup_rejected_initialize()`, which handles a session
+     * whose `nvEncInitializeEncoder()` was *called and rejected* — a state the
+     * D3D12 backend must additionally respond to by disabling itself for the
+     * rest of the process. Nothing is rejected here, so that must not happen.
+     */
+    void discard_uninitialized_session();
+
+    /**
      * @brief Optional. Override if you must perform additional operations on the registered input surface in the beginning of `encode_frame()`.
      *        Typically used for interop copy.
      * @return `true` on success, `false` on error
@@ -215,6 +236,17 @@ namespace nvenc {
     const NV_ENC_DEVICE_TYPE device_type;
 
     void *encoder = nullptr;
+
+    /**
+     * @brief Whether `nvEncInitializeEncoder()` has succeeded on `encoder`.
+     *
+     * Separates a fully-live session from one that has only been opened with
+     * `nvEncOpenEncodeSessionEx()`. The two require different teardowns: an
+     * uninitialized session has no async event and no registered input/output
+     * resources, so the general `destroy_encoder()` sequence is invalid for
+     * it. See `discard_uninitialized_session()`.
+     */
+    bool encoder_initialized = false;
 
     struct {
       uint32_t width = 0;

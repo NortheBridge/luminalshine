@@ -21,13 +21,13 @@ extern "C" {
 #include "misc.h"
 #include "src/config.h"
 #include "src/gpu_recovery_policy.h"
-#include "src/platform/windows/nvidia_codec_support.h"
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_d3d11_native.h"
 #include "src/nvenc/nvenc_d3d12.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
 #include "src/nvenc/nvenc_utils.h"
+#include "src/platform/windows/nvidia_codec_support.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 #include "src/video.h"
 #include "utf_utils.h"
@@ -2047,12 +2047,23 @@ namespace platf::dxgi {
       if (!boost::algorithm::ends_with(name, "_nvenc")) {
         return false;
       }
-      // Ampere (including the RTX 3080 Ti) supports AV1 decoding but not
-      // AV1 encoding. Avoid entering the NVENC AV1 probe at all: the driver
-      // rejects the codec during encoder creation, and that rejection can
-      // escalate through the Windows terminate/SEH crash path.
+      // Ampere (including the RTX 3080 Ti) supports AV1 decoding but not AV1
+      // encoding, so skip the AV1 NVENC probe on pre-Ada parts rather than
+      // opening an encode session the driver can only reject.
+      //
+      // This is an optimisation, not the crash guard it was originally
+      // written as. The rejection itself was always correct and graceful
+      // (nvenc_base::create_encoder queries nvEncGetEncodeGUIDs and returns
+      // early); what crashed in issue #147 was the teardown afterwards, which
+      // unregistered resources that had never been registered. That is fixed
+      // at the source in nvenc_base::discard_uninitialized_session(), and it
+      // covers the configurations no device-ID table can enumerate — HEVC on
+      // pre-Kepler parts, 10-bit on Pascal, unsupported resolutions, and the
+      // YUV444 rejection the probe provokes deliberately on every run.
+      //
+      // Logged at debug because the probe re-runs on every launch and resume.
       if (config.videoFormat == 2 && !nvidia::supports_av1_encode(adapter_desc.DeviceId)) {
-        BOOST_LOG(info) << "AV1 encoding is not supported by this NVIDIA GPU; skipping " << name;
+        BOOST_LOG(debug) << "AV1 encoding is not supported by this NVIDIA GPU; skipping " << name;
         return false;
       }
     } else if (adapter_desc.VendorId == 0x4D4F4351 ||  // Qualcomm (QCOM as MOQC reversed)

@@ -198,7 +198,21 @@ namespace nvenc {
     if (encoder) {
       destroy_encoder();
     }
+    encoder_initialized = false;
     auto fail_guard = util::fail_guard([this] {
+      if (encoder && !encoder_initialized) {
+        // The session was opened but nvEncInitializeEncoder() never succeeded,
+        // so nothing was ever registered against it. Running the general
+        // teardown here would call nvEncUnregisterAsyncEvent() on a handle that
+        // has no async event; some NVIDIA driver branches answer that invalid
+        // sequence with a non-C++ exception, and because ~FailGuard is noexcept
+        // it becomes std::terminate and kills the process instead of failing
+        // the probe. That is the crash behind issue #147 (av1_nvenc on Ampere,
+        // where the AV1 codec GUID is correctly absent and create_encoder
+        // returns early).
+        discard_uninitialized_session();
+        return;
+      }
       destroy_encoder();
     });
 
@@ -791,6 +805,11 @@ namespace nvenc {
       }
     }
 
+    // Past this point the driver owns a live, initialized session: the async
+    // event and the input/output resources below are registered against it, so
+    // teardown must go through the full destroy_encoder() sequence.
+    encoder_initialized = true;
+
     if (async_event_handle) {
       NV_ENC_EVENT_PARAMS event_params = {api::event_params_version(selected_api_version)};
       event_params.completionEvent = async_event_handle;
@@ -897,6 +916,21 @@ namespace nvenc {
       nvenc->nvEncDestroyEncoder(encoder);
       encoder = nullptr;
     }
+    encoder_initialized = false;
+  }
+
+  void nvenc_base::discard_uninitialized_session() {
+    if (encoder) {
+      if (nvenc_failed(nvenc->nvEncDestroyEncoder(encoder))) {
+        BOOST_LOG(warning) << "NvEnc: NvEncDestroyEncoder() failed while discarding a session "
+                              "that was never initialized: " << last_nvenc_error_string;
+      }
+      encoder = nullptr;
+    }
+    encoder_initialized = false;
+    encoder_state = {};
+    encoder_params = {};
+    selected_api_version = 0;
   }
 
   void nvenc_base::destroy_output_buffer() {
@@ -1036,6 +1070,7 @@ namespace nvenc {
       encoder = nullptr;
     }
 
+    encoder_initialized = false;
     encoder_state = {};
     encoder_params = {};
     selected_api_version = 0;
