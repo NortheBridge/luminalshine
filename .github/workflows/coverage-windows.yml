@@ -214,12 +214,82 @@ jobs:
         # cases reliably fail even when the binaries are healthy. Don't gate the
         # workflow on test failures — coverage upload should still run so PRs
         # see the data either way.
+        #
+        # The suite runs in SHARDS rather than as one process because gcov only
+        # writes its .gcda counters from an atexit handler: a process killed by
+        # a signal contributes NOTHING, no matter how many tests passed first.
+        # That is the bug this step shipped with — one segfault
+        # (SimpleWebLifetime, see below) discarded the entire run, and gcovr
+        # then reconstructed a structurally complete but 0%-covered report from
+        # the .gcno compile-time notes alone. Nothing in that report says the
+        # runtime data is missing, so it uploaded clean and quietly failed
+        # codecov/patch on every C++ PR.
+        #
+        # Sharding bounds the blast radius of a future crash to one shard
+        # instead of the whole report; the "Verify coverage data" step below
+        # turns a total loss into a hard failure rather than a silent 0%.
+        # Shards run sequentially on purpose: libgcov merges each exiting
+        # process's counters into the existing .gcda files, so concurrent
+        # shards would race on the same files.
         continue-on-error: true
         working-directory: build/tests
-        run: ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml
+        env:
+          # SimpleWebLifetime is a Boost.Asio threading stress test with
+          # deliberately aggressive 1s/2s timeouts. It passes in the optimized
+          # ci-windows / nightly builds (~3s) but segfaults within ~25ms under
+          # Debug -O0 + gcov instrumentation, whose overhead invalidates those
+          # timing assumptions. What it exercises is
+          # third-party/Simple-Web-Server, which the report excludes anyway, so
+          # skipping it here costs no reported coverage while leaving it a real
+          # gate in the builds where it is meaningful.
+          COVERAGE_GTEST_FILTER: '-SimpleWebLifetime.*'
+          COVERAGE_SHARDS: '6'
+        run: |
+          set +e
+          mkdir -p test_results
+          crashed=0
+          for i in $(seq 0 $((COVERAGE_SHARDS - 1))); do
+            GTEST_TOTAL_SHARDS="${COVERAGE_SHARDS}" GTEST_SHARD_INDEX="${i}" \
+              ./test_sunshine.exe \
+                --gtest_color=yes \
+                --gtest_filter="${COVERAGE_GTEST_FILTER}" \
+                --gtest_output="xml:test_results/shard_${i}.xml"
+            rc=$?
+            # Exit >=128 is a fatal signal (139 = SIGSEGV) and means this
+            # shard's counters were never flushed. Exit 1 is ordinary test
+            # failures, which still write .gcda normally.
+            if [ "${rc}" -ge 128 ]; then
+              echo "::warning::Coverage shard ${i} of ${COVERAGE_SHARDS} crashed (exit ${rc}); its counters were lost."
+              crashed=$((crashed + 1))
+            fi
+          done
+          if [ "${crashed}" -gt 0 ]; then
+            echo "::warning::${crashed} of ${COVERAGE_SHARDS} coverage shards crashed; reported coverage understates reality."
+          fi
+          exit 0
+
+      - name: Verify coverage data was produced
+        # The guard that keeps this gate honest. gcovr will happily emit a
+        # complete-looking 0% report from .gcno notes alone when no .gcda
+        # runtime data exists, and neither the XML nor the Codecov UI
+        # distinguishes that from "genuinely untested". Fail loudly here
+        # instead: uploading a run with no runtime data is worse than not
+        # uploading at all, because codecov/patch then reports "0.00% of diff
+        # hit" on every C++ PR until reviewers learn to ignore a red check.
+        working-directory: build
+        run: |
+          gcno=$(find . -name '*.gcno' | wc -l)
+          gcda=$(find . -name '*.gcda' | wc -l)
+          echo "Coverage notes (.gcno, compile time): ${gcno}"
+          echo "Coverage data  (.gcda, run time):     ${gcda}"
+          if [ "${gcda}" -eq 0 ]; then
+            echo "::error::No .gcda files were produced — the instrumented test binary never reached a clean exit, so every coverage counter was lost. See the 'Run tests' step for a crash. Refusing to upload a report that would show 0% for the entire tree."
+            exit 1
+          fi
 
       - name: Generate coverage XML
-        if: always() && steps.test.outcome != 'cancelled'
+        # No always() here: if the guard above failed there is no runtime data,
+        # and generating/uploading the report regardless is the original bug.
         working-directory: build
         run: |
           python -m gcovr \
@@ -242,11 +312,12 @@ jobs:
           name: coverage-windows
           path: |
             build/coverage.xml
-            build/tests/test_results.xml
+            build/tests/test_results/
           if-no-files-found: warn
 
       - name: Upload to Codecov
-        if: always() && steps.test.outcome != 'cancelled'
+        # Deliberately not always(): an upload with no runtime data is exactly
+        # the failure mode this workflow is being fixed for.
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -257,8 +328,8 @@ jobs:
           verbose: true
 
       - name: Upload test results to Codecov Test Analytics
-        # `--gtest_output=xml:test_results.xml` above already emits the
-        # JUnit-compatible XML; this step just ships it. Run even when
+        # `--gtest_output=xml:...` above already emits the JUnit-compatible
+        # XML (one file per shard); this step just ships them. Run even when
         # the test step exited non-zero (continue-on-error keeps the
         # workflow alive) so the Test Analytics dashboard records
         # failing / flaky tests — those are the ones worth tracking,
@@ -276,7 +347,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           report_type: test_results
-          files: build/tests/test_results.xml
+          files: build/tests/test_results/shard_0.xml,build/tests/test_results/shard_1.xml,build/tests/test_results/shard_2.xml,build/tests/test_results/shard_3.xml,build/tests/test_results/shard_4.xml,build/tests/test_results/shard_5.xml
           flags: windows
           name: windows-amd64-results
           # Non-blocking: a test-results upload failure is observability
