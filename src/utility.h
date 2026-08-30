@@ -124,6 +124,27 @@ struct argument_type<T(U)> {
 
 namespace util {
 
+  /**
+   * @brief Clamp a requested frame rate into a supported range.
+   * @param requested The frame rate the client asked for.
+   * @param minimum Lowest frame rate the host will serve.
+   * @param maximum Highest frame rate the host will serve.
+   * @return `requested` clamped to [minimum, maximum]; `minimum` if the bounds
+   *         are inverted.
+   */
+  inline int clamp_fps(int requested, int minimum, int maximum) {
+    if (maximum < minimum) {
+      return minimum;
+    }
+    if (requested < minimum) {
+      return minimum;
+    }
+    if (requested > maximum) {
+      return maximum;
+    }
+    return requested;
+  }
+
   template<template<typename...> class X, class... Y>
   struct __instantiation_of: public std::false_type {};
 
