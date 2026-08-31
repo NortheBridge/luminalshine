@@ -117,10 +117,47 @@ namespace {
             }
             // Odd threads also open an SSE stream and abandon it early,
             // forcing server-side response drops with writes in flight.
+            //
+            // Deliberately a raw socket rather than HttpClient, for two
+            // reasons.
+            //
+            // An abrupt half-read disconnect is the closer match to the real
+            // early-dropping client this test models: it drops the connection
+            // mid-stream rather than letting a client library shut it down
+            // tidily.
+            //
+            // It also keeps the test independent of the SSE path in
+            // Simple-Web-Server's client. On "Content-Type:
+            // text/event-stream" that client switches into a server-sent-event
+            // read loop which kept invoking the request completion callback
+            // once per event — long after ClientBase::sync_request() had
+            // returned and destroyed the response/promise locals the callback
+            // captured by reference, so the late invocations read a dangling
+            // shared_ptr and called Response::close() through it. Optimized
+            // builds happened to survive that; -O0 did not, which is why this
+            // whole suite used to die here under the coverage build, and why
+            // the run was excluded from it. Fixed in the fork by
+            // NortheBridge/Simple-Web-Server#3 and picked up by the submodule
+            // bump alongside this change — but that was a client-side bug,
+            // unrelated to the server-side lifetime hazard this test exists to
+            // guard, and nothing here needs the client to reach the hazard.
             if (t % 2 == 1) {
               try {
-                client.request("GET", "/sse");
+                SimpleWeb::io_context io;
+                SimpleWeb::asio::ip::tcp::socket socket(io);
+                socket.connect(SimpleWeb::asio::ip::tcp::endpoint(SimpleWeb::make_address("127.0.0.1"), port.load()));
+
+                const std::string req = "GET /sse HTTP/1.1\r\nHost: " + host + "\r\n\r\n";
+
+                SimpleWeb::asio::write(socket, SimpleWeb::asio::buffer(req));
                 requests.fetch_add(1);
+
+                // Read part of the stream, then drop the connection while the
+                // server's detached thread still has sends queued.
+                char buf[64];
+                SimpleWeb::error_code ec;
+                socket.read_some(SimpleWeb::asio::buffer(buf), ec);
+                socket.close(ec);
               } catch (...) {
                 // Early disconnects / timeouts are expected here.
               }

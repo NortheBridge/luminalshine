@@ -219,7 +219,7 @@ jobs:
         # writes its .gcda counters from an atexit handler: a process killed by
         # a signal contributes NOTHING, no matter how many tests passed first.
         # That is the bug this step shipped with — one segfault
-        # (SimpleWebLifetime, see below) discarded the entire run, and gcovr
+        # (SimpleWebLifetime) discarded the entire run, and gcovr
         # then reconstructed a structurally complete but 0%-covered report from
         # the .gcno compile-time notes alone. Nothing in that report says the
         # runtime data is missing, so it uploaded clean and quietly failed
@@ -234,15 +234,19 @@ jobs:
         continue-on-error: true
         working-directory: build/tests
         env:
-          # SimpleWebLifetime is a Boost.Asio threading stress test with
-          # deliberately aggressive 1s/2s timeouts. It passes in the optimized
-          # ci-windows / nightly builds (~3s) but segfaults within ~25ms under
-          # Debug -O0 + gcov instrumentation, whose overhead invalidates those
-          # timing assumptions. What it exercises is
-          # third-party/Simple-Web-Server, which the report excludes anyway, so
-          # skipping it here costs no reported coverage while leaving it a real
-          # gate in the builds where it is meaningful.
-          COVERAGE_GTEST_FILTER: '-SimpleWebLifetime.*'
+          # No --gtest_filter here: the whole suite runs under coverage.
+          #
+          # SimpleWebLifetime used to be excluded because it segfaulted within
+          # ~25ms in this build while passing in the optimized ci-windows /
+          # nightly builds. That was never a timing or instrumentation
+          # artifact: the test's SSE leg drove the Simple-Web-Server *client*
+          # into a use-after-free that only -O0 makes fatal (-O1 and above
+          # happen to survive it), and gcov was an innocent bystander — it
+          # writes .gcda from an atexit handler, so the signal merely made the
+          # loss visible. Fixed twice over: at the source in the fork
+          # (NortheBridge/Simple-Web-Server#3, picked up by the submodule bump)
+          # and in tests/unit/test_simpleweb_lifetime.cpp, which now issues
+          # that request over a raw socket. The test gates this build again.
           COVERAGE_SHARDS: '6'
         run: |
           set +e
@@ -252,7 +256,6 @@ jobs:
             GTEST_TOTAL_SHARDS="${COVERAGE_SHARDS}" GTEST_SHARD_INDEX="${i}" \
               ./test_sunshine.exe \
                 --gtest_color=yes \
-                --gtest_filter="${COVERAGE_GTEST_FILTER}" \
                 --gtest_output="xml:test_results/shard_${i}.xml"
             rc=$?
             # Exit >=128 is a fatal signal (139 = SIGSEGV) and means this
