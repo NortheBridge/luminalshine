@@ -2003,168 +2003,6 @@ namespace webrtc_stream {
       return info;
     }
 
-    /**
-     * @brief Modifies SDP to configure Opus encoder for high quality audio.
-     *
-     * Adds parameters to match Sunshine's native Opus encoder settings:
-     * - maxaveragebitrate: High bitrate for quality (512kbps for stereo)
-     * - stereo/sprop-stereo: Enable stereo
-     * - cbr: Constant bitrate (matches Sunshine's VBR=0)
-     * - usedtx: Disable discontinuous transmission
-     *
-     * @param sdp The SDP string to modify
-     * @param channels Number of audio channels (2 for stereo, 6 for 5.1, 8 for 7.1)
-     * @return Modified SDP string
-     */
-    [[maybe_unused]] std::string apply_opus_audio_params(std::string_view sdp, int channels) {
-      // Determine bitrate based on channel count (matching audio.cpp stream_configs)
-      // Using HIGH_QUALITY bitrates since WebRTC config sets HIGH_QUALITY = true
-      int bitrate = 512000;  // stereo high quality
-      if (channels == 6) {
-        bitrate = 1536000;  // 5.1 high quality
-      } else if (channels == 8) {
-        bitrate = 2048000;  // 7.1 high quality
-      }
-
-      const bool is_stereo = (channels == 2);
-      std::string result;
-      result.reserve(sdp.size() + 256);
-
-      int opus_payload_type = -1;
-      bool in_audio = false;
-      bool found_opus_fmtp = false;
-
-      std::size_t line_start = 0;
-      while (line_start < sdp.size()) {
-        std::size_t line_end = sdp.find('\n', line_start);
-        if (line_end == std::string_view::npos) {
-          line_end = sdp.size();
-        }
-        auto line = sdp.substr(line_start, line_end - line_start);
-        std::string_view line_content = line;
-        bool has_cr = !line_content.empty() && line_content.back() == '\r';
-        if (has_cr) {
-          line_content.remove_suffix(1);
-        }
-
-        // Track audio section
-        if (line_content.rfind("m=audio", 0) == 0) {
-          in_audio = true;
-        } else if (line_content.rfind("m=", 0) == 0) {
-          in_audio = false;
-        }
-
-        // Find Opus payload type
-        if (in_audio && line_content.rfind("a=rtpmap:", 0) == 0) {
-          auto rest = line_content.substr(9);
-          auto space = rest.find_first_of(" \t");
-          if (space != std::string_view::npos) {
-            auto pt_str = trim_ascii(rest.substr(0, space));
-            auto codec = trim_ascii(rest.substr(space + 1));
-            if (boost::istarts_with(codec, "opus/")) {
-              int pt = -1;
-              auto parse_result = std::from_chars(pt_str.data(), pt_str.data() + pt_str.size(), pt);
-              if (parse_result.ec == std::errc() && pt >= 0) {
-                opus_payload_type = pt;
-              }
-            }
-          }
-        }
-
-        // Modify existing Opus fmtp line or add parameters
-        if (in_audio && opus_payload_type >= 0 && line_content.rfind("a=fmtp:", 0) == 0) {
-          auto rest = line_content.substr(7);
-          auto space = rest.find_first_of(" \t");
-          if (space != std::string_view::npos) {
-            auto pt_str = trim_ascii(rest.substr(0, space));
-            int pt = -1;
-            auto parse_result = std::from_chars(pt_str.data(), pt_str.data() + pt_str.size(), pt);
-            if (parse_result.ec == std::errc() && pt == opus_payload_type) {
-              found_opus_fmtp = true;
-              auto existing_params = rest.substr(space + 1);
-
-              // Build new fmtp line with our parameters
-              result += "a=fmtp:";
-              result += pt_str;
-              result += ' ';
-
-              // Add existing params that we don't override
-              std::size_t param_start = 0;
-              bool first_param = true;
-              while (param_start < existing_params.size()) {
-                std::size_t param_end = existing_params.find(';', param_start);
-                if (param_end == std::string_view::npos) {
-                  param_end = existing_params.size();
-                }
-                auto token = trim_ascii(existing_params.substr(param_start, param_end - param_start));
-                if (!token.empty()) {
-                  auto eq = token.find('=');
-                  std::string_view key = eq != std::string_view::npos ? token.substr(0, eq) : token;
-                  std::string key_lower {key};
-                  boost::algorithm::to_lower(key_lower);
-                  // Skip parameters we're going to set ourselves
-                  if (key_lower != "maxaveragebitrate" && key_lower != "stereo" &&
-                      key_lower != "sprop-stereo" && key_lower != "cbr" && key_lower != "usedtx") {
-                    if (!first_param) {
-                      result += ';';
-                    }
-                    result += token;
-                    first_param = false;
-                  }
-                }
-                if (param_end >= existing_params.size()) {
-                  break;
-                }
-                param_start = param_end + 1;
-              }
-
-              // Add our parameters
-              if (!first_param) {
-                result += ';';
-              }
-              result += "maxaveragebitrate=";
-              result += std::to_string(bitrate);
-              if (is_stereo) {
-                result += ";stereo=1;sprop-stereo=1";
-              }
-              result += ";cbr=1;usedtx=0";
-
-              if (has_cr) {
-                result += '\r';
-              }
-              result += '\n';
-
-              if (line_end < sdp.size()) {
-                line_start = line_end + 1;
-              } else {
-                break;
-              }
-              continue;
-            }
-          }
-        }
-
-        // Copy line as-is
-        result += line;
-        result += '\n';
-
-        if (line_end >= sdp.size()) {
-          break;
-        }
-        line_start = line_end + 1;
-      }
-
-      // If we found Opus but no fmtp line, we need to add one
-      // This shouldn't normally happen as browsers include fmtp for Opus
-      if (opus_payload_type >= 0 && !found_opus_fmtp) {
-        BOOST_LOG(debug) << "WebRTC: No Opus fmtp found, adding one";
-        // Insert before the first a= line in audio section
-        // For simplicity, just log a warning - browsers should always have fmtp
-      }
-
-      return result;
-    }
-
     #ifdef SUNSHINE_ENABLE_WEBRTC
     const char *lwrtc_codec_name(lwrtc_video_codec_t codec) {
       switch (codec) {
@@ -2912,6 +2750,20 @@ namespace webrtc_stream {
       delete ctx;
     }
 
+    /**
+     * @brief Record the audio layout an answer actually settled on.
+     *
+     * The requested count lives in SessionOptions; this is what the peer agreed
+     * to, which is what submit_audio_frame() has to match.
+     */
+    void store_negotiated_audio_channels(const std::string &session_id, int channels) {
+      std::lock_guard lg {session_mutex};
+      auto it = sessions.find(session_id);
+      if (it != sessions.end()) {
+        it->second.state.negotiated_audio_channels = channels;
+      }
+    }
+
     void on_create_answer_success(void *user, const char *sdp, const char *type) {
       auto *ctx = static_cast<SessionPeerContext *>(user);
       if (!ctx) {
@@ -2927,8 +2779,12 @@ namespace webrtc_stream {
 
       // Apply Opus audio parameters to match Sunshine's native encoder quality
       if (!sdp_copy.empty() && ctx->audio_channels > 0) {
-        sdp_copy = apply_opus_audio_params(sdp_copy, ctx->audio_channels);
-        BOOST_LOG(debug) << "WebRTC: applied Opus audio params for " << ctx->audio_channels << " channels";
+        auto rewritten = apply_opus_audio_params(sdp_copy, ctx->audio_channels);
+        sdp_copy = std::move(rewritten.sdp);
+        store_negotiated_audio_channels(ctx->session_id, rewritten.channels);
+        BOOST_LOG(info) << "WebRTC: negotiated " << rewritten.channels << "-channel audio"
+                        << (rewritten.multiopus ? " (multiopus)" : " (opus)")
+                        << " for " << ctx->session_id;
       }
 
       auto *local_ctx = new LocalDescriptionContext {
@@ -5001,13 +4857,328 @@ namespace webrtc_stream {
 #endif
   }
 
+  namespace {
+    /// One SDP line plus whether it was CRLF-terminated, so a rewrite round-trips byte-for-byte.
+    struct sdp_line_t {
+      std::string text;
+      bool crlf = false;
+    };
+
+    std::vector<sdp_line_t> split_sdp_lines(std::string_view sdp) {
+      std::vector<sdp_line_t> lines;
+      std::size_t start = 0;
+      while (true) {
+        auto end = sdp.find('\n', start);
+        auto text = sdp.substr(start, (end == std::string_view::npos ? sdp.size() : end) - start);
+        const bool crlf = !text.empty() && text.back() == '\r';
+        if (crlf) {
+          text.remove_suffix(1);
+        }
+        lines.push_back(sdp_line_t {std::string {text}, crlf});
+        if (end == std::string_view::npos) {
+          break;
+        }
+        start = end + 1;
+      }
+      return lines;
+    }
+
+    std::string join_sdp_lines(const std::vector<sdp_line_t> &lines) {
+      std::string out;
+      for (std::size_t i = 0; i < lines.size(); ++i) {
+        out += lines[i].text;
+        if (i + 1 < lines.size()) {
+          out += lines[i].crlf ? "\r\n" : "\n";
+        }
+      }
+      return out;
+    }
+
+    struct rtpmap_entry_t {
+      int pt = -1;
+      std::string name;  ///< Lower-cased encoding name.
+      int channels = 1;
+    };
+
+    /**
+     * @brief Parse an `a=rtpmap:<pt> <name>/<rate>[/<channels>]` line.
+     */
+    std::optional<rtpmap_entry_t> parse_rtpmap(std::string_view line) {
+      constexpr std::string_view prefix = "a=rtpmap:";
+      if (!boost::istarts_with(line, prefix)) {
+        return std::nullopt;
+      }
+      auto rest = line.substr(prefix.size());
+      auto space = rest.find_first_of(" \t");
+      if (space == std::string_view::npos) {
+        return std::nullopt;
+      }
+
+      rtpmap_entry_t entry;
+      auto pt_str = trim_ascii(rest.substr(0, space));
+      auto parsed = std::from_chars(pt_str.data(), pt_str.data() + pt_str.size(), entry.pt);
+      if (parsed.ec != std::errc() || entry.pt < 0) {
+        return std::nullopt;
+      }
+
+      auto codec = trim_ascii(rest.substr(space + 1));
+      auto rate_slash = codec.find('/');
+      entry.name = std::string {rate_slash == std::string_view::npos ? codec : codec.substr(0, rate_slash)};
+      boost::algorithm::to_lower(entry.name);
+      if (rate_slash != std::string_view::npos) {
+        auto after_rate = codec.substr(rate_slash + 1);
+        auto channel_slash = after_rate.find('/');
+        if (channel_slash != std::string_view::npos) {
+          auto channel_str = trim_ascii(after_rate.substr(channel_slash + 1));
+          int value = 0;
+          auto channels_parsed =
+            std::from_chars(channel_str.data(), channel_str.data() + channel_str.size(), value);
+          if (channels_parsed.ec == std::errc() && value > 0) {
+            entry.channels = value;
+          }
+        }
+      }
+      return entry;
+    }
+  }  // namespace
+
+  opus_sdp_result_t apply_opus_audio_params(std::string_view sdp, int channels) {
+    opus_sdp_result_t result;
+    result.sdp = std::string {sdp};
+
+    // Single source of truth: the same row audio::capture() hands to the native
+    // encoder. WebRTC always captures at HIGH_QUALITY (see build_audio_config),
+    // so the far end has to be told about that exact layout. map_stream() falls
+    // back to stereo for counts it does not know, which is what makes the
+    // channelCount comparison below a real validity check.
+    const auto &requested_config = audio::stream_configs[audio::map_stream(channels, true)];
+    const bool want_multichannel = channels > 2 && requested_config.channelCount == channels;
+
+    auto lines = split_sdp_lines(sdp);
+
+    int opus_pt = -1;
+    int multiopus_pt = -1;
+    std::size_t audio_m_line = std::string::npos;
+    {
+      bool in_audio = false;
+      for (std::size_t i = 0; i < lines.size(); ++i) {
+        const auto &text = lines[i].text;
+        if (boost::istarts_with(text, "m=")) {
+          in_audio = boost::istarts_with(text, "m=audio");
+          if (in_audio && audio_m_line == std::string::npos) {
+            audio_m_line = i;
+          }
+          continue;
+        }
+        if (!in_audio) {
+          continue;
+        }
+        auto entry = parse_rtpmap(text);
+        if (!entry) {
+          continue;
+        }
+        if (entry->name == "opus" && opus_pt < 0) {
+          opus_pt = entry->pt;
+        } else if (entry->name == "multiopus" && entry->channels == channels && multiopus_pt < 0) {
+          multiopus_pt = entry->pt;
+        }
+      }
+    }
+
+    int target_pt = -1;
+    if (want_multichannel && multiopus_pt >= 0) {
+      target_pt = multiopus_pt;
+      result.channels = channels;
+      result.multiopus = true;
+    } else {
+      target_pt = opus_pt;
+      result.channels = 2;
+      if (want_multichannel) {
+        BOOST_LOG(warning) << "WebRTC: " << channels
+                           << "-channel audio was requested but the peer offered no matching "
+                              "multiopus payload; falling back to stereo";
+      }
+    }
+
+    if (target_pt < 0) {
+      // No Opus payload at all -- nothing useful to say about this m-line.
+      return result;
+    }
+
+    const auto &negotiated_config = audio::stream_configs[audio::map_stream(result.channels, true)];
+
+    // Parameters we restate authoritatively. Everything else the peer offered
+    // (minptime, useinbandfec, ...) is preserved untouched.
+    static constexpr std::string_view owned_keys[] {
+      "maxaveragebitrate",
+      "stereo",
+      "sprop-stereo",
+      "cbr",
+      "usedtx",
+      "num_streams",
+      "coupled_streams",
+      "channel_mapping",
+    };
+
+    auto rebuild_fmtp_params = [&](std::string_view existing) {
+      std::string params;
+      auto append = [&params](std::string_view token) {
+        if (!params.empty()) {
+          params += ';';
+        }
+        params += token;
+      };
+
+      std::size_t start = 0;
+      while (start < existing.size()) {
+        auto end = existing.find(';', start);
+        if (end == std::string_view::npos) {
+          end = existing.size();
+        }
+        auto token = trim_ascii(existing.substr(start, end - start));
+        if (!token.empty()) {
+          auto eq = token.find('=');
+          std::string key {eq == std::string_view::npos ? token : token.substr(0, eq)};
+          boost::algorithm::to_lower(key);
+          if (std::find(std::begin(owned_keys), std::end(owned_keys), key) == std::end(owned_keys)) {
+            append(token);
+          }
+        }
+        start = end + 1;
+      }
+
+      append("maxaveragebitrate=" + std::to_string(negotiated_config.bitrate));
+      if (result.multiopus) {
+        append("num_streams=" + std::to_string(negotiated_config.streams));
+        append("coupled_streams=" + std::to_string(negotiated_config.coupledStreams));
+        std::string mapping = "channel_mapping=";
+        for (int i = 0; i < negotiated_config.channelCount; ++i) {
+          if (i > 0) {
+            mapping += ',';
+          }
+          mapping += std::to_string(static_cast<int>(negotiated_config.mapping[i]));
+        }
+        append(mapping);
+      } else {
+        append("stereo=1");
+        append("sprop-stereo=1");
+      }
+      append("cbr=1");
+      append("usedtx=0");
+      return params;
+    };
+
+    const std::string target_pt_str = std::to_string(target_pt);
+    bool rewrote_fmtp = false;
+    {
+      bool in_audio = false;
+      for (auto &line : lines) {
+        if (boost::istarts_with(line.text, "m=")) {
+          in_audio = boost::istarts_with(line.text, "m=audio");
+          continue;
+        }
+        if (!in_audio || !boost::istarts_with(line.text, "a=fmtp:")) {
+          continue;
+        }
+        auto rest = std::string_view {line.text}.substr(7);
+        auto space = rest.find_first_of(" \t");
+        if (space == std::string_view::npos || trim_ascii(rest.substr(0, space)) != target_pt_str) {
+          continue;
+        }
+        line.text = "a=fmtp:" + target_pt_str + " " + rebuild_fmtp_params(trim_ascii(rest.substr(space + 1)));
+        rewrote_fmtp = true;
+      }
+    }
+
+    // Browsers always emit an fmtp for Opus, but a hand-rolled offer may not.
+    if (!rewrote_fmtp) {
+      bool in_audio = false;
+      for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (boost::istarts_with(lines[i].text, "m=")) {
+          in_audio = boost::istarts_with(lines[i].text, "m=audio");
+          continue;
+        }
+        auto entry = in_audio ? parse_rtpmap(lines[i].text) : std::nullopt;
+        if (!entry || entry->pt != target_pt) {
+          continue;
+        }
+        sdp_line_t inserted;
+        inserted.text = "a=fmtp:" + target_pt_str + " " + rebuild_fmtp_params({});
+        inserted.crlf = lines[i].crlf;
+        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(i) + 1, std::move(inserted));
+        break;
+      }
+    }
+
+    // Promote the multichannel payload to the head of the m-line so it is the
+    // one actually sent on. An answer keeps the offer's payload set, but the
+    // first entry is the selected codec.
+    if (result.multiopus && audio_m_line != std::string::npos) {
+      auto &text = lines[audio_m_line].text;
+      std::vector<std::string> fields;
+      std::size_t start = 0;
+      while (true) {
+        auto end = text.find(' ', start);
+        if (end == std::string::npos) {
+          fields.push_back(text.substr(start));
+          break;
+        }
+        fields.push_back(text.substr(start, end - start));
+        start = end + 1;
+      }
+      // m=<media> <port> <proto> <fmt> ...
+      constexpr std::ptrdiff_t first_payload = 3;
+      if (static_cast<std::ptrdiff_t>(fields.size()) > first_payload) {
+        auto payloads_begin = fields.begin() + first_payload;
+        auto it = std::find(payloads_begin, fields.end(), target_pt_str);
+        if (it != fields.end() && it != payloads_begin) {
+          std::rotate(payloads_begin, it, it + 1);
+          std::string rebuilt;
+          for (std::size_t i = 0; i < fields.size(); ++i) {
+            if (i > 0) {
+              rebuilt += ' ';
+            }
+            rebuilt += fields[i];
+          }
+          text = std::move(rebuilt);
+        }
+      }
+    }
+
+    result.sdp = join_sdp_lines(lines);
+    return result;
+  }
+
   void submit_audio_frame(const std::vector<float> &samples, int sample_rate, int channels, int frames) {
     if (!has_active_sessions() || samples.empty()) {
       return;
     }
 
+    // All live sessions share the single capture buffer below, and the capture
+    // config key includes the channel count, so concurrent sessions cannot
+    // actually disagree here -- but take the minimum anyway: sending 6-channel
+    // PCM to a peer that only negotiated stereo produces garbage, whereas the
+    // fold is merely lossy. Sessions that have not answered yet are ignored;
+    // no audio is flowing to them.
+    bool any_negotiated = false;
+    int negotiated_channels = 0;
+    {
+      std::lock_guard lg {session_mutex};
+      for (auto &[_, session] : sessions) {
+        if (!session.state.audio || !session.state.negotiated_audio_channels) {
+          continue;
+        }
+        const int session_channels = *session.state.negotiated_audio_channels;
+        negotiated_channels = any_negotiated ? std::min(negotiated_channels, session_channels) : session_channels;
+        any_negotiated = true;
+      }
+    }
+
     const bool downmix_to_stereo =
-      rtsp_sessions_active.load(std::memory_order_relaxed) && channels > 2;
+      channels > 2 &&
+      (rtsp_sessions_active.load(std::memory_order_relaxed) ||
+       (any_negotiated && negotiated_channels < channels));
+
     const float *input_samples = samples.data();
     int output_channels = channels;
     std::vector<float> downmixed;
@@ -5015,10 +5186,37 @@ namespace webrtc_stream {
       output_channels = 2;
       const std::size_t total_frames = static_cast<std::size_t>(std::max(frames, 0));
       downmixed.resize(total_frames * static_cast<std::size_t>(output_channels));
+
+      // Capture order is WASAPI order, which is what audio::stream_configs
+      // describes: FL FR FC LFE BL BR [SL SR]. Fold per ITU-R BS.775 and
+      // normalize by the coefficient sum so a full-scale surround mix cannot
+      // clip the stereo result (what ffmpeg's resampler does by default).
+      // LFE is dropped on purpose -- it is redundant bass that only muddies a
+      // stereo fold. Simply taking FL/FR instead would silence the centre
+      // channel, i.e. most dialogue.
+      constexpr float attenuation = 0.7071068f;  // -3 dB
+      const bool has_surround = channels >= 6;
+      const bool has_sides = channels >= 8;
+      const float normalize =
+        has_surround ? 1.0f / (1.0f + attenuation + attenuation + (has_sides ? attenuation : 0.0f)) : 1.0f;
+
       for (std::size_t frame = 0; frame < total_frames; ++frame) {
         const std::size_t base = frame * static_cast<std::size_t>(channels);
-        downmixed[frame * 2] = samples[base];
-        downmixed[frame * 2 + 1] = samples[base + 1];
+        float left = samples[base];
+        float right = samples[base + 1];
+        if (has_surround) {
+          const float center = samples[base + 2] * attenuation;
+          left = (left + center + samples[base + 4] * attenuation);
+          right = (right + center + samples[base + 5] * attenuation);
+          if (has_sides) {
+            left += samples[base + 6] * attenuation;
+            right += samples[base + 7] * attenuation;
+          }
+          left *= normalize;
+          right *= normalize;
+        }
+        downmixed[frame * 2] = left;
+        downmixed[frame * 2 + 1] = right;
       }
       input_samples = downmixed.data();
     }

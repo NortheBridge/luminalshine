@@ -379,6 +379,7 @@ namespace confighttp {
     output["codec"] = state.codec ? nlohmann::json(*state.codec) : nlohmann::json(nullptr);
     output["hdr"] = state.hdr ? nlohmann::json(*state.hdr) : nlohmann::json(nullptr);
     output["audio_channels"] = state.audio_channels ? nlohmann::json(*state.audio_channels) : nlohmann::json(nullptr);
+    output["negotiated_audio_channels"] = state.negotiated_audio_channels ? nlohmann::json(*state.negotiated_audio_channels) : nlohmann::json(nullptr);
     output["audio_codec"] = state.audio_codec ? nlohmann::json(*state.audio_codec) : nlohmann::json(nullptr);
     output["profile"] = state.profile ? nlohmann::json(*state.profile) : nlohmann::json(nullptr);
     output["video_pacing_mode"] = state.video_pacing_mode ? nlohmann::json(*state.video_pacing_mode) : nlohmann::json(nullptr);
