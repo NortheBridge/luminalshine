@@ -27,8 +27,6 @@ namespace audio {
   static void stop_audio_control(audio_ctx_t &);
   static void apply_surround_params(opus_stream_config_t &stream, const stream_params_t &params);
 
-  int map_stream(int channels, bool quality);
-
   constexpr auto SAMPLE_RATE = 48000;
 
   // NOTE: If you adjust the bitrates listed here, make sure to update the
@@ -229,6 +227,15 @@ namespace audio {
     bool continuous_audio = config.flags[config_t::CONTINUOUS_AUDIO];
     auto mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size, continuous_audio);
     if (!mic) {
+      if (stream.channelCount > 2) {
+        // WASAPI capture needs the device to already be configured for the exact
+        // layout -- it will not upmix. Without that, init fails and the stream
+        // gets no audio at all, which is otherwise a confusing silent failure.
+        BOOST_LOG(warning) << "Couldn't capture a "sv << stream.channelCount
+                           << "-channel layout. The capture device must be set to that layout; a virtual "
+                              "sink (Steam Streaming Speakers, or audio_virtual_sink) provides it. "
+                              "Request stereo if the host has no surround-capable output."sv;
+      }
       return;
     }
 

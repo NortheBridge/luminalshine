@@ -40,6 +40,14 @@ namespace audio {
 
   extern opus_stream_config_t stream_configs[MAX_STREAM_CONFIG];
 
+  /**
+   * @brief Map a channel count onto an index into stream_configs.
+   * @param channels Channel count. 2, 6 and 8 are recognized; anything else falls back to stereo.
+   * @param quality True to select the high-quality variant of the layout.
+   * @returns Index into stream_configs.
+   */
+  int map_stream(int channels, bool quality);
+
   struct config_t {
     enum flags_e : int {
       HIGH_QUALITY,  ///< High quality audio

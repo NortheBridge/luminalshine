@@ -424,6 +424,32 @@
             {{ hdrInlineWarning }}
           </n-alert>
 
+          <!-- Audio Channels -->
+          <div class="setting-group">
+            <label class="group-label">{{ $t('webrtc.audio_channels') }}</label>
+            <p class="hint">{{ $t('webrtc.audio_channels_desc') }}</p>
+            <div class="preset-chips">
+              <button
+                v-for="opt in audioChannelOptions"
+                :key="opt.value"
+                class="chip"
+                :class="{ active: (config.audioChannels ?? 2) === opt.value }"
+                :disabled="isConnected"
+                @click="config.audioChannels = opt.value"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+          <n-alert
+            v-if="audioChannelsWarning"
+            type="warning"
+            :show-icon="true"
+            class="setting-alert"
+          >
+            {{ audioChannelsWarning }}
+          </n-alert>
+
           <!-- Mute Host Audio -->
           <div class="setting-group toggle-setting">
             <div class="toggle-info">
@@ -657,6 +683,14 @@ const encodingOptions = computed(() =>
   }),
 );
 
+const audioChannelOptions = [
+  { label: 'Stereo', value: 2 },
+  { label: '5.1', value: 6 },
+  { label: '7.1', value: 8 },
+] as const;
+
+const AUDIO_CHANNEL_VALUES: readonly number[] = audioChannelOptions.map((opt) => opt.value);
+
 const pacingOptions = [
   { label: 'Latency', value: 'latency' },
   { label: 'Balanced', value: 'balanced' },
@@ -731,6 +765,7 @@ const config = reactive<StreamConfig>({
   encoding: 'h264',
   hdr: false,
   bitrateKbps: 20000,
+  audioChannels: 2,
   muteHostAudio: true,
   videoPacingMode: 'balanced',
   videoPacingSlackMs: pacingPresets.balanced.slackMs,
@@ -738,6 +773,22 @@ const config = reactive<StreamConfig>({
 });
 
 const negotiatedEncoding = ref<EncodingType | null>(null);
+const negotiatedAudioChannels = ref<number | undefined>(undefined);
+
+const audioChannelsWarning = computed(() => {
+  const requested = config.audioChannels ?? 2;
+  const negotiated = negotiatedAudioChannels.value;
+  if (requested <= 2 || negotiated === undefined || negotiated >= requested) return undefined;
+  return t('webrtc.audio_channels_fallback', {
+    requested: audioChannelLabel(requested),
+    negotiated: audioChannelLabel(negotiated),
+  });
+});
+
+function audioChannelLabel(channels: number): string {
+  return audioChannelOptions.find((opt) => opt.value === channels)?.label ?? `${channels}ch`;
+}
+
 const hdrRuntimeWarning = ref<string | null>(null);
 
 const CLIENT_CONFIG_STORAGE_KEY = 'sunshine.webrtc.session_config';
@@ -785,6 +836,10 @@ function normalizeProfileConfig(profileConfig: StreamConfig): StreamConfig {
     fps,
     mode,
   );
+
+  if (!AUDIO_CHANNEL_VALUES.includes(normalized.audioChannels as number)) {
+    normalized.audioChannels = 2;
+  }
   return normalized;
 }
 
@@ -2495,6 +2550,7 @@ async function startConnect() {
   // Yield to allow the connecting spinner to render and start animating before heavy work
   await waitForSpinnerFrame();
   negotiatedEncoding.value = null;
+  negotiatedAudioChannels.value = undefined;
   hdrRuntimeWarning.value = null;
   audioAutoplayRequested = true;
   primeAudioAutoplay();
@@ -2592,6 +2648,9 @@ async function startConnect() {
         onNegotiatedEncoding: (encoding) => {
           if (encoding === 'h264' || encoding === 'hevc' || encoding === 'av1')
             negotiatedEncoding.value = encoding;
+        },
+        onNegotiatedAudioChannels: (channels) => {
+          negotiatedAudioChannels.value = channels;
         },
         onWarning: (warning) => {
           notifyWarning('Configuration Warning', warning);

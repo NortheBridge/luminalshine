@@ -9,6 +9,7 @@ export interface WebRtcClientCallbacks {
   onStats?: (stats: WebRtcStatsSnapshot) => void;
   onInputMessage?: (message: GamepadFeedbackMessage) => void;
   onNegotiatedEncoding?: (encoding: string) => void;
+  onNegotiatedAudioChannels?: (channels: number) => void;
   onWarning?: (warning: string) => void;
   onError?: (error: Error) => void;
 }
@@ -295,6 +296,127 @@ function applyInitialBitrateHints(sdp: string, bitrateKbps?: number): string {
 
   const joined = output.join('\r\n');
   return sdp.endsWith('\n') && !joined.endsWith('\r\n') ? `${joined}\r\n` : joined;
+}
+
+const MULTIOPUS_CLOCK_RATE = 48000;
+const SURROUND_CHANNEL_COUNTS: readonly number[] = [6, 8];
+
+export function isSurroundChannelCount(channels?: number): boolean {
+  return typeof channels === 'number' && SURROUND_CHANNEL_COUNTS.includes(channels);
+}
+
+function collectUsedPayloadTypes(lines: string[]): Set<number> {
+  const used = new Set<number>();
+  for (const line of lines) {
+    const rtpmap = line.match(/^a=rtpmap:(\d+)\s/);
+    if (rtpmap) {
+      used.add(Number(rtpmap[1]));
+      continue;
+    }
+    const mediaPayloads = line.match(/^m=\S+ \d+ \S+ (.*)$/)?.[1];
+    if (mediaPayloads) {
+      for (const token of mediaPayloads.trim().split(/\s+/)) {
+        const value = Number(token);
+        if (Number.isInteger(value)) used.add(value);
+      }
+    }
+  }
+  return used;
+}
+
+function allocatePayloadType(lines: string[]): number | undefined {
+  const used = collectUsedPayloadTypes(lines);
+  for (let pt = 96; pt <= 127; pt += 1) {
+    if (!used.has(pt)) return pt;
+  }
+  return undefined;
+}
+
+/**
+ * Advertise multichannel Opus in our own offer.
+ *
+ * Browsers can do multiopus but never offer it: libwebrtc registers the
+ * multichannel encoder and decoder as `NotAdvertised`, so they are usable but
+ * absent from the codec list an offer is built from. An answer may not
+ * introduce a codec the offer left out, so surround has to start here.
+ *
+ * The fmtp mirrors the host's HIGH_QUALITY surround rows in
+ * `audio::stream_configs` (one uncoupled stream per channel, identity channel
+ * mapping). The host restates these authoritatively in its answer, and that is
+ * what ends up configuring our decoder.
+ */
+export function applyMultiopusOffer(sdp: string, channels?: number): string {
+  if (!sdp || !isSurroundChannelCount(channels)) return sdp;
+  const wanted = channels as number;
+  const rtpmapValue = `multiopus/${MULTIOPUS_CLOCK_RATE}/${wanted}`;
+
+  const lines = sdp.split(/\r\n/);
+  if (lines.some((line) => line.toLowerCase().startsWith('a=rtpmap:') && line.includes(rtpmapValue))) {
+    return sdp;
+  }
+
+  const audioIndex = lines.findIndex((line) => line.startsWith('m=audio'));
+  if (audioIndex < 0) return sdp;
+
+  const payloadType = allocatePayloadType(lines);
+  if (payloadType === undefined) return sdp;
+
+  // m=audio <port> <proto> <fmt> ...
+  const mediaMatch = (lines[audioIndex] ?? '').match(/^(m=audio \S+ \S+)\s+(.*)$/);
+  const mediaPrefix = mediaMatch?.[1];
+  const mediaPayloads = mediaMatch?.[2];
+  if (mediaPrefix === undefined || mediaPayloads === undefined) return sdp;
+
+  let sectionEnd = lines.length;
+  for (let i = audioIndex + 1; i < lines.length; i += 1) {
+    if (lines[i]?.startsWith('m=')) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  // Keep the new block next to the other codec attributes.
+  let insertAt = sectionEnd;
+  for (let i = sectionEnd - 1; i > audioIndex; i -= 1) {
+    if (/^a=(rtpmap|fmtp|rtcp-fb):/.test(lines[i] ?? '')) {
+      insertAt = i + 1;
+      break;
+    }
+  }
+
+  const mapping = Array.from({ length: wanted }, (_, index) => index).join(',');
+  const fmtp = `minptime=10;useinbandfec=1;num_streams=${wanted};coupled_streams=0;channel_mapping=${mapping}`;
+
+  // Listing it first marks it as our preferred payload type.
+  lines[audioIndex] = `${mediaPrefix} ${payloadType} ${mediaPayloads}`;
+  lines.splice(insertAt, 0, `a=rtpmap:${payloadType} ${rtpmapValue}`, `a=fmtp:${payloadType} ${fmtp}`);
+  return lines.join('\r\n');
+}
+
+/**
+ * Read back the audio layout the answer actually settled on.
+ *
+ * The first payload type on the audio m-line is the selected codec, so its
+ * rtpmap says whether the host is really sending surround or fell back to
+ * stereo.
+ */
+export function getNegotiatedAudioChannels(sdp: string): number | undefined {
+  if (!sdp) return undefined;
+  const lines = sdp.split(/\r\n/);
+  const audioLine = lines.find((line) => line.startsWith('m=audio'));
+  if (!audioLine) return undefined;
+
+  const selected = audioLine.trim().split(/\s+/).slice(3)[0];
+  if (!selected) return undefined;
+
+  const rtpmap = lines.find((line) => line.startsWith(`a=rtpmap:${selected} `));
+  if (!rtpmap) return undefined;
+
+  // `<name>/<rate>/<channels>`; a codec with no channel field is single-channel.
+  const channelField = rtpmap.split('/')[2];
+  if (channelField === undefined) return 1;
+  const negotiated = Number(channelField);
+  return Number.isInteger(negotiated) && negotiated > 0 ? negotiated : undefined;
 }
 
 function applyAudioReceiverHints(
@@ -684,7 +806,10 @@ export class WebRtcClient {
       });
       const mungedOffer: RTCSessionDescriptionInit = {
         type: offer.type,
-        sdp: applyInitialBitrateHints(offer.sdp ?? '', sessionConfig.bitrateKbps),
+        sdp: applyMultiopusOffer(
+          applyInitialBitrateHints(offer.sdp ?? '', sessionConfig.bitrateKbps),
+          sessionConfig.audioChannels,
+        ),
       };
       if (!offerSupportsEncoding(mungedOffer.sdp ?? '', sessionConfig.encoding)) {
         const offered =
@@ -717,6 +842,10 @@ export class WebRtcClient {
         throw new Error(
           `Failed to apply WebRTC answer SDP (${sessionConfig.encoding}; offered: ${offered}): ${message}`,
         );
+      }
+      const negotiatedAudioChannels = getNegotiatedAudioChannels(answer.sdp);
+      if (negotiatedAudioChannels !== undefined) {
+        callbacks.onNegotiatedAudioChannels?.(negotiatedAudioChannels);
       }
       await this.flushPendingCandidates();
     } catch (error) {
