@@ -4,6 +4,7 @@
  */
 // local includes
 #include "display.h"
+#include "display_vram.h"
 #include "misc.h"
 #include "src/logging.h"
 
@@ -215,8 +216,12 @@ namespace platf::dxgi {
     if (frame_info.LastMouseUpdateTime.QuadPart) {
       cursor.x = frame_info.PointerPosition.Position.x;
       cursor.y = frame_info.PointerPosition.Position.y;
-      cursor.visible = frame_info.PointerPosition.Visible;
+      // Same flap filter as the VRAM paths (cursor_visibility_filter.h).
+      cursor.visible = cursor_visibility_filter.apply(frame_info.PointerPosition.Visible != FALSE, std::chrono::steady_clock::now());
+    } else if (const auto visible = cursor_visibility_filter.tick(std::chrono::steady_clock::now())) {
+      cursor.visible = *visible;
     }
+    log_cursor_visibility_event("DDA", cursor_visibility_filter);
 
     if (frame_update_flag) {
       {

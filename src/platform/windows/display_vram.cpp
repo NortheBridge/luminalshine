@@ -226,6 +226,48 @@ namespace platf::dxgi {
     }
   };
 
+  namespace {
+    /// The running OS build, read once: a field report of a cursor flap is
+    /// only useful if it can be matched against Microsoft's release notes.
+    std::uint32_t windows_build_number() {
+      static const std::uint32_t build = [] {
+        return query_windows_version().build_number.value_or(0u);
+      }();
+      return build;
+    }
+  }  // namespace
+
+  void log_cursor_visibility_event(const char *backend, cursor_visibility_filter_t &filter) {
+    if (const auto stats = filter.take_stats()) {
+      // Emitted only for intervals in which the flag moved at all, so a
+      // flap too slow to arm the hold is still visible in the log.
+      BOOST_LOG(info) << backend << " capture: the OS cursor-visibility flag changed " << stats->transitions
+                      << " times in the last " << stats->interval.count() / 1000 << " s (shortest gap "
+                      << stats->min_gap.count() << " ms)" << (filter.holding() ? "; hold active." : ".");
+    }
+    const auto event = filter.take_event();
+    if (!event) {
+      return;
+    }
+    switch (event->kind) {
+      case cursor_visibility_filter_t::event_e::hold_started: {
+        // The first hold per display is a warning; a bursty flap re-arms
+        // every few seconds and must not flood the log at that level.
+        auto &hold_logger = filter.holds_started() == 1 ? warning : info;
+        BOOST_LOG(hold_logger) << backend << " capture: the OS cursor-visibility flag is flapping ("
+                               << event->hide_count << " hides in " << event->span.count()
+                               << " ms) on Windows build " << windows_build_number()
+                               << "; holding the cursor visible until the flag settles. This is the pattern of "
+                                  "the cursor-blink fault Microsoft documents for some Windows 11 Insider flights.";
+        break;
+      }
+      case cursor_visibility_filter_t::event_e::hold_ended:
+        BOOST_LOG(info) << backend << " capture: cursor visibility settled after " << event->span.count()
+                        << " ms (" << event->hide_count << " hides suppressed); following the OS flag again.";
+        break;
+    }
+  }
+
   util::buffer_t<std::uint8_t> make_cursor_xor_image(const util::buffer_t<std::uint8_t> &img_data, DXGI_OUTDUPL_POINTER_SHAPE_INFO shape_info) {
     constexpr std::uint32_t inverted = 0xFFFFFFFF;
     constexpr std::uint32_t transparent = 0;
@@ -1364,10 +1406,20 @@ namespace platf::dxgi {
     }
 
     if (frame_info.LastMouseUpdateTime.QuadPart) {
-      cursor_alpha.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
+      // Same flap filter as the LuminalVGD path (cursor_visibility_filter.h):
+      // DDA mirrors the same OS flag, and the same Insider fault blinks it.
+      const bool visible = cursor_visibility_filter.apply(frame_info.PointerPosition.Visible != FALSE, host_processing_timestamp);
+      cursor_alpha.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, visible);
 
-      cursor_xor.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
+      cursor_xor.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, visible);
+    } else if (const auto visible = cursor_visibility_filter.tick(host_processing_timestamp); visible && *visible != cursor_alpha.visible) {
+      // No pointer update this frame: DDA only reports the flag on pointer
+      // updates, so without this a hold could outlive the flap for as long
+      // as the mouse stays still. Position is unchanged; only the bit moves.
+      cursor_alpha.visible = *visible;
+      cursor_xor.visible = *visible;
     }
+    log_cursor_visibility_event("DDA", cursor_visibility_filter);
 
     const bool blend_mouse_cursor_flag = (cursor_alpha.visible || cursor_xor.visible) && cursor_visible;
 
