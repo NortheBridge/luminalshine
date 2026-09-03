@@ -24,6 +24,7 @@
 #include "src/platform/common.h"
 #include "src/platform/windows/ipc/pipes.h"
 #include "src/platform/windows/ipc/process_handler.h"
+#include "src/platform/windows/cursor_visibility_filter.h"
 #include "src/platform/windows/vgd_ring_liveness.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -518,6 +519,8 @@ namespace platf::dxgi {
 
     duplication_t dup;
     cursor_t cursor;
+    /// Rate filter on the OS-reported cursor visibility (Insider cursor-blink fault).
+    cursor_visibility_filter_t cursor_visibility_filter;
   };
 
   /**
@@ -541,6 +544,8 @@ namespace platf::dxgi {
 
     gpu_cursor_t cursor_alpha;
     gpu_cursor_t cursor_xor;
+    /// Rate filter on the OS-reported cursor visibility (Insider cursor-blink fault).
+    cursor_visibility_filter_t cursor_visibility_filter;
 
     texture2d_t old_surface_delayed_destruction;
     std::chrono::steady_clock::time_point old_surface_timestamp;
@@ -852,6 +857,8 @@ namespace platf::dxgi {
     vs_t _cursor_vs;
     gpu_cursor_t _cursor_alpha;
     gpu_cursor_t _cursor_xor;
+    /// Rate filter on the OS-reported cursor visibility (Insider cursor-blink fault).
+    cursor_visibility_filter_t _cursor_visibility_filter;
     std::vector<std::uint8_t> _cursor_shape_buf;
     /// Shape generation currently uploaded to the GPU cursors.
     uint32_t _cursor_shape_generation = 0;

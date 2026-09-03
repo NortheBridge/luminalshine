@@ -50,5 +50,7 @@ namespace platf::dxgi {
   util::buffer_t<std::uint8_t> make_cursor_alpha_image(const util::buffer_t<std::uint8_t> &img_data, DXGI_OUTDUPL_POINTER_SHAPE_INFO shape_info);
   util::buffer_t<std::uint8_t> make_cursor_xor_image(const util::buffer_t<std::uint8_t> &img_data, DXGI_OUTDUPL_POINTER_SHAPE_INFO shape_info);
   bool set_cursor_texture(device_t::pointer device, gpu_cursor_t &cursor, util::buffer_t<std::uint8_t> &&cursor_img, DXGI_OUTDUPL_POINTER_SHAPE_INFO &shape_info);
+  /// Drain the filter's pending hold_started / hold_ended notification into the log.
+  void log_cursor_visibility_event(const char *backend, cursor_visibility_filter_t &filter);
 
 }  // namespace platf::dxgi

@@ -673,8 +673,13 @@ namespace platf::dxgi {
       // A failed fetch (driver mid-rewrite) retries on the next snapshot.
     }
 
-    _cursor_alpha.set_pos(state.x, state.y, width_before_rotation, height_before_rotation, display_rotation, state.visible != 0);
-    _cursor_xor.set_pos(state.x, state.y, width_before_rotation, height_before_rotation, display_rotation, state.visible != 0);
+    // The OS flag goes through the flap filter first: Windows 11 Insider
+    // flights toggle it on and off (a known OS issue), and mirroring that
+    // faithfully blinks the streamed cursor. See cursor_visibility_filter.h.
+    const bool visible = _cursor_visibility_filter.apply(state.visible != 0, std::chrono::steady_clock::now());
+    log_cursor_visibility_event("LuminalVGD", _cursor_visibility_filter);
+    _cursor_alpha.set_pos(state.x, state.y, width_before_rotation, height_before_rotation, display_rotation, visible);
+    _cursor_xor.set_pos(state.x, state.y, width_before_rotation, height_before_rotation, display_rotation, visible);
   }
 
   void display_vgd_vram_t::blend_cursor_into(img_d3d_t &d3d_img) {
