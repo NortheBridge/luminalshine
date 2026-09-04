@@ -6,10 +6,10 @@ import { useAuthStore } from '@/stores/auth';
 // Each view becomes a separate chunk loaded on demand
 const OverviewView = () => import('@/views/OverviewView.vue');
 const StreamView = () => import('@/views/StreamView.vue');
-const ApplicationsView = () => import('@/views/ApplicationsView.vue');
+const LibraryView = () => import('@/views/LibraryView.vue');
 const SettingsView = () => import('@/views/SettingsView.vue');
 const DiagnosticsView = () => import('@/views/DiagnosticsView.vue');
-const ClientManagementView = () => import('@/views/ClientManagementView.vue');
+const ClientsView = () => import('@/views/ClientsView.vue');
 const WebRtcClientView = () => import('@/views/WebRtcClientView.vue');
 const DisplayView = () => import('@/views/DisplayView.vue');
 
@@ -35,13 +35,13 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/library',
-    component: ApplicationsView,
-    meta: { container: 'lg', title: 'shell.nav_library' },
+    component: LibraryView,
+    meta: { container: 'full', title: 'shell.nav_library' },
   },
   {
     path: '/clients',
-    component: ClientManagementView,
-    meta: { container: 'lg', title: 'shell.nav_clients' },
+    component: ClientsView,
+    meta: { container: 'full', title: 'shell.nav_clients' },
   },
   {
     path: '/display',

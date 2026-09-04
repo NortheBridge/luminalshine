@@ -7,6 +7,7 @@
  * the next session sit in the inspector.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { NAlert, NButton, useDialog, useMessage } from 'naive-ui';
 import { useHostStore, type SessionSummary } from '@/stores/host';
@@ -24,10 +25,10 @@ import LinkButton from '@/components/shell/LinkButton.vue';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
 import HighPerformanceCard from '@/components/HighPerformanceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
-import SessionDetailsPanel from '@/components/SessionDetailsPanel.vue';
 
 const t2 = useT2();
 const host = useHostStore();
+const router = useRouter();
 const configStore = useConfigStore();
 const appsStore = useAppsStore();
 const auth = useAuthStore();
@@ -425,12 +426,9 @@ const hasAttention = computed(
     update.buildVersionIsDirty.value,
 );
 
-// ---- session details drawer ------------------------------------------------
-const panelShow = ref(false);
-const panelSessionId = ref<string | null>(null);
+// ---- session details live on the Stream page ---------------------------
 function openSession(id: string) {
-  panelSessionId.value = id;
-  panelShow.value = true;
+  void router.push({ path: '/stream', query: { id } });
 }
 
 // ---- lifecycle -------------------------------------------------------------
@@ -1006,12 +1004,6 @@ onBeforeUnmount(() => {
     <div v-if="!auth.isStatsOnly() && isWindows" class="col-span-12">
       <HighPerformanceCard />
     </div>
-
-    <SessionDetailsPanel
-      v-model:show="panelShow"
-      :session-id="panelSessionId"
-      @session-deleted="host.removeSession"
-    />
 
     <!-- Inspector: stream settings for the next session -->
     <InspectorPanel
