@@ -159,17 +159,14 @@ const summaryRows = computed<Array<[string, string]>>(() => {
 const showModal = ref(false);
 const modalApp = ref<App | null>(null);
 const modalIndex = ref(-1);
-const modalKey = ref(0);
 function openAdd(): void {
   modalApp.value = null;
   modalIndex.value = -1;
-  modalKey.value += 1;
   showModal.value = true;
 }
 function openEdit(row: Row): void {
   modalApp.value = row.app;
   modalIndex.value = row.index;
-  modalKey.value += 1;
   showModal.value = true;
 }
 async function reload(): Promise<void> {
@@ -398,7 +395,7 @@ onMounted(async () => {
     </section>
 
     <AppEditModal
-      :key="modalKey"
+      :key="`${modalIndex}|${modalApp?.uuid || modalApp?.name || 'new'}`"
       v-model="showModal"
       :app="modalApp"
       :index="modalIndex"

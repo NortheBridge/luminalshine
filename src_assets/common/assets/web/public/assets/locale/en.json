@@ -924,6 +924,7 @@
     "id_version": "LuminalShine",
     "id_vgd": "LuminalVGD",
     "identity": "Identity",
+    "in_view": "in view",
     "inspector_title": "Session details",
     "list_footer": "List refreshes every 5 s",
     "m_encoder": "Encoder",

@@ -203,7 +203,9 @@ const identityRows = computed(() => {
   push(t2('stream.id_device', 'Device'), m.client_name || m.device);
   push(
     t2('stream.id_resolution', 'Resolution'),
-    sessionFormat(m).split(' · ').slice(1).join(' · '),
+    m.resolution_w && m.resolution_h
+      ? `${m.resolution_w}×${m.resolution_h}${m.fps ? ` @${m.fps}` : ''}`
+      : undefined,
   );
   push(t2('stream.id_codec', 'Codec'), m.codec);
   push(
@@ -541,7 +543,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="mc-kicker px-[18px] pb-1 pt-3">
-        {{ t2('stream.quality', 'Connection quality') }}
+        {{ t2('stream.quality', 'Connection quality') }} · {{ t2('stream.in_view', 'in view') }}
       </div>
       <div class="grid grid-cols-2 gap-2 px-[18px] pb-2">
         <div
