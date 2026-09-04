@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { http } from '@/http';
 
 // Metadata describing build/runtime info returned by /api/metadata
@@ -422,6 +422,40 @@ export const useConfigStore = defineStore('config', () => {
     restartRequired?: boolean;
   } | null>(null);
 
+  // --- Change log ------------------------------------------------------------
+  // The backend refuses to hot-apply these (src/confighttp.cpp
+  // restart_required_keys); a change to any of them needs a restart.
+  const RESTART_REQUIRED_KEYS = new Set<string>(['port', 'address_family', 'upnp', 'pkey', 'cert']);
+  interface ConfigChange {
+    key: string;
+    from: unknown;
+    to: unknown;
+    at: number;
+    restart: boolean;
+  }
+  const recentChanges = ref<ConfigChange[]>([]);
+  const lastSavedAt = ref<number | null>(null);
+  const restartClearedAt = ref(0);
+  function recordChange(k: string, from: unknown, to: unknown): void {
+    const entry: ConfigChange = {
+      key: k,
+      from: deepClone(from),
+      to: deepClone(to),
+      at: Date.now(),
+      restart: RESTART_REQUIRED_KEYS.has(k),
+    };
+    recentChanges.value = [entry, ...recentChanges.value.filter((c) => c.key !== k)].slice(0, 20);
+  }
+  /** Restart-required keys changed since the last restart this UI triggered. */
+  const restartPendingKeys = computed(() =>
+    recentChanges.value.filter((c) => c.restart && c.at > restartClearedAt.value).map((c) => c.key),
+  );
+  function clearRestartPending(): void {
+    restartClearedAt.value = Date.now();
+    if (lastSaveResult.value)
+      lastSaveResult.value = { ...lastSaveResult.value, restartRequired: false };
+  }
+
   function buildWrapper(): ConfigState {
     const target = {} as ConfigState;
     // union of keys (defaults + current data)
@@ -465,6 +499,7 @@ export const useConfigStore = defineStore('config', () => {
           const prev = _data.value[k];
           if (deepEqual(prev, v)) return; // ignore no-op
           _data.value[k] = v;
+          recordChange(k, prev, v);
           // If this key requires manual save, do not bump version so
           // autosave logic won't trigger; mark manual dirty instead
           if (manualSaveKeys.has(k)) {
@@ -866,6 +901,7 @@ export const useConfigStore = defineStore('config', () => {
             restartRequired: !!(res as any)?.data?.restartRequired,
           };
         } catch {}
+        lastSavedAt.value = Date.now();
         savingState.value = 'saved';
         manualDirty.value = false;
         validationError.value = null;
@@ -967,6 +1003,7 @@ export const useConfigStore = defineStore('config', () => {
             restartRequired: !!(res as any)?.data?.restartRequired,
           };
         } catch {}
+        lastSavedAt.value = Date.now();
         savingState.value = 'saved';
         setTimeout(() => {
           if (
@@ -1053,5 +1090,10 @@ export const useConfigStore = defineStore('config', () => {
     autosaveIntervalMs,
     nextAutosaveAt,
     lastSaveResult,
+    recentChanges,
+    lastSavedAt,
+    restartPendingKeys,
+    clearRestartPending,
+    RESTART_REQUIRED_KEYS,
   };
 });

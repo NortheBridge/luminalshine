@@ -5,6 +5,7 @@
  * existing editor (AppEditModal), which owns the full form.
  */
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { NButton, NInput, useMessage } from 'naive-ui';
 import { http } from '@/http';
 import { useT2 } from '@/composables/useT2';
@@ -19,6 +20,7 @@ import NavIcon from '@/components/shell/NavIcon.vue';
 const AppEditModal = defineAsyncComponent(() => import('@/components/AppEditModal.vue'));
 
 const t2 = useT2();
+const route = useRoute();
 const message = useMessage();
 const appsStore = useAppsStore();
 const auth = useAuthStore();
@@ -34,7 +36,7 @@ const playniteAvailable = computed(() => !!(playnite.value?.installed || playnit
 // ---- list + filters -------------------------------------------------------
 type Source = 'all' | 'playnite' | 'steam' | 'custom';
 const filter = ref<Source>('all');
-const query = ref('');
+const query = ref(typeof route.query['q'] === 'string' ? String(route.query['q']) : '');
 
 function sourceOf(app: App): Exclude<Source, 'all'> {
   if (typeof app['playnite-id'] === 'string' && app['playnite-id']) return 'playnite';

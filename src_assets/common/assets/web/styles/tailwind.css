@@ -887,3 +887,17 @@
     color: var(--mc-ink);
   }
 }
+
+/* Key/value grid inside a panel, and a panel footer row. */
+.mc-kv {
+  @apply grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-1.5 px-4 py-3 text-xs;
+}
+.mc-kv-k {
+  @apply text-ink-3;
+}
+.mc-kv-v {
+  @apply min-w-0 text-ink;
+}
+.mc-panel-f {
+  @apply flex items-center gap-3 border-t border-line px-4 py-2 text-xs;
+}
