@@ -1,28 +1,30 @@
 <template>
-  <n-button
+  <button
     v-if="visible"
-    type="default"
-    strong
-    size="small"
-    class="flex items-center gap-2 text-xs select-none n-button--linkish"
-    :class="{ 'cursor-pointer': canSave }"
+    type="button"
+    class="mc-tag select-none"
+    :class="[kindClass, canSave ? 'cursor-pointer' : 'cursor-default']"
     :title="tooltip"
+    :disabled="!canSave"
     @click="onClick"
   >
     <i :class="iconClass" />
-    <span class="opacity-80">{{ label }}</span>
-  </n-button>
+    <span>{{ label }}</span>
+  </button>
 </template>
 
 <script setup lang="ts">
+/**
+ * Global save-state badge for the host strip. Shows "Saved" everywhere,
+ * counts down pending auto-saves, and turns into the restart affordance when
+ * a saved change still needs LuminalShine to restart.
+ */
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { useRoute } from 'vue-router';
 import { useConfigStore } from '@/stores/config';
 import { storeToRefs } from 'pinia';
-import { NButton, useMessage } from 'naive-ui';
+import { useMessage } from 'naive-ui';
 import { http } from '@/http';
 
-const route = useRoute();
 const store = useConfigStore();
 const { savingState, manualDirty, validationError } = storeToRefs(store);
 const message = useMessage();
@@ -47,54 +49,54 @@ onUnmounted(() => {
   if (timer) clearInterval(timer);
 });
 
-const visible = computed(() => route.path === '/settings');
+// Always visible once the config has loaded; before that there is nothing
+// to report.
+const visible = computed(() => !!store.config && !store.loading);
 const canSave = computed(
   () =>
-    visible.value &&
-    (savingState.value === 'error' ||
-      manualDirty.value === true ||
-      hasPending.value === true ||
-      (savingState.value === 'saved' && restartRequired.value === true)),
+    savingState.value === 'error' ||
+    manualDirty.value === true ||
+    hasPending.value === true ||
+    (savingState.value === 'saved' && restartRequired.value === true),
 );
 
 const label = computed(() => {
-  if (hasPending.value) {
-    return `Auto-save in ${countdown.value}s (Tap to Save Now)`;
-  }
+  if (hasPending.value) return `Auto-save in ${countdown.value}s`;
   switch (savingState.value) {
     case 'saving':
-      return 'Save Status: Saving…';
+      return 'Saving…';
     case 'dirty':
-      return manualDirty.value
-        ? 'Save Status: Unsaved Changes (Click to Save)'
-        : 'Save Status: Unsaved Changes';
+      return 'Unsaved changes';
     case 'saved':
-      return restartRequired.value
-        ? 'Save Status: Saved; Restart Required (Tap to Apply)'
-        : 'Save Status: Saved';
+      return restartRequired.value ? 'Needs restart' : 'Saved';
     case 'error':
-      return 'Save Status: Error (Tap to Retry)';
+      return 'Save failed';
     default:
-      return 'Save Status: Waiting for Changes';
+      return 'Saved';
   }
 });
 
+const kindClass = computed(() => {
+  if (hasPending.value || savingState.value === 'dirty') return 'mc-tag-warn';
+  if (savingState.value === 'error') return 'mc-tag-danger';
+  if (savingState.value === 'saved' && restartRequired.value) return 'mc-tag-warn';
+  return 'mc-tag-ok';
+});
+
 const iconClass = computed(() => {
-  const base = 'fas text-[11px]';
-  if (hasPending.value) return base + ' fa-clock text-warning';
+  const base = 'fas text-[10px]';
+  if (hasPending.value) return base + ' fa-clock';
   switch (savingState.value) {
     case 'saving':
-      return base + ' fa-spinner animate-spin opacity-80';
+      return base + ' fa-spinner animate-spin';
     case 'dirty':
-      return base + ' fa-circle-exclamation text-warning';
+      return base + ' fa-circle-exclamation';
     case 'saved':
-      return restartRequired.value
-        ? base + ' fa-power-off text-secondary'
-        : base + ' fa-check text-success';
+      return restartRequired.value ? base + ' fa-power-off' : base + ' fa-check';
     case 'error':
-      return base + ' fa-triangle-exclamation text-danger';
+      return base + ' fa-triangle-exclamation';
     default:
-      return base + ' fa-circle opacity-60 pulse-soft';
+      return base + ' fa-check';
   }
 });
 
@@ -103,8 +105,9 @@ const tooltip = computed(() => {
   if (hasPending.value)
     return `Auto-save flushes every ${Math.round(intervalMs.value / 1000)}s. Tap to save now.`;
   if (restartRequired.value)
-    return 'Saved; Restart required to apply runtime changes. Tap to apply now.';
-  return 'This page auto-saves most changes as you edit. Some fields may require clicking Save.';
+    return 'Saved. A restart is required to apply runtime changes. Tap to restart now.';
+  if (savingState.value === 'dirty') return 'Tap to save now.';
+  return 'Settings auto-save as you edit.';
 });
 
 async function onClick() {
@@ -125,7 +128,9 @@ async function onClick() {
           message.error(validationError.value || 'Save failed. Check fields for errors.', {
             duration: 5000,
           });
-        } catch {}
+        } catch {
+          /* the toast is best effort */
+        }
       }
       return;
     }
@@ -135,25 +140,12 @@ async function onClick() {
         message.error(validationError.value || 'Save failed. Check fields for errors.', {
           duration: 5000,
         });
-      } catch {}
+      } catch {
+        /* the toast is best effort */
+      }
     }
-  } catch {}
+  } catch {
+    /* errors are surfaced through savingState */
+  }
 }
 </script>
-
-<style scoped>
-@keyframes pulseSoft {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.9;
-    transform: scale(1.06);
-  }
-}
-.pulse-soft {
-  animation: pulseSoft 1.6s ease-in-out infinite;
-}
-</style>

@@ -1,38 +1,85 @@
 import { createRouter, createWebHistory, RouteLocationNormalized } from 'vue-router';
+import type { RouteLocationRaw, RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 
 // Route-level code splitting via dynamic imports
 // Each view becomes a separate chunk loaded on demand
-const DashboardView = () => import('@/views/DashboardView.vue');
+const OverviewView = () => import('@/views/OverviewView.vue');
+const StreamView = () => import('@/views/StreamView.vue');
 const ApplicationsView = () => import('@/views/ApplicationsView.vue');
 const SettingsView = () => import('@/views/SettingsView.vue');
-const TroubleshootingView = () => import('@/views/TroubleshootingView.vue');
+const DiagnosticsView = () => import('@/views/DiagnosticsView.vue');
 const ClientManagementView = () => import('@/views/ClientManagementView.vue');
 const WebRtcClientView = () => import('@/views/WebRtcClientView.vue');
-const AboutView = () => import('@/views/AboutView.vue');
-const StatsView = () => import('@/views/StatsView.vue');
-const VgdControlPanelView = () => import('@/views/VgdControlPanelView.vue');
-const VgdAboutView = () => import('@/views/VgdAboutView.vue');
+const DisplayView = () => import('@/views/DisplayView.vue');
 
-const routes = [
-  { path: '/', component: DashboardView },
-  { path: '/applications', component: ApplicationsView },
-  { path: '/settings', component: SettingsView, meta: { container: 'lg' } },
-  { path: '/logs', component: DashboardView },
-  { path: '/troubleshooting', component: TroubleshootingView },
-  { path: '/clients', component: ClientManagementView },
-  { path: '/about', component: AboutView, meta: { container: 'lg' } },
+// Mission Control navigation: seven destinations plus the in-browser
+// player. Paths stay single-depth on purpose: the Vite build uses base './',
+// so assets resolve relative to the URL — a nested route would request
+// /display/assets/*.
+//
+// Route meta:
+//   container — content wrapper, see App.vue containerClass()
+//   title     — locale key for the page title shown in the mobile header
+const routes: RouteRecordRaw[] = [
+  { path: '/', component: OverviewView, meta: { container: 'flush', title: 'shell.nav_overview' } },
+  {
+    path: '/stream',
+    component: StreamView,
+    meta: { container: 'full', title: 'shell.nav_stream' },
+  },
+  {
+    path: '/webrtc',
+    component: WebRtcClientView,
+    meta: { container: 'full', title: 'shell.nav_play' },
+  },
+  {
+    path: '/library',
+    component: ApplicationsView,
+    meta: { container: 'lg', title: 'shell.nav_library' },
+  },
+  {
+    path: '/clients',
+    component: ClientManagementView,
+    meta: { container: 'lg', title: 'shell.nav_clients' },
+  },
+  {
+    path: '/display',
+    component: DisplayView,
+    meta: { container: 'lg', title: 'shell.nav_display' },
+  },
+  {
+    path: '/settings',
+    component: SettingsView,
+    meta: { container: 'lg', title: 'shell.nav_settings' },
+  },
+  {
+    path: '/diagnostics',
+    component: DiagnosticsView,
+    meta: { container: 'lg', title: 'shell.nav_diagnostics' },
+  },
+
+  // Legacy paths. Bookmarks, deep links inside older pages and the
+  // classic Sunshine URLs all land on their new home.
+  { path: '/applications', redirect: '/library' },
+  { path: '/stats', redirect: '/stream' },
+  { path: '/logs', redirect: { path: '/diagnostics', hash: '#logs' } },
+  {
+    path: '/troubleshooting',
+    redirect: (to): RouteLocationRaw => ({
+      path: '/diagnostics',
+      query: { ...to.query },
+      hash: to.hash,
+    }),
+  },
+  { path: '/about', redirect: { path: '/diagnostics', query: { sec: 'about' } } },
+  { path: '/vgd-control-panel', redirect: '/display' },
+  { path: '/vgd-about', redirect: { path: '/display', query: { sec: 'about' } } },
   {
     path: '/api-tokens',
     alias: '/api-tokens/',
     redirect: { path: '/clients', query: { sec: 'tokens' } },
   },
-  { path: '/webrtc', component: WebRtcClientView, meta: { container: 'full' } },
-  { path: '/stats', component: StatsView },
-  // Single-depth paths on purpose: the Vite build uses base './', so assets
-  // resolve relative to the URL — a nested route would request /vgd/assets/*.
-  { path: '/vgd-control-panel', component: VgdControlPanelView, meta: { container: 'lg' } },
-  { path: '/vgd-about', component: VgdAboutView, meta: { container: 'lg' } },
 ];
 
 const CHUNK_RELOAD_FLAG = 'sunshine:chunk-reload';
@@ -62,6 +109,9 @@ function isChunkLoadError(error: unknown): boolean {
   return false;
 }
 
+/** The page a stats-only session is pinned to. */
+export const STATS_ONLY_HOME = '/stream';
+
 export const router = createRouter({
   // Use HTML5 history mode (no # in URLs)
   history: createWebHistory('/'),
@@ -82,11 +132,11 @@ router.beforeEach(async (to: RouteLocationNormalized) => {
         /* ignore */
       }
     }
-    // Stats-only sessions are pinned to /stats. UX only — the backend
-    // allowlist is the actual security boundary; admin pages would just
-    // render dead panels behind 403s.
-    if (auth.isAuthenticated && auth.isStatsOnly() && to.path !== '/stats') {
-      return { path: '/stats' };
+    // Stats-only sessions are pinned to the Stream page. UX only — the
+    // backend allowlist is the actual security boundary; admin pages would
+    // just render dead panels behind 403s.
+    if (auth.isAuthenticated && auth.isStatsOnly() && to.path !== STATS_ONLY_HOME) {
+      return { path: STATS_ONLY_HOME };
     }
     // If not authenticated, trigger overlay (do not redirect)
     if (!auth.isAuthenticated) auth.requireLogin();
@@ -108,6 +158,8 @@ router.onError((error) => {
       return;
     }
     storage?.removeItem(CHUNK_RELOAD_FLAG);
-  } catch {}
+  } catch {
+    /* sessionStorage unavailable; fall through to a plain reload */
+  }
   window.location.replace(window.location.origin);
 });

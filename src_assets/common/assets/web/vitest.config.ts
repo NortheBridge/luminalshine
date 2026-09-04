@@ -20,6 +20,9 @@ export default defineConfig({
       // need this package to be reachable but Node's walk-up resolution
       // from there can't find the web package's node_modules.
       'naive-ui': resolve(__dirname, 'node_modules/naive-ui'),
+      // Tests import pinia and vue-router directly, so they need the same treatment.
+      pinia: resolve(__dirname, 'node_modules/pinia'),
+      'vue-router': resolve(__dirname, 'node_modules/vue-router'),
     },
   },
   // Vite's default fs.allow is the directory containing this config
@@ -36,7 +39,10 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: [resolve(repoRoot, 'tests/frontend/setup.ts')],
-    include: [resolve(repoRoot, 'tests/frontend/**/*.test.ts')],
+    // Globs must use forward slashes even on Windows: path.resolve() emits
+    // backslashes there, which picomatch treats as escapes, and vitest then
+    // reports "No test files found".
+    include: [resolve(repoRoot, 'tests/frontend/**/*.test.ts').replace(/\\/g, '/')],
     css: true,
     // Emit JUnit XML alongside the default console reporter so the
     // coverage-web GitHub Actions workflow can upload it to Codecov
