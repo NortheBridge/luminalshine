@@ -43,6 +43,7 @@
             size="small"
             clearable
             class="w-[260px]"
+            :aria-label="t2('settings.search_all', 'Search all settings')"
             :placeholder="t2('settings.search_all', 'Search all settings')"
             @focus="onSearchFocus"
             @blur="onSearchBlur"
@@ -51,14 +52,12 @@
           <div
             v-if="searchOpen && searchResults.length"
             class="mc-panel absolute right-0 top-9 z-[60] max-h-80 w-[360px] overflow-y-auto shadow-xl"
-            role="listbox"
           >
             <button
               v-for="(r, i) in searchResults"
               :key="`${r.sectionId}-${r.key || r.label}-${i}`"
               type="button"
               class="mc-row mc-row-clickable w-full text-left"
-              role="option"
               @mousedown.prevent="goTo(r)"
             >
               <div class="min-w-0">
@@ -239,8 +238,7 @@ import InspectorPanel from '@/components/shell/InspectorPanel.vue';
 import NavIcon from '@/components/shell/NavIcon.vue';
 
 const store = useConfigStore();
-const { config, metadata } = storeToRefs(store);
-const platform = computed(() => (metadata.value?.platform || '').toLowerCase());
+const { config } = storeToRefs(store);
 const message = useMessage();
 const auth = useAuthStore();
 const host = useHostStore();
@@ -290,9 +288,7 @@ const SUBTITLES = {
   playnite: ['settings.sub_playnite', 'Playnite extension and library sync'],
 };
 
-const tabsFiltered = computed(() =>
-  tabs.filter((tab) => (tab.id === 'rtss' ? platform.value === 'windows' : true)),
-);
+const tabsFiltered = computed(() => tabs);
 
 const route = useRoute();
 const router = useRouter();
@@ -325,8 +321,18 @@ async function ensureSectionOpen(id) {
 async function scrollToOpen(id) {
   if (!id) return;
   await ensureSectionOpen(id);
-  const el = sectionRefs.get(id);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Section switch: back to the top of the scrolling pane (the section sits
+  // under the panel header, so scrollIntoView would hide the search box).
+  let node = sectionRefs.get(id)?.parentElement ?? null;
+  while (node && node !== document.body) {
+    const oy = getComputedStyle(node).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight) {
+      node.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    node = node.parentElement;
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 watch(
@@ -444,8 +450,8 @@ const KEY_SECTION = {
   port: 'network',
   address_family: 'network',
   upnp: 'network',
-  pkey: 'advanced',
-  cert: 'advanced',
+  pkey: 'files',
+  cert: 'files',
 };
 const recent = computed(() => (store.recentChanges || []).slice(0, 8));
 const restartKeys = computed(() => store.restartPendingKeys || []);
@@ -478,7 +484,7 @@ const changesTag = computed(() => {
     return {
       text:
         n > 0
-          ? `${n} ${t2('settings.tag_restart', n === 1 ? 'needs restart' : 'need restart')}`
+          ? `${n} ${n === 1 ? t2('settings.tag_restart_one', 'needs restart') : t2('settings.tag_restart_many', 'need restart')}`
           : t2('settings.tag_restart_one', 'needs restart'),
       kind: 'warn',
     };
@@ -585,7 +591,7 @@ async function apply() {
 
 async function discardPending() {
   try {
-    await store.reloadConfig();
+    await store.discardPending();
     message.info(t2('settings.discarded', 'Pending changes discarded.'));
   } catch {
     /* reloadConfig reports through the store */
