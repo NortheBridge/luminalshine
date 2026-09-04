@@ -54,7 +54,8 @@ watch(() => route.hash, scrollToHash);
       </div>
       <div class="flex-1"></div>
       <div class="mc-chips" role="tablist">
-        <span
+        <button
+          type="button"
           class="mc-chip"
           :class="{ 'mc-chip-on': section === 'health' }"
           role="tab"
@@ -62,8 +63,9 @@ watch(() => route.hash, scrollToHash);
           @click="go('health')"
         >
           {{ t2('diagnostics.section_health', 'Health & logs') }}
-        </span>
-        <span
+        </button>
+        <button
+          type="button"
           class="mc-chip"
           :class="{ 'mc-chip-on': section === 'about' }"
           role="tab"
@@ -71,7 +73,7 @@ watch(() => route.hash, scrollToHash);
           @click="go('about')"
         >
           {{ t2('diagnostics.section_about', 'About this host') }}
-        </span>
+        </button>
       </div>
     </div>
 

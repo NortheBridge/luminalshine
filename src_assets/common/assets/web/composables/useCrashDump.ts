@@ -144,6 +144,31 @@ export function useCrashDump() {
     return `${formatter.format(value)} ${units[unit] ?? 'B'}`;
   }
 
+  function formatRelativeTime(date: Date): string {
+    try {
+      const diffMs = Date.now() - date.getTime();
+      if (!Number.isFinite(diffMs)) return '';
+      const minutes = Math.round(diffMs / 60000);
+      const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+      if (Math.abs(minutes) < 60) return rtf.format(-minutes, 'minute');
+      const hours = Math.round(minutes / 60);
+      if (Math.abs(hours) < 48) return rtf.format(-hours, 'hour');
+      return rtf.format(-Math.round(hours / 24), 'day');
+    } catch {
+      return '';
+    }
+  }
+
+  /** "Crash detected 12 minutes ago." or '' when the capture time is unknown. */
+  const detected = computed(() => {
+    const d = host.crashDump;
+    if (!d?.available || !d.captured_at) return '';
+    const captured = new Date(d.captured_at);
+    if (Number.isNaN(captured.getTime())) return '';
+    const rel = formatRelativeTime(captured);
+    return rel ? `Crash detected ${rel}.` : '';
+  });
+
   const details = computed(() => {
     const d = host.crashDump;
     if (!d || !d.available) return '';
@@ -160,5 +185,5 @@ export function useCrashDump() {
     return parts.join(' · ');
   });
 
-  return { exportPending, exportBundle, dismiss, details };
+  return { exportPending, exportBundle, dismiss, details, detected };
 }

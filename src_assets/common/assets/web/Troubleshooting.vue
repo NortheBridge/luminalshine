@@ -276,7 +276,10 @@
               <div class="flex items-center gap-2 font-semibold text-error">
                 <i class="fas fa-circle-exclamation" />
                 {{
-                  translate('troubleshooting.tdr_stack_down_title', 'Display stack down — reboot required')
+                  translate(
+                    'troubleshooting.tdr_stack_down_title',
+                    'Display stack down — reboot required',
+                  )
                 }}
               </div>
               <p class="mt-1 opacity-90">
@@ -393,7 +396,9 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div class="min-w-0">
             <h2 class="text-base font-semibold text-dark dark:text-light">
-              {{ translate('troubleshooting.vdd_card_title', 'Virtual Display Driver (LuminalVGD)') }}
+              {{
+                translate('troubleshooting.vdd_card_title', 'Virtual Display Driver (LuminalVGD)')
+              }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
               {{
@@ -416,7 +421,12 @@
                     >
                   </template>
                   <template v-else-if="vddDiag.driver_reachable">
-                    {{ translate('troubleshooting.vdd_driver_no_handshake', 'Reachable, but handshake failed') }}
+                    {{
+                      translate(
+                        'troubleshooting.vdd_driver_no_handshake',
+                        'Reachable, but handshake failed',
+                      )
+                    }}
                   </template>
                   <template v-else>
                     {{ translate('troubleshooting.vdd_driver_unreachable', 'Not reachable') }}
@@ -522,9 +532,7 @@
         <div class="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 class="text-base font-semibold text-dark dark:text-light">
-              {{
-                translate('troubleshooting.clear_steam_library', 'Clear Steam Library Cache')
-              }}
+              {{ translate('troubleshooting.clear_steam_library', 'Clear Steam Library Cache') }}
             </h2>
             <p class="text-xs opacity-70 leading-snug">
               {{
@@ -552,10 +560,7 @@
         <n-alert v-if="clearSteamLibraryStatus === 'success'" type="success" class="mt-3">
           {{
             clearSteamLibraryMessage ||
-            translate(
-              'troubleshooting.clear_steam_library_success',
-              'Steam library cache cleared.',
-            )
+            translate('troubleshooting.clear_steam_library_success', 'Steam library cache cleared.')
           }}
         </n-alert>
         <n-alert v-else-if="clearSteamLibraryStatus === 'error'" type="error" class="mt-3">
@@ -578,7 +583,7 @@
               {{
                 translate(
                   'troubleshooting.clear_nonsteam_shortcuts_desc',
-                  "Deletes the nonsg_apps.json catalogue written by the non-Steam shortcuts auto-sync. The Moonlight app list reverts to whatever your apps.json and (optionally) steam_apps.json produce. Toggling the shortcuts auto-sync off in Settings hides these entries from Moonlight without deleting the file; this card deletes the file from disk.",
+                  'Deletes the nonsg_apps.json catalogue written by the non-Steam shortcuts auto-sync. The Moonlight app list reverts to whatever your apps.json and (optionally) steam_apps.json produce. Toggling the shortcuts auto-sync off in Settings hides these entries from Moonlight without deleting the file; this card deletes the file from disk.',
                 )
               }}
             </p>
@@ -646,10 +651,7 @@
         <n-alert v-if="clearSessionHistoryStatus === 'success'" type="success" class="mt-3">
           {{
             clearSessionHistoryMessage ||
-            translate(
-              'troubleshooting.clear_session_history_success',
-              'Session history cleared.',
-            )
+            translate('troubleshooting.clear_session_history_success', 'Session history cleared.')
           }}
         </n-alert>
         <n-alert v-else-if="clearSessionHistoryStatus === 'error'" type="error" class="mt-3">
@@ -708,7 +710,7 @@
       </section>
     </div>
 
-    <section class="troubleshoot-card space-y-4">
+    <section id="logs" class="troubleshoot-card space-y-4">
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 class="text-base font-semibold text-dark dark:text-light">
@@ -955,7 +957,8 @@ const vgdCaptureBadge = computed(() => {
   const base = display ? `${label} (${display})` : label;
   const age = store.metadata?.capture_backend_age_seconds;
   if (typeof age !== 'number' || age < 300) return base;
-  const ageLabel = age < 3600 ? `${Math.round(age / 60)} min ago` : `${Math.round(age / 3600)} h ago`;
+  const ageLabel =
+    age < 3600 ? `${Math.round(age / 60)} min ago` : `${Math.round(age / 3600)} h ago`;
   return `${base}, ${ageLabel}`;
 });
 
@@ -1344,10 +1347,7 @@ async function doClearSteamLibrary() {
       clearSteamLibraryStatus.value = 'success';
       clearSteamLibraryMessage.value =
         (typeof body.message === 'string' && body.message) ||
-        translate(
-          'troubleshooting.clear_steam_library_success',
-          'Steam library cache cleared.',
-        );
+        translate('troubleshooting.clear_steam_library_success', 'Steam library cache cleared.');
     } else {
       clearSteamLibraryStatus.value = 'error';
       clearSteamLibraryMessage.value =
@@ -1372,10 +1372,7 @@ function confirmClearSteamLibrary() {
       'troubleshooting.clear_steam_library_confirm_body',
       'The steam_apps.json catalogue will be deleted from disk and the Steam game entries will disappear from Moonlight. Your hand-curated apps.json (Desktop, Steam, anything you added by hand) is NOT touched. If the Steam auto-sync toggle is still ON, the catalogue will be re-generated on the next 30-second sync tick. Continue?',
     ),
-    positiveText: translate(
-      'troubleshooting.clear_steam_library_confirm_yes',
-      'Clear cache',
-    ),
+    positiveText: translate('troubleshooting.clear_steam_library_confirm_yes', 'Clear cache'),
     negativeText: translate('troubleshooting.cancel', 'Cancel'),
     onPositiveClick: async () => {
       await doClearSteamLibrary();
@@ -1426,10 +1423,7 @@ function confirmClearNonsteamShortcuts() {
       'troubleshooting.clear_nonsteam_shortcuts_confirm_body',
       'The nonsg_apps.json catalogue will be deleted from disk and the non-Steam shortcut entries will disappear from Moonlight. Your hand-curated apps.json (Desktop, Steam, anything you added by hand) and the Steam library catalogue are NOT touched. If the non-Steam shortcuts auto-sync toggle is still ON, the catalogue will be re-generated on the next 30-second sync tick. Continue?',
     ),
-    positiveText: translate(
-      'troubleshooting.clear_nonsteam_shortcuts_confirm_yes',
-      'Clear cache',
-    ),
+    positiveText: translate('troubleshooting.clear_nonsteam_shortcuts_confirm_yes', 'Clear cache'),
     negativeText: translate('troubleshooting.cancel', 'Cancel'),
     onPositiveClick: async () => {
       await doClearNonsteamShortcuts();
@@ -1452,10 +1446,7 @@ async function doClearSessionHistory() {
       clearSessionHistoryStatus.value = 'success';
       clearSessionHistoryMessage.value =
         (typeof body.message === 'string' && body.message) ||
-        translate(
-          'troubleshooting.clear_session_history_success',
-          'Session history cleared.',
-        );
+        translate('troubleshooting.clear_session_history_success', 'Session history cleared.');
     } else {
       clearSessionHistoryStatus.value = 'error';
       clearSessionHistoryMessage.value =
@@ -1480,10 +1471,7 @@ function confirmClearSessionHistory() {
       'troubleshooting.clear_session_history_confirm_body',
       'Every recorded session JSON in %ProgramData%\\LuminalShine\\sessions\\ will be deleted and the Session History card on the Dashboard will empty within ~5 seconds. The running LuminalShineSessionMonitor service keeps its in-memory ring buffer until it restarts, so a currently-active stream still shows up live. Continue?',
     ),
-    positiveText: translate(
-      'troubleshooting.clear_session_history_confirm_yes',
-      'Clear history',
-    ),
+    positiveText: translate('troubleshooting.clear_session_history_confirm_yes', 'Clear history'),
     negativeText: translate('troubleshooting.cancel', 'Cancel'),
     onPositiveClick: async () => {
       await doClearSessionHistory();

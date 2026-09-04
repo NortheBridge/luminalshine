@@ -35,7 +35,8 @@ function go(sec: Section): void {
       </div>
       <div class="flex-1"></div>
       <div class="mc-chips" role="tablist">
-        <span
+        <button
+          type="button"
           class="mc-chip"
           :class="{ 'mc-chip-on': section === 'panel' }"
           role="tab"
@@ -43,8 +44,9 @@ function go(sec: Section): void {
           @click="go('panel')"
         >
           {{ t2('vgd.nav_control_panel', 'Control panel') }}
-        </span>
-        <span
+        </button>
+        <button
+          type="button"
           class="mc-chip"
           :class="{ 'mc-chip-on': section === 'about' }"
           role="tab"
@@ -52,7 +54,7 @@ function go(sec: Section): void {
           @click="go('about')"
         >
           {{ t2('vgd.nav_about', 'About the driver') }}
-        </span>
+        </button>
       </div>
     </div>
 

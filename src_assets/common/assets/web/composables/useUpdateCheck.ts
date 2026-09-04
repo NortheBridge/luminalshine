@@ -10,20 +10,22 @@ import { useConfigStore } from '@/stores/config';
  */
 type ReleaseEntry = GitHubRelease & { prerelease?: boolean; draft?: boolean; tag_name?: string };
 
+// Module-level state: the GitHub check runs once per page load however often
+// the Overview is mounted (the unauthenticated GitHub API allows 60 requests/h).
+const installedVersion = ref<LuminalShineVersion>(new LuminalShineVersion('0.0.0'));
+const githubRelease = ref<GitHubRelease | null>(null);
+const preReleaseRelease = ref<GitHubRelease | null>(null);
+const notifyPreReleases = ref(false);
+const branch = ref('');
+const commit = ref('');
+const installedIsPrerelease = ref(false);
+const loading = ref(false);
+const checked = ref(false);
+const remoteReachable = ref(true);
+let started = false;
+
 export function useUpdateCheck() {
   const configStore = useConfigStore();
-
-  const installedVersion = ref<LuminalShineVersion>(new LuminalShineVersion('0.0.0'));
-  const githubRelease = ref<GitHubRelease | null>(null);
-  const preReleaseRelease = ref<GitHubRelease | null>(null);
-  const notifyPreReleases = ref(false);
-  const branch = ref('');
-  const commit = ref('');
-  const installedIsPrerelease = ref(false);
-  const loading = ref(false);
-  const checked = ref(false);
-  const remoteReachable = ref(true);
-  let started = false;
 
   const githubVersion = computed(() =>
     githubRelease.value

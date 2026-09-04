@@ -20,6 +20,7 @@ import { useUpdateCheck } from '@/composables/useUpdateCheck';
 import { useCrashDump } from '@/composables/useCrashDump';
 import InspectorPanel from '@/components/shell/InspectorPanel.vue';
 import NavIcon from '@/components/shell/NavIcon.vue';
+import LinkButton from '@/components/shell/LinkButton.vue';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
 import HighPerformanceCard from '@/components/HighPerformanceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
@@ -203,6 +204,17 @@ function levelClass(level: string): string {
   return 'text-ink-4';
 }
 
+// Installed version with its branch / short commit, and a pre-release marker
+// when GitHub says the installed tag is one (the old Dashboard's info alert).
+const versionLabel = computed(() => {
+  const parts = [update.displayVersion.value];
+  const branch = update.branch.value;
+  if (branch && !['main', 'master'].includes(branch)) parts.push(branch);
+  if (update.commit.value) parts.push(update.commit.value.slice(0, 7));
+  if (update.installedVersionNotStable.value) parts.push(t2('overview.prerelease', 'pre-release'));
+  return parts.join(' · ');
+});
+
 // Health list = host store checks + the update row.
 const healthRows = computed(() => {
   const rows = host.healthChecks.map((c) => ({ ...c }));
@@ -224,8 +236,8 @@ const healthRows = computed(() => {
                 : update.preReleaseVersion.value.version
             }`
           : update.remoteReachable.value
-            ? `${update.displayVersion.value} · ${t2('overview.up_to_date', 'up to date')}`
-            : `${update.displayVersion.value} · ${t2('overview.offline_check', 'update check offline')}`,
+            ? `${versionLabel.value} · ${t2('overview.up_to_date', 'up to date')}`
+            : `${versionLabel.value} · ${t2('overview.offline_check', 'update check offline')}`,
     });
   }
   return rows;
@@ -425,7 +437,7 @@ function openSession(id: string) {
 onMounted(async () => {
   clock = setInterval(() => (nowSec.value = Math.floor(Date.now() / 1000)), 1000);
   await auth.waitForAuthentication();
-  if (!host.running) host.start();
+  if (!host.running) void host.start();
   if (!auth.isStatsOnly()) {
     void update.run();
     if (!appsStore.apps.length) void appsStore.loadApps();
@@ -503,17 +515,15 @@ onBeforeUnmount(() => {
             }}</span>
           </div>
           <div class="flex items-center gap-2">
-            <RouterLink v-if="!auth.isStatsOnly()" to="/clients"
-              ><NButton size="small"
-                ><NavIcon name="clients" :size="14" />{{
-                  t2('overview.pair', 'Pair with PIN')
-                }}</NButton
-              ></RouterLink
+            <LinkButton v-if="!auth.isStatsOnly()" to="/clients" size="small"
+              ><NavIcon name="clients" :size="14" />{{
+                t2('overview.pair', 'Pair with PIN')
+              }}</LinkButton
             >
-            <RouterLink to="/stream"
-              ><NButton size="small"
-                ><NavIcon name="stream" :size="14" />{{ t2('shell.nav_stream', 'Stream') }}</NButton
-              ></RouterLink
+            <LinkButton to="/stream" size="small"
+              ><NavIcon name="stream" :size="14" />{{
+                t2('shell.nav_stream', 'Stream')
+              }}</LinkButton
             >
           </div>
         </div>
@@ -612,7 +622,7 @@ onBeforeUnmount(() => {
                 }}
               </p>
               <p v-if="crash.details.value" class="m-0 text-xs opacity-60">
-                {{ crash.details.value }}
+                {{ crash.detected.value }} {{ crash.details.value }}
               </p>
             </div>
             <div class="grid shrink-0 gap-2 sm:flex sm:flex-wrap sm:items-center">
@@ -652,11 +662,9 @@ onBeforeUnmount(() => {
             <ul class="list-disc space-y-1 pl-5 text-xs">
               <li v-for="(line, i) in host.fatalLines" :key="i">{{ line.message }}</li>
             </ul>
-            <RouterLink to="/diagnostics#logs"
-              ><NButton type="error" size="small">{{
-                t2('index.view_logs', 'View logs')
-              }}</NButton></RouterLink
-            >
+            <LinkButton to="/diagnostics#logs" type="error" size="small">{{
+              t2('index.view_logs', 'View logs')
+            }}</LinkButton>
           </div>
         </NAlert>
 
@@ -768,14 +776,16 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <div class="shrink-0">
-              <RouterLink
+              <LinkButton
                 :to="{
                   path: '/settings',
                   query: { sec: 'av', jump: 'dd_always_restore_from_golden' },
                 }"
-                ><NButton type="primary" size="small">{{
+                type="primary"
+                size="small"
+                >{{
                   t2('config.golden_layout_upgrade_action', 'Open display settings')
-                }}</NButton></RouterLink
+                }}</LinkButton
               >
             </div>
           </div>
@@ -1065,11 +1075,9 @@ onBeforeUnmount(() => {
         <span class="text-[11.5px] text-ink-3">{{
           t2('overview.stream_settings_footer', 'Changes apply to the next session')
         }}</span>
-        <RouterLink to="/settings"
-          ><NButton size="small">{{
-            t2('overview.all_settings', 'All settings')
-          }}</NButton></RouterLink
-        >
+        <LinkButton to="/settings" size="small">{{
+          t2('overview.all_settings', 'All settings')
+        }}</LinkButton>
       </template>
     </InspectorPanel>
   </div>

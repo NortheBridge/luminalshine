@@ -71,7 +71,7 @@ initApp(app, async () => {
     await configStore.fetchConfig(true);
     // Shared host status (sessions, clients, health) behind the shell's
     // host strip and the Overview. Started once; pages just read it.
-    useHostStore().start();
+    void useHostStore().start();
     // React to locale setting changes by switching i18n at runtime
     watch(
       () => configStore.config?.locale,

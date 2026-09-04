@@ -331,6 +331,7 @@ export const useHostStore = defineStore('host', () => {
     if (statsOnly.value) return;
     try {
       const r = await http.get('./api/clients/list', { validateStatus: () => true });
+      if (r.status !== 200) return; // keep the previous list on a transient error
       const body = r.data as { named_certs?: unknown } | undefined;
       const list: ClientApiEntry[] =
         r.status === 200 && Array.isArray(body?.named_certs)
@@ -454,10 +455,17 @@ export const useHostStore = defineStore('host', () => {
   }
 
   // ---- lifecycle ------------------------------------------------------
-  function start(): void {
+  async function start(): Promise<void> {
     if (running.value) return;
     running.value = true;
-    void refreshAll();
+    // The probes key off metadata.platform and config.controller, so make sure
+    // the config (and with it the metadata) is loaded before the first sweep.
+    try {
+      await configStore.fetchConfig();
+    } catch {
+      /* probes report 'not probed' and retry on the slow timer */
+    }
+    await refreshAll();
     fastTimer = setInterval(() => void refreshSessions(), FAST_MS);
     mediumTimer = setInterval(() => void refreshClients(), MEDIUM_MS);
     slowTimer = setInterval(() => void refreshHealth(), SLOW_MS);

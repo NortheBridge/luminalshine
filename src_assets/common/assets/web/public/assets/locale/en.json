@@ -720,6 +720,7 @@
     "pair": "Pair with PIN",
     "paired": "paired",
     "passing": "passing",
+    "prerelease": "pre-release",
     "ready": "Ready",
     "ready_checks": "Ready checks",
     "ready_hint": "Host is ready. A Moonlight or browser client can connect now; the virtual display attaches when the session starts.",
