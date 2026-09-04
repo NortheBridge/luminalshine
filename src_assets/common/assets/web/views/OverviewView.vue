@@ -1011,21 +1011,37 @@ onBeforeUnmount(() => {
       :tag="t2('overview.stream_settings_tag', 'Audio / Video')"
     >
       <div class="mc-field">
-        <ConfigFieldRenderer v-model="config.encoder" setting-key="encoder" size="small" />
+        <ConfigFieldRenderer v-model="config.encoder" setting-key="encoder" desc="" size="small" />
       </div>
       <div class="mc-field">
-        <ConfigFieldRenderer v-model="config.hevc_mode" setting-key="hevc_mode" size="small" />
+        <ConfigFieldRenderer
+          v-model="config.hevc_mode"
+          setting-key="hevc_mode"
+          desc=""
+          size="small"
+        />
       </div>
       <div class="mc-field">
-        <ConfigFieldRenderer v-model="config.av1_mode" setting-key="av1_mode" size="small" />
+        <ConfigFieldRenderer
+          v-model="config.av1_mode"
+          setting-key="av1_mode"
+          desc=""
+          size="small"
+        />
       </div>
       <div class="mc-field">
-        <ConfigFieldRenderer v-model="config.max_bitrate" setting-key="max_bitrate" size="small" />
+        <ConfigFieldRenderer
+          v-model="config.max_bitrate"
+          setting-key="max_bitrate"
+          desc=""
+          size="small"
+        />
       </div>
       <div v-if="isWindows" class="mc-field">
         <ConfigFieldRenderer
           v-model="config.vgd_hdr_peak_nits"
           setting-key="vgd_hdr_peak_nits"
+          desc=""
           size="small"
         />
       </div>
@@ -1033,6 +1049,7 @@ onBeforeUnmount(() => {
         <ConfigFieldRenderer
           v-model="config.virtual_display_layout"
           setting-key="virtual_display_layout"
+          desc=""
           size="small"
         />
       </div>
@@ -1040,6 +1057,7 @@ onBeforeUnmount(() => {
         <ConfigFieldRenderer
           v-model="config.dd_config_revert_on_disconnect"
           setting-key="dd_config_revert_on_disconnect"
+          desc=""
           size="small"
         />
       </div>

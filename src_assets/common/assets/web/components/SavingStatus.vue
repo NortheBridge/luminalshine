@@ -21,11 +21,13 @@
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useConfigStore } from '@/stores/config';
+import { useAuthStore } from '@/stores/auth';
 import { storeToRefs } from 'pinia';
 import { useMessage } from 'naive-ui';
 import { http } from '@/http';
 
 const store = useConfigStore();
+const auth = useAuthStore();
 const { savingState, manualDirty, validationError } = storeToRefs(store);
 const message = useMessage();
 const hasPending = computed(() => store.hasPendingPatch());
@@ -49,9 +51,11 @@ onUnmounted(() => {
   if (timer) clearInterval(timer);
 });
 
-// Always visible once the config has loaded; before that there is nothing
-// to report.
-const visible = computed(() => !!store.config && !store.loading);
+// Visible once an authenticated session has loaded its config; before that
+// there is nothing to report.
+const visible = computed(
+  () => auth.isAuthenticated && !store.loading && !!store.metadata?.platform,
+);
 const canSave = computed(
   () =>
     savingState.value === 'error' ||
