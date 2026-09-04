@@ -1713,7 +1713,7 @@ watch(open, (o) => {
     frameGenHealth.value = null;
     frameGenHealthError.value = null;
   }
-});
+}, { immediate: true });
 
 watch(
   () => (configStore.config as any)?.lossless_scaling_path,

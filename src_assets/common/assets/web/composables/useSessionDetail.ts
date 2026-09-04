@@ -143,7 +143,10 @@ export function useSessionDetail(sessionId: Ref<string | null>, range: Ref<Range
     { immediate: true },
   );
 
-  onBeforeUnmount(stopPolling);
+  onBeforeUnmount(() => {
+    generation += 1;
+    stopPolling();
+  });
 
   // ---- derived -------------------------------------------------------------
   function points(key: string): Array<[number, number]> {

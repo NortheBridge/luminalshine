@@ -461,7 +461,7 @@ export const useHostStore = defineStore('host', () => {
     // The probes key off metadata.platform and config.controller, so make sure
     // the config (and with it the metadata) is loaded before the first sweep.
     try {
-      await configStore.fetchConfig();
+      if (!statsOnly.value) await configStore.fetchConfig();
     } catch {
       /* probes report 'not probed' and retry on the slow timer */
     }

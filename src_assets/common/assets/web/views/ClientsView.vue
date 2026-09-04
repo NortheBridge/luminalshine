@@ -277,24 +277,27 @@ const sorted = computed(() => {
 });
 const connectedCount = computed(() => clients.value.filter((c) => c.connected).length);
 
-async function refreshClients(): Promise<void> {
-  if (!auth.isAuthenticated) return;
+/** Returns true when the list was replaced by a fresh server response. */
+async function refreshClients(): Promise<boolean> {
+  if (!auth.isAuthenticated) return false;
   try {
     const r = await http.get<ClientsListResponse>('./api/clients/list', {
       validateStatus: () => true,
     });
-    if (r.status !== 200) return;
+    if (r.status !== 200) return false;
     const body = r.data ?? {};
     if (body.status === true && Array.isArray(body.named_certs)) {
       clients.value = body.named_certs
         .filter((e) => typeof e.uuid === 'string' && e.uuid)
         .map(toClient);
+      return true;
     }
   } catch {
     /* keep the previous list */
   } finally {
     loaded.value = true;
   }
+  return false;
 }
 
 // ---- formatting -----------------------------------------------------------
@@ -527,9 +530,11 @@ async function saveDraft(): Promise<void> {
     const body = r.data as { status?: boolean } | undefined;
     if (r.status >= 200 && r.status < 300 && body?.status === true) {
       message.success(t('clients.update_success'));
-      await refreshClients();
+      const replaced = await refreshClients();
       await host.refreshClients();
-      resetDraft();
+      // Only rebuild the draft from a fresh list; on a transient refresh
+      // failure the edited values stay in the inspector.
+      if (replaced) resetDraft();
     } else {
       message.error(t('clients.update_failed'));
     }
@@ -622,7 +627,7 @@ function openPair(): void {
   pairOpen.value = true;
 }
 async function pair(): Promise<void> {
-  if (pairing.value) return;
+  if (pairing.value || pin.value.trim().length !== 4) return;
   pairing.value = true;
   pairResult.value = null;
   try {
