@@ -89,7 +89,7 @@ initApp(app, async () => {
     const prefetch = () => {
       // Trigger dynamic imports; browser caches chunks for next navigation
       import('@/views/SettingsView.vue');
-      import('@/views/ApplicationsView.vue');
+      import('@/views/LibraryView.vue');
     };
     // Use requestIdleCallback when available to avoid competing with critical work
     if (typeof (window as any).requestIdleCallback === 'function') {

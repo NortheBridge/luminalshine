@@ -14,10 +14,10 @@ vi.mock('@web/http', () => ({
 }));
 vi.mock('@web/views/OverviewView.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('@web/views/StreamView.vue', () => ({ default: { template: '<div />' } }));
-vi.mock('@web/views/ApplicationsView.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('@web/views/LibraryView.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('@web/views/SettingsView.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('@web/views/DiagnosticsView.vue', () => ({ default: { template: '<div />' } }));
-vi.mock('@web/views/ClientManagementView.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('@web/views/ClientsView.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('@web/views/WebRtcClientView.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('@web/views/DisplayView.vue', () => ({ default: { template: '<div />' } }));
 
