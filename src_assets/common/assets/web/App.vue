@@ -84,12 +84,35 @@
                       </div>
                     </RouterView>
                   </main>
-                  <!-- Inspector column: pages teleport their contextual panel here. -->
+                  <!-- Inspector column: pages teleport their contextual panel here.
+                       Below lg it is a slide-over drawer behind a floating toggle. -->
+                  <div
+                    v-if="drawerOpen"
+                    class="fixed inset-0 z-[85] bg-dark/60 lg:hidden"
+                    aria-hidden="true"
+                    @click="drawerOpen = false"
+                  ></div>
                   <aside
                     :id="INSPECTOR_TARGET_ID"
-                    class="hidden shrink-0 flex-col overflow-hidden bg-chrome transition-[width] duration-200 lg:flex"
-                    :class="inspectorOpen ? 'w-[340px] border-l border-line' : 'w-0'"
+                    class="shrink-0 flex-col overflow-hidden bg-chrome lg:static lg:flex lg:transition-[width] lg:duration-200"
+                    :class="[
+                      inspectorOpen
+                        ? 'lg:w-[340px] lg:border-l lg:border-line'
+                        : 'lg:w-0 lg:border-0',
+                      drawerOpen
+                        ? 'fixed inset-y-0 right-0 z-[90] flex w-[340px] max-w-[90vw] border-l border-line shadow-2xl'
+                        : 'hidden',
+                    ]"
                   ></aside>
+                  <button
+                    v-if="inspectorOpen"
+                    type="button"
+                    class="fixed bottom-4 right-4 z-[95] flex h-11 items-center gap-2 rounded-full border border-line-strong bg-chrome px-4 text-xs font-medium text-ink shadow-xl lg:hidden"
+                    @click="drawerOpen = !drawerOpen"
+                  >
+                    <NavIcon :name="drawerOpen ? 'close' : 'chevron'" :size="14" />
+                    {{ drawerOpen ? t2('shell.close', 'Close') : t2('shell.details', 'Details') }}
+                  </button>
                 </div>
               </div>
 
@@ -140,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import {
   NConfigProvider,
   NDialogProvider,
@@ -174,6 +197,14 @@ const t2 = useT2();
 const auth = useAuthStore();
 const host = useHostStore();
 const { open: inspectorOpen } = useInspector();
+// Narrow-screen drawer for the inspector; closes on navigation.
+const drawerOpen = ref(false);
+watch(
+  () => route.fullPath,
+  () => {
+    drawerOpen.value = false;
+  },
+);
 
 // ---- navigation -----------------------------------------------------------
 interface NavItem {

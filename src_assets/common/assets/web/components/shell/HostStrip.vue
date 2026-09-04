@@ -11,6 +11,7 @@ import { useConfigStore } from '@/stores/config';
 import { useConnectivityStore } from '@/stores/connectivity';
 import { useT2 } from '@/composables/useT2';
 import SavingStatus from '@/components/SavingStatus.vue';
+import GlobalSearch from '@/components/shell/GlobalSearch.vue';
 
 const t2 = useT2();
 
@@ -136,6 +137,7 @@ const hostOnline = computed(() => !connectivity.offline);
     </div>
     <div class="flex-1"></div>
     <div class="flex items-center gap-2.5 pr-3">
+      <GlobalSearch v-if="!host.statsOnly" />
       <SavingStatus />
     </div>
   </div>
