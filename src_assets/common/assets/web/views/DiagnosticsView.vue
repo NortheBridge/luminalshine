@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useConfigStore } from '@/stores/config';
 import { useHostStore } from '@/stores/host';
 import AboutView from '@/views/AboutView.vue';
+import ResourceCard from '@/ResourceCard.vue';
 import LogViewer from '@/components/LogViewer.vue';
 import InspectorPanel from '@/components/shell/InspectorPanel.vue';
 import NavIcon from '@/components/shell/NavIcon.vue';
@@ -31,7 +32,6 @@ const host = useHostStore();
 const configStore = useConfigStore();
 const { metadata } = storeToRefs(configStore);
 const {
-  detected: crashDetected,
   details: crashDetails,
   exportPending: crashExporting,
   exportBundle,
@@ -210,22 +210,24 @@ const vgdLine = computed(() => {
 });
 const vgdStatus = computed(() => {
   const md = metadata.value;
-  if (!md) return { text: '', kind: '' };
+  if (!md?.platform || String(md.platform).toLowerCase() !== 'windows')
+    return { text: '', kind: '' };
   if (
     md.virtual_display_driver_ready === true ||
     String(md.virtual_display_driver_status) === '0'
   ) {
     return { text: t2('diagnostics.ready', 'ready'), kind: 'mc-tag-ok' };
   }
-  if (!md.vgd_installed)
+  if (md.vgd_installed !== true) {
     return { text: t2('diagnostics.not_installed', 'not installed'), kind: 'mc-tag-warn' };
+  }
   return { text: t2('diagnostics.degraded', 'degraded'), kind: 'mc-tag-danger' };
 });
-const gamepadBus = computed(() =>
-  host.vigemInstalled
-    ? `LuminalVGBus${host.vigemVersion ? ` ${host.vigemVersion}` : ''}`
-    : t2('diagnostics.not_installed', 'not installed'),
-);
+const gamepadBus = computed(() => {
+  if (host.vigemInstalled == null) return t2('diagnostics.not_probed', 'not probed');
+  if (!host.vigemInstalled) return t2('diagnostics.not_installed', 'not installed');
+  return `ViGEmBus${host.vigemVersion ? ` ${host.vigemVersion}` : ''}`;
+});
 const buildLine = computed(() => {
   const md = metadata.value;
   if (!md) return '';
@@ -273,6 +275,7 @@ function confirmRestart(): void {
             'Restart requested. LuminalShine comes back in a few seconds.',
           ),
         );
+        configStore.clearRestartPending();
       } catch {
         /* the process is going down; the request often does not answer */
       } finally {
@@ -527,7 +530,7 @@ watch(() => route.hash, scrollToHash);
             }}
           </div>
         </div>
-        <div v-if="crashDetected" class="mc-panel border-primary/40 px-4 py-3 text-xs">
+        <div v-if="host.crashDumpVisible" class="mc-panel border-primary/40 px-4 py-3 text-xs">
           <div class="flex flex-wrap items-center gap-2">
             <NavIcon name="warning" :size="14" class="text-primary" />
             <span class="font-medium text-ink">{{
@@ -579,6 +582,10 @@ watch(() => route.hash, scrollToHash);
               }}</span>
               <span class="mc-kv-k">{{ t2('diagnostics.last_reset', 'Last reset') }}</span
               ><span class="mc-kv-v break-words">{{ tdrLastText }}</span>
+              <template v-if="tdrLast?.detail">
+                <span class="mc-kv-k">{{ t2('diagnostics.detail', 'Detail') }}</span>
+                <span class="mc-kv-v break-words">{{ tdrLast.detail }}</span>
+              </template>
               <template v-if="tdrIncident">
                 <span class="mc-kv-k">{{ t2('diagnostics.incident', 'Incident') }}</span>
                 <span class="mc-kv-v"
@@ -667,7 +674,15 @@ watch(() => route.hash, scrollToHash);
         <LogViewer ref="logViewer" :height="480" />
       </template>
 
-      <AboutView v-else />
+      <template v-else>
+        <AboutView />
+        <div class="mc-panel">
+          <div class="mc-panel-h">
+            <span class="mc-panel-title">{{ t2('resources.title', 'Web links') }}</span>
+          </div>
+          <div class="px-4 py-3 text-xs"><ResourceCard /></div>
+        </div>
+      </template>
     </div>
 
     <InspectorPanel

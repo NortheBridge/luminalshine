@@ -4,7 +4,7 @@
  * card fills the inspector with the app's summary; editing hands off to the
  * existing editor (AppEditModal), which owns the full form.
  */
-import { computed, defineAsyncComponent, onMounted, ref } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { NButton, NInput, useMessage } from 'naive-ui';
 import { http } from '@/http';
@@ -37,6 +37,12 @@ const playniteAvailable = computed(() => !!(playnite.value?.installed || playnit
 type Source = 'all' | 'playnite' | 'steam' | 'custom';
 const filter = ref<Source>('all');
 const query = ref(typeof route.query['q'] === 'string' ? String(route.query['q']) : '');
+watch(
+  () => route.query['q'],
+  (q) => {
+    if (typeof q === 'string') query.value = q;
+  },
+);
 
 function sourceOf(app: App): Exclude<Source, 'all'> {
   if (typeof app['playnite-id'] === 'string' && app['playnite-id']) return 'playnite';

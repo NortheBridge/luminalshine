@@ -680,6 +680,14 @@ onMounted(async () => {
   }
   refreshTimer = setInterval(() => void refreshClients(), 5000);
 });
+watch(
+  () => route.query['id'],
+  (wanted) => {
+    if (typeof wanted !== 'string') return;
+    const c = clients.value.find((x) => x.uuid === wanted);
+    if (c) select(c);
+  },
+);
 onBeforeUnmount(() => {
   if (refreshTimer) clearInterval(refreshTimer);
 });

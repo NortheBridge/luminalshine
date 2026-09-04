@@ -8,15 +8,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { NButton, NInput, NScrollbar, NSelect } from 'naive-ui';
 import { storeToRefs } from 'pinia';
+import { useI18n } from 'vue-i18n';
 import { http } from '@/http';
 import { useAuthStore } from '@/stores/auth';
 import { useConfigStore } from '@/stores/config';
 import { useT2 } from '@/composables/useT2';
-import NavIcon from '@/components/shell/NavIcon.vue';
 
 const props = withDefaults(defineProps<{ height?: number }>(), { height: 520 });
 
 const t2 = useT2();
+const { t } = useI18n();
 const authStore = useAuthStore();
 const configStore = useConfigStore();
 const { metadata } = storeToRefs(configStore);
@@ -38,10 +39,8 @@ let searchTaskTimer: number | null = null;
 const segmentCache = new Map<number, { term: string; text: string; segments: LogSegment[] }>();
 
 const tCount = (key: string, fallback: string, count: number) => {
-  const value = t2(key, '');
-  return value
-    ? value.replace('{count}', String(count))
-    : fallback.replace('{count}', String(count));
+  const value = t(key, { count });
+  return value === key ? fallback.replace('{count}', String(count)) : value;
 };
 
 const logSourceOptions = computed(() => {
@@ -600,11 +599,6 @@ defineExpose({ exportLogs, refreshLogs });
           size="tiny"
           @click="jumpToLatest"
           >{{ t2('troubleshooting.jump_to_latest', 'Jump to latest') }}</NButton
-        >
-        <NButton size="tiny" @click="exportLogs"
-          ><NavIcon name="download" :size="12" />{{
-            t2('troubleshooting.export_logs', 'Export logs')
-          }}</NButton
         >
       </div>
     </div>

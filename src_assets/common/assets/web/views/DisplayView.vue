@@ -5,7 +5,7 @@
  * panel, the golden display snapshot, and a driver diagnostic in the
  * inspector. `?sec=about` still opens the driver's About page.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import {
@@ -67,8 +67,17 @@ const driverReady = computed(() => metadata.value?.virtual_display_driver_ready)
 const driverStatusText = computed(() => {
   const s = metadata.value?.virtual_display_driver_status;
   if (driverReady.value === true) return t2('display.status_ready', 'ready');
-  if (typeof s === 'string' && s) return s;
-  if (typeof s === 'number') return String(s);
+  const code = s != null ? String(s) : '';
+  const labels: Record<string, [string, string]> = {
+    '0': ['about.vdd_status_ready', 'ready'],
+    '1': ['about.vdd_status_unknown', 'unknown'],
+    '-1': ['about.vdd_status_failed', 'failed'],
+    '-2': ['about.vdd_status_version_incompatible', 'version incompatible'],
+    '-3': ['about.vdd_status_watchdog_failed', 'watchdog failed'],
+  };
+  const l = labels[code];
+  if (l) return t2(l[0], l[1]);
+  if (code) return code;
   return driverInstalled.value
     ? t2('display.status_unknown', 'unknown')
     : t2('display.status_missing', 'not installed');
@@ -584,12 +593,25 @@ const diagRows = computed<Array<[string, string]>>(() => {
     t2('display.d_hwid', 'Hardware IDs'),
     Array.isArray(d.hardware_ids) ? d.hardware_ids.join(', ') : d.hardware_ids,
   );
-  push(t2('display.d_error', 'Last error'), d.last_error);
+  push(
+    t2('display.d_error', 'Last error'),
+    d.last_error ? `${t2('display.d_error_code', 'error')} ${d.last_error}` : '',
+  );
+  const level = Number(d.last_recovery_level);
+  const levelLabels = [
+    t2('display.recovery_none', 'none'),
+    t2('display.recovery_session', 'session reset'),
+    t2('display.recovery_pnp', 'PnP restart'),
+  ];
+  const levelLabel =
+    levelLabels[level] ?? (d.last_recovery_level != null ? String(d.last_recovery_level) : '');
+  const at =
+    typeof d.last_recovery_at === 'number' && d.last_recovery_at > 0
+      ? new Date(d.last_recovery_at * 1000).toLocaleString()
+      : '';
   push(
     t2('display.d_recovery', 'Last recovery'),
-    [d.last_recovery_level, d.last_recovery_message, d.last_recovery_at]
-      .filter(Boolean)
-      .join(' · '),
+    [levelLabel, d.last_recovery_message, at].filter(Boolean).join(' · '),
   );
   return rows;
 });
@@ -616,6 +638,26 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   for (const tmr of metadataTimers) clearTimeout(tmr);
 });
+
+// Load the diagnostic as soon as we know this is a Windows host; it is the
+// copy-into-a-ticket surface, so it should not need a click first.
+watch(
+  isWindows,
+  (w) => {
+    if (w && !diag.value && !diagLoading.value) void runDiagnostic();
+  },
+  { immediate: true },
+);
+const diagMessage = useMessage();
+async function copyDiag(): Promise<void> {
+  const text = diagRows.value.map(([k, v]) => `${k}: ${v}`).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    diagMessage.success(t2('display.copied', 'Diagnostic copied.'));
+  } catch {
+    diagMessage.error(t2('about.copy_failed', 'Copy failed.'));
+  }
+}
 </script>
 
 <template>
@@ -985,6 +1027,9 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <template #footer>
+        <NButton size="small" :disabled="!diag" @click="copyDiag">{{
+          t2('display.copy_diag', 'Copy')
+        }}</NButton>
         <NButton
           size="small"
           :loading="restartPending"

@@ -435,8 +435,12 @@ export const useConfigStore = defineStore('config', () => {
   }
   const recentChanges = ref<ConfigChange[]>([]);
   const lastSavedAt = ref<number | null>(null);
-  const restartClearedAt = ref(0);
+  // Value of each restart-required key when it was first edited since load / last restart.
+  const restartBaseline = ref<Record<string, unknown>>({});
   function recordChange(k: string, from: unknown, to: unknown): void {
+    if (RESTART_REQUIRED_KEYS.has(k) && !(k in restartBaseline.value)) {
+      restartBaseline.value[k] = deepClone(from);
+    }
     const entry: ConfigChange = {
       key: k,
       from: deepClone(from),
@@ -446,12 +450,15 @@ export const useConfigStore = defineStore('config', () => {
     };
     recentChanges.value = [entry, ...recentChanges.value.filter((c) => c.key !== k)].slice(0, 20);
   }
-  /** Restart-required keys changed since the last restart this UI triggered. */
-  const restartPendingKeys = computed(() =>
-    recentChanges.value.filter((c) => c.restart && c.at > restartClearedAt.value).map((c) => c.key),
-  );
+  /** Restart-required keys whose current value differs from the last restart's. */
+  const restartPendingKeys = computed(() => {
+    const cur = (_data.value ?? {}) as Record<string, unknown>;
+    return Object.keys(restartBaseline.value).filter(
+      (k) => !deepEqual(restartBaseline.value[k], cur[k]),
+    );
+  });
   function clearRestartPending(): void {
-    restartClearedAt.value = Date.now();
+    restartBaseline.value = {};
     if (lastSaveResult.value)
       lastSaveResult.value = { ...lastSaveResult.value, restartRequired: false };
   }
@@ -1041,6 +1048,22 @@ export const useConfigStore = defineStore('config', () => {
     return await fetchConfig(true);
   }
 
+  /** Drop queued autosave / manual edits and reload the saved config. */
+  async function discardPending() {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    nextFlushAt.value = null;
+    patchQueue.value = {};
+    manualDirty.value = false;
+    savingState.value = 'idle';
+    validationError.value = null;
+    const since = lastSavedAt.value ?? 0;
+    recentChanges.value = recentChanges.value.filter((c) => c.at <= since);
+    return await reloadConfig();
+  }
+
   // Start autosave queue watcher by default
   startAutosave();
 
@@ -1094,6 +1117,7 @@ export const useConfigStore = defineStore('config', () => {
     lastSavedAt,
     restartPendingKeys,
     clearRestartPending,
+    discardPending,
     RESTART_REQUIRED_KEYS,
   };
 });

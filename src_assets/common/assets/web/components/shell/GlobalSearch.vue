@@ -219,6 +219,10 @@ defineExpose({ focus });
         ref="input"
         v-model="query"
         type="search"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-controls="mc-global-search-list"
+        :aria-expanded="open && hits.length > 0"
         class="min-w-0 flex-1 bg-transparent text-xs text-ink outline-none placeholder:text-ink-4"
         :placeholder="t2('shell.search_placeholder', 'Search settings, apps, clients…')"
         :aria-label="t2('shell.search_placeholder', 'Search settings, apps, clients…')"
@@ -231,6 +235,7 @@ defineExpose({ focus });
     </label>
     <div
       v-if="open && hits.length"
+      id="mc-global-search-list"
       class="mc-panel absolute right-0 top-9 z-[60] w-[320px] overflow-hidden shadow-xl"
       role="listbox"
     >

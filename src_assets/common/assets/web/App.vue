@@ -108,6 +108,8 @@
                     v-if="inspectorOpen"
                     type="button"
                     class="fixed bottom-4 right-4 z-[95] flex h-11 items-center gap-2 rounded-full border border-line-strong bg-chrome px-4 text-xs font-medium text-ink shadow-xl lg:hidden"
+                    :aria-expanded="drawerOpen"
+                    :aria-controls="INSPECTOR_TARGET_ID"
                     @click="drawerOpen = !drawerOpen"
                   >
                     <NavIcon :name="drawerOpen ? 'close' : 'chevron'" :size="14" />
@@ -163,7 +165,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import {
   NConfigProvider,
   NDialogProvider,
@@ -205,6 +207,11 @@ watch(
     drawerOpen.value = false;
   },
 );
+function onDrawerKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && drawerOpen.value) drawerOpen.value = false;
+}
+onMounted(() => window.addEventListener('keydown', onDrawerKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onDrawerKey));
 
 // ---- navigation -----------------------------------------------------------
 interface NavItem {
