@@ -131,6 +131,16 @@ Full documentation — installation, configuration, driver selection, WebRTC set
 
 ---
 
+## Project Contributors
+
+LuminalShine is developed by the [NortheBridge Foundation](https://github.com/NortheBridge). These community members have landed changes in the project:
+
+- **[João Pedro Magalhães (@magalz)](https://github.com/magalz)** — RTX 30-series (Ampere) NVENC compatibility: kept an unsupported AV1 probe from taking hardware encoding down with it ([#156](https://github.com/NortheBridge/luminalshine/pull/156)), the fix that also surfaced the NVENC teardown defect closed in 26.09.0.
+
+Want to be on this list? Read [`architecture.md`](architecture.md), then open a pull request — contributions are welcome under the project license.
+
+---
+
 ## License
 
 LuminalShine is distributed under the [GNU General Public License v3.0](LICENSE). Contributions are welcome under the same terms.
