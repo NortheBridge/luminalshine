@@ -673,8 +673,21 @@ onMounted(async () => {
   await auth.waitForAuthentication();
   if (!host.running) void host.start();
   await refreshClients();
+  const wanted = route.query['id'];
+  if (typeof wanted === 'string') {
+    const c = clients.value.find((x) => x.uuid === wanted);
+    if (c) select(c);
+  }
   refreshTimer = setInterval(() => void refreshClients(), 5000);
 });
+watch(
+  () => route.query['id'],
+  (wanted) => {
+    if (typeof wanted !== 'string') return;
+    const c = clients.value.find((x) => x.uuid === wanted);
+    if (c) select(c);
+  },
+);
 onBeforeUnmount(() => {
   if (refreshTimer) clearInterval(refreshTimer);
 });
