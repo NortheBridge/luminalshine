@@ -806,7 +806,8 @@ namespace LuminalShineInstaller {
       });
 
       tipsStack.Children.Add(new TextBlock {
-        Text = "You can install or upgrade LuminalShine while actively streaming. No system restart is required. "
+        Text = "You can install or upgrade LuminalShine while actively streaming. No system restart is required "
+          + "unless the LuminalVGD display driver itself is updated — the installer tells you at the end if that happened. "
           + "After you click Install or Upgrade, the current streaming session will end, then you can usually "
           + "start streaming again after about 1–2 minutes without issues.",
         FontSize = 12.5,
@@ -1395,6 +1396,40 @@ namespace LuminalShineInstaller {
         "LuminalShine uninstall completed.");
     }
 
+    /// <summary>
+    /// Final page when this run replaced the LuminalVGD driver: instead of the
+    /// auto-closing "Complete" overlay, ask for a Windows restart. "Restart
+    /// Later" needs a second confirmation; either way Windows already knows a
+    /// restart is pending (RunInstallAttempt registered it), so "Later" only
+    /// changes the exit code and leaves the machine up.
+    /// </summary>
+    private async Task RunVgdRestartFlowAsync(string previousVersion, string newVersion) {
+      var page = "LuminalShine is installed.\n\n"
+        + "The LuminalVGD Driver has been Updated from " + previousVersion + " to " + newVersion + ". "
+        + "To ensure Windows is using the latest LuminalVGD Driver, please restart Windows.";
+      while (true) {
+        var restartNow = await ShowOverlayConfirmAsync("LuminalVGD Driver Updated", page, "Restart Now", "Restart Later", false);
+        if (restartNow) {
+          ProcessExitCode = 0;
+          SetStatus("Restarting Windows...", "Windows restarts in about 10 seconds to load LuminalVGD " + newVersion + ".", _statusSuccessBrush);
+          VgdUpdateMarker.InitiateRestart();
+          Close();
+          return;
+        }
+        var later = await ShowOverlayConfirmAsync(
+          "Restart Windows later?",
+          "LuminalVGD will not operate with the latest updates and fixes until Windows restart. Are you sure?",
+          "Okay",
+          "Go Back",
+          true);
+        if (later) {
+          ProcessExitCode = 3010;
+          Close();
+          return;
+        }
+      }
+    }
+
     private async Task RunOperationAsync(Func<Task<InstallerResult>> actionFactory, string actionLabel, string inProgressText, string successText) {
       SetBusyState(true);
       SetStatus(inProgressText, "This can take a minute.", _statusBusyBrush);
@@ -1403,6 +1438,13 @@ namespace LuminalShineInstaller {
         var result = await actionFactory();
         if (result.Succeeded) {
           ProcessExitCode = 0;
+          // Read the marker here rather than trusting the result object: the
+          // elevated-child install path hands results back through a snapshot
+          // that does not carry the driver fields.
+          var vgdPreviousVersion = string.Empty;
+          var vgdNewVersion = string.Empty;
+          var vgdUpdated = result.Operation == InstallerOperation.Install
+            && VgdUpdateMarker.TryRead(out vgdPreviousVersion, out vgdNewVersion);
           if (result.Operation == InstallerOperation.Install && result.PartiallySucceeded) {
             var warningDetail = BuildComponentFailureDetail(result.ComponentFailures);
             if (!string.IsNullOrWhiteSpace(result.UserDetail)) {
@@ -1410,6 +1452,10 @@ namespace LuminalShineInstaller {
             }
             SetStatus("LuminalShine installation completed with warnings.", warningDetail, _statusWarningBrush);
             await ShowInstallPartialSuccessDialogAsync(result);
+            if (vgdUpdated) {
+              await RunVgdRestartFlowAsync(vgdPreviousVersion, vgdNewVersion);
+              return;
+            }
             Close();
             return;
           }
@@ -1420,6 +1466,10 @@ namespace LuminalShineInstaller {
             detail += "\n" + result.UserDetail;
           }
           SetStatus(successText, detail, _statusSuccessBrush);
+          if (vgdUpdated) {
+            await RunVgdRestartFlowAsync(vgdPreviousVersion, vgdNewVersion);
+            return;
+          }
           await ShowOverlayInfoAsync("Complete", _statusText.Text);
           Close();
           return;
@@ -2374,6 +2424,104 @@ namespace LuminalShineInstaller {
     }
     public bool PartiallySucceeded {
       get { return Succeeded && ComponentFailures != null && ComponentFailures.Count > 0; }
+    }
+    // Set when this install run moved the LuminalVGD driver package to a
+    // newer version (previous -> new); empty otherwise.
+    public string VgdPreviousVersion { get; set; }
+    public string VgdNewVersion { get; set; }
+    public bool VgdDriverUpdated {
+      get { return !string.IsNullOrWhiteSpace(VgdPreviousVersion) && !string.IsNullOrWhiteSpace(VgdNewVersion); }
+    }
+  }
+
+  /// <summary>
+  /// The LuminalVGD driver script (drivers\luminalvgd\install.ps1, run by the
+  /// MSI) records what it did under HKLM\SOFTWARE\NortheBridge\LuminalShine\LuminalVGD:
+  /// PreviousVersion, InstalledVersion and Updated (1 when the package moved
+  /// to a newer version). The installer clears those values before msiexec so
+  /// a stale marker from an earlier run can never trigger the restart page.
+  /// </summary>
+  internal static class VgdUpdateMarker {
+    private const string KeyPath = @"SOFTWARE\NortheBridge\LuminalShine\LuminalVGD";
+    private const int MoveFileDelayUntilReboot = 0x4;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool MoveFileEx(string existingFileName, string newFileName, int flags);
+
+    public static void Clear() {
+      try {
+        using (var key = Registry.LocalMachine.OpenSubKey(KeyPath, true)) {
+          if (key == null) {
+            return;
+          }
+          foreach (var name in new[] { "PreviousVersion", "InstalledVersion", "Updated", "UpdatedAt" }) {
+            key.DeleteValue(name, false);
+          }
+        }
+      } catch {
+        // Best effort: a stale marker could only re-show the restart page,
+        // never suppress it.
+      }
+    }
+
+    public static bool TryRead(out string previousVersion, out string newVersion) {
+      previousVersion = string.Empty;
+      newVersion = string.Empty;
+      try {
+        using (var key = Registry.LocalMachine.OpenSubKey(KeyPath, false)) {
+          if (key == null) {
+            return false;
+          }
+          var updated = key.GetValue("Updated") as int?;
+          previousVersion = (key.GetValue("PreviousVersion") as string) ?? string.Empty;
+          newVersion = (key.GetValue("InstalledVersion") as string) ?? string.Empty;
+          return updated == 1
+            && !string.IsNullOrWhiteSpace(previousVersion)
+            && !string.IsNullOrWhiteSpace(newVersion)
+            && !string.Equals(previousVersion, newVersion, StringComparison.Ordinal);
+        }
+      } catch {
+        return false;
+      }
+    }
+
+    /// <summary>
+    /// Tells Windows a restart is pending the way installers do: a marker file
+    /// scheduled for delete-at-reboot lands in PendingFileRenameOperations —
+    /// what Windows itself, SCCM/Intune and Test-PendingReboot all check — and
+    /// it clears itself the moment the machine actually restarts.
+    /// </summary>
+    public static void RegisterPendingRestart(string previousVersion, string newVersion) {
+      try {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LuminalShine");
+        Directory.CreateDirectory(dir);
+        var marker = Path.Combine(dir, "luminalvgd-restart-pending.txt");
+        File.WriteAllText(
+          marker,
+          "LuminalVGD driver updated " + previousVersion + " -> " + newVersion + " at " + DateTime.Now.ToString("o") + Environment.NewLine
+          + "Windows must restart before the new driver is in use. Windows removes this file at the next restart." + Environment.NewLine);
+        MoveFileEx(marker, null, MoveFileDelayUntilReboot);
+        using (var key = Registry.LocalMachine.CreateSubKey(KeyPath)) {
+          if (key != null) {
+            key.SetValue("RestartPending", 1, RegistryValueKind.DWord);
+          }
+        }
+      } catch {
+        // Best effort; the restart page itself already told the user.
+      }
+    }
+
+    /// <summary>Begins a normal Windows restart (planned, application-installation reason).</summary>
+    public static void InitiateRestart() {
+      var shutdown = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shutdown.exe");
+      var psi = new ProcessStartInfo {
+        FileName = shutdown,
+        Arguments = "/r /t 10 /d p:4:1 /c \"LuminalShine: restarting Windows to load the updated LuminalVGD driver.\"",
+        UseShellExecute = false,
+        CreateNoWindow = true
+      };
+      using (Process.Start(psi)) {
+      }
     }
   }
 
@@ -3643,9 +3791,26 @@ namespace LuminalShineInstaller {
         "SUPPRESSMSGBOXES=1"
       };
 
+      if (installLuminalVgd) {
+        VgdUpdateMarker.Clear();
+      }
       var exitCode = RunMsiexec(args, true, false);
       if (exitCode == 0 && competingProductsRequireRestart) {
         exitCode = 3010;
+      }
+
+      var vgdPreviousVersion = string.Empty;
+      var vgdNewVersion = string.Empty;
+      var vgdUpdated = installLuminalVgd
+        && (exitCode == 0 || exitCode == 3010)
+        && VgdUpdateMarker.TryRead(out vgdPreviousVersion, out vgdNewVersion);
+      if (vgdUpdated) {
+        // The driver package moved to a newer version and Windows may keep
+        // the old image loaded until it restarts. Flag it like any installer
+        // would (3010 + pending-restart registration); the UI or the CLI
+        // caller decides when to restart.
+        exitCode = 3010;
+        VgdUpdateMarker.RegisterPendingRestart(vgdPreviousVersion, vgdNewVersion);
       }
 
       var componentFailures = CollectInstallComponentFailures(logPath, vddChoice);
@@ -3661,6 +3826,10 @@ namespace LuminalShineInstaller {
       }
 
       var resultMessage = BuildResultMessage("Install", exitCode, logPath);
+      if (vgdUpdated) {
+        resultMessage += " LuminalVGD driver updated " + vgdPreviousVersion + " -> " + vgdNewVersion
+          + "; restart Windows to load it.";
+      }
       if (saveInstallLogs) {
         if (!string.IsNullOrWhiteSpace(savedLogPath)) {
           resultMessage += " Saved log copy: " + savedLogPath;
@@ -3690,7 +3859,9 @@ namespace LuminalShineInstaller {
         Message = resultMessage,
         UserDetail = saveLogsDetail,
         LogPath = logPath,
-        ComponentFailures = componentFailures
+        ComponentFailures = componentFailures,
+        VgdPreviousVersion = vgdUpdated ? vgdPreviousVersion : string.Empty,
+        VgdNewVersion = vgdUpdated ? vgdNewVersion : string.Empty
       };
     }
 

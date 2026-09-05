@@ -135,6 +135,56 @@ function Get-PublishedDriverPackages([string]$OriginalInfPattern, [string]$Provi
     $packages | Select-Object -Unique
 }
 
+function Get-StagedLuminalVgdVersion {
+    # Highest LuminalVGD package version currently in the driver store, from
+    # `pnputil /enum-drivers` ("Driver Version: 07/23/2026 0.1.0.8"). Works
+    # whether the devnode is present, phantom (service stopped — i.e. every
+    # upgrade) or absent, which is why the update marker uses it instead of
+    # a devnode property.
+    $out = pnputil /enum-drivers | Out-String
+    $best = $null
+    $inPackage = $false
+    foreach ($line in ($out -split "`r?`n")) {
+        if ($line -match 'Published Name:\s+oem\d+\.inf') { $inPackage = $false }
+        elseif ($line -match 'Original Name:\s+luminalvgd\.inf') { $inPackage = $true }
+        elseif ($inPackage -and $line -match 'Driver Version:\s+\S+\s+([0-9][0-9.]*)') {
+            try {
+                $v = [Version]$Matches[1]
+                if (-not $best -or $v -gt $best) { $best = $v }
+            } catch {}
+        }
+    }
+    $best
+}
+
+# --- Driver update marker ---------------------------------------------------
+# "What did this run do to the driver", for the installer UI: the bootstrapper
+# clears these values before msiexec and reads them afterwards, then offers a
+# Windows restart when the package actually moved to a newer version (some
+# hosts keep the old driver image loaded until they restart).
+$vgdMarkerKey = 'HKLM:\SOFTWARE\NortheBridge\LuminalShine\LuminalVGD'
+$script:vgdPreviousVer = $null
+$script:vgdBundledVer = $null
+
+function Write-VgdUpdateMarker {
+    New-Item -Path $vgdMarkerKey -Force | Out-Null
+    $prev = if ($script:vgdPreviousVer) { $script:vgdPreviousVer.ToString() } else { '' }
+    $new = if ($script:vgdBundledVer) { $script:vgdBundledVer.ToString() } else { '' }
+    $updated = 0
+    if ($script:vgdPreviousVer -and $script:vgdBundledVer -and $script:vgdBundledVer -gt $script:vgdPreviousVer) { $updated = 1 }
+    New-ItemProperty -Path $vgdMarkerKey -Name 'PreviousVersion' -Value $prev -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $vgdMarkerKey -Name 'InstalledVersion' -Value $new -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $vgdMarkerKey -Name 'Updated' -Value $updated -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $vgdMarkerKey -Name 'UpdatedAt' -Value ([DateTime]::UtcNow.ToString('o')) -PropertyType String -Force | Out-Null
+    # A previous "restart later" is satisfied once the marker file Windows
+    # deletes at reboot is gone.
+    $pendingFile = Join-Path $env:ProgramData 'LuminalShine\luminalvgd-restart-pending.txt'
+    if (-not (Test-Path $pendingFile)) {
+        Remove-ItemProperty -Path $vgdMarkerKey -Name 'RestartPending' -ErrorAction SilentlyContinue
+    }
+    if ($updated -eq 1) { Write-Host "[LuminalVGD] Driver package updated $prev -> $new; a Windows restart is recommended." }
+}
+
 function Remove-SudoVda {
     # Unconditional eviction: devices, driver packages, SudoMaker
     # publisher certs, and the SudoMaker registry key. Every step is
@@ -196,6 +246,16 @@ function Install-LuminalVgd {
     $dll = Join-Path $packageDir 'luminal_vgd_driver.dll'
     foreach ($f in @($inf, $cat, $dll)) {
         if (-not (Test-Path $f)) { throw "[LuminalVGD] missing driver artifact: $f" }
+    }
+
+    # What is staged right now vs. what we bundle — recorded by
+    # Write-VgdUpdateMarker once the install pass is done.
+    if ((Get-Content $inf -Raw) -match 'DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)') {
+        try { $script:vgdBundledVer = [Version]$Matches[1] } catch {}
+    }
+    $script:vgdPreviousVer = Get-StagedLuminalVgdVersion
+    if ($script:vgdPreviousVer) {
+        Write-Host "[LuminalVGD] Previously staged driver: $($script:vgdPreviousVer); bundled: $($script:vgdBundledVer)"
     }
 
     $build = [Environment]::OSVersion.Version.Build
@@ -301,6 +361,7 @@ try {
             Write-Warning "[LuminalVGD] ETW AutoLogger removal failed (continuing): $($_.Exception.Message)"
         }
         Remove-LuminalVgd
+        Remove-Item -Path $vgdMarkerKey -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
     } else {
         # The sweep is best-effort by contract — its failure must never
         # abort the driver install (a terminating error here previously
@@ -311,6 +372,11 @@ try {
             Write-Warning "[LuminalVGD] SudoVDA sweep failed (continuing): $($_.Exception.Message)"
         }
         Install-LuminalVgd
+        try {
+            Write-VgdUpdateMarker
+        } catch {
+            Write-Warning "[LuminalVGD] Could not record the driver update marker (continuing): $($_.Exception.Message)"
+        }
         # Best-effort by contract, like the sweep: diagnostics must never
         # fail the driver install.
         try {
