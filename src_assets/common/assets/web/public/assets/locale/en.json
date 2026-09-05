@@ -1347,12 +1347,15 @@
     "warning_msg": "Make sure you have access to the client you are pairing with. This software can give total control to your computer, so be careful!"
   },
   "resource_card": {
+    "discord_experimental": "LuminalShine is Experimental on the Official Moonlight Server. Please be sure to Enable View of the Experimental Category.",
+    "discord_experimental_hint": "The Discord link above joins the Moonlight community server. In the server’s channel browser (Channels & Roles), turn on the Experimental category to see the LuminalShine channel.",
+    "discord_experimental_hint2": "When asking for help there, paste the diagnostics report from this page (Copy as Markdown).",
     "github_discussions": "GitHub Discussions",
     "legal": "Legal",
     "legal_desc": "By continuing to use this software you agree to the terms and conditions in the following documents.",
     "license": "License",
     "resources": "Resources",
-    "discord_desc": "Join the community",
+    "discord_desc": "Moonlight community server · LuminalShine lives in the Experimental category",
     "resources_desc": "Resources for LuminalShine!",
     "third_party_notice": "Third Party Notice"
   },
