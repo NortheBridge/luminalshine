@@ -28,6 +28,34 @@
           </div>
         </n-card>
       </div>
+      <div
+        class="rounded-lg border border-line bg-white/[0.02] px-3 py-2.5 text-xs leading-relaxed"
+      >
+        <p class="font-semibold text-ink">
+          {{
+            withFallback(
+              'resource_card.discord_experimental',
+              'LuminalShine is Experimental on the Official Moonlight Server. Please be sure to Enable View of the Experimental Category.',
+            )
+          }}
+        </p>
+        <p class="mt-1.5 text-ink-3">
+          {{
+            withFallback(
+              'resource_card.discord_experimental_hint',
+              'The Discord link above joins the Moonlight community server. In the server’s channel browser (Channels & Roles), turn on the Experimental category to see the LuminalShine channel.',
+            )
+          }}
+        </p>
+        <p class="mt-1 text-ink-3">
+          {{
+            withFallback(
+              'resource_card.discord_experimental_hint2',
+              'When asking for help there, paste the diagnostics report from this page (Copy as Markdown).',
+            )
+          }}
+        </p>
+      </div>
     </section>
 
     <section class="min-w-0 space-y-3">
@@ -77,10 +105,13 @@ function withFallback(key: string, fallback: string) {
 
 const resources = computed(() => [
   {
-    href: 'https://discord.com/channels/352065098472488960/1528712503054303423',
+    href: 'https://discord.gg/EWNGkAATR',
     icon: 'fab fa-discord',
     title: 'Discord',
-    description: withFallback('resource_card.discord_desc', 'Join the community'),
+    description: withFallback(
+      'resource_card.discord_desc',
+      'Moonlight community server · LuminalShine lives in the Experimental category',
+    ),
     avatarStyle: 'background-color: rgba(0, 180, 216, 0.15); color: rgb(0, 180, 216);',
   },
   {
