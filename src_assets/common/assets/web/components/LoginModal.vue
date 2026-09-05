@@ -111,6 +111,7 @@
   </n-modal>
 </template>
 <script setup lang="ts">
+import { STATS_ONLY_HOME } from '@/router';
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
@@ -247,7 +248,7 @@ async function submit() {
       setTimeout(() => {
         auth.hideLogin();
         if (requestStatsOnly) {
-          router.push('/stats').catch(() => {});
+          router.push(STATS_ONLY_HOME).catch(() => {});
         }
       }, 400);
     } else if (

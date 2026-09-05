@@ -4,157 +4,127 @@
       <n-dialog-provider>
         <n-notification-provider>
           <n-message-provider>
-            <!-- Sunburst gradient + dot-grain layers sit behind every view so the
-                 entire UI feels like one continuous pane of glass. -->
-            <div class="sunburst-bg" aria-hidden="true"></div>
-            <div class="sunburst-grain" aria-hidden="true"></div>
-            <div class="min-h-screen flex flex-col text-onDark">
-              <header
-                class="sticky top-0 z-30 h-16 flex items-center gap-4 px-4 sm:px-6 border-b border-white/10 bg-[rgba(20,15,10,0.55)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(20,15,10,0.4)]"
+            <div class="flex h-screen w-full overflow-hidden bg-dark text-onDark">
+              <!-- Icon rail (desktop) -->
+              <nav
+                class="hidden w-14 shrink-0 flex-col items-center gap-1.5 border-r border-line bg-chrome py-3 md:flex"
+                :aria-label="t2('shell.nav_label', 'Primary')"
               >
-                <div class="flex items-center gap-3 min-w-0">
-                  <RouterLink
-                    to="/"
-                    class="brand-mark brand-mark--stacked shrink-0"
-                    aria-label="LuminalShine — NortheBridge Foundation home"
-                  >
+                <RouterLink to="/" class="mb-2.5 shrink-0" aria-label="LuminalShine">
+                  <img
+                    src="/images/logo-luminalshine.png"
+                    alt=""
+                    aria-hidden="true"
+                    class="h-[30px] w-[30px] rounded-full"
+                  />
+                </RouterLink>
+                <RouterLink
+                  v-for="item in navItems"
+                  :key="item.path"
+                  :to="item.path"
+                  class="rail-btn"
+                  :class="{ 'rail-btn-on': isActive(item.path) }"
+                  :title="item.label"
+                  :aria-label="item.label"
+                >
+                  <NavIcon :name="item.icon" :size="20" />
+                </RouterLink>
+                <div class="flex-1"></div>
+                <button
+                  type="button"
+                  class="rail-btn"
+                  :title="t2('navbar.logout', 'Log out')"
+                  :aria-label="t2('navbar.logout', 'Log out')"
+                  @click="logout"
+                >
+                  <NavIcon name="logout" :size="20" />
+                </button>
+              </nav>
+
+              <div class="flex min-w-0 flex-1 flex-col">
+                <!-- Host strip (desktop) -->
+                <HostStrip />
+
+                <!-- Compact header (mobile) -->
+                <header
+                  class="flex h-14 shrink-0 items-center gap-3 border-b border-line bg-chrome px-4 md:hidden"
+                >
+                  <RouterLink to="/" class="flex items-center gap-2.5" aria-label="LuminalShine">
                     <img
                       src="/images/logo-luminalshine.png"
                       alt=""
                       aria-hidden="true"
-                      class="brand-mark-logo"
+                      class="h-7 w-7 rounded-full"
                     />
-                    <span class="brand-mark-text">
-                      <span class="brand-mark-product">LuminalShine</span>
-                      <span class="brand-mark-org">NortheBridge&nbsp;Foundation</span>
-                    </span>
+                    <span class="text-sm font-semibold">LuminalShine</span>
                   </RouterLink>
-                  <span
-                    class="hidden md:inline-block h-6 w-px bg-white/10"
-                    aria-hidden="true"
-                  ></span>
-                  <h1
-                    class="hidden md:block text-sm md:text-base font-medium tracking-tight truncate text-[var(--sun-text-secondary)]"
-                  >
-                    {{
-                      displayTitle && displayTitle.includes('.') ? $t(displayTitle) : displayTitle
-                    }}
-                  </h1>
-                </div>
-                <nav class="hidden md:flex items-center gap-0.5 text-sm font-medium ml-2">
-                  <!-- Stats-only sessions see just their page + logout;
-                       the backend allowlist is the actual boundary. -->
-                  <template v-if="!statsOnly">
-                    <RouterLink to="/" :class="linkClass('/')">
-                      <i class="fas fa-gauge" /><span>{{ $t('navbar.home') }}</span>
-                    </RouterLink>
-                    <RouterLink to="/applications" :class="linkClass('/applications')">
-                      <i class="fas fa-table-cells-large" /><span>{{
-                        $t('navbar.applications')
-                      }}</span>
-                    </RouterLink>
-                    <RouterLink to="/clients" :class="linkClass('/clients')">
-                      <i class="fas fa-users-cog" /><span>{{ $t('clients.nav') }}</span>
-                    </RouterLink>
-                    <RouterLink to="/webrtc" :class="linkClass('/webrtc')">
-                      <i class="fas fa-satellite-dish" /><span>{{ $t('webrtc.nav') }}</span>
-                    </RouterLink>
-                    <RouterLink to="/settings" :class="linkClass('/settings')">
-                      <i class="fas fa-sliders" /><span>{{ $t('navbar.configuration') }}</span>
-                    </RouterLink>
-                    <RouterLink to="/troubleshooting" :class="linkClass('/troubleshooting')">
-                      <i class="fas fa-bug" /><span>{{ $t('navbar.troubleshoot') }}</span>
-                    </RouterLink>
+                  <span class="truncate text-sm text-ink-3">{{ pageTitle }}</span>
+                  <div class="ml-auto flex items-center gap-2">
+                    <SavingStatus />
                     <n-dropdown
-                      trigger="hover"
+                      trigger="click"
                       :show-arrow="true"
-                      :options="vgdMenuOptions"
-                      @select="onNavSelect"
+                      :options="mobileMenuOptions"
+                      @select="onMobileSelect"
                     >
-                      <button type="button" :class="vgdLinkClass()">
-                        <i class="fas fa-display" /><span>{{ $t('vgd.nav') }}</span>
-                        <i class="fas fa-chevron-down text-[10px] opacity-70" />
-                      </button>
+                      <n-button type="default" size="small" :aria-label="t2('shell.menu', 'Menu')">
+                        <NavIcon name="menu" :size="16" />
+                      </n-button>
                     </n-dropdown>
-                    <RouterLink to="/about" :class="linkClass('/about')">
-                      <i class="fas fa-circle-info" /><span>{{ $t('navbar.about') }}</span>
-                    </RouterLink>
-                  </template>
-                  <RouterLink v-else to="/stats" :class="linkClass('/stats')">
-                    <i class="fas fa-chart-line" /><span>{{ $t('stats.nav') }}</span>
-                  </RouterLink>
-                  <a href="#" :class="linkClass('/logout')" @click.prevent="logout">
-                    <i class="fas fa-sign-out-alt" /><span>{{ $t('navbar.logout') }}</span>
-                  </a>
-                </nav>
-                <!-- Mobile menu button (md:hidden) -->
-                <div class="md:hidden ml-auto flex items-center gap-2">
-                  <n-dropdown
-                    trigger="click"
-                    :show-arrow="true"
-                    :options="mobileMenuOptions"
-                    @select="onMobileSelect"
-                  >
-                    <n-button type="primary" strong circle size="small" aria-label="Menu">
-                      <i class="fas fa-bars" />
-                    </n-button>
-                  </n-dropdown>
-                  <!-- Show save/status control on mobile app bar when on Settings -->
-                  <SavingStatus />
-                </div>
-                <!-- Desktop actions -->
-                <div class="hidden md:flex ml-auto items-center gap-3 text-xs">
-                  <SavingStatus />
-                </div>
-              </header>
-
-              <!-- Content: single shared container around RouterView; width via route meta -->
-              <main class="flex-1 overflow-auto">
-                <RouterView v-slot="{ Component, route: r }">
-                  <div :class="containerClass(r)">
-                    <Transition name="fade-fast" mode="out-in">
-                      <component :is="Component" />
-                    </Transition>
                   </div>
-                </RouterView>
-              </main>
+                </header>
+
+                <div class="flex min-h-0 flex-1">
+                  <main class="app-scrollbar min-w-0 flex-1 overflow-y-auto">
+                    <RouterView v-slot="{ Component, route: r }">
+                      <div :class="containerClass(r)">
+                        <Transition name="fade-fast" mode="out-in">
+                          <component :is="Component" />
+                        </Transition>
+                      </div>
+                    </RouterView>
+                  </main>
+                  <!-- Inspector column: pages teleport their contextual panel here. -->
+                  <aside
+                    :id="INSPECTOR_TARGET_ID"
+                    class="hidden shrink-0 flex-col overflow-hidden bg-chrome transition-[width] duration-200 lg:flex"
+                    :class="inspectorOpen ? 'w-[340px] border-l border-line' : 'w-0'"
+                  ></aside>
+                </div>
+              </div>
+
               <!-- Immediate background for login modal (no transition delay) -->
               <div v-if="loginOverlay" class="fixed inset-0 z-[110]">
-                <div
-                  class="absolute inset-0 bg-gradient-to-br from-[rgba(15,13,10,0.78)] via-[rgba(28,20,16,0.7)] to-[rgba(15,13,10,0.78)] backdrop-blur-md"
-                ></div>
+                <div class="absolute inset-0 bg-dark/85"></div>
               </div>
               <LoginModal />
               <OfflineOverlay />
               <transition name="fade-fast">
                 <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
+                  <div class="absolute inset-0 bg-dark/90"></div>
                   <div
-                    class="absolute inset-0 bg-gradient-to-br from-[rgba(15,13,10,0.82)] via-[rgba(28,20,16,0.72)] to-[rgba(15,13,10,0.82)] backdrop-blur-md"
-                  ></div>
-                  <div
-                    class="relative flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto"
+                    class="relative flex flex-1 flex-col items-center justify-center overflow-y-auto p-6"
                   >
-                    <div class="w-full max-w-md mx-auto text-center space-y-6">
+                    <div class="mx-auto w-full max-w-md space-y-6 text-center">
                       <img
                         src="/images/logo-luminalshine.png"
                         alt="LuminalShine"
-                        class="h-24 w-24 opacity-80 mx-auto select-none"
+                        class="mx-auto h-24 w-24 select-none opacity-80"
                       />
                       <div class="space-y-2">
                         <h2 class="text-2xl font-semibold tracking-tight">
                           {{ $t('auth.logout_success') }}
                         </h2>
-                        <p class="text-sm opacity-80 leading-relaxed">
+                        <p class="text-sm leading-relaxed opacity-80">
                           {{ $t('auth.logout_refresh_hint') }}
                         </p>
                       </div>
                       <div class="flex items-center justify-center pt-2">
                         <n-button type="primary" @click="refreshPage">
                           {{ $t('auth.logout_refresh_button') }}
-                          <i class="fas fa-rotate" />
                         </n-button>
                       </div>
-                      <p class="mt-8 text-[10px] tracking-wider uppercase opacity-60 select-none">
+                      <p class="mt-8 select-none text-[10px] uppercase tracking-wider opacity-60">
                         LuminalShine
                       </p>
                     </div>
@@ -168,8 +138,9 @@
     </n-loading-bar-provider>
   </n-config-provider>
 </template>
+
 <script setup lang="ts">
-import { ref, watch, computed, h } from 'vue';
+import { ref, computed } from 'vue';
 import {
   NConfigProvider,
   NDialogProvider,
@@ -181,80 +152,89 @@ import {
   darkTheme,
 } from 'naive-ui';
 import { useNaiveThemeOverrides } from '@/naive-theme';
-import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
+import type { RouteLocationNormalizedLoaded } from 'vue-router';
+import { useT2 } from '@/composables/useT2';
 import SavingStatus from '@/components/SavingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
 import OfflineOverlay from '@/components/OfflineOverlay.vue';
+import HostStrip from '@/components/shell/HostStrip.vue';
+import NavIcon from '@/components/shell/NavIcon.vue';
+import { INSPECTOR_TARGET_ID, useInspector } from '@/composables/useInspector';
 import { http } from '@/http';
 import { useAuthStore } from './stores/auth';
-import { useConfigStore } from '@/stores/config';
-import { storeToRefs } from 'pinia';
 import { useConnectivityStore } from '@/stores/connectivity';
+import { useHostStore } from '@/stores/host';
 
 const naiveOverrides = useNaiveThemeOverrides();
-
 const route = useRoute();
 const router = useRouter();
+const t2 = useT2();
 
-// Use config metadata as a fallback for container sizing when route meta isn't set
-const cfgStore = useConfigStore();
-const { metadata } = storeToRefs(cfgStore);
+const auth = useAuthStore();
+const host = useHostStore();
+const { open: inspectorOpen } = useInspector();
 
-const linkClass = (path: string) => {
-  const base =
-    'inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] transition-colors';
-  const active = route.path === path;
-  if (active)
-    return (
-      base +
-      ' font-semibold text-onPrimary bg-gradient-to-br from-primary/90 to-secondary/80 shadow-[0_8px_24px_-12px_rgba(255,176,32,0.55)]'
-    );
-  return base + ' text-[var(--sun-text-secondary)] hover:text-onDark hover:bg-white/5';
-};
-const pageTitle = ref('Dashboard');
-const displayTitle = computed(() => {
-  // If pageTitle is an i18n key like 'navbar.troubleshoot', call $t from template via global $t
-  // We return the key here; template will call $t when necessary using a heuristic there.
-  return pageTitle.value;
+// ---- navigation -----------------------------------------------------------
+interface NavItem {
+  path: string;
+  icon: string;
+  label: string;
+}
+
+const statsOnly = computed(() => auth.isStatsOnly());
+
+const navItems = computed<NavItem[]>(() => {
+  if (statsOnly.value) {
+    return [{ path: '/stream', icon: 'stream', label: t2('shell.nav_stream', 'Stream') }];
+  }
+  return [
+    { path: '/', icon: 'overview', label: t2('shell.nav_overview', 'Overview') },
+    { path: '/stream', icon: 'stream', label: t2('shell.nav_stream', 'Stream') },
+    { path: '/webrtc', icon: 'play', label: t2('shell.nav_play', 'Play') },
+    { path: '/library', icon: 'library', label: t2('shell.nav_library', 'Library') },
+    { path: '/clients', icon: 'clients', label: t2('shell.nav_clients', 'Clients') },
+    { path: '/display', icon: 'display', label: t2('shell.nav_display', 'Display') },
+    { path: '/settings', icon: 'settings', label: t2('shell.nav_settings', 'Settings') },
+    {
+      path: '/diagnostics',
+      icon: 'diagnostics',
+      label: t2('shell.nav_diagnostics', 'Diagnostics'),
+    },
+  ];
 });
-// app bar only; sidebar removed
 
-watch(
-  () => route.path,
-  (p) => {
-    const map: Record<string, string> = {
-      '/': 'navbar.home',
-      '/applications': 'navbar.applications',
-      '/settings': 'navbar.configuration',
-      '/logs': 'navbar.troubleshoot',
-      '/troubleshooting': 'navbar.troubleshoot',
-      '/clients': 'clients.nav',
-      '/webrtc': 'webrtc.nav',
-      '/vgd-control-panel': 'vgd.nav_control_panel',
-      '/vgd-about': 'vgd.nav_about',
-    };
-    const v = map[p] || 'LuminalShine';
-    pageTitle.value = v;
-  },
-  { immediate: true },
-);
+function isActive(path: string): boolean {
+  return route.path === path;
+}
 
+const pageTitle = computed(() => {
+  const key = route.meta?.['title'];
+  if (typeof key === 'string' && key) return t2(key, key.split('.').pop() || '');
+  return navItems.value.find((i) => i.path === route.path)?.label ?? '';
+});
+
+const mobileMenuOptions = computed(() => [
+  ...navItems.value.map((i) => ({ label: i.label, key: i.path })),
+  { type: 'divider' as const, key: 'divider' },
+  { label: t2('navbar.logout', 'Log out'), key: '__logout' },
+]);
+
+function onMobileSelect(key: string | number): void {
+  if (key === '__logout') {
+    void logout();
+    return;
+  }
+  if (typeof key === 'string') void router.push(key);
+}
+
+// ---- auth / overlays -------------------------------------------------------
 const loggedOut = ref(false);
-
-// Mirror LoginModal visibility for instant background application
-const authForOverlay = useAuthStore();
 const loginOverlay = computed(
-  () =>
-    authForOverlay.ready &&
-    authForOverlay.showLoginModal &&
-    !authForOverlay.isAuthenticated &&
-    !authForOverlay.logoutInitiated,
+  () => auth.ready && auth.showLoginModal && !auth.isAuthenticated && !auth.logoutInitiated,
 );
-const statsOnly = computed(() => authForOverlay.isStatsOnly());
 
 async function logout() {
-  const authStore = useAuthStore();
   const connectivity = useConnectivityStore();
   try {
     await http.post('/api/auth/logout', {}, { validateStatus: () => true });
@@ -262,15 +242,21 @@ async function logout() {
     console.error('Logout failed:', e);
   }
   try {
-    (authStore as any).logoutInitiated = true;
-  } catch {}
+    auth.logoutInitiated = true;
+  } catch {
+    /* best effort during logout */
+  }
   try {
-    authStore.setAuthenticated(false);
-  } catch {}
-  // Stop background connectivity checks and any other background polling
+    auth.setAuthenticated(false);
+  } catch {
+    /* best effort during logout */
+  }
   try {
     connectivity.stop();
-  } catch {}
+    host.stop();
+  } catch {
+    /* best effort during logout */
+  }
   loggedOut.value = true;
 }
 
@@ -278,87 +264,51 @@ function refreshPage() {
   window.location.reload();
 }
 
-const { t } = useI18n();
-const navIcon = (cls: string) => () => h('i', { class: cls });
-
-// "LuminalVGD Options" dropdown, shared between the desktop nav and the
-// mobile menu (as a submenu).
-const vgdMenuOptions = computed(() => [
-  {
-    label: t('vgd.nav_control_panel'),
-    key: '/vgd-control-panel',
-    icon: navIcon('fas fa-sliders'),
-  },
-  { label: t('vgd.nav_about'), key: '/vgd-about', icon: navIcon('fas fa-circle-info') },
-]);
-
-const vgdLinkClass = () => {
-  const base =
-    'inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[13px] transition-colors';
-  if (route.path.startsWith('/vgd-'))
-    return (
-      base +
-      ' font-semibold text-onPrimary bg-gradient-to-br from-primary/90 to-secondary/80 shadow-[0_8px_24px_-12px_rgba(255,176,32,0.55)]'
-    );
-  return base + ' text-[var(--sun-text-secondary)] hover:text-onDark hover:bg-white/5';
-};
-
-function onNavSelect(key: string | number): void {
-  if (typeof key === 'string') void router.push(key);
-}
-
-const mobileMenuOptions = computed(() => {
-  const icon = navIcon;
-  if (statsOnly.value) {
-    return [
-      { label: t('stats.nav'), key: '/stats', icon: icon('fas fa-chart-line') },
-      { type: 'divider' as const },
-      { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
-    ];
-  }
-  return [
-    { label: t('navbar.home'), key: '/', icon: icon('fas fa-gauge') },
-    {
-      label: t('navbar.applications'),
-      key: '/applications',
-      icon: icon('fas fa-table-cells-large'),
-    },
-    { label: t('clients.nav'), key: '/clients', icon: icon('fas fa-users-cog') },
-    { label: t('webrtc.nav'), key: '/webrtc', icon: icon('fas fa-satellite-dish') },
-    { label: t('navbar.configuration'), key: '/settings', icon: icon('fas fa-sliders') },
-    { label: t('navbar.troubleshoot'), key: '/troubleshooting', icon: icon('fas fa-bug') },
-    {
-      label: t('vgd.nav'),
-      key: '__vgd',
-      icon: icon('fas fa-display'),
-      children: vgdMenuOptions.value,
-    },
-    { label: t('navbar.about'), key: '/about', icon: icon('fas fa-circle-info') },
-    { type: 'divider' as const },
-    { label: t('navbar.logout'), key: '__logout', icon: icon('fas fa-sign-out-alt') },
-  ];
-});
-
-function onMobileSelect(key: string | number): void {
-  if (key === '__logout') {
-    void logout();
-    return;
-  }
-  if (typeof key === 'string') router.push(key);
-}
-
-// Layout container sizing via route meta: { container: 'sm'|'md'|'lg'|'xl'|'full' }
-const base = 'mx-auto px-4 sm:px-6 lg:px-8 py-4 md:py-6';
+// ---- content container ----------------------------------------------------
+// Route meta `container` picks the content wrapper:
+//   flush — no padding; the page lays itself out (Overview)
+//   full  — full width with the standard 16px gutter (Stream, Play)
+//   lg/xl — centered, max-width; used by pages not yet rebuilt for the shell
 const sizes: Record<string, string> = {
-  sm: 'max-w-2xl',
-  md: 'max-w-3xl',
-  lg: 'max-w-5xl',
-  xl: 'max-w-7xl',
-  full: 'max-w-none px-0 sm:px-0 lg:px-0',
+  flush: '',
+  full: 'p-4',
+  lg: 'mx-auto w-full max-w-5xl px-4 py-4 sm:px-6',
+  xl: 'mx-auto w-full max-w-7xl px-4 py-4 sm:px-6',
 };
-function containerClass(r: any) {
-  const routeSize = r?.meta?.container;
-  const size = routeSize ?? (metadata.value as any)?.container ?? 'lg';
-  return `${base} ${sizes[size] || sizes['lg']}`;
+function containerClass(r: RouteLocationNormalizedLoaded): string {
+  const size = typeof r?.meta?.['container'] === 'string' ? r.meta['container'] : 'lg';
+  return sizes[size] ?? sizes['lg'] ?? '';
 }
 </script>
+
+<style scoped>
+.rail-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b9096;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.rail-btn:hover {
+  color: var(--mc-ink);
+  background: rgba(255, 255, 255, 0.04);
+}
+.rail-btn-on,
+.rail-btn-on:hover {
+  background: rgba(255, 176, 32, 0.14);
+  color: var(--mc-gold);
+}
+.fade-fast-enter-active,
+.fade-fast-leave-active {
+  transition: opacity 0.12s ease;
+}
+.fade-fast-enter-from,
+.fade-fast-leave-to {
+  opacity: 0;
+}
+</style>

@@ -8,66 +8,69 @@ module.exports = {
     './index.html',
     './*.{vue,js,ts,html}',
     './components/**/*.{vue,js,ts}',
+    './composables/**/*.{js,ts}',
     './views/**/*.{vue,js,ts}',
     './configs/**/*.{vue,js,ts}',
     './stores/**/*.{js,ts}',
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['IBM Plex Sans', 'Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'Consolas', 'Courier New', 'monospace'],
+      },
       // Single source of truth for semantic colors.
       // The app is dark-only; both `light` and `dark` resolve to the same
-      // sunshine palette so anything that lands before `.dark` is applied
-      // still gets a coherent surface. Values mirror the LuminalShine docs
-      // theme (appdocs.northebridge.com — docs/_static/luminalshine.css).
+      // "Mission Control" palette so anything that lands before `.dark` is
+      // applied still gets a coherent surface. Cool near-black surfaces,
+      // sun gold as the ONLY accent, green/amber/red reserved for state.
       semanticColors: {
         light: {
-          // Mirror of dark — see below. Kept identical so `:root` defaults
-          // stay coherent if `.dark` is ever absent.
-          dark: '17 17 17',
-          surface: '26 26 26',
-          light: '230 230 230',
+          dark: '14 16 19',
+          chrome: '11 13 16',
+          surface: '20 23 27',
+          light: '200 204 208',
           primary: '255 176 32',
-          secondary: '255 122 26',
-          accent: '255 61 0',
+          secondary: '255 200 87',
+          accent: '255 176 32',
           info: '255 200 87',
           success: '76 175 80',
           warning: '255 167 38',
           danger: '244 67 54',
           onPrimary: '26 18 8',
           onSecondary: '26 18 8',
-          onAccent: '255 248 240',
-          onLight: '17 17 17',
-          onDark: '240 235 228',
+          onAccent: '26 18 8',
+          onLight: '14 16 19',
+          onDark: '232 234 237',
           brand: '255 200 87',
         },
         dark: {
-          // LuminalShine sunshine palette on Learn-Dark surfaces.
-          // Backgrounds: warm near-black.
-          dark: '17 17 17', // #111111 base
-          surface: '26 26 26', // #1A1A1A panels
-          light: '230 230 230', // #E6E6E6 (text helpers)
+          // Backgrounds: cool near-black.
+          dark: '14 16 19', // #0E1013 page
+          chrome: '11 13 16', // #0B0D10 rail, strip, inspector
+          surface: '20 23 27', // #14171B panels
+          light: '200 204 208', // text helpers
 
-          // Sunshine accents — sun-gold leads, with mid-orange / red-orange
-          // as supporting hues for halos, gradients, and emphasis.
-          primary: '255 176 32', // #FFB020  sun gold (PRIMARY)
-          secondary: '255 122 26', // #FF7A1A  mid orange
-          accent: '255 61 0', // #FF3D00  deep red-orange (outer flare)
-          info: '255 200 87', // #FFC857  soft gold
+          // Sun gold is the single accent. `secondary`/`accent`/`info` are
+          // soft-gold variants kept for existing callers; no orange remains.
+          primary: '255 176 32', // #FFB020
+          secondary: '255 200 87', // #FFC857
+          accent: '255 176 32',
+          info: '255 200 87',
 
-          // Status colors — dark-safe semantics from the docs theme.
-          success: '76 175 80', // #4CAF50  green
-          warning: '255 167 38', // #FFA726  amber
-          danger: '244 67 54', // #F44336  red
+          // Status colors — reserved for state, never decoration.
+          success: '76 175 80', // #4CAF50
+          warning: '255 167 38', // #FFA726
+          danger: '244 67 54', // #F44336
 
           // Text-on-color (AA+).
-          onDark: '240 235 228',
-          onLight: '17 17 17',
+          onDark: '232 234 237', // #E8EAED
+          onLight: '14 16 19',
           onPrimary: '26 18 8',
           onSecondary: '26 18 8',
-          onAccent: '255 248 240',
+          onAccent: '26 18 8',
 
-          // Soft-gold brand tint for logos and illustrations.
-          brand: '255 200 87', // #FFC857
+          brand: '255 200 87',
         },
       },
       colors: {
@@ -80,6 +83,7 @@ module.exports = {
         info: 'rgb(var(--color-info) / <alpha-value>)',
         light: 'rgb(var(--color-light) / <alpha-value>)',
         dark: 'rgb(var(--color-dark) / <alpha-value>)',
+        chrome: 'rgb(var(--color-chrome) / <alpha-value>)',
         surface: 'rgb(var(--color-surface) / <alpha-value>)',
         accent: 'rgb(var(--color-accent) / <alpha-value>)',
         onPrimary: 'rgb(var(--color-on-primary) / <alpha-value>)',
@@ -89,6 +93,17 @@ module.exports = {
         onDark: 'rgb(var(--color-on-dark) / <alpha-value>)',
         // Optional brand token for places that previously mixed solar-secondary + lunar-onSecondary
         brand: 'rgb(var(--color-brand) / <alpha-value>)',
+        // Mission Control text ramp (literal, not themed — the app is dark-only).
+        ink: {
+          DEFAULT: '#E8EAED',
+          2: '#C3C7CC',
+          3: '#8B9096',
+          4: '#6F757C',
+        },
+      },
+      borderColor: {
+        line: 'rgba(255, 255, 255, 0.07)',
+        'line-strong': 'rgba(255, 255, 255, 0.12)',
       },
     },
   },
@@ -111,6 +126,7 @@ module.exports = {
         '--color-info': src.info,
         '--color-light': src.light,
         '--color-dark': src.dark,
+        '--color-chrome': src.chrome,
         '--color-surface': src.surface,
         '--color-accent': src.accent,
         '--color-on-primary': src.onPrimary,

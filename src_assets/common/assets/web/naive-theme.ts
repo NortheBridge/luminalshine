@@ -46,12 +46,12 @@ export function useNaiveThemeOverrides() {
     const success = cssVarRgb('--color-success', 'rgb(76, 175, 80)');
     const warning = cssVarRgb('--color-warning', 'rgb(255, 167, 38)');
     const danger = cssVarRgb('--color-danger', 'rgb(244, 67, 54)');
-    // Frosted-glass surfaces — semi-transparent so the sunburst background
-    // bleeds through cards, modals, and popovers.
-    const glassSurface = 'rgba(46, 34, 22, 0.55)';
-    const glassPopover = 'rgba(46, 34, 22, 0.72)';
-    const glassTable = 'rgba(30, 24, 17, 0.45)';
-    const glassBorder = 'rgba(255, 255, 255, 0.12)';
+    // Mission Control surfaces — flat, opaque panels on a cool near-black
+    // page. (Variable names kept so the overrides below read unchanged.)
+    const glassSurface = '#14171B';
+    const glassPopover = '#1A1E24';
+    const glassTable = '#111418';
+    const glassBorder = 'rgba(255, 255, 255, 0.08)';
     overrides.value = {
       common: {
         primaryColor: primary,
@@ -75,9 +75,9 @@ export function useNaiveThemeOverrides() {
         errorColorPressed: darken(danger, 0.14),
         errorColorSuppl: lighten(danger, 0.16),
 
-        baseColor: cssVarRgb('--color-dark', 'rgb(17, 17, 17)'),
-        bodyColor: 'rgba(0, 0, 0, 0)', // transparent so the sunburst layer shows through
-        textColorBase: cssVarRgb('--color-onDark', 'rgb(240, 235, 228)'),
+        baseColor: cssVarRgb('--color-dark', 'rgb(14, 16, 19)'),
+        bodyColor: 'rgba(0, 0, 0, 0)', // the page background is painted by <html>
+        textColorBase: cssVarRgb('--color-onDark', 'rgb(232, 234, 237)'),
         cardColor: glassSurface,
         modalColor: glassSurface,
         popoverColor: glassPopover,
@@ -85,38 +85,38 @@ export function useNaiveThemeOverrides() {
 
         borderColor: glassBorder,
         dividerColor: glassBorder,
-        hoverColor: 'rgba(255, 190, 92, 0.10)',
+        hoverColor: 'rgba(255, 176, 32, 0.08)',
       },
       Card: {
-        borderRadius: '22px',
-        paddingMedium: '20px 22px',
-        paddingLarge: '24px 26px',
+        borderRadius: '12px',
+        paddingMedium: '16px 18px',
+        paddingLarge: '20px 22px',
       },
       Button: {
-        borderRadiusMedium: '12px',
-        borderRadiusLarge: '14px',
-        borderRadiusSmall: '10px',
+        borderRadiusMedium: '8px',
+        borderRadiusLarge: '10px',
+        borderRadiusSmall: '7px',
       },
       Input: {
-        borderRadius: '12px',
-        color: 'rgba(46, 34, 22, 0.55)',
-        colorFocus: 'rgba(46, 34, 22, 0.65)',
+        borderRadius: '8px',
+        color: '#0E1013',
+        colorFocus: '#0E1013',
       },
       Tag: {
         borderRadius: '999px',
       },
       Alert: {
-        borderRadius: '18px',
+        borderRadius: '10px',
       },
       Modal: {
         peers: {
           Card: {
-            borderRadius: '22px',
+            borderRadius: '12px',
           },
         },
       },
       Dropdown: {
-        borderRadius: '14px',
+        borderRadius: '10px',
       },
     } as GlobalThemeOverrides;
   };

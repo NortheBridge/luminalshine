@@ -16,6 +16,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useAppsStore } from '@/stores/apps';
 import { useConfigStore } from '@/stores/config';
 import { useConnectivityStore } from '@/stores/connectivity';
+import { useHostStore } from '@/stores/host';
 import { ensureLocaleLoaded } from '@/locale-manager';
 
 const chunkReloadFlag = 'sunshine:chunk-reload';
@@ -68,6 +69,9 @@ initApp(app, async () => {
 
   auth.waitForAuthentication().then(async () => {
     await configStore.fetchConfig(true);
+    // Shared host status (sessions, clients, health) behind the shell's
+    // host strip and the Overview. Started once; pages just read it.
+    void useHostStore().start();
     // React to locale setting changes by switching i18n at runtime
     watch(
       () => configStore.config?.locale,

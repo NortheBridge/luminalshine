@@ -3,53 +3,56 @@
 @tailwind utilities;
 
 /*
- * Sunshine-glass theme (appdocs.northebridge.com / docs/_static/luminalshine.css).
- * Dark-only: surfaces sit on a fixed warm near-black gradient with
- * sunburst gold/orange halos. Cards, modals, and inputs are frosted
- * glass that lets the sunburst bleed through — one continuous pane of
- * glass. Inter is the brand typeface.
+ * Mission Control theme.
+ * Dark-only. Cool near-black surfaces, flat panels with hairline borders,
+ * sun gold (#FFB020) as the single accent, green / amber / red reserved for
+ * state. IBM Plex Sans for UI text, IBM Plex Mono for data.
  *
- * Brand triple (extracted from the LuminalShine sunburst logo):
- *   deep red-orange  #ff3d00   outer flare, gradient start
- *   mid-orange       #ff7a1a   secondary accents, warnings
- *   sun gold         #ffb020   PRIMARY — links, focus, brand mark
- *   soft gold        #ffc857   hover / soft accents
+ * The `--sun-*` variable names are kept so existing components keep
+ * resolving; their VALUES now point at the Mission Control ramp.
  */
 @layer base {
   :root {
-    --sun-bg-base: #0f0d0a;
-    --sun-bg-deep: #1c1410;
-    --sun-gold: #ffb020;
-    --sun-orange: #ff7a1a;
-    --sun-flare: #ff3d00;
-    --sun-soft: #ffc857;
-    --sun-text: #f5f1ea;
-    --sun-text-secondary: rgba(240, 231, 218, 0.72);
-    --sun-text-muted: rgba(214, 199, 180, 0.55);
-    --sun-glass-bg: rgba(46, 34, 22, 0.35);
-    --sun-glass-bg-strong: rgba(46, 34, 22, 0.55);
-    --sun-glass-border: rgba(255, 255, 255, 0.12);
-    --sun-glass-border-hover: rgba(255, 190, 92, 0.45);
-    --sun-glass-highlight: rgba(255, 255, 255, 0.08);
+    --mc-bg: #0e1013;
+    --mc-chrome: #0b0d10;
+    --mc-panel: #14171b;
+    --mc-panel-2: #1a1e24;
+    --mc-line: rgba(255, 255, 255, 0.07);
+    --mc-line-strong: rgba(255, 255, 255, 0.12);
+    --mc-ink: #e8eaed;
+    --mc-ink-2: #c3c7cc;
+    --mc-ink-3: #8b9096;
+    --mc-ink-4: #6f757c;
+    --mc-gold: #ffb020;
+    --mc-gold-soft: #ffc857;
+
+    /* Legacy aliases (values remapped). */
+    --sun-bg-base: var(--mc-bg);
+    --sun-bg-deep: var(--mc-chrome);
+    --sun-gold: var(--mc-gold);
+    --sun-orange: var(--mc-gold-soft);
+    --sun-flare: var(--mc-gold);
+    --sun-soft: var(--mc-gold-soft);
+    --sun-text: var(--mc-ink);
+    --sun-text-secondary: var(--mc-ink-3);
+    --sun-text-muted: var(--mc-ink-4);
+    --sun-glass-bg: var(--mc-panel);
+    --sun-glass-bg-strong: var(--mc-panel);
+    --sun-glass-border: var(--mc-line);
+    --sun-glass-border-hover: rgba(255, 176, 32, 0.45);
+    --sun-glass-highlight: transparent;
   }
 
   html,
   body {
-    background-color: var(--sun-bg-base);
-    color: var(--sun-text);
+    background-color: var(--mc-bg);
+    color: var(--mc-ink);
   }
 
   body {
-    font-family:
-      'Inter',
-      -apple-system,
-      BlinkMacSystemFont,
-      'Segoe UI Variable',
-      'Segoe UI',
-      system-ui,
-      sans-serif;
-    font-feature-settings: 'ss01', 'cv11';
-    line-height: 1.55;
+    font-family: 'IBM Plex Sans', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.45;
+    font-size: 13px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     @apply text-onDark antialiased;
@@ -64,110 +67,329 @@
   h4,
   h5,
   h6 {
-    letter-spacing: -0.015em;
+    letter-spacing: -0.01em;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: 'IBM Plex Mono', Consolas, 'Courier New', monospace;
+    font-variant-numeric: tabular-nums;
   }
 }
 
-/* ----------------------------------------------------------------- */
-/* Sunburst background — fixed gradient halos + faint dot grid overlay */
-/* ----------------------------------------------------------------- */
+/* ---------------------------------------------------------------- */
+/* Mission Control primitives                                        */
+/* ---------------------------------------------------------------- */
 @layer components {
-  .sunburst-bg {
-    position: fixed;
-    inset: -20%;
-    z-index: -2;
-    background:
-      radial-gradient(ellipse 60% 50% at 15% 20%, rgba(255, 176, 32, 0.18), transparent 60%),
-      radial-gradient(ellipse 50% 45% at 85% 15%, rgba(255, 61, 0, 0.14), transparent 60%),
-      radial-gradient(ellipse 70% 55% at 50% 95%, rgba(255, 122, 26, 0.12), transparent 65%),
-      radial-gradient(ellipse 45% 40% at 90% 80%, rgba(255, 200, 87, 0.10), transparent 60%),
-      linear-gradient(180deg, var(--sun-bg-deep) 0%, var(--sun-bg-base) 100%);
-    filter: blur(40px) saturate(120%);
-    animation: sunburst-drift 28s ease-in-out infinite alternate;
-    pointer-events: none;
+  /* Flat panel — the only card style. */
+  .mc-panel {
+    background: var(--mc-panel);
+    border: 1px solid var(--mc-line);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
   }
 
-  .sunburst-grain {
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-    background-size: 3px 3px;
-    opacity: 0.6;
-    pointer-events: none;
-    mix-blend-mode: overlay;
+  .mc-panel-h {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
 
-  @keyframes sunburst-drift {
-    0% {
-      transform: translate3d(0, 0, 0) scale(1);
-    }
-    50% {
-      transform: translate3d(-2%, 1.5%, 0) scale(1.05);
-    }
-    100% {
-      transform: translate3d(2%, -1%, 0) scale(1.02);
-    }
+  .mc-panel-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--mc-ink);
+    letter-spacing: 0.01em;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .sunburst-bg {
-      animation: none;
-    }
+  .mc-panel-link {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--mc-gold);
+    white-space: nowrap;
+  }
+  .mc-panel-link:hover {
+    color: var(--mc-gold-soft);
   }
 
-  /* Pulse for the brand-mark dot */
-  @keyframes sunburst-pulse {
+  /* Uppercase kicker label (metric keys, strip keys, section headers). */
+  .mc-kicker {
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--mc-ink-4);
+  }
+
+  /* List row inside a panel. */
+  .mc-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .mc-row:last-child {
+    border-bottom: none;
+  }
+  .mc-row-primary {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--mc-ink);
+  }
+  .mc-row-secondary {
+    font-size: 11px;
+    color: var(--mc-ink-3);
+    margin-top: 1px;
+  }
+  .mc-row-selected {
+    background: rgba(255, 176, 32, 0.06);
+    box-shadow: inset 2px 0 0 var(--mc-gold);
+  }
+  .mc-row-clickable {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+  .mc-row-clickable:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  /* Status pill. */
+  .mc-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #9aa0a6;
+    white-space: nowrap;
+    line-height: 1.4;
+  }
+  .mc-tag-ok {
+    color: #7bd389;
+    border-color: rgba(76, 175, 80, 0.35);
+    background: rgba(76, 175, 80, 0.1);
+  }
+  .mc-tag-live {
+    color: var(--mc-gold);
+    border-color: rgba(255, 176, 32, 0.4);
+    background: rgba(255, 176, 32, 0.12);
+  }
+  .mc-tag-warn {
+    color: var(--mc-gold-soft);
+    border-color: rgba(255, 176, 32, 0.3);
+    background: rgba(255, 176, 32, 0.08);
+  }
+  .mc-tag-danger {
+    color: #ff8a80;
+    border-color: rgba(244, 67, 54, 0.35);
+    background: rgba(244, 67, 54, 0.08);
+  }
+
+  /* State dot. */
+  .mc-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4caf50;
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.18);
+    flex-shrink: 0;
+  }
+  .mc-dot-gold {
+    background: var(--mc-gold);
+    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.18);
+  }
+  .mc-dot-red {
+    background: #f44336;
+    box-shadow: 0 0 0 3px rgba(244, 67, 54, 0.18);
+  }
+  .mc-dot-grey {
+    background: #4b5158;
+    box-shadow: none;
+  }
+  .mc-dot-pulse {
+    animation: mc-pulse 1.6s ease-in-out infinite;
+  }
+
+  @keyframes mc-pulse {
     0%,
     100% {
       opacity: 1;
-      transform: scale(1);
     }
     50% {
-      opacity: 0.6;
-      transform: scale(0.85);
+      opacity: 0.45;
     }
+  }
+
+  /* Metric (kicker + big value). */
+  .mc-metric-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--mc-ink);
+    line-height: 1.1;
+  }
+  .mc-metric-unit {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--mc-ink-3);
+    margin-left: 3px;
+  }
+
+  /* Checklist row (dot · label · right text). */
+  .mc-check {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 12.5px;
+  }
+  .mc-check:last-child {
+    border-bottom: none;
+  }
+  .mc-check-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--mc-ink);
+    min-width: 0;
+  }
+  .mc-check-value {
+    font-size: 11.5px;
+    color: var(--mc-ink-3);
+    white-space: nowrap;
+  }
+
+  /* Inspector field. */
+  .mc-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .mc-field-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--mc-ink);
+  }
+  .mc-field-hint {
+    font-size: 11px;
+    color: var(--mc-ink-4);
+  }
+
+  /* Segmented chips. */
+  .mc-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--mc-bg);
+  }
+  .mc-chip {
+    padding: 4px 10px;
+    border-radius: 7px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--mc-ink-3);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
+  }
+  .mc-chip:hover {
+    color: var(--mc-ink);
+  }
+  .mc-chip-on {
+    background: rgba(255, 176, 32, 0.14);
+    color: var(--mc-gold);
+  }
+
+  /* Event / log line. */
+  .mc-log {
+    display: grid;
+    grid-template-columns: 72px 72px minmax(0, 1fr);
+    gap: 14px;
+    padding: 5px 16px;
+    font-size: 12px;
+    color: var(--mc-ink-2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    font-family: 'IBM Plex Mono', Consolas, 'Courier New', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .mc-log:last-child {
+    border-bottom: none;
+  }
+  .mc-log-time {
+    color: var(--mc-ink-4);
+  }
+  .mc-log-cat {
+    color: var(--mc-gold);
+  }
+  .mc-log-warn {
+    color: var(--mc-gold-soft);
+  }
+  .mc-log-error {
+    color: #ff8a80;
+  }
+
+  /* Page header. */
+  .mc-page-title {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .mc-page-sub {
+    font-size: 12px;
+    color: var(--mc-ink-3);
   }
 }
 
 /* ---------------------------------------------------------------- */
-/* Section heading helpers                                          */
+/* Legacy helpers kept for existing pages (restyled flat)            */
 /* ---------------------------------------------------------------- */
 @layer components {
+  /* The sunburst layers are gone; keep the class names inert. */
+  .sunburst-bg,
+  .sunburst-grain {
+    display: none;
+  }
+
   .brand-mark {
     display: inline-flex;
     align-items: center;
     gap: 0.6rem;
-    padding: 0.4rem 0.95rem 0.4rem 0.55rem;
-    background: var(--sun-glass-bg);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--sun-glass-border);
+    padding: 0.35rem 0.85rem 0.35rem 0.5rem;
+    background: var(--mc-panel);
+    border: 1px solid var(--mc-line);
     border-radius: 999px;
     font-size: 0.78rem;
     font-weight: 500;
     letter-spacing: 0.04em;
-    color: var(--sun-text-secondary);
+    color: var(--mc-ink-3);
   }
 
   .brand-mark .brand-mark-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--sun-flare), var(--sun-gold));
-    box-shadow: 0 0 12px rgba(255, 176, 32, 0.7);
-    animation: sunburst-pulse 2.4s ease-in-out infinite;
+    background: var(--mc-gold);
   }
 
-  /*
-   * Stacked variant — used by the nav-bar brand-mark in App.vue:
-   * the LuminalShine sunburst logo sits on the left, with
-   * "LuminalShine" stacked over "NortheBridge Foundation" on the
-   * right. Pill is taller than the single-line variant to fit two
-   * lines of text without crowding. Existing single-line callers
-   * (e.g. the dashboard hero accent) are unaffected because they
-   * don't apply `.brand-mark--stacked`.
-   */
   a.brand-mark,
   a.brand-mark:hover,
   a.brand-mark:focus,
@@ -178,17 +400,6 @@
 
   .brand-mark--stacked {
     gap: 0.7rem;
-    padding: 0.35rem 0.95rem 0.35rem 0.45rem;
-    transition:
-      border-color 0.25s ease,
-      box-shadow 0.25s ease;
-  }
-
-  .brand-mark--stacked:hover,
-  .brand-mark--stacked:focus-visible {
-    border-color: var(--sun-glass-border-hover);
-    box-shadow: 0 0 0 1px rgba(255, 190, 92, 0.18);
-    outline: none;
   }
 
   .brand-mark-logo {
@@ -197,12 +408,6 @@
     flex-shrink: 0;
     border-radius: 50%;
     object-fit: contain;
-    /* Soft gold halo so the logo reads as part of the sunshine-glass
-       family even when the asset itself doesn't have any glow baked in. */
-    box-shadow:
-      0 0 0 1px rgba(255, 255, 255, 0.08) inset,
-      0 0 12px rgba(255, 176, 32, 0.35),
-      0 0 22px rgba(255, 122, 26, 0.2);
   }
 
   .brand-mark-text {
@@ -210,30 +415,22 @@
     flex-direction: column;
     align-items: flex-start;
     line-height: 1.15;
-    /* Allow truncation of the org line on tight viewports without
-       clipping the product name. */
     min-width: 0;
   }
 
   .brand-mark-product {
-    font-size: 0.875rem; /* 14px */
+    font-size: 0.875rem;
     font-weight: 600;
     letter-spacing: -0.005em;
-    /* Sunburst gradient wordmark — mirrors the docs sidebar brand:
-       deep red-orange → sun gold → soft gold. */
-    background: linear-gradient(135deg, #ff5c1a 0%, var(--sun-gold) 55%, var(--sun-soft) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
+    color: var(--mc-ink);
   }
 
   .brand-mark-org {
-    font-size: 0.625rem; /* 10px */
+    font-size: 0.625rem;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.14em;
-    color: var(--sun-text-muted);
+    color: var(--mc-ink-4);
     max-width: 16rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -244,57 +441,40 @@
     display: flex;
     align-items: center;
     gap: 0.85rem;
-    font-size: 0.78rem;
+    font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--sun-text-muted);
-    margin: 0 0 1.5rem;
+    color: var(--mc-ink-4);
+    margin: 0 0 1rem;
   }
 
   .section-label::after {
     content: '';
     flex: 1;
     height: 1px;
-    background: linear-gradient(90deg, var(--sun-glass-border), transparent);
+    background: var(--mc-line);
   }
 
   .gradient-text {
-    background: linear-gradient(135deg, #ffffff 0%, #ffe9c4 45%, var(--sun-soft) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
+    color: var(--mc-ink);
   }
 }
 
 /* ---------------------------------------------------------------- */
-/* Naive UI surface overrides — frosted-glass cards, dialogs, etc.  */
+/* Naive UI surface overrides — flat panels, dialogs, inputs         */
 /* ---------------------------------------------------------------- */
 @layer components {
   :root .n-card {
-    background-color: var(--sun-glass-bg-strong) !important;
-    border: 1px solid var(--sun-glass-border) !important;
-    border-radius: 22px !important;
-    backdrop-filter: blur(22px) saturate(180%);
-    -webkit-backdrop-filter: blur(22px) saturate(180%);
-    box-shadow:
-      0 1px 0 var(--sun-glass-highlight) inset,
-      0 30px 60px -30px rgba(0, 0, 0, 0.6);
-    transition:
-      transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
-      border-color 0.4s ease,
-      box-shadow 0.5s ease;
+    background-color: var(--mc-panel) !important;
+    border: 1px solid var(--mc-line) !important;
+    border-radius: 12px !important;
+    box-shadow: none;
+    transition: border-color 0.2s ease;
   }
 
   :root .n-card.n-card--hoverable:hover {
-    transform: translateY(-4px);
-    border-color: var(--sun-glass-border-hover) !important;
-    box-shadow:
-      0 1px 0 var(--sun-glass-highlight) inset,
-      0 0 0 1px rgba(255, 190, 92, 0.18),
-      0 25px 55px -20px rgba(255, 122, 26, 0.35),
-      0 40px 80px -30px rgba(255, 61, 0, 0.25);
+    border-color: var(--mc-line-strong) !important;
   }
 
   :root .n-card > .n-card-header,
@@ -303,49 +483,41 @@
     background-color: transparent !important;
   }
 
-  :root .n-modal-mask,
-  :root .n-modal-mask + .n-modal {
-    backdrop-filter: blur(12px) saturate(150%);
-    -webkit-backdrop-filter: blur(12px) saturate(150%);
-  }
-
   :root .n-modal-mask {
-    background: rgba(15, 13, 10, 0.55) !important;
+    background: rgba(14, 16, 19, 0.72) !important;
   }
 
   :root .n-base-selection,
   :root .n-input,
   :root .n-input-wrapper {
-    background-color: var(--sun-glass-bg-strong) !important;
-    border-radius: 12px !important;
+    background-color: var(--mc-bg) !important;
+    border-radius: 8px !important;
   }
 
   :root .n-input .n-input__border,
   :root .n-input .n-input__state-border {
-    border-color: var(--sun-glass-border) !important;
-    border-radius: 12px !important;
+    border-color: var(--mc-line-strong) !important;
+    border-radius: 8px !important;
   }
 
   :root .n-input:focus-within .n-input__state-border,
   :root .n-base-selection--focus .n-base-selection__state-border {
     border-color: rgb(var(--color-primary)) !important;
-    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.25) !important;
+    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.22) !important;
   }
 
   :root .n-tag {
     border-radius: 999px !important;
     background-color: rgba(255, 255, 255, 0.04) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    color: var(--sun-text-secondary) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: var(--mc-ink-3) !important;
     font-weight: 500;
     letter-spacing: 0.02em;
   }
 
   :root .n-alert {
-    border-radius: 18px !important;
-    border: 1px solid var(--sun-glass-border);
-    backdrop-filter: blur(18px) saturate(170%);
-    -webkit-backdrop-filter: blur(18px) saturate(170%);
+    border-radius: 10px !important;
+    border: 1px solid var(--mc-line);
   }
 }
 
@@ -354,15 +526,13 @@
 /* ---------------------------------------------------------------- */
 @layer components {
   :root .n-button {
-    border-radius: 12px;
+    border-radius: 8px;
     font-weight: 500;
     letter-spacing: 0.01em;
     transition:
-      background 0.25s ease,
-      border-color 0.25s ease,
-      color 0.25s ease,
-      transform 0.2s ease,
-      box-shadow 0.25s ease;
+      background 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
   }
 
   :root .n-button .n-button__content {
@@ -371,74 +541,65 @@
     gap: 0.5rem;
   }
 
-  /* Default / neutral: glass surface */
+  /* Default / neutral: flat */
   :root .n-button--default-type {
-    background-color: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid var(--sun-glass-border) !important;
-    color: var(--sun-text) !important;
-    backdrop-filter: blur(12px) saturate(160%);
-    -webkit-backdrop-filter: blur(12px) saturate(160%);
+    background-color: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: var(--mc-ink) !important;
   }
   :root .n-button--default-type:hover {
-    background-color: rgba(255, 190, 92, 0.12) !important;
-    border-color: var(--sun-glass-border-hover) !important;
-    color: var(--sun-text) !important;
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    border-color: var(--mc-line-strong) !important;
+    color: var(--mc-ink) !important;
   }
 
-  /* Primary: sun-gold gradient with dark text */
+  /* Primary: solid gold with dark text */
   :root .n-button--primary-type {
-    background: linear-gradient(
-      135deg,
-      rgb(var(--color-primary)) 0%,
-      rgb(var(--color-secondary)) 100%
-    ) !important;
+    background: rgb(var(--color-primary)) !important;
     color: rgb(var(--color-onPrimary)) !important;
-    border: none !important;
-    box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.18) inset,
-      0 10px 30px -12px rgba(255, 176, 32, 0.55);
+    border: 1px solid rgb(var(--color-primary)) !important;
+    box-shadow: none;
   }
   :root .n-button--primary-type:hover {
-    filter: brightness(1.08);
-    transform: translateY(-1px);
+    filter: brightness(1.06);
   }
 
-  /* Secondary / tertiary: orange-tinted glass */
+  /* Secondary / tertiary: gold-tinted flat */
   :root .n-button--secondary,
   :root .n-button--tertiary {
-    background-color: rgba(255, 122, 26, 0.16) !important;
-    border: 1px solid rgba(255, 122, 26, 0.3) !important;
-    color: var(--sun-text) !important;
+    background-color: rgba(255, 176, 32, 0.12) !important;
+    border: 1px solid rgba(255, 176, 32, 0.3) !important;
+    color: var(--mc-ink) !important;
   }
   :root .n-button--secondary:hover,
   :root .n-button--tertiary:hover {
-    background-color: rgba(255, 122, 26, 0.26) !important;
-    border-color: rgba(255, 122, 26, 0.5) !important;
+    background-color: rgba(255, 176, 32, 0.2) !important;
+    border-color: rgba(255, 176, 32, 0.45) !important;
   }
 
-  /* Success / Info / Warning / Error: tinted glass with colored border */
+  /* Success / Info / Warning / Error: tinted flat with colored border */
   :root .n-button--success-type {
-    background-color: rgba(76, 175, 80, 0.18) !important;
-    border: 1px solid rgba(76, 175, 80, 0.45) !important;
-    color: rgb(var(--color-success)) !important;
+    background-color: rgba(76, 175, 80, 0.12) !important;
+    border: 1px solid rgba(76, 175, 80, 0.4) !important;
+    color: #7bd389 !important;
   }
   :root .n-button--info-type {
-    background-color: rgba(255, 200, 87, 0.16) !important;
-    border: 1px solid rgba(255, 200, 87, 0.45) !important;
+    background-color: rgba(255, 200, 87, 0.1) !important;
+    border: 1px solid rgba(255, 200, 87, 0.4) !important;
     color: rgb(var(--color-info)) !important;
   }
   :root .n-button--warning-type {
-    background-color: rgba(255, 167, 38, 0.16) !important;
-    border: 1px solid rgba(255, 167, 38, 0.45) !important;
+    background-color: rgba(255, 167, 38, 0.1) !important;
+    border: 1px solid rgba(255, 167, 38, 0.4) !important;
     color: rgb(var(--color-warning)) !important;
   }
   :root .n-button--error-type {
-    background-color: rgba(244, 67, 54, 0.16) !important;
-    border: 1px solid rgba(244, 67, 54, 0.45) !important;
-    color: rgb(var(--color-danger)) !important;
+    background-color: rgba(244, 67, 54, 0.08) !important;
+    border: 1px solid rgba(244, 67, 54, 0.4) !important;
+    color: #ff8a80 !important;
   }
 
-  /* Link-like variant — used for navbar items */
+  /* Link-like variant */
   :root .n-button.n-button--linkish {
     @apply bg-transparent text-primary hover:bg-primary/10 shadow-none border-0 px-3 py-1 rounded-md;
   }
@@ -446,7 +607,7 @@
   :root .n-button--disabled,
   :root .n-button[disabled='true'],
   :root .n-button[aria-disabled='true'] {
-    opacity: 0.55;
+    opacity: 0.45;
     cursor: not-allowed;
     filter: none;
     transform: none;
@@ -464,64 +625,44 @@
 }
 
 /* ---------------------------------------------------------------- */
-/* Scrollbar (preserves the previous "thumb gradient" treatment but  */
-/* re-tinted to sun-gold/orange).                                    */
+/* Scrollbar — thin and neutral                                      */
 /* ---------------------------------------------------------------- */
 @layer components {
   .scroll-stable {
     scrollbar-gutter: stable;
   }
 
-  .app-scrollbar {
+  .app-scrollbar,
+  .app-scrollbar-prominent {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
-    scrollbar-color: rgba(255, 176, 32, 0.55) rgba(255, 255, 255, 0.06);
-  }
-
-  .app-scrollbar-prominent {
-    scrollbar-gutter: stable both-edges;
-    scrollbar-width: auto;
-    scrollbar-color: rgba(255, 176, 32, 0.68) rgba(255, 255, 255, 0.1);
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
   }
 
   .app-scrollbar::-webkit-scrollbar,
   .app-scrollbar-prominent::-webkit-scrollbar {
-    width: 12px;
-    height: 12px;
-  }
-
-  .app-scrollbar-prominent::-webkit-scrollbar {
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
   }
 
   .app-scrollbar::-webkit-scrollbar-track,
   .app-scrollbar-prominent::-webkit-scrollbar-track {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.1));
-    border-radius: 999px;
-    margin: 0.35rem;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-  }
-
-  .app-scrollbar-edge::-webkit-scrollbar-track {
-    margin: 0.35rem 0 0.35rem 0.25rem;
+    background: transparent;
   }
 
   .app-scrollbar::-webkit-scrollbar-thumb,
   .app-scrollbar-prominent::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(255, 176, 32, 0.62), rgba(255, 122, 26, 0.45));
+    background: rgba(255, 255, 255, 0.16);
     border: 3px solid transparent;
     border-radius: 999px;
     background-clip: padding-box;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-      0 10px 24px rgba(0, 0, 0, 0.28);
-    min-height: 2.75rem;
+    min-height: 2.5rem;
   }
 
   .app-scrollbar:hover::-webkit-scrollbar-thumb,
   .app-scrollbar-prominent:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, rgba(255, 176, 32, 0.78), rgba(255, 122, 26, 0.6));
+    background: rgba(255, 255, 255, 0.28);
+    background-clip: padding-box;
   }
 
   .app-scrollbar::-webkit-scrollbar-corner,
@@ -536,14 +677,9 @@
 @layer components {
   .card {
     @apply p-5;
-    border-radius: 22px;
-    background: var(--sun-glass-bg-strong);
-    border: 1px solid var(--sun-glass-border);
-    backdrop-filter: blur(22px) saturate(180%);
-    -webkit-backdrop-filter: blur(22px) saturate(180%);
-    box-shadow:
-      0 1px 0 var(--sun-glass-highlight) inset,
-      0 30px 60px -30px rgba(0, 0, 0, 0.6);
+    border-radius: 12px;
+    background: var(--mc-panel);
+    border: 1px solid var(--mc-line);
   }
 
   .card-header {
@@ -552,27 +688,26 @@
 
   .form-control {
     @apply w-full px-3 py-2 text-sm;
-    border-radius: 12px;
-    background: var(--sun-glass-bg-strong);
-    border: 1px solid var(--sun-glass-border);
-    color: var(--sun-text);
+    border-radius: 8px;
+    background: var(--mc-bg);
+    border: 1px solid var(--mc-line-strong);
+    color: var(--mc-ink);
     -webkit-appearance: none;
     appearance: none;
     background-repeat: no-repeat;
     background-position: right 0.75rem center;
     background-size: 1.25rem 1.25rem;
     transition:
-      border-color 0.2s ease,
-      box-shadow 0.2s ease,
-      background-color 0.2s ease;
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
   }
   .form-control::placeholder {
-    color: var(--sun-text-muted);
+    color: var(--mc-ink-4);
   }
   .form-control:focus {
     outline: none;
     border-color: rgb(var(--color-primary));
-    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.25);
+    box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.22);
   }
 
   .form-control.monospace {
@@ -585,7 +720,7 @@
 
   .form-text {
     @apply text-[11px] mt-1;
-    color: var(--sun-text-muted);
+    color: var(--mc-ink-4);
   }
 
   .form-select {
@@ -616,7 +751,7 @@
 
   .table th {
     @apply text-left font-semibold pr-3 pb-2;
-    color: var(--sun-text-secondary);
+    color: var(--mc-ink-3);
   }
 
   .table td {
@@ -627,41 +762,39 @@
     vertical-align: middle;
   }
 
-  /* Alerts — glass-tinted, colored left edge cue. */
+  /* Alerts — flat, tinted border. */
   .alert {
-    border-radius: 18px;
+    border-radius: 10px;
     padding: 0.65rem 0.9rem;
     margin: 0.5rem 0;
-    border: 1px solid var(--sun-glass-border);
-    background: var(--sun-glass-bg-strong);
-    backdrop-filter: blur(16px) saturate(170%);
-    -webkit-backdrop-filter: blur(16px) saturate(170%);
-    color: var(--sun-text);
+    border: 1px solid var(--mc-line);
+    background: var(--mc-panel);
+    color: var(--mc-ink);
   }
 
   .alert-danger {
-    background-color: rgba(244, 67, 54, 0.12);
+    background-color: rgba(244, 67, 54, 0.08);
     border-color: rgba(244, 67, 54, 0.35);
   }
 
   .alert-success {
-    background-color: rgba(76, 175, 80, 0.12);
+    background-color: rgba(76, 175, 80, 0.08);
     border-color: rgba(76, 175, 80, 0.35);
   }
 
   .alert-warning {
-    background-color: rgba(255, 167, 38, 0.14);
+    background-color: rgba(255, 167, 38, 0.08);
     border-color: rgba(255, 167, 38, 0.35);
   }
 
   .alert-info {
-    background-color: rgba(255, 200, 87, 0.12);
-    border-color: rgba(255, 200, 87, 0.35);
+    background-color: rgba(255, 200, 87, 0.06);
+    border-color: rgba(255, 200, 87, 0.3);
   }
 }
 
 /* ---------------------------------------------------------------- */
-/* Inline icon polish (legacy Bootstrap-style icons)                */
+/* Inline icon polish (legacy Font Awesome usage)                   */
 /* ---------------------------------------------------------------- */
 @layer components {
   .icon,
@@ -699,20 +832,20 @@
 @layer components {
   :root .n-checkbox:not(.n-checkbox--checked) .n-checkbox-box,
   :root .n-checkbox:not(.n-checkbox--checked) .n-checkbox__input {
-    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.45);
-    border-color: rgba(255, 236, 214, 0.45) !important;
-    background-color: rgba(255, 236, 214, 0.06);
+    box-shadow: inset 0 0 0 2px rgba(232, 234, 237, 0.35);
+    border-color: rgba(232, 234, 237, 0.35) !important;
+    background-color: rgba(232, 234, 237, 0.04);
   }
   :root .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox-box,
   :root .n-checkbox:not(.n-checkbox--checked):hover .n-checkbox__input {
-    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.65);
-    border-color: rgba(255, 236, 214, 0.65) !important;
-    background-color: rgba(255, 236, 214, 0.1);
+    box-shadow: inset 0 0 0 2px rgba(232, 234, 237, 0.55);
+    border-color: rgba(232, 234, 237, 0.55) !important;
+    background-color: rgba(232, 234, 237, 0.08);
   }
   :root .n-checkbox .n-checkbox__input:focus-visible .n-checkbox-box {
     box-shadow:
-      0 0 0 3px rgba(255, 176, 32, 0.35),
-      inset 0 0 0 2px rgba(255, 236, 214, 0.55);
+      0 0 0 3px rgba(255, 176, 32, 0.3),
+      inset 0 0 0 2px rgba(232, 234, 237, 0.45);
   }
   :root .n-checkbox.n-checkbox--checked .n-checkbox-box,
   :root .n-checkbox.n-checkbox--checked .n-checkbox__input {
@@ -720,37 +853,37 @@
   }
 
   :root .n-radio:not(.n-radio--checked) .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.55);
-    border-color: rgba(255, 236, 214, 0.55) !important;
-    background-color: rgba(255, 236, 214, 0.06);
+    box-shadow: inset 0 0 0 2px rgba(232, 234, 237, 0.45);
+    border-color: rgba(232, 234, 237, 0.45) !important;
+    background-color: rgba(232, 234, 237, 0.04);
   }
   :root .n-radio:not(.n-radio--checked):hover .n-radio__input {
-    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.75);
-    background-color: rgba(255, 236, 214, 0.1);
+    box-shadow: inset 0 0 0 2px rgba(232, 234, 237, 0.65);
+    background-color: rgba(232, 234, 237, 0.08);
   }
   :root .n-radio .n-radio__input:focus-visible {
     box-shadow:
-      0 0 0 3px rgba(255, 176, 32, 0.35),
-      inset 0 0 0 2px rgba(255, 236, 214, 0.55);
+      0 0 0 3px rgba(255, 176, 32, 0.3),
+      inset 0 0 0 2px rgba(232, 234, 237, 0.45);
   }
   :root .n-radio.n-radio--checked .n-radio__dot {
     background-color: rgb(var(--color-primary));
   }
   :root .n-radio:not(.n-radio--checked) .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.55) !important;
+    box-shadow: inset 0 0 0 2px rgba(232, 234, 237, 0.45) !important;
     background-color: transparent !important;
   }
   :root .n-radio:not(.n-radio--checked):hover .n-radio__dot {
-    box-shadow: inset 0 0 0 2px rgba(255, 236, 214, 0.75) !important;
-    background-color: rgba(255, 236, 214, 0.1) !important;
+    box-shadow: inset 0 0 0 2px rgba(232, 234, 237, 0.65) !important;
+    background-color: rgba(232, 234, 237, 0.08) !important;
   }
   :root .n-radio:focus-visible .n-radio__dot {
     box-shadow:
-      0 0 0 3px rgba(255, 176, 32, 0.35),
-      inset 0 0 0 2px rgba(255, 236, 214, 0.55) !important;
+      0 0 0 3px rgba(255, 176, 32, 0.3),
+      inset 0 0 0 2px rgba(232, 234, 237, 0.45) !important;
   }
   :root .n-radio .n-radio__label,
   :root .n-radio .n-radio-label {
-    color: var(--sun-text);
+    color: var(--mc-ink);
   }
 }
