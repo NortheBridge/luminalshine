@@ -754,11 +754,31 @@ namespace webrtc_stream {
       std::thread video_thread;
       std::thread audio_thread;
       std::thread feedback_thread;
+      std::thread packet_thread;
       safe::mail_raw_t::queue_t<platf::gamepad_feedback_msg_t> feedback_queue;
       std::atomic_bool feedback_shutdown {false};
       std::optional<int> app_id;
       std::optional<WebRtcCaptureConfigKey> config_key;
       std::optional<WebRtcStreamStartParams> stream_start_params;
+
+      // Belt and braces for exit-time static destruction: webrtc_stream::shutdown()
+      // is the orderly path, but a joinable std::thread destroyed here would call
+      // std::terminate. Signal the capture mailbox and join instead.
+      ~WebRtcCaptureState() {
+        if (mail) {
+          mail->event<bool>(mail::shutdown)->raise(true);
+          video::packet_queue(mail, mail::video_packets)->stop();
+        }
+        feedback_shutdown.store(true, std::memory_order_release);
+        if (feedback_queue) {
+          feedback_queue->stop();
+        }
+        for (auto *thread : {&feedback_thread, &video_thread, &audio_thread, &packet_thread}) {
+          if (thread->joinable()) {
+            thread->join();
+          }
+        }
+      }
     };
 
     template<class T>
@@ -1581,7 +1601,537 @@ namespace webrtc_stream {
 #endif
 
 #ifdef _WIN32
-    class D3D11Nv12Converter;
+    class D3D11Nv12Converter {
+    public:
+      bool Convert(
+        ID3D11Texture2D *input_texture,
+        IDXGIKeyedMutex *input_mutex,
+        int width,
+        int height,
+        const video::sunshine_colorspace_t &colorspace,
+        ID3D11Texture2D **out_texture,
+        IDXGIKeyedMutex **out_mutex
+      ) {
+        if (!input_texture || width <= 0 || height <= 0 || !out_texture || !out_mutex) {
+          BOOST_LOG(debug) << "WebRTC: Convert called with invalid params";
+          return false;
+        }
+
+        const bool hdr_output = video::colorspace_is_hdr(colorspace);
+        if (!ensure_device(input_texture)) {
+          BOOST_LOG(error) << "WebRTC: ensure_device failed";
+          return false;
+        }
+        if (!ensure_shaders()) {
+          BOOST_LOG(error) << "WebRTC: ensure_shaders failed";
+          return false;
+        }
+        if (!ensure_output(width, height)) {
+          BOOST_LOG(error) << "WebRTC: ensure_output failed";
+          return false;
+        }
+        if (!ensure_constant_buffers(width, height, colorspace)) {
+          BOOST_LOG(error) << "WebRTC: ensure_constant_buffers failed";
+          return false;
+        }
+
+        // Acquire input mutex BEFORE creating SRV to ensure texture content is stable
+        if (input_mutex) {
+          const HRESULT hr = input_mutex->AcquireSync(0, 3000);
+          if (hr != S_OK && hr != WAIT_ABANDONED) {
+            BOOST_LOG(warning) << "WebRTC: failed to acquire input mutex: 0x" << std::hex << hr;
+            return false;
+          }
+        }
+        auto release_input_mutex = util::fail_guard([&]() {
+          if (input_mutex) {
+            input_mutex->ReleaseSync(0);
+          }
+        });
+
+        // Create SRV for the input texture (after acquiring mutex)
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> input_srv;
+        D3D11_TEXTURE2D_DESC input_desc {};
+        input_texture->GetDesc(&input_desc);
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc {};
+        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srv_desc.Texture2D.MipLevels = 1;
+        srv_desc.Texture2D.MostDetailedMip = 0;
+        // Map typeless formats to their typed equivalents for SRV
+        switch (input_desc.Format) {
+          case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+            srv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            break;
+          case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+            srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            break;
+          case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+            srv_desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+            break;
+          case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+            srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            break;
+          default:
+            srv_desc.Format = input_desc.Format;
+            break;
+        }
+
+        HRESULT srv_hr = device_->CreateShaderResourceView(input_texture, &srv_desc, &input_srv);
+        if (FAILED(srv_hr)) {
+          BOOST_LOG(error) << "WebRTC: failed to create input SRV for NV12 conversion, hr=0x" << std::hex << srv_hr
+                           << ", format=" << input_desc.Format;
+          return false;
+        }
+
+        const HRESULT out_lock = output_mutex_->AcquireSync(0, 100);
+        if (out_lock != S_OK && out_lock != WAIT_ABANDONED) {
+          BOOST_LOG(warning) << "WebRTC: failed to acquire output mutex: 0x" << std::hex << out_lock;
+          return false;
+        }
+
+        // Set up pipeline state
+        context_->IASetInputLayout(nullptr);
+        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        ID3D11BlendState *blend = blend_disable_.Get();
+        context_->OMSetBlendState(blend, nullptr, 0xFFFFFFFFu);
+
+        ID3D11SamplerState *sampler = sampler_.Get();
+        context_->PSSetSamplers(0, 1, &sampler);
+
+        ID3D11ShaderResourceView *srv = input_srv.Get();
+        context_->PSSetShaderResources(0, 1, &srv);
+
+        ID3D11Buffer *rotation_cb = rotation_cb_.Get();
+        context_->VSSetConstantBuffers(1, 1, &rotation_cb);
+
+        ID3D11Buffer *color_cb = color_matrix_cb_.Get();
+        context_->PSSetConstantBuffers(0, 1, &color_cb);
+
+        // Y plane
+        ID3D11RenderTargetView *rtv_y = rtv_y_.Get();
+        context_->OMSetRenderTargets(1, &rtv_y, nullptr);
+        context_->RSSetViewports(1, &viewport_y_);
+        context_->VSSetShader(vs_y_.Get(), nullptr, 0);
+        context_->PSSetShader(select_ps_y(input_texture, hdr_output), nullptr, 0);
+        context_->Draw(3, 0);
+
+        // UV plane
+        ID3D11Buffer *subsample_cb = subsample_cb_.Get();
+        context_->VSSetConstantBuffers(0, 1, &subsample_cb);
+        ID3D11RenderTargetView *rtv_uv = rtv_uv_.Get();
+        context_->OMSetRenderTargets(1, &rtv_uv, nullptr);
+        context_->RSSetViewports(1, &viewport_uv_);
+        context_->VSSetShader(vs_uv_.Get(), nullptr, 0);
+        context_->PSSetShader(select_ps_uv(input_texture, hdr_output), nullptr, 0);
+        context_->Draw(3, 0);
+
+        // Unbind resources
+        ID3D11ShaderResourceView *empty_srv = nullptr;
+        context_->PSSetShaderResources(0, 1, &empty_srv);
+        ID3D11RenderTargetView *empty_rtv = nullptr;
+        context_->OMSetRenderTargets(1, &empty_rtv, nullptr);
+
+        // Flush to ensure commands are submitted before releasing mutex
+        context_->Flush();
+
+        output_mutex_->ReleaseSync(0);
+
+        *out_texture = output_texture_.Get();
+        *out_mutex = output_mutex_.Get();
+        return true;
+      }
+
+      bool ReadbackNv12(
+        ID3D11Texture2D *texture,
+        IDXGIKeyedMutex *texture_mutex,
+        int width,
+        int height,
+        const std::function<bool(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv)> &push_cb
+      ) {
+        if (!texture || !push_cb || width <= 0 || height <= 0) {
+          BOOST_LOG(debug) << "WebRTC: ReadbackNv12 invalid params";
+          return false;
+        }
+        if (!ensure_staging(width, height)) {
+          BOOST_LOG(error) << "WebRTC: ReadbackNv12 ensure_staging failed";
+          return false;
+        }
+
+        // Acquire mutex to ensure GPU rendering has completed before copy
+        if (texture_mutex) {
+          const HRESULT hr = texture_mutex->AcquireSync(0, 1000);
+          if (hr != S_OK && hr != WAIT_ABANDONED) {
+            BOOST_LOG(warning) << "WebRTC: ReadbackNv12 failed to acquire mutex: 0x" << std::hex << hr;
+            return false;
+          }
+        }
+        auto release_mutex_guard = util::fail_guard([&]() {
+          if (texture_mutex) {
+            texture_mutex->ReleaseSync(0);
+          }
+        });
+
+        context_->CopyResource(staging_texture_.Get(), texture);
+
+        D3D11_MAPPED_SUBRESOURCE mapped {};
+        const HRESULT hr = context_->Map(staging_texture_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) {
+          BOOST_LOG(error) << "WebRTC: ReadbackNv12 Map failed hr=0x" << std::hex << hr;
+          return false;
+        }
+        auto unmap_guard = util::fail_guard([&]() {
+          context_->Unmap(staging_texture_.Get(), 0);
+        });
+
+        const auto *y_plane = static_cast<const uint8_t *>(mapped.pData);
+        const auto *uv_plane = y_plane + (mapped.RowPitch * height);
+
+        return push_cb(y_plane, static_cast<int>(mapped.RowPitch), uv_plane, static_cast<int>(mapped.RowPitch));
+      }
+
+    private:
+      bool ensure_device(ID3D11Texture2D *input_texture) {
+        Microsoft::WRL::ComPtr<ID3D11Device> device;
+        input_texture->GetDevice(&device);
+        if (!device) {
+          return false;
+        }
+        if (device_ == device) {
+          return true;
+        }
+
+        device_ = std::move(device);
+        device_->GetImmediateContext(&context_);
+        vs_y_.Reset();
+        ps_y_.Reset();
+        vs_uv_.Reset();
+        ps_uv_.Reset();
+        ps_y_linear_.Reset();
+        ps_uv_linear_.Reset();
+        ps_y_pq_.Reset();
+        ps_uv_pq_.Reset();
+        sampler_.Reset();
+        blend_disable_.Reset();
+        color_matrix_cb_.Reset();
+        rotation_cb_.Reset();
+        subsample_cb_.Reset();
+        output_texture_.Reset();
+        rtv_y_.Reset();
+        rtv_uv_.Reset();
+        output_mutex_.Reset();
+        colorspace_valid_ = false;
+        return true;
+      }
+
+      bool ensure_shaders() {
+        if (vs_y_ && ps_y_ && ps_y_linear_ && ps_y_pq_ && vs_uv_ && ps_uv_ && ps_uv_linear_ && ps_uv_pq_) {
+          return true;
+        }
+
+        auto compile_shader = [](const std::string &file, const char *entry, const char *model) -> Microsoft::WRL::ComPtr<ID3DBlob> {
+          Microsoft::WRL::ComPtr<ID3DBlob> blob;
+          Microsoft::WRL::ComPtr<ID3DBlob> errors;
+          auto wfile = std::filesystem::path(file).wstring();
+          const HRESULT hr = D3DCompileFromFile(
+            wfile.c_str(),
+            nullptr,
+            D3D_COMPILE_STANDARD_FILE_INCLUDE,
+            entry,
+            model,
+            D3DCOMPILE_ENABLE_STRICTNESS,
+            0,
+            &blob,
+            &errors
+          );
+          if (FAILED(hr)) {
+            if (errors) {
+              BOOST_LOG(error) << "WebRTC: shader compile failed: "
+                               << std::string_view(
+                                    static_cast<const char *>(errors->GetBufferPointer()),
+                                    errors->GetBufferSize()
+                                  );
+            }
+            return {};
+          }
+          return blob;
+        };
+
+        const std::string vs_y_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_vs.hlsl";
+        const std::string vs_uv_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_vs.hlsl";
+        const std::string ps_y_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_ps.hlsl";
+        const std::string ps_uv_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_ps.hlsl";
+        const std::string ps_y_linear_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_ps_linear.hlsl";
+        const std::string ps_uv_linear_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_ps_linear.hlsl";
+        const std::string ps_y_pq_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_ps_perceptual_quantizer.hlsl";
+        const std::string ps_uv_pq_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_ps_perceptual_quantizer.hlsl";
+
+        auto vs_y_blob = compile_shader(vs_y_path, "main_vs", "vs_5_0");
+        auto vs_uv_blob = compile_shader(vs_uv_path, "main_vs", "vs_5_0");
+        auto ps_y_blob = compile_shader(ps_y_path, "main_ps", "ps_5_0");
+        auto ps_uv_blob = compile_shader(ps_uv_path, "main_ps", "ps_5_0");
+        auto ps_y_linear_blob = compile_shader(ps_y_linear_path, "main_ps", "ps_5_0");
+        auto ps_uv_linear_blob = compile_shader(ps_uv_linear_path, "main_ps", "ps_5_0");
+        auto ps_y_pq_blob = compile_shader(ps_y_pq_path, "main_ps", "ps_5_0");
+        auto ps_uv_pq_blob = compile_shader(ps_uv_pq_path, "main_ps", "ps_5_0");
+        if (!vs_y_blob || !vs_uv_blob || !ps_y_blob || !ps_uv_blob ||
+            !ps_y_linear_blob || !ps_uv_linear_blob || !ps_y_pq_blob || !ps_uv_pq_blob) {
+          return false;
+        }
+
+        if (FAILED(device_->CreateVertexShader(vs_y_blob->GetBufferPointer(), vs_y_blob->GetBufferSize(), nullptr, &vs_y_))) {
+          return false;
+        }
+        if (FAILED(device_->CreateVertexShader(vs_uv_blob->GetBufferPointer(), vs_uv_blob->GetBufferSize(), nullptr, &vs_uv_))) {
+          return false;
+        }
+        if (FAILED(device_->CreatePixelShader(ps_y_blob->GetBufferPointer(), ps_y_blob->GetBufferSize(), nullptr, &ps_y_))) {
+          return false;
+        }
+        if (FAILED(device_->CreatePixelShader(ps_uv_blob->GetBufferPointer(), ps_uv_blob->GetBufferSize(), nullptr, &ps_uv_))) {
+          return false;
+        }
+        if (FAILED(device_->CreatePixelShader(ps_y_linear_blob->GetBufferPointer(), ps_y_linear_blob->GetBufferSize(), nullptr, &ps_y_linear_))) {
+          return false;
+        }
+        if (FAILED(device_->CreatePixelShader(ps_uv_linear_blob->GetBufferPointer(), ps_uv_linear_blob->GetBufferSize(), nullptr, &ps_uv_linear_))) {
+          return false;
+        }
+        if (FAILED(device_->CreatePixelShader(ps_y_pq_blob->GetBufferPointer(), ps_y_pq_blob->GetBufferSize(), nullptr, &ps_y_pq_))) {
+          return false;
+        }
+        if (FAILED(device_->CreatePixelShader(ps_uv_pq_blob->GetBufferPointer(), ps_uv_pq_blob->GetBufferSize(), nullptr, &ps_uv_pq_))) {
+          return false;
+        }
+
+        return true;
+      }
+
+      bool ensure_output(int width, int height) {
+        if (output_texture_ && width_ == width && height_ == height) {
+          return true;
+        }
+
+        width_ = width;
+        height_ = height;
+
+        output_texture_.Reset();
+        rtv_y_.Reset();
+        rtv_uv_.Reset();
+        output_mutex_.Reset();
+
+        D3D11_TEXTURE2D_DESC desc {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_NV12;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+
+        if (FAILED(device_->CreateTexture2D(&desc, nullptr, &output_texture_))) {
+          BOOST_LOG(error) << "WebRTC: failed to create NV12 output texture";
+          return false;
+        }
+
+        D3D11_RENDER_TARGET_VIEW_DESC rtv_desc {};
+        rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        rtv_desc.Texture2D.MipSlice = 0;
+
+        rtv_desc.Format = DXGI_FORMAT_R8_UNORM;
+        if (FAILED(device_->CreateRenderTargetView(output_texture_.Get(), &rtv_desc, &rtv_y_))) {
+          return false;
+        }
+
+        rtv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+        if (FAILED(device_->CreateRenderTargetView(output_texture_.Get(), &rtv_desc, &rtv_uv_))) {
+          return false;
+        }
+
+        if (FAILED(output_texture_->QueryInterface(IID_PPV_ARGS(&output_mutex_)))) {
+          return false;
+        }
+
+        viewport_y_ = {0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+        viewport_uv_ = {0.0f, 0.0f, static_cast<float>(width) / 2.0f, static_cast<float>(height) / 2.0f, 0.0f, 1.0f};
+
+        return true;
+      }
+
+      bool ensure_staging(int width, int height) {
+        if (staging_texture_ && staging_width_ == width && staging_height_ == height) {
+          return true;
+        }
+
+        staging_texture_.Reset();
+        staging_width_ = width;
+        staging_height_ = height;
+
+        D3D11_TEXTURE2D_DESC desc {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_NV12;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+        if (FAILED(device_->CreateTexture2D(&desc, nullptr, &staging_texture_))) {
+          BOOST_LOG(error) << "WebRTC: failed to create staging NV12 texture";
+          return false;
+        }
+
+        return true;
+      }
+
+      bool ensure_constant_buffers(int width, int height, const video::sunshine_colorspace_t &colorspace) {
+        if (!sampler_) {
+          D3D11_SAMPLER_DESC sampler_desc {};
+          sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+          sampler_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+          sampler_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+          sampler_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+          sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+          sampler_desc.MinLOD = 0;
+          sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
+          if (FAILED(device_->CreateSamplerState(&sampler_desc, &sampler_))) {
+            return false;
+          }
+        }
+
+        if (!blend_disable_) {
+          D3D11_BLEND_DESC blend_desc {};
+          blend_desc.RenderTarget[0].BlendEnable = FALSE;
+          blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+          if (FAILED(device_->CreateBlendState(&blend_desc, &blend_disable_))) {
+            return false;
+          }
+        }
+
+        if (!rotation_cb_) {
+          int rotation_data[4] = {0, 0, 0, 0};
+          D3D11_BUFFER_DESC desc {};
+          desc.ByteWidth = sizeof(rotation_data);
+          desc.Usage = D3D11_USAGE_IMMUTABLE;
+          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+          D3D11_SUBRESOURCE_DATA init {};
+          init.pSysMem = rotation_data;
+          if (FAILED(device_->CreateBuffer(&desc, &init, &rotation_cb_))) {
+            return false;
+          }
+        }
+
+        const bool colorspace_changed = !colorspace_valid_ ||
+                                        colorspace_.colorspace != colorspace.colorspace ||
+                                        colorspace_.full_range != colorspace.full_range ||
+                                        colorspace_.bit_depth != colorspace.bit_depth;
+        if (!color_matrix_cb_ || colorspace_changed) {
+          const video::color_t *colors = video::color_vectors_from_colorspace(colorspace, true);
+          if (!colors) {
+            return false;
+          }
+          D3D11_BUFFER_DESC desc {};
+          desc.ByteWidth = sizeof(video::color_t);
+          desc.Usage = D3D11_USAGE_DEFAULT;
+          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+          D3D11_SUBRESOURCE_DATA init {};
+          init.pSysMem = colors;
+          if (!color_matrix_cb_) {
+            if (FAILED(device_->CreateBuffer(&desc, &init, &color_matrix_cb_))) {
+              return false;
+            }
+          } else {
+            context_->UpdateSubresource(color_matrix_cb_.Get(), 0, nullptr, colors, 0, 0);
+          }
+          colorspace_ = colorspace;
+          colorspace_valid_ = true;
+        }
+
+        if (!subsample_cb_ || subsample_width_ != width || subsample_height_ != height) {
+          float subsample_data[4] = {1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height), 0.0f, 0.0f};
+          D3D11_BUFFER_DESC desc {};
+          desc.ByteWidth = sizeof(subsample_data);
+          desc.Usage = D3D11_USAGE_DEFAULT;
+          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+          D3D11_SUBRESOURCE_DATA init {};
+          init.pSysMem = subsample_data;
+          if (!subsample_cb_) {
+            if (FAILED(device_->CreateBuffer(&desc, &init, &subsample_cb_))) {
+              return false;
+            }
+          } else {
+            context_->UpdateSubresource(subsample_cb_.Get(), 0, nullptr, subsample_data, 0, 0);
+          }
+          subsample_width_ = width;
+          subsample_height_ = height;
+        }
+
+        return true;
+      }
+
+      ID3D11PixelShader *select_ps_y(ID3D11Texture2D *input_texture, bool hdr_output) const {
+        D3D11_TEXTURE2D_DESC desc {};
+        input_texture->GetDesc(&desc);
+        if (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+          if (hdr_output && ps_y_pq_) {
+            return ps_y_pq_.Get();
+          }
+          if (ps_y_linear_) {
+            return ps_y_linear_.Get();
+          }
+        }
+        return ps_y_.Get();
+      }
+
+      ID3D11PixelShader *select_ps_uv(ID3D11Texture2D *input_texture, bool hdr_output) const {
+        D3D11_TEXTURE2D_DESC desc {};
+        input_texture->GetDesc(&desc);
+        if (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+          if (hdr_output && ps_uv_pq_) {
+            return ps_uv_pq_.Get();
+          }
+          if (ps_uv_linear_) {
+            return ps_uv_linear_.Get();
+          }
+        }
+        return ps_uv_.Get();
+      }
+
+      Microsoft::WRL::ComPtr<ID3D11Device> device_;
+      Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+      Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_y_;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y_;
+      Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_uv_;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_uv_;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y_linear_;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_uv_linear_;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y_pq_;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_uv_pq_;
+      Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
+      Microsoft::WRL::ComPtr<ID3D11BlendState> blend_disable_;
+      Microsoft::WRL::ComPtr<ID3D11Buffer> color_matrix_cb_;
+      Microsoft::WRL::ComPtr<ID3D11Buffer> rotation_cb_;
+      Microsoft::WRL::ComPtr<ID3D11Buffer> subsample_cb_;
+      Microsoft::WRL::ComPtr<ID3D11Texture2D> output_texture_;
+      Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_y_;
+      Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_uv_;
+      Microsoft::WRL::ComPtr<IDXGIKeyedMutex> output_mutex_;
+      Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_texture_;
+      D3D11_VIEWPORT viewport_y_ {};
+      D3D11_VIEWPORT viewport_uv_ {};
+      int width_ = 0;
+      int height_ = 0;
+      int subsample_width_ = 0;
+      int subsample_height_ = 0;
+      int staging_width_ = 0;
+      int staging_height_ = 0;
+      bool colorspace_valid_ = false;
+      video::sunshine_colorspace_t colorspace_ {};
+    };
 #endif
 
     struct Session {
@@ -2353,6 +2903,13 @@ namespace webrtc_stream {
       if (webrtc_capture.audio_thread.joinable()) {
         webrtc_capture.audio_thread.join();
       }
+      // The producers above are gone; release the pump and join it.
+      if (webrtc_capture.mail) {
+        video::packet_queue(webrtc_capture.mail, mail::video_packets)->stop();
+      }
+      if (webrtc_capture.packet_thread.joinable()) {
+        webrtc_capture.packet_thread.join();
+      }
       webrtc_capture.feedback_queue.reset();
       webrtc_capture.mail.reset();
       webrtc_capture.launch_session.reset();
@@ -2578,6 +3135,17 @@ namespace webrtc_stream {
 
       webrtc_capture.video_thread = std::thread([mail, video_config]() mutable {
         video::capture(mail, video_config, nullptr);
+      });
+      // Host-side egress. Encoded packets -- from the isolated video worker's
+      // bridge or from an in-process encoder -- land on this mailbox's
+      // video_packets queue; hand each one to the WebRTC peers. RTSP sessions
+      // have their own consumer on their own mailbox (stream.cpp) and are not
+      // involved here.
+      webrtc_capture.packet_thread = std::thread([mail]() {
+        auto packets = video::packet_queue(mail, mail::video_packets);
+        while (auto packet = packets->pop()) {
+          submit_video_packet(*packet);
+        }
       });
       webrtc_capture.audio_thread = std::thread([mail, audio_config]() mutable {
         audio::capture(mail, audio_config, nullptr);
@@ -2859,12 +3427,29 @@ namespace webrtc_stream {
     std::optional<std::string> webrtc_desired_hevc_fmtp;
     std::mutex webrtc_media_mutex;
     std::condition_variable webrtc_media_cv;
-    std::thread webrtc_media_thread;
+    std::atomic<bool> webrtc_media_running {false};
+    std::atomic<bool> webrtc_media_shutdown {false};
+    // The media thread lives in static storage. webrtc_stream::shutdown() joins
+    // it during main()'s teardown; if some exit path skipped that, a joinable
+    // std::thread destroyed by the CRT would call std::terminate (the
+    // 0xC0000374 heap fast-fail seen on service stop). Stop and join instead.
+    // Declared after the flag and the condition variable it uses so it is
+    // destroyed before them.
+    struct MediaThreadHandle {
+      std::thread thread;
+
+      ~MediaThreadHandle() {
+        if (thread.joinable()) {
+          webrtc_media_shutdown.store(true, std::memory_order_release);
+          webrtc_media_cv.notify_all();
+          thread.join();
+        }
+      }
+    };
+    MediaThreadHandle webrtc_media_thread;
     // Guards all access to webrtc_media_thread (creation/join/joinable) so ensure_media_thread()
     // and stop_media_thread() can't race on the std::thread object from different threads.
     std::mutex webrtc_media_thread_mutex;
-    std::atomic<bool> webrtc_media_running {false};
-    std::atomic<bool> webrtc_media_shutdown {false};
     std::atomic<bool> webrtc_media_has_work {false};
 
     std::optional<lwrtc_video_codec_t> session_codec_to_lwrtc(const SessionState &state) {
@@ -3122,538 +3707,6 @@ namespace webrtc_stream {
   #endif
 
   #ifdef _WIN32
-    class D3D11Nv12Converter {
-    public:
-      bool Convert(
-        ID3D11Texture2D *input_texture,
-        IDXGIKeyedMutex *input_mutex,
-        int width,
-        int height,
-        const video::sunshine_colorspace_t &colorspace,
-        ID3D11Texture2D **out_texture,
-        IDXGIKeyedMutex **out_mutex
-      ) {
-        if (!input_texture || width <= 0 || height <= 0 || !out_texture || !out_mutex) {
-          BOOST_LOG(debug) << "WebRTC: Convert called with invalid params";
-          return false;
-        }
-
-        const bool hdr_output = video::colorspace_is_hdr(colorspace);
-        if (!ensure_device(input_texture)) {
-          BOOST_LOG(error) << "WebRTC: ensure_device failed";
-          return false;
-        }
-        if (!ensure_shaders()) {
-          BOOST_LOG(error) << "WebRTC: ensure_shaders failed";
-          return false;
-        }
-        if (!ensure_output(width, height)) {
-          BOOST_LOG(error) << "WebRTC: ensure_output failed";
-          return false;
-        }
-        if (!ensure_constant_buffers(width, height, colorspace)) {
-          BOOST_LOG(error) << "WebRTC: ensure_constant_buffers failed";
-          return false;
-        }
-
-        // Acquire input mutex BEFORE creating SRV to ensure texture content is stable
-        if (input_mutex) {
-          const HRESULT hr = input_mutex->AcquireSync(0, 3000);
-          if (hr != S_OK && hr != WAIT_ABANDONED) {
-            BOOST_LOG(warning) << "WebRTC: failed to acquire input mutex: 0x" << std::hex << hr;
-            return false;
-          }
-        }
-        auto release_input_mutex = util::fail_guard([&]() {
-          if (input_mutex) {
-            input_mutex->ReleaseSync(0);
-          }
-        });
-
-        // Create SRV for the input texture (after acquiring mutex)
-        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> input_srv;
-        D3D11_TEXTURE2D_DESC input_desc {};
-        input_texture->GetDesc(&input_desc);
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc {};
-        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srv_desc.Texture2D.MipLevels = 1;
-        srv_desc.Texture2D.MostDetailedMip = 0;
-        // Map typeless formats to their typed equivalents for SRV
-        switch (input_desc.Format) {
-          case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-            srv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            break;
-          case DXGI_FORMAT_R8G8B8A8_TYPELESS:
-            srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            break;
-          case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-            srv_desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
-            break;
-          case DXGI_FORMAT_R16G16B16A16_TYPELESS:
-            srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-            break;
-          default:
-            srv_desc.Format = input_desc.Format;
-            break;
-        }
-
-        HRESULT srv_hr = device_->CreateShaderResourceView(input_texture, &srv_desc, &input_srv);
-        if (FAILED(srv_hr)) {
-          BOOST_LOG(error) << "WebRTC: failed to create input SRV for NV12 conversion, hr=0x" << std::hex << srv_hr
-                           << ", format=" << input_desc.Format;
-          return false;
-        }
-
-        const HRESULT out_lock = output_mutex_->AcquireSync(0, 100);
-        if (out_lock != S_OK && out_lock != WAIT_ABANDONED) {
-          BOOST_LOG(warning) << "WebRTC: failed to acquire output mutex: 0x" << std::hex << out_lock;
-          return false;
-        }
-
-        // Set up pipeline state
-        context_->IASetInputLayout(nullptr);
-        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-        ID3D11BlendState *blend = blend_disable_.Get();
-        context_->OMSetBlendState(blend, nullptr, 0xFFFFFFFFu);
-
-        ID3D11SamplerState *sampler = sampler_.Get();
-        context_->PSSetSamplers(0, 1, &sampler);
-
-        ID3D11ShaderResourceView *srv = input_srv.Get();
-        context_->PSSetShaderResources(0, 1, &srv);
-
-        ID3D11Buffer *rotation_cb = rotation_cb_.Get();
-        context_->VSSetConstantBuffers(1, 1, &rotation_cb);
-
-        ID3D11Buffer *color_cb = color_matrix_cb_.Get();
-        context_->PSSetConstantBuffers(0, 1, &color_cb);
-
-        // Y plane
-        ID3D11RenderTargetView *rtv_y = rtv_y_.Get();
-        context_->OMSetRenderTargets(1, &rtv_y, nullptr);
-        context_->RSSetViewports(1, &viewport_y_);
-        context_->VSSetShader(vs_y_.Get(), nullptr, 0);
-        context_->PSSetShader(select_ps_y(input_texture, hdr_output), nullptr, 0);
-        context_->Draw(3, 0);
-
-        // UV plane
-        ID3D11Buffer *subsample_cb = subsample_cb_.Get();
-        context_->VSSetConstantBuffers(0, 1, &subsample_cb);
-        ID3D11RenderTargetView *rtv_uv = rtv_uv_.Get();
-        context_->OMSetRenderTargets(1, &rtv_uv, nullptr);
-        context_->RSSetViewports(1, &viewport_uv_);
-        context_->VSSetShader(vs_uv_.Get(), nullptr, 0);
-        context_->PSSetShader(select_ps_uv(input_texture, hdr_output), nullptr, 0);
-        context_->Draw(3, 0);
-
-        // Unbind resources
-        ID3D11ShaderResourceView *empty_srv = nullptr;
-        context_->PSSetShaderResources(0, 1, &empty_srv);
-        ID3D11RenderTargetView *empty_rtv = nullptr;
-        context_->OMSetRenderTargets(1, &empty_rtv, nullptr);
-
-        // Flush to ensure commands are submitted before releasing mutex
-        context_->Flush();
-
-        output_mutex_->ReleaseSync(0);
-
-        *out_texture = output_texture_.Get();
-        *out_mutex = output_mutex_.Get();
-        return true;
-      }
-
-      bool ReadbackNv12(
-        ID3D11Texture2D *texture,
-        IDXGIKeyedMutex *texture_mutex,
-        int width,
-        int height,
-        const std::function<bool(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv)> &push_cb
-      ) {
-        if (!texture || !push_cb || width <= 0 || height <= 0) {
-          BOOST_LOG(debug) << "WebRTC: ReadbackNv12 invalid params";
-          return false;
-        }
-        if (!ensure_staging(width, height)) {
-          BOOST_LOG(error) << "WebRTC: ReadbackNv12 ensure_staging failed";
-          return false;
-        }
-
-        // Acquire mutex to ensure GPU rendering has completed before copy
-        if (texture_mutex) {
-          const HRESULT hr = texture_mutex->AcquireSync(0, 1000);
-          if (hr != S_OK && hr != WAIT_ABANDONED) {
-            BOOST_LOG(warning) << "WebRTC: ReadbackNv12 failed to acquire mutex: 0x" << std::hex << hr;
-            return false;
-          }
-        }
-        auto release_mutex_guard = util::fail_guard([&]() {
-          if (texture_mutex) {
-            texture_mutex->ReleaseSync(0);
-          }
-        });
-
-        context_->CopyResource(staging_texture_.Get(), texture);
-
-        D3D11_MAPPED_SUBRESOURCE mapped {};
-        const HRESULT hr = context_->Map(staging_texture_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-        if (FAILED(hr)) {
-          BOOST_LOG(error) << "WebRTC: ReadbackNv12 Map failed hr=0x" << std::hex << hr;
-          return false;
-        }
-        auto unmap_guard = util::fail_guard([&]() {
-          context_->Unmap(staging_texture_.Get(), 0);
-        });
-
-        const auto *y_plane = static_cast<const uint8_t *>(mapped.pData);
-        const auto *uv_plane = y_plane + (mapped.RowPitch * height);
-
-        return push_cb(y_plane, static_cast<int>(mapped.RowPitch), uv_plane, static_cast<int>(mapped.RowPitch));
-      }
-
-    private:
-      bool ensure_device(ID3D11Texture2D *input_texture) {
-        Microsoft::WRL::ComPtr<ID3D11Device> device;
-        input_texture->GetDevice(&device);
-        if (!device) {
-          return false;
-        }
-        if (device_ == device) {
-          return true;
-        }
-
-        device_ = std::move(device);
-        device_->GetImmediateContext(&context_);
-        vs_y_.Reset();
-        ps_y_.Reset();
-        vs_uv_.Reset();
-        ps_uv_.Reset();
-        ps_y_linear_.Reset();
-        ps_uv_linear_.Reset();
-        ps_y_pq_.Reset();
-        ps_uv_pq_.Reset();
-        sampler_.Reset();
-        blend_disable_.Reset();
-        color_matrix_cb_.Reset();
-        rotation_cb_.Reset();
-        subsample_cb_.Reset();
-        output_texture_.Reset();
-        rtv_y_.Reset();
-        rtv_uv_.Reset();
-        output_mutex_.Reset();
-        colorspace_valid_ = false;
-        return true;
-      }
-
-      bool ensure_shaders() {
-        if (vs_y_ && ps_y_ && ps_y_linear_ && ps_y_pq_ && vs_uv_ && ps_uv_ && ps_uv_linear_ && ps_uv_pq_) {
-          return true;
-        }
-
-        auto compile_shader = [](const std::string &file, const char *entry, const char *model) -> Microsoft::WRL::ComPtr<ID3DBlob> {
-          Microsoft::WRL::ComPtr<ID3DBlob> blob;
-          Microsoft::WRL::ComPtr<ID3DBlob> errors;
-          auto wfile = std::filesystem::path(file).wstring();
-          const HRESULT hr = D3DCompileFromFile(
-            wfile.c_str(),
-            nullptr,
-            D3D_COMPILE_STANDARD_FILE_INCLUDE,
-            entry,
-            model,
-            D3DCOMPILE_ENABLE_STRICTNESS,
-            0,
-            &blob,
-            &errors
-          );
-          if (FAILED(hr)) {
-            if (errors) {
-              BOOST_LOG(error) << "WebRTC: shader compile failed: "
-                               << std::string_view(
-                                    static_cast<const char *>(errors->GetBufferPointer()),
-                                    errors->GetBufferSize()
-                                  );
-            }
-            return {};
-          }
-          return blob;
-        };
-
-        const std::string vs_y_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_vs.hlsl";
-        const std::string vs_uv_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_vs.hlsl";
-        const std::string ps_y_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_ps.hlsl";
-        const std::string ps_uv_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_ps.hlsl";
-        const std::string ps_y_linear_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_ps_linear.hlsl";
-        const std::string ps_uv_linear_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_ps_linear.hlsl";
-        const std::string ps_y_pq_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_planar_y_ps_perceptual_quantizer.hlsl";
-        const std::string ps_uv_pq_path = std::string {SUNSHINE_SHADERS_DIR} + "/convert_yuv420_packed_uv_type0_ps_perceptual_quantizer.hlsl";
-
-        auto vs_y_blob = compile_shader(vs_y_path, "main_vs", "vs_5_0");
-        auto vs_uv_blob = compile_shader(vs_uv_path, "main_vs", "vs_5_0");
-        auto ps_y_blob = compile_shader(ps_y_path, "main_ps", "ps_5_0");
-        auto ps_uv_blob = compile_shader(ps_uv_path, "main_ps", "ps_5_0");
-        auto ps_y_linear_blob = compile_shader(ps_y_linear_path, "main_ps", "ps_5_0");
-        auto ps_uv_linear_blob = compile_shader(ps_uv_linear_path, "main_ps", "ps_5_0");
-        auto ps_y_pq_blob = compile_shader(ps_y_pq_path, "main_ps", "ps_5_0");
-        auto ps_uv_pq_blob = compile_shader(ps_uv_pq_path, "main_ps", "ps_5_0");
-        if (!vs_y_blob || !vs_uv_blob || !ps_y_blob || !ps_uv_blob ||
-            !ps_y_linear_blob || !ps_uv_linear_blob || !ps_y_pq_blob || !ps_uv_pq_blob) {
-          return false;
-        }
-
-        if (FAILED(device_->CreateVertexShader(vs_y_blob->GetBufferPointer(), vs_y_blob->GetBufferSize(), nullptr, &vs_y_))) {
-          return false;
-        }
-        if (FAILED(device_->CreateVertexShader(vs_uv_blob->GetBufferPointer(), vs_uv_blob->GetBufferSize(), nullptr, &vs_uv_))) {
-          return false;
-        }
-        if (FAILED(device_->CreatePixelShader(ps_y_blob->GetBufferPointer(), ps_y_blob->GetBufferSize(), nullptr, &ps_y_))) {
-          return false;
-        }
-        if (FAILED(device_->CreatePixelShader(ps_uv_blob->GetBufferPointer(), ps_uv_blob->GetBufferSize(), nullptr, &ps_uv_))) {
-          return false;
-        }
-        if (FAILED(device_->CreatePixelShader(ps_y_linear_blob->GetBufferPointer(), ps_y_linear_blob->GetBufferSize(), nullptr, &ps_y_linear_))) {
-          return false;
-        }
-        if (FAILED(device_->CreatePixelShader(ps_uv_linear_blob->GetBufferPointer(), ps_uv_linear_blob->GetBufferSize(), nullptr, &ps_uv_linear_))) {
-          return false;
-        }
-        if (FAILED(device_->CreatePixelShader(ps_y_pq_blob->GetBufferPointer(), ps_y_pq_blob->GetBufferSize(), nullptr, &ps_y_pq_))) {
-          return false;
-        }
-        if (FAILED(device_->CreatePixelShader(ps_uv_pq_blob->GetBufferPointer(), ps_uv_pq_blob->GetBufferSize(), nullptr, &ps_uv_pq_))) {
-          return false;
-        }
-
-        return true;
-      }
-
-      bool ensure_output(int width, int height) {
-        if (output_texture_ && width_ == width && height_ == height) {
-          return true;
-        }
-
-        width_ = width;
-        height_ = height;
-
-        output_texture_.Reset();
-        rtv_y_.Reset();
-        rtv_uv_.Reset();
-        output_mutex_.Reset();
-
-        D3D11_TEXTURE2D_DESC desc {};
-        desc.Width = width;
-        desc.Height = height;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_NV12;
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-
-        if (FAILED(device_->CreateTexture2D(&desc, nullptr, &output_texture_))) {
-          BOOST_LOG(error) << "WebRTC: failed to create NV12 output texture";
-          return false;
-        }
-
-        D3D11_RENDER_TARGET_VIEW_DESC rtv_desc {};
-        rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-        rtv_desc.Texture2D.MipSlice = 0;
-
-        rtv_desc.Format = DXGI_FORMAT_R8_UNORM;
-        if (FAILED(device_->CreateRenderTargetView(output_texture_.Get(), &rtv_desc, &rtv_y_))) {
-          return false;
-        }
-
-        rtv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
-        if (FAILED(device_->CreateRenderTargetView(output_texture_.Get(), &rtv_desc, &rtv_uv_))) {
-          return false;
-        }
-
-        if (FAILED(output_texture_->QueryInterface(IID_PPV_ARGS(&output_mutex_)))) {
-          return false;
-        }
-
-        viewport_y_ = {0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
-        viewport_uv_ = {0.0f, 0.0f, static_cast<float>(width) / 2.0f, static_cast<float>(height) / 2.0f, 0.0f, 1.0f};
-
-        return true;
-      }
-
-      bool ensure_staging(int width, int height) {
-        if (staging_texture_ && staging_width_ == width && staging_height_ == height) {
-          return true;
-        }
-
-        staging_texture_.Reset();
-        staging_width_ = width;
-        staging_height_ = height;
-
-        D3D11_TEXTURE2D_DESC desc {};
-        desc.Width = width;
-        desc.Height = height;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_NV12;
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-
-        if (FAILED(device_->CreateTexture2D(&desc, nullptr, &staging_texture_))) {
-          BOOST_LOG(error) << "WebRTC: failed to create staging NV12 texture";
-          return false;
-        }
-
-        return true;
-      }
-
-      bool ensure_constant_buffers(int width, int height, const video::sunshine_colorspace_t &colorspace) {
-        if (!sampler_) {
-          D3D11_SAMPLER_DESC sampler_desc {};
-          sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-          sampler_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-          sampler_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-          sampler_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-          sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-          sampler_desc.MinLOD = 0;
-          sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
-          if (FAILED(device_->CreateSamplerState(&sampler_desc, &sampler_))) {
-            return false;
-          }
-        }
-
-        if (!blend_disable_) {
-          D3D11_BLEND_DESC blend_desc {};
-          blend_desc.RenderTarget[0].BlendEnable = FALSE;
-          blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-          if (FAILED(device_->CreateBlendState(&blend_desc, &blend_disable_))) {
-            return false;
-          }
-        }
-
-        if (!rotation_cb_) {
-          int rotation_data[4] = {0, 0, 0, 0};
-          D3D11_BUFFER_DESC desc {};
-          desc.ByteWidth = sizeof(rotation_data);
-          desc.Usage = D3D11_USAGE_IMMUTABLE;
-          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-          D3D11_SUBRESOURCE_DATA init {};
-          init.pSysMem = rotation_data;
-          if (FAILED(device_->CreateBuffer(&desc, &init, &rotation_cb_))) {
-            return false;
-          }
-        }
-
-        const bool colorspace_changed = !colorspace_valid_ ||
-                                        colorspace_.colorspace != colorspace.colorspace ||
-                                        colorspace_.full_range != colorspace.full_range ||
-                                        colorspace_.bit_depth != colorspace.bit_depth;
-        if (!color_matrix_cb_ || colorspace_changed) {
-          const video::color_t *colors = video::color_vectors_from_colorspace(colorspace, true);
-          if (!colors) {
-            return false;
-          }
-          D3D11_BUFFER_DESC desc {};
-          desc.ByteWidth = sizeof(video::color_t);
-          desc.Usage = D3D11_USAGE_DEFAULT;
-          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-          D3D11_SUBRESOURCE_DATA init {};
-          init.pSysMem = colors;
-          if (!color_matrix_cb_) {
-            if (FAILED(device_->CreateBuffer(&desc, &init, &color_matrix_cb_))) {
-              return false;
-            }
-          } else {
-            context_->UpdateSubresource(color_matrix_cb_.Get(), 0, nullptr, colors, 0, 0);
-          }
-          colorspace_ = colorspace;
-          colorspace_valid_ = true;
-        }
-
-        if (!subsample_cb_ || subsample_width_ != width || subsample_height_ != height) {
-          float subsample_data[4] = {1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height), 0.0f, 0.0f};
-          D3D11_BUFFER_DESC desc {};
-          desc.ByteWidth = sizeof(subsample_data);
-          desc.Usage = D3D11_USAGE_DEFAULT;
-          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-          D3D11_SUBRESOURCE_DATA init {};
-          init.pSysMem = subsample_data;
-          if (!subsample_cb_) {
-            if (FAILED(device_->CreateBuffer(&desc, &init, &subsample_cb_))) {
-              return false;
-            }
-          } else {
-            context_->UpdateSubresource(subsample_cb_.Get(), 0, nullptr, subsample_data, 0, 0);
-          }
-          subsample_width_ = width;
-          subsample_height_ = height;
-        }
-
-        return true;
-      }
-
-      ID3D11PixelShader *select_ps_y(ID3D11Texture2D *input_texture, bool hdr_output) const {
-        D3D11_TEXTURE2D_DESC desc {};
-        input_texture->GetDesc(&desc);
-        if (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
-          if (hdr_output && ps_y_pq_) {
-            return ps_y_pq_.Get();
-          }
-          if (ps_y_linear_) {
-            return ps_y_linear_.Get();
-          }
-        }
-        return ps_y_.Get();
-      }
-
-      ID3D11PixelShader *select_ps_uv(ID3D11Texture2D *input_texture, bool hdr_output) const {
-        D3D11_TEXTURE2D_DESC desc {};
-        input_texture->GetDesc(&desc);
-        if (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
-          if (hdr_output && ps_uv_pq_) {
-            return ps_uv_pq_.Get();
-          }
-          if (ps_uv_linear_) {
-            return ps_uv_linear_.Get();
-          }
-        }
-        return ps_uv_.Get();
-      }
-
-      Microsoft::WRL::ComPtr<ID3D11Device> device_;
-      Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
-      Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_y_;
-      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y_;
-      Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_uv_;
-      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_uv_;
-      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y_linear_;
-      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_uv_linear_;
-      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y_pq_;
-      Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_uv_pq_;
-      Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
-      Microsoft::WRL::ComPtr<ID3D11BlendState> blend_disable_;
-      Microsoft::WRL::ComPtr<ID3D11Buffer> color_matrix_cb_;
-      Microsoft::WRL::ComPtr<ID3D11Buffer> rotation_cb_;
-      Microsoft::WRL::ComPtr<ID3D11Buffer> subsample_cb_;
-      Microsoft::WRL::ComPtr<ID3D11Texture2D> output_texture_;
-      Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_y_;
-      Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_uv_;
-      Microsoft::WRL::ComPtr<IDXGIKeyedMutex> output_mutex_;
-      Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_texture_;
-      D3D11_VIEWPORT viewport_y_ {};
-      D3D11_VIEWPORT viewport_uv_ {};
-      int width_ = 0;
-      int height_ = 0;
-      int subsample_width_ = 0;
-      int subsample_height_ = 0;
-      int staging_width_ = 0;
-      int staging_height_ = 0;
-      bool colorspace_valid_ = false;
-      video::sunshine_colorspace_t colorspace_ {};
-    };
-
     [[maybe_unused]] bool try_push_d3d11_frame(
       lwrtc_video_source_t *source,
       const std::shared_ptr<platf::img_t> &image,
@@ -4220,7 +4273,7 @@ namespace webrtc_stream {
       BOOST_LOG(debug) << "WebRTC: starting media thread";
       {
         std::lock_guard lg {webrtc_media_thread_mutex};
-        webrtc_media_thread = std::thread(&media_thread_main);
+        webrtc_media_thread.thread = std::thread(&media_thread_main);
       }
     }
 
@@ -4233,8 +4286,8 @@ namespace webrtc_stream {
       webrtc_media_cv.notify_one();
       {
         std::lock_guard lg {webrtc_media_thread_mutex};
-        if (webrtc_media_thread.joinable()) {
-          webrtc_media_thread.join();
+        if (webrtc_media_thread.thread.joinable()) {
+          webrtc_media_thread.thread.join();
         }
       }
       webrtc_media_running.store(false, std::memory_order_release);
@@ -4741,6 +4794,25 @@ namespace webrtc_stream {
     reset_webrtc_factory();
 #endif
     stop_webrtc_capture_if_idle();
+  }
+
+  void shutdown() {
+    shutdown_all_sessions();
+    {
+      std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
+      // Never touch a capture an RTSP session may still own: that one ends
+      // through stream.cpp exactly as before.
+      if (webrtc_capture.active.load(std::memory_order_acquire) &&
+          !rtsp_sessions_active.load(std::memory_order_relaxed)) {
+        stop_webrtc_capture_locked(true);
+      }
+    }
+#ifdef SUNSHINE_ENABLE_WEBRTC
+    webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
+    stop_media_thread();
+    reset_input_context();
+    reset_webrtc_factory();
+#endif
   }
 
   void submit_video_packet(video::packet_raw_t &packet) {

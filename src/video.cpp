@@ -2100,9 +2100,7 @@ namespace video {
       packet->channel_data = channel_data;
       packet->capture_placeholder = capture_placeholder;
       packet->capture_generation = capture_generation;
-      if (webrtc_stream::has_active_sessions()) {
-        webrtc_stream::submit_video_packet(*packet);
-      }
+      // WebRTC peers are fed from this queue by webrtc_stream's packet pump.
       packets->raise(std::move(packet));
     }
 
@@ -2127,9 +2125,7 @@ namespace video {
     packet->capture_generation = capture_generation;
     packet->frame_timestamp = frame_timestamp;
     packet->host_processing_timestamp = host_processing_timestamp;
-    if (webrtc_stream::has_active_sessions()) {
-      webrtc_stream::submit_video_packet(*packet);
-    }
+    // WebRTC peers are fed from this queue by webrtc_stream's packet pump.
     packets->raise(std::move(packet));
 
     return 0;

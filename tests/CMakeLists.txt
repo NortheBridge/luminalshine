@@ -259,4 +259,21 @@ if (WIN32)
             VERBATIM
         )
     endif()
+
+    # Copy libwebrtc.dll to the test binary directory.
+    # test_sunshine compiles the same sources as the main target, so with
+    # SUNSHINE_ENABLE_WEBRTC=ON it imports libwebrtc.dll too. The build-dir
+    # copy in cmake/packaging/windows.cmake only lands next to the main
+    # executable in ${CMAKE_BINARY_DIR}; the tests run from
+    # ${CMAKE_BINARY_DIR}/tests, where the loader would not find it and the
+    # process exits 127 before any test body runs.
+    if(WEBRTC_RUNTIME_DLL)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${WEBRTC_RUNTIME_DLL}"
+                "${CMAKE_CURRENT_BINARY_DIR}"
+            COMMENT "Copying libwebrtc DLL to test binary directory"
+            VERBATIM
+        )
+    endif()
 endif ()

@@ -422,6 +422,10 @@ namespace platf::video_worker {
     return packet.is_idr();
   }
 
+  bool network_consumer_attached_at_start(bool has_udp_channel, bool peer_ready) {
+    return !has_udp_channel || peer_ready;
+  }
+
   bool packet_metadata_can_enter_capture_generation(
     std::uint64_t packet_generation,
     bool capture_placeholder,
@@ -1054,7 +1058,14 @@ namespace platf::video_worker {
     std::atomic_bool first_frame_seen {false};
     std::atomic<std::uint64_t> active_capture_generation {startup_generation};
     std::atomic_bool generation_needs_idr {true};
-    std::atomic_bool network_attached {mail->event<bool>(mail::video_peer_ready)->peek()};
+    // RTSP: attach when the authenticated UDP consumer arrives (unchanged).
+    // WebRTC: no channel_data, no UDP peer to wait for -- attach from the start.
+    std::atomic_bool network_attached {
+      network_consumer_attached_at_start(channel_data != nullptr, mail->event<bool>(mail::video_peer_ready)->peek())
+    };
+    if (channel_data == nullptr) {
+      BOOST_LOG(info) << "Video worker: session has no UDP consumer (WebRTC); forwarding packets as they arrive.";
+    }
     // Recovery requests are deliberately owned by this parent process.  The
     // client can report every missing reference frame separately, but passing
     // that burst straight through to NVENC creates an IDR feedback loop: each
