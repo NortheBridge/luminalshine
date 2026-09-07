@@ -39,6 +39,14 @@ namespace crash_handler {
   void init();
 
   /**
+   * @brief Mark that process exit has begun. Registered with atexit by init().
+   *
+   * Boost.Log's sinks are torn down during exit; once this is set the crash and
+   * terminate handlers keep to stderr / OutputDebugString and the minidump.
+   */
+  void note_exit_started() noexcept;
+
+  /**
    * @brief Delete the oldest `.dmp` files in @p dir until at most @p keep remain.
    *
    * Ordering is by last-write time (newest kept). Non-`.dmp` entries and

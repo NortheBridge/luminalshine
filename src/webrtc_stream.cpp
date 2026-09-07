@@ -754,11 +754,31 @@ namespace webrtc_stream {
       std::thread video_thread;
       std::thread audio_thread;
       std::thread feedback_thread;
+      std::thread packet_thread;
       safe::mail_raw_t::queue_t<platf::gamepad_feedback_msg_t> feedback_queue;
       std::atomic_bool feedback_shutdown {false};
       std::optional<int> app_id;
       std::optional<WebRtcCaptureConfigKey> config_key;
       std::optional<WebRtcStreamStartParams> stream_start_params;
+
+      // Belt and braces for exit-time static destruction: webrtc_stream::shutdown()
+      // is the orderly path, but a joinable std::thread destroyed here would call
+      // std::terminate. Signal the capture mailbox and join instead.
+      ~WebRtcCaptureState() {
+        if (mail) {
+          mail->event<bool>(mail::shutdown)->raise(true);
+          video::packet_queue(mail, mail::video_packets)->stop();
+        }
+        feedback_shutdown.store(true, std::memory_order_release);
+        if (feedback_queue) {
+          feedback_queue->stop();
+        }
+        for (auto *thread : {&feedback_thread, &video_thread, &audio_thread, &packet_thread}) {
+          if (thread->joinable()) {
+            thread->join();
+          }
+        }
+      }
     };
 
     template<class T>
@@ -2883,6 +2903,13 @@ namespace webrtc_stream {
       if (webrtc_capture.audio_thread.joinable()) {
         webrtc_capture.audio_thread.join();
       }
+      // The producers above are gone; release the pump and join it.
+      if (webrtc_capture.mail) {
+        video::packet_queue(webrtc_capture.mail, mail::video_packets)->stop();
+      }
+      if (webrtc_capture.packet_thread.joinable()) {
+        webrtc_capture.packet_thread.join();
+      }
       webrtc_capture.feedback_queue.reset();
       webrtc_capture.mail.reset();
       webrtc_capture.launch_session.reset();
@@ -3108,6 +3135,17 @@ namespace webrtc_stream {
 
       webrtc_capture.video_thread = std::thread([mail, video_config]() mutable {
         video::capture(mail, video_config, nullptr);
+      });
+      // Host-side egress. Encoded packets -- from the isolated video worker's
+      // bridge or from an in-process encoder -- land on this mailbox's
+      // video_packets queue; hand each one to the WebRTC peers. RTSP sessions
+      // have their own consumer on their own mailbox (stream.cpp) and are not
+      // involved here.
+      webrtc_capture.packet_thread = std::thread([mail]() {
+        auto packets = video::packet_queue(mail, mail::video_packets);
+        while (auto packet = packets->pop()) {
+          submit_video_packet(*packet);
+        }
       });
       webrtc_capture.audio_thread = std::thread([mail, audio_config]() mutable {
         audio::capture(mail, audio_config, nullptr);
@@ -3389,12 +3427,29 @@ namespace webrtc_stream {
     std::optional<std::string> webrtc_desired_hevc_fmtp;
     std::mutex webrtc_media_mutex;
     std::condition_variable webrtc_media_cv;
-    std::thread webrtc_media_thread;
+    std::atomic<bool> webrtc_media_running {false};
+    std::atomic<bool> webrtc_media_shutdown {false};
+    // The media thread lives in static storage. webrtc_stream::shutdown() joins
+    // it during main()'s teardown; if some exit path skipped that, a joinable
+    // std::thread destroyed by the CRT would call std::terminate (the
+    // 0xC0000374 heap fast-fail seen on service stop). Stop and join instead.
+    // Declared after the flag and the condition variable it uses so it is
+    // destroyed before them.
+    struct MediaThreadHandle {
+      std::thread thread;
+
+      ~MediaThreadHandle() {
+        if (thread.joinable()) {
+          webrtc_media_shutdown.store(true, std::memory_order_release);
+          webrtc_media_cv.notify_all();
+          thread.join();
+        }
+      }
+    };
+    MediaThreadHandle webrtc_media_thread;
     // Guards all access to webrtc_media_thread (creation/join/joinable) so ensure_media_thread()
     // and stop_media_thread() can't race on the std::thread object from different threads.
     std::mutex webrtc_media_thread_mutex;
-    std::atomic<bool> webrtc_media_running {false};
-    std::atomic<bool> webrtc_media_shutdown {false};
     std::atomic<bool> webrtc_media_has_work {false};
 
     std::optional<lwrtc_video_codec_t> session_codec_to_lwrtc(const SessionState &state) {
@@ -4218,7 +4273,7 @@ namespace webrtc_stream {
       BOOST_LOG(debug) << "WebRTC: starting media thread";
       {
         std::lock_guard lg {webrtc_media_thread_mutex};
-        webrtc_media_thread = std::thread(&media_thread_main);
+        webrtc_media_thread.thread = std::thread(&media_thread_main);
       }
     }
 
@@ -4231,8 +4286,8 @@ namespace webrtc_stream {
       webrtc_media_cv.notify_one();
       {
         std::lock_guard lg {webrtc_media_thread_mutex};
-        if (webrtc_media_thread.joinable()) {
-          webrtc_media_thread.join();
+        if (webrtc_media_thread.thread.joinable()) {
+          webrtc_media_thread.thread.join();
         }
       }
       webrtc_media_running.store(false, std::memory_order_release);
@@ -4739,6 +4794,25 @@ namespace webrtc_stream {
     reset_webrtc_factory();
 #endif
     stop_webrtc_capture_if_idle();
+  }
+
+  void shutdown() {
+    shutdown_all_sessions();
+    {
+      std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
+      // Never touch a capture an RTSP session may still own: that one ends
+      // through stream.cpp exactly as before.
+      if (webrtc_capture.active.load(std::memory_order_acquire) &&
+          !rtsp_sessions_active.load(std::memory_order_relaxed)) {
+        stop_webrtc_capture_locked(true);
+      }
+    }
+#ifdef SUNSHINE_ENABLE_WEBRTC
+    webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
+    stop_media_thread();
+    reset_input_context();
+    reset_webrtc_factory();
+#endif
   }
 
   void submit_video_packet(video::packet_raw_t &packet) {

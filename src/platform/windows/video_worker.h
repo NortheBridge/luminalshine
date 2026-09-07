@@ -39,6 +39,17 @@ namespace platf::video_worker {
     bool first_admission
   );
 
+  /**
+   * @brief Whether the host-side packet bridge forwards packets from the first one.
+   *
+   * RTSP sessions carry a UDP channel whose consumer attaches only once it has
+   * authenticated (stream.cpp raises `video_peer_ready`); until then only a
+   * bootstrap IDR is retained. A session without a UDP channel (WebRTC) has no
+   * such consumer to wait for and is attached immediately -- before this, every
+   * packet after the bootstrap IDR of a WebRTC session was discarded.
+   */
+  bool network_consumer_attached_at_start(bool has_udp_channel, bool peer_ready);
+
   /** Launch an authenticated idle worker before RTSP supplies its config. */
   bool prewarm();
 

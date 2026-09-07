@@ -94,6 +94,14 @@ namespace webrtc_stream {
   std::vector<SessionState> list_sessions();
   void shutdown_all_sessions();
 
+  /**
+   * @brief Process-exit teardown: close every session, stop the WebRTC capture
+   * (unless an RTSP session owns it) and join the media thread. Call from
+   * main()'s orderly shutdown while logging and the mailboxes are still alive;
+   * a no-op when WebRTC was never used.
+   */
+  void shutdown();
+
   void cancel_paused_display_cleanup();
 
   /**
