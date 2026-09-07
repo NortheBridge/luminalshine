@@ -27,6 +27,71 @@ else()
             CACHE PATH "Path to libwebrtc root (contains include/ and lib/).")
 endif()
 unset(_luminalshine_default_webrtc_root)
+
+# --- Prebuilt wrapper -------------------------------------------------------
+# NortheBridge/libwebrtc builds the wrapper in its own Actions workflow and
+# publishes it as a release asset staged as include/ + lib/. When nothing
+# usable is at WEBRTC_ROOT, download that archive (pinned by tag and SHA-256)
+# into the shared deps cache and point WEBRTC_ROOT at it, so "cmake -B build"
+# just works and CI builds against a known binary. Bump LIBWEBRTC_TAG and
+# LIBWEBRTC_SHA256 together with the third-party/libwebrtc submodule.
+set(LIBWEBRTC_TAG "luminalshine-m150.0"
+        CACHE STRING "NortheBridge/libwebrtc release tag providing the prebuilt wrapper.")
+set(LIBWEBRTC_SHA256 "19366379368f5619195e59838cf2191c27f2988a801f55b6a6397d420111ea89"
+        CACHE STRING "SHA-256 of libwebrtc-win-x64-release.zip for LIBWEBRTC_TAG.")
+option(SUNSHINE_WEBRTC_FETCH_PREBUILT
+        "Download the prebuilt libwebrtc wrapper when no local build is found." ON)
+if(WIN32 AND SUNSHINE_WEBRTC_FETCH_PREBUILT AND NOT EXISTS "${WEBRTC_ROOT}/include/libwebrtc.h")
+    if(DEFINED ENV{LUMINALSHINE_DEPS_DIR} AND NOT "$ENV{LUMINALSHINE_DEPS_DIR}" STREQUAL "")
+        set(_luminalshine_prebuilt_cache "$ENV{LUMINALSHINE_DEPS_DIR}/libwebrtc/prebuilt/${LIBWEBRTC_TAG}")
+    elseif(DEFINED ENV{LOCALAPPDATA} AND NOT "$ENV{LOCALAPPDATA}" STREQUAL "")
+        set(_luminalshine_prebuilt_cache "$ENV{LOCALAPPDATA}/LuminalShine/deps/libwebrtc/prebuilt/${LIBWEBRTC_TAG}")
+    else()
+        set(_luminalshine_prebuilt_cache "${CMAKE_BINARY_DIR}/libwebrtc-prebuilt/${LIBWEBRTC_TAG}")
+    endif()
+    file(TO_CMAKE_PATH "${_luminalshine_prebuilt_cache}" _luminalshine_prebuilt_cache)
+    set(_luminalshine_prebuilt_root "${_luminalshine_prebuilt_cache}/libwebrtc-x64-release")
+    if(NOT EXISTS "${_luminalshine_prebuilt_root}/include/libwebrtc.h"
+            OR NOT EXISTS "${_luminalshine_prebuilt_root}/lib/libwebrtc.dll")
+        set(_luminalshine_prebuilt_url
+                "https://github.com/NortheBridge/libwebrtc/releases/download/${LIBWEBRTC_TAG}/libwebrtc-win-x64-release.zip")
+        set(_luminalshine_prebuilt_zip "${_luminalshine_prebuilt_cache}/libwebrtc-win-x64-release.zip")
+        message(STATUS "libwebrtc: fetching prebuilt wrapper ${LIBWEBRTC_TAG} from ${_luminalshine_prebuilt_url}")
+        file(MAKE_DIRECTORY "${_luminalshine_prebuilt_cache}")
+        file(DOWNLOAD "${_luminalshine_prebuilt_url}" "${_luminalshine_prebuilt_zip}"
+                EXPECTED_HASH "SHA256=${LIBWEBRTC_SHA256}"
+                INACTIVITY_TIMEOUT 120
+                STATUS _luminalshine_prebuilt_status
+                TLS_VERIFY ON)
+        list(GET _luminalshine_prebuilt_status 0 _luminalshine_prebuilt_code)
+        if(NOT _luminalshine_prebuilt_code EQUAL 0)
+            list(GET _luminalshine_prebuilt_status 1 _luminalshine_prebuilt_msg)
+            file(REMOVE "${_luminalshine_prebuilt_zip}")
+            message(FATAL_ERROR
+                    "libwebrtc: download of the prebuilt wrapper failed: ${_luminalshine_prebuilt_msg}\n"
+                    "  URL: ${_luminalshine_prebuilt_url}\n"
+                    "  Either provide network access, point WEBRTC_ROOT at a local wrapper, or configure\n"
+                    "  with -DSUNSHINE_ENABLE_WEBRTC=OFF.")
+        endif()
+        file(ARCHIVE_EXTRACT INPUT "${_luminalshine_prebuilt_zip}" DESTINATION "${_luminalshine_prebuilt_cache}")
+        file(REMOVE "${_luminalshine_prebuilt_zip}")
+        if(NOT EXISTS "${_luminalshine_prebuilt_root}/lib/libwebrtc.dll")
+            message(FATAL_ERROR
+                    "libwebrtc: the prebuilt archive did not unpack to ${_luminalshine_prebuilt_root} "
+                    "(expected include/ and lib/libwebrtc.dll).")
+        endif()
+    else()
+        message(STATUS "libwebrtc: using cached prebuilt wrapper ${LIBWEBRTC_TAG} at ${_luminalshine_prebuilt_root}")
+    endif()
+    set(WEBRTC_ROOT "${_luminalshine_prebuilt_root}"
+            CACHE PATH "Path to libwebrtc root (contains include/ and lib/)." FORCE)
+    unset(_luminalshine_prebuilt_cache)
+    unset(_luminalshine_prebuilt_root)
+    unset(_luminalshine_prebuilt_url)
+    unset(_luminalshine_prebuilt_zip)
+    unset(_luminalshine_prebuilt_status)
+    unset(_luminalshine_prebuilt_code)
+endif()
 set(WEBRTC_LIBRARY "" CACHE FILEPATH "Path to libwebrtc library file.")
 set(WEBRTC_INCLUDE_DIR "" CACHE PATH "Path to libwebrtc include directory.")
 set(WEBRTC_EXTRA_LIBRARIES "" CACHE STRING "Extra libraries required by libwebrtc.")
@@ -171,7 +236,8 @@ if(NOT WEBRTC_INCLUDE_DIR OR NOT WEBRTC_LIBRARY)
     if(WIN32)
         message(FATAL_ERROR
                 "libwebrtc not found.\n"
-                "  Build it once with:\n"
+                "  The prebuilt wrapper is normally fetched automatically (see LIBWEBRTC_TAG in\n"
+                "  cmake/dependencies/webrtc.cmake); to build it yourself instead:\n"
                 "    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_mingw_webrtc.ps1\n"
                 "  By default this caches artifacts to %LOCALAPPDATA%\\LuminalShine\\deps\\libwebrtc,\n"
                 "  shared across every sunshine build dir / worktree on this machine.\n"

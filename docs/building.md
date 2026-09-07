@@ -176,17 +176,19 @@ fi
 pacman -S "${dependencies[@]}"
 ```
 
-##### WebRTC (optional, Windows only)
-Sunshine can link against the libwebrtc C++ wrapper when `SUNSHINE_ENABLE_WEBRTC=ON`. The wrapper source is vendored as
-the `third-party/libwebrtc` submodule, but you must build WebRTC separately and provide a staging directory that
-contains `include/` and `lib/` (e.g., `libwebrtc.dll` and its import library). We use the `third-party/depot_tools`
-submodule for `gclient`/`gn`.
+##### WebRTC (Windows, on by default)
+LuminalShine links against the libwebrtc C++ wrapper; `SUNSHINE_ENABLE_WEBRTC` defaults to `ON` on Windows (pass
+`-DSUNSHINE_ENABLE_WEBRTC=OFF` to build without it). The wrapper source is vendored as the `third-party/libwebrtc`
+submodule; the build needs a staging directory that contains `include/` and `lib/` (`libwebrtc.dll` and its import
+library). We use the `third-party/depot_tools` submodule for `gclient`/`gn` when building it from source.
 
-> **You usually do not need to build this yourself.** `NortheBridge/libwebrtc` builds the wrapper in its own GitHub
-> Actions workflow and publishes `libwebrtc-win-x64-release.zip` as a release asset, already staged as `include/` +
-> `lib/`. Download it, unzip it, and point `-DWEBRTC_ROOT=<dir>` at the result. Windows CI does exactly this; see the
-> `LIBWEBRTC_TAG` variable in `.github/workflows/ci-windows.yml` for the pinned tag. Build from source only when you
-> need to change the wrapper itself.
+> **You usually do not need to build or download this yourself.** `NortheBridge/libwebrtc` builds the wrapper in
+> its own GitHub Actions workflow and publishes `libwebrtc-win-x64-release.zip` as a release asset, already staged
+> as `include/` + `lib/`. When CMake finds no local wrapper it downloads that archive (pinned by `LIBWEBRTC_TAG` and
+> `LIBWEBRTC_SHA256` in `cmake/dependencies/webrtc.cmake`, verified by hash) into the shared deps cache
+> (`%LOCALAPPDATA%\LuminalShine\deps\libwebrtc\prebuilt\<tag>`) and points `WEBRTC_ROOT` at it. Windows CI relies on
+> the same mechanism. Set `-DSUNSHINE_WEBRTC_FETCH_PREBUILT=OFF` to disable the download, or `-DWEBRTC_ROOT=<dir>`
+> to use a wrapper you built or unpacked yourself. Build from source only when you need to change the wrapper.
 
 ###### Quickstart (recommended)
 A helper script automates the full depot_tools / gclient / gn / ninja flow:
