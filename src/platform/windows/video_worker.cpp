@@ -1228,7 +1228,7 @@ namespace platf::video_worker {
         // while that IDR traverses the broadcaster and client decoder.
         suppress_recovery_until = recovery_now + 1000ms;
         while (invalidate->pop(0ms)) ++coalesced_invalidations;
-        BOOST_LOG(info) << "Video worker: recovery IDR submitted to UDP; suppressing obsolete reference invalidations for 1 second.";
+        BOOST_LOG(info) << "Video worker: recovery IDR submitted to the transport; suppressing obsolete reference invalidations for 1 second.";
       } else if (recovery_idr_inflight.load(std::memory_order_acquire) &&
                  recovery_now - recovery_sent_at > 1500ms) {
         // A lost/failed recovery IDR must not suppress recovery forever.

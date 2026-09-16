@@ -2205,6 +2205,21 @@ namespace webrtc_stream {
       std::optional<std::chrono::steady_clock::time_point> last_keyframe_request;
       std::optional<std::chrono::steady_clock::time_point> last_keyframe_sent;
       std::size_t encoded_prefix_logs = 0;
+      std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+      bool first_keyframe_logged = false;
+
+      // Baseline for the periodic egress log line (deltas since the last line).
+      struct EgressLogMark {
+        std::chrono::steady_clock::time_point at = std::chrono::steady_clock::now();
+        std::uint64_t video_packets = 0;
+        std::uint64_t video_pushed = 0;
+        std::uint64_t video_push_failed = 0;
+        std::uint64_t video_keyframes_pushed = 0;
+        std::uint64_t video_dropped = 0;
+        std::uint64_t keyframe_requests = 0;
+      };
+
+      EgressLogMark egress_mark;
 
       struct VideoPacingState {
         std::optional<std::chrono::steady_clock::time_point> anchor_capture;
@@ -2972,9 +2987,17 @@ namespace webrtc_stream {
     }
 
     std::optional<std::string> start_webrtc_capture(const SessionOptions &options) {
+      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
+      if (!capture_start_allowed(rtsp_active)) {
+        // See capture_start_allowed(): a second capture worker on the same
+        // display halves the frame rate of the Moonlight stream beside it.
+        // Checked before the idle token is bumped so a refused start cannot
+        // cancel a pending idle stop of an earlier browser capture.
+        BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is streaming; the capture pipeline is exclusive.";
+        return std::string {"A Moonlight session is already streaming on this host. Disconnect it before starting a browser session."};
+      }
       webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
       std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
-      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
       const auto rtsp_config = rtsp_active ? snapshot_rtsp_capture_config() : std::nullopt;
       const bool was_idle_shutdown_pending =
         webrtc_capture.idle_shutdown_pending.exchange(false, std::memory_order_acq_rel);
@@ -3174,10 +3197,14 @@ namespace webrtc_stream {
       if (!webrtc_capture.active.load(std::memory_order_acquire)) {
         return;
       }
-      if (rtsp_sessions_active.load(std::memory_order_relaxed)) {
-        return;
+      // A Moonlight session owns the display now: still stop the browser
+      // capture (its worker would otherwise share the LuminalVGD ring with
+      // Moonlight's for the whole session), but leave the topology to RTSP.
+      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
+      if (rtsp_active) {
+        BOOST_LOG(info) << "WebRTC: stopping the idle browser capture beside an active Moonlight session; the display stays with Moonlight.";
       }
-      stop_webrtc_capture_locked(true);
+      stop_webrtc_capture_locked(!rtsp_active);
     }
 
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -3275,6 +3302,31 @@ namespace webrtc_stream {
       handle_input_message(std::string_view {buffer, static_cast<std::size_t>(length)});
     }
 
+    void on_data_channel_state(void *user, int state) {
+      auto *ctx = static_cast<SessionDataChannelContext *>(user);
+      if (!ctx || !ctx->active.load(std::memory_order_acquire)) {
+        return;
+      }
+      if (state == LWRTC_DATA_CHANNEL_OPEN) {
+        BOOST_LOG(info) << "WebRTC: input channel open id=" << ctx->id;
+        return;
+      }
+      if (state != LWRTC_DATA_CHANNEL_CLOSED) {
+        return;
+      }
+      // The wrapper exposes no peer-connection state, so the input channel
+      // closing is the only signal that the browser went away (tab closed,
+      // navigated, pc.close()). Before this the session -- with its capture
+      // worker and virtual display -- outlived the browser until a DELETE
+      // that never came. This runs on libwebrtc's signaling thread inside the
+      // channel's own observer; close_session unregisters that observer and
+      // closes the peer, so it must not run re-entrantly here.
+      BOOST_LOG(info) << "WebRTC: input channel closed by the peer id=" << ctx->id << "; closing the session.";
+      task_pool.push([id = ctx->id]() {
+        close_session(id);
+      });
+    }
+
     void on_data_channel(void *user, lwrtc_data_channel_t *channel) {
       auto *ctx = static_cast<SessionDataChannelContext *>(user);
       if (!ctx || !ctx->active.load(std::memory_order_acquire) || !channel) {
@@ -3309,7 +3361,7 @@ namespace webrtc_stream {
           it->second.data_channel_context->last_mouse_move_seq.store(0, std::memory_order_release);
           it->second.data_channel_context->last_mouse_move_at_ms.store(0, std::memory_order_release);
         }
-        lwrtc_data_channel_register_observer(channel, nullptr, &on_data_channel_message, ctx);
+        lwrtc_data_channel_register_observer(channel, &on_data_channel_state, &on_data_channel_message, ctx);
       }
     }
 
@@ -3900,6 +3952,46 @@ namespace webrtc_stream {
     void ensure_media_thread();
     void stop_media_thread();
 
+    constexpr auto kEgressLogInterval = std::chrono::seconds {30};
+
+    // One info line per negotiated session every 30 s so the host log alone can
+    // answer "did frames reach the browser": what capture handed over, what
+    // libwebrtc accepted (and how many keyframes), drops, and how often the
+    // browser asked for an IDR. The 2026-09-15 log had none of this and the
+    // "no frames" report could not be placed on either side of the wire.
+    void log_egress_windows() {
+      const auto now = std::chrono::steady_clock::now();
+      std::lock_guard lg {session_mutex};
+      for (auto &[_, session] : sessions) {
+        if (!session.peer || !session.encoded_video_source) {
+          continue;
+        }
+        auto &mark = session.egress_mark;
+        if (now - mark.at < kEgressLogInterval) {
+          continue;
+        }
+        const auto &state = session.state;
+        const auto window_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - mark.at).count();
+        BOOST_LOG(info) << "WebRTC egress window id=" << state.id << ": "
+                        << (state.video_packets - mark.video_packets) << " packets from capture, "
+                        << (state.video_pushed - mark.video_pushed) << " pushed to libwebrtc ("
+                        << (state.video_keyframes_pushed - mark.video_keyframes_pushed) << " keyframes), "
+                        << (state.video_push_failed - mark.video_push_failed) << " push failures, "
+                        << (state.video_dropped - mark.video_dropped) << " dropped, "
+                        << (state.keyframe_requests - mark.keyframe_requests) << " PLI/FIR over "
+                        << window_ms << " ms; queue=" << session.video_frames.size()
+                        << " inflight=" << (session.video_inflight ? session.video_inflight->load(std::memory_order_relaxed) : 0)
+                        << " needs_keyframe=" << (session.needs_keyframe ? "yes" : "no") << '.';
+        mark.at = now;
+        mark.video_packets = state.video_packets;
+        mark.video_pushed = state.video_pushed;
+        mark.video_push_failed = state.video_push_failed;
+        mark.video_keyframes_pushed = state.video_keyframes_pushed;
+        mark.video_dropped = state.video_dropped;
+        mark.keyframe_requests = state.keyframe_requests;
+      }
+    }
+
     void media_thread_main() {
       using namespace std::chrono_literals;
       // Exception barrier: an exception escaping this thread would std::terminate the host.
@@ -3926,7 +4018,9 @@ namespace webrtc_stream {
       while (!webrtc_media_shutdown.load(std::memory_order_acquire)) {
         {
           std::unique_lock<std::mutex> lock(webrtc_media_mutex);
-          webrtc_media_cv.wait(lock, []() {
+          // Bounded wait so the periodic egress log still runs when nothing is
+          // flowing: "0 packets from capture" is exactly the line that matters then.
+          webrtc_media_cv.wait_for(lock, 1s, []() {
             return webrtc_media_shutdown.load(std::memory_order_acquire) ||
                    webrtc_media_has_work.load(std::memory_order_acquire);
           });
@@ -3944,6 +4038,7 @@ namespace webrtc_stream {
           std::shared_ptr<std::vector<std::uint8_t>> data;
           std::shared_ptr<std::atomic_uint32_t> inflight;
           bool is_keyframe = false;
+          std::int64_t frame_index = 0;
           std::optional<std::chrono::steady_clock::time_point> timestamp;
           std::chrono::steady_clock::time_point target_send {};
           std::chrono::nanoseconds pacing_slack {};
@@ -4231,6 +4326,7 @@ namespace webrtc_stream {
                 work.data = std::move(frame.data);
                 work.inflight = session.video_inflight;
                 work.is_keyframe = frame.idr;
+                work.frame_index = frame.frame_index;
                 // Use the mapped send target as the capture timestamp for WebRTC.
                 // This avoids the receiver treating frames as perpetually late due to
                 // upstream capture/encode pipeline delay.
@@ -4378,24 +4474,56 @@ namespace webrtc_stream {
             release_shared_encoded_payload,
             payload_ref
           );
-          if (pushed && !work.session_id.empty()) {
+          if (!work.session_id.empty()) {
             std::lock_guard lg {session_mutex};
             auto it = sessions.find(work.session_id);
             if (it != sessions.end()) {
-              it->second.consecutive_drops = 0;
-              if (work.is_keyframe) {
-                it->second.last_keyframe_sent = std::chrono::steady_clock::now();
-              }
-              if (work.clear_keyframe_on_success) {
-                it->second.needs_keyframe = false;
-                // Reset pacing state on keyframe delivery to recover from any accumulated drift
-                it->second.video_pacing_state.anchor_capture.reset();
-                it->second.video_pacing_state.anchor_send.reset();
-                it->second.last_video_push.reset();
+              if (!pushed) {
+                // libwebrtc creates the passthrough encoder only once the
+                // negotiated sender starts; until then every push is refused.
+                it->second.state.video_push_failed++;
+              } else {
+                it->second.consecutive_drops = 0;
+                it->second.state.video_pushed++;
+                if (work.is_keyframe) {
+                  it->second.state.video_keyframes_pushed++;
+                  it->second.last_keyframe_sent = std::chrono::steady_clock::now();
+                  if (!it->second.first_keyframe_logged) {
+                    it->second.first_keyframe_logged = true;
+                    BOOST_LOG(info) << "WebRTC: first keyframe handed to libwebrtc id=" << it->second.state.id
+                                    << ' '
+                                    << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - it->second.created_at
+                                       )
+                                         .count()
+                                    << " ms after session creation (" << work.data->size() << " bytes).";
+                  }
+                }
+                if (work.clear_keyframe_on_success) {
+                  it->second.needs_keyframe = false;
+                  // Reset pacing state on keyframe delivery to recover from any accumulated drift
+                  it->second.video_pacing_state.anchor_capture.reset();
+                  it->second.video_pacing_state.anchor_send.reset();
+                  it->second.last_video_push.reset();
+                }
               }
             }
           }
+          if (pushed && work.is_keyframe) {
+            // Acknowledge the recovery point only once libwebrtc accepted the
+            // keyframe, matching stream.cpp which raises this once an IDR
+            // reaches UDP. The isolated video worker's bridge waits on it to
+            // reopen its bounded recovery gate; nothing raised it for WebRTC,
+            // so every keyframe request ended in "recovery IDR acknowledgement
+            // timed out" 1.5 s later. Taken outside session_mutex: the capture
+            // mailbox lookup locks webrtc_capture.mutex.
+            if (auto capture_mail = current_capture_mail()) {
+              capture_mail->event<std::int64_t>(mail::video_idr_submitted)->raise(work.frame_index);
+            }
+          }
         }
+
+        log_egress_windows();
       }
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "WebRTC media thread terminated by exception (" << e.what()
@@ -4565,6 +4693,7 @@ namespace webrtc_stream {
               // When a receiver sends PLI/FIR it typically cannot decode the current delta
               // frames. Stop sending deltas until we successfully deliver an IDR.
               it->second.needs_keyframe = true;
+              it->second.state.keyframe_requests++;
 
               // Rate-limit PLI/FIR-triggered requests. Spamming IDR frames can congest the
               // connection and make initial playout buffering worse.
@@ -4721,6 +4850,18 @@ namespace webrtc_stream {
     return active_sessions.load(std::memory_order_relaxed) > 0;
   }
 
+  bool capture_start_allowed(bool rtsp_sessions_active) {
+    return !rtsp_sessions_active;
+  }
+
+  bool capture_active() {
+    return webrtc_capture.active.load(std::memory_order_acquire);
+  }
+
+  bool rtsp_sessions_are_active() {
+    return rtsp_sessions_active.load(std::memory_order_relaxed);
+  }
+
   std::optional<std::string> ensure_capture_started(const SessionOptions &options) {
     return start_webrtc_capture(options);
   }
@@ -4844,6 +4985,7 @@ namespace webrtc_stream {
     }
     if (removed) {
       local_answer_cv.notify_all();
+      BOOST_LOG(info) << "WebRTC: session closed id=" << id;
     }
 #ifdef SUNSHINE_ENABLE_WEBRTC
     if (peer) {
@@ -5580,10 +5722,20 @@ namespace webrtc_stream {
           BOOST_LOG(error) << "WebRTC: HEVC requested but offer does not include H265";
           return false;
         } else if (hevc_offer.fmtp) {
-          BOOST_LOG(debug) << "WebRTC: parsed HEVC fmtp params " << *hevc_offer.fmtp;
+          BOOST_LOG(info) << "WebRTC: browser offered H265 with fmtp " << *hevc_offer.fmtp << " for " << session_id;
         } else {
           BOOST_LOG(warning) << "WebRTC: no HEVC fmtp params found in offer";
         }
+      }
+      if (it->second.state.video) {
+        // One line that says what the browser is about to be sent; the
+        // 2026-09-15 log could not answer even "was this HDR?" without the worker log.
+        const auto &cfg = it->second.video_config;
+        BOOST_LOG(info) << "WebRTC: video for " << session_id << ": codec=" << it->second.state.codec.value_or("h264")
+                        << ' ' << cfg.width << 'x' << cfg.height << '@' << cfg.framerate
+                        << " hdr=" << (cfg.dynamicRange != 0 ? "yes" : "no")
+                        << " bitrate=" << cfg.bitrate << " kbps pacing="
+                        << it->second.state.video_pacing_mode.value_or("balanced") << '.';
       }
 
       bool created_peer = false;

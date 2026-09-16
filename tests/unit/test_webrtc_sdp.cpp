@@ -196,3 +196,11 @@ TEST(WebRtcOpusSdpTest, InsertsFmtpWhenTheOfferOmittedIt) {
   // The synthesized line must land inside the audio section.
   EXPECT_LT(result.sdp.find("a=fmtp:111"), result.sdp.find("m=video"));
 }
+
+TEST(WebRtcExclusivity, BrowserSessionIsRefusedWhileMoonlightStreams) {
+  // Two capture workers on one LuminalVGD ring split the frames between them
+  // (2026-09-15: Moonlight fell to ~40 fps beside a browser session). Moonlight
+  // has priority, so a browser capture never starts while an RTSP session runs.
+  EXPECT_FALSE(webrtc_stream::capture_start_allowed(true));
+  EXPECT_TRUE(webrtc_stream::capture_start_allowed(false));
+}

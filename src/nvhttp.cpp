@@ -2197,6 +2197,34 @@ namespace nvhttp {
     }
   }
 
+  namespace {
+    /**
+     * @brief Give a Moonlight launch/resume exclusive use of the capture pipeline.
+     *
+     * A browser (WebRTC) session runs its own capture worker on the same display.
+     * On the LuminalVGD frame ring two workers split the published frames, so the
+     * Moonlight stream that started beside a browser session on 2026-09-15 ran at
+     * ~40 fps while the browser got the other half. Moonlight wins: close the
+     * browser session(s) first. The capture also idles for a grace period after
+     * the last browser leaves (zero sessions, worker still running), so the
+     * capture state is what decides, not the session count.
+     * shutdown_all_sessions() is synchronous and also stops the WebRTC capture
+     * and reverts its display, so what follows sees a host with no active
+     * session, exactly as if the browser had disconnected.
+     */
+    void preempt_webrtc_sessions_for_moonlight(std::string_view reason) {
+      const bool sessions = webrtc_stream::has_active_sessions();
+      const bool capture = webrtc_stream::capture_active();
+      if (!sessions && !capture) {
+        return;
+      }
+      BOOST_LOG(info) << "Moonlight " << reason << " while a browser (WebRTC) "
+                      << (sessions ? "session is active" : "capture is still idling after its last session")
+                      << "; closing it so the capture pipeline stays exclusive.";
+      webrtc_stream::shutdown_all_sessions();
+    }
+  }  // namespace
+
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -2244,6 +2272,8 @@ namespace nvhttp {
     }
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
+
+    preempt_webrtc_sessions_for_moonlight("launch");
 
     const bool no_active_sessions =
       (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
@@ -2558,6 +2588,8 @@ namespace nvhttp {
 
       return;
     }
+
+    preempt_webrtc_sessions_for_moonlight("resume");
 
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
