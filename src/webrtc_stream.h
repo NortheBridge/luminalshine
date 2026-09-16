@@ -146,15 +146,26 @@ namespace webrtc_stream {
   /**
    * @brief Mark a Moonlight /launch or /resume handler as in flight.
    *
-   * Call after the handler has preempted the browser session(s) and before it
-   * prepares the display; pair with moonlight_launch_end() when the handler
-   * returns, whether it succeeded or failed. Counted, not boolean, so two
-   * handlers running back to back cannot clear each other's latch.
+   * Call at the top of the handler, before it preempts the browser session(s)
+   * and prepares the display; pair with moonlight_launch_end() when the handler
+   * returns, whether it succeeded or failed. nvhttp serves these handlers on a
+   * single thread today; counted rather than boolean so that concurrent
+   * handlers could not release each other's latch if that ever changes.
    */
   void moonlight_launch_begin();
 
   /** @brief Undo one moonlight_launch_begin(). */
   void moonlight_launch_end();
+
+  /**
+   * @brief Refusal messages for a browser session while Moonlight holds the
+   *        capture, shared by confighttp's pre-check and the capture start so
+   *        the two cannot drift apart.
+   */
+  inline constexpr const char *kMoonlightStreamingRefusal =
+    "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session.";
+  inline constexpr const char *kMoonlightConnectingRefusal =
+    "A Moonlight client is connecting to this host. Wait for it to finish connecting, or disconnect it, before starting a browser session.";
 
   std::optional<SessionState> create_session(const SessionOptions &options);
   std::optional<std::string> ensure_capture_started(const SessionOptions &options);

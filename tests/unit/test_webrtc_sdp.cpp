@@ -214,3 +214,26 @@ TEST(WebRtcExclusivity, BrowserSessionIsRefusedWhileMoonlightLaunchIsPending) {
   EXPECT_FALSE(webrtc_stream::capture_start_allowed(/*rtsp_sessions_active=*/false, /*moonlight_launch_pending=*/true));
   EXPECT_FALSE(webrtc_stream::capture_start_allowed(/*rtsp_sessions_active=*/true, /*moonlight_launch_pending=*/true));
 }
+
+TEST(WebRtcExclusivity, LaunchLatchIsHeldWhileAnyHandlerRunsAndNeverSticks) {
+  // No Moonlight launch is in flight in the test process and the RTSP server
+  // has no pending launch session, so the latch alone decides here.
+  ASSERT_FALSE(webrtc_stream::moonlight_launch_is_pending());
+
+  webrtc_stream::moonlight_launch_begin();
+  EXPECT_TRUE(webrtc_stream::moonlight_launch_is_pending());
+
+  // A second handler (should nvhttp ever run them concurrently) must not be
+  // able to release the first one's latch.
+  webrtc_stream::moonlight_launch_begin();
+  webrtc_stream::moonlight_launch_end();
+  EXPECT_TRUE(webrtc_stream::moonlight_launch_is_pending());
+
+  webrtc_stream::moonlight_launch_end();
+  EXPECT_FALSE(webrtc_stream::moonlight_launch_is_pending());
+
+  // An unbalanced release is a programming error, but it must not wrap the
+  // counter and leave the host refusing browser sessions forever.
+  webrtc_stream::moonlight_launch_end();
+  EXPECT_FALSE(webrtc_stream::moonlight_launch_is_pending());
+}

@@ -2949,14 +2949,10 @@ namespace webrtc_stream {
       // needs to consult the RTSP state.
       const bool moonlight_streaming = rtsp_sessions_active.load(std::memory_order_relaxed);
       if (!capture_start_allowed(moonlight_streaming, moonlight_launch_is_pending())) {
-        BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is "
-                           << (moonlight_streaming ? "streaming" : "starting")
+        BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight "
+                           << (moonlight_streaming ? "session is streaming" : "client is connecting")
                            << "; the capture pipeline is exclusive.";
-        return std::string {
-          moonlight_streaming ?
-            "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session." :
-            "A Moonlight session is starting on this host. Wait for it to finish, or disconnect it, before starting a browser session."
-        };
+        return std::string {moonlight_streaming ? kMoonlightStreamingRefusal : kMoonlightConnectingRefusal};
       }
       webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
       std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
@@ -3022,8 +3018,9 @@ namespace webrtc_stream {
         }
       }
 
-      // Display preparation and encoder probing. Scoped so the hot-apply read
-      // gate taken inside is released before the capture threads are spawned.
+      // Display preparation and encoder probing. The hot-apply read gate taken
+      // inside covers only this block, as it did when the block was the
+      // `!rtsp_active` branch.
       {
 #ifdef _WIN32
         stream::cancel_paused_display_cleanup();
@@ -5379,9 +5376,7 @@ namespace webrtc_stream {
     }
 
     const bool downmix_to_stereo =
-      channels > 2 &&
-      (rtsp_sessions_active.load(std::memory_order_relaxed) ||
-       (any_negotiated && negotiated_channels < channels));
+      channels > 2 && any_negotiated && negotiated_channels < channels;
 
     const float *input_samples = samples.data();
     int output_channels = channels;

@@ -3098,15 +3098,13 @@ namespace confighttp {
       rtsp_stream::session_count() > 0 || webrtc_stream::rtsp_sessions_are_active();
     const bool moonlight_launch_pending = webrtc_stream::moonlight_launch_is_pending();
     if (!webrtc_stream::capture_start_allowed(moonlight_streaming, moonlight_launch_pending)) {
-      BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is "
-                         << (moonlight_streaming ? "streaming" : "starting")
+      BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight "
+                         << (moonlight_streaming ? "session is streaming" : "client is connecting")
                          << "; the capture pipeline is exclusive.";
       bad_request(
         response,
         request,
-        moonlight_streaming ?
-          "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session." :
-          "A Moonlight session is starting on this host. Wait for it to finish, or disconnect it, before starting a browser session."
+        moonlight_streaming ? webrtc_stream::kMoonlightStreamingRefusal : webrtc_stream::kMoonlightConnectingRefusal
       );
       return;
     }
