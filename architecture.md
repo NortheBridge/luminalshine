@@ -340,9 +340,10 @@ webrtc_stream::set_remote_offer(session_id, sdp, type);
 
 1. Stores the SDP offer in the session state (`has_remote_offer = true`).
 2. Creates the WebRTC peer connection if needed (`create_peer_connection()`).
-3. Registers the data channel handler (`lwrtc_peer_register_data_channel`).
-4. Attaches media tracks (`attach_media_tracks(session)`).
-5. Calls `lwrtc_peer_set_remote_description(...)` with async callbacks.
+3. Registers the peer-connection / ICE state callbacks on a freshly created peer (`lwrtc_peer_set_state_callback`, see §5.10).
+4. Registers the data channel handler (`lwrtc_peer_register_data_channel`).
+5. Attaches media tracks (`attach_media_tracks(session)`).
+6. Calls `lwrtc_peer_set_remote_description(...)` with async callbacks.
 
 Snippet (simplified to show control flow):
 
@@ -640,6 +641,14 @@ The browser disconnect path calls `DELETE /api/webrtc/sessions/:id` (`endSession
   - A reconnect during the grace window cancels the scheduled shutdown; if the new session’s capture settings differ, capture is restarted to apply them.
 
 This keeps reconnects snappy in the common “disconnect → reconnect” case while still cleaning up when idle.
+
+**Link loss without a graceful close.** A browser that simply vanishes (Wi-Fi drop, laptop sleep, crashed tab) never sends the `DELETE`, and a data channel only reports `CLOSED` once dcSCTP exhausts its retransmissions, if ever. The host therefore also subscribes to libwebrtc's peer-connection and ICE connection state through `lwrtc_peer_set_state_callback` (registered in `set_remote_offer()` once per created peer). `link_monitor_t` (`src/webrtc_link_monitor.h`) folds both observers onto one scale and decides:
+
+- `FAILED` (either observer) → close the session immediately.
+- `DISCONNECTED` → arm a grace timer (`kLinkDisconnectGrace`, 10 s) on the task pool; if the link has not come back when it fires, close the session. A `CONNECTED` in between invalidates the timer (each real state change bumps an epoch the timer compares against), so a short Wi-Fi hiccup that ICE recovers on its own costs nothing. A browser-driven ICE restart (`checking`) while down does not reset the grace: an attempt is not a recovery.
+- `CLOSED` is ignored: it can only result from a local close, whose caller is already tearing the session down. (The current wrapper's `lwrtc_peer_close()` just drops the native peer and reports nothing; the host is written not to depend on that.)
+
+Both callbacks run on libwebrtc's signaling thread, so they never wait on `session_mutex` and never call `close_session()` inline (it closes and releases the very peer that is calling); teardown is always handed to `task_pool`. Every transition is logged at `info` (`WebRTC: peer connection state=… id=…`, `WebRTC: ICE connection state=… id=…`).
 
 ---
 

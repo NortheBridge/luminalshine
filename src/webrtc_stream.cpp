@@ -61,6 +61,7 @@
 #include "uuid.h"
 #include "video.h"
 #include "video_colorspace.h"
+#include "webrtc_link_monitor.h"
 #include "webrtc_stream.h"
 
 #ifdef _WIN32
@@ -1575,6 +1576,20 @@ namespace webrtc_stream {
       std::atomic<bool> active {true};
     };
 
+    /**
+     * @brief Per-session state behind the peer-connection / ICE state callbacks.
+     *
+     * Reports arrive on libwebrtc's signaling thread while the grace timer fires on the
+     * task pool, so the monitor is serialized by its own mutex rather than session_mutex,
+     * which the signaling thread must never wait on.
+     */
+    struct SessionLinkContext {
+      std::string id;
+      std::atomic<bool> active {true};
+      std::mutex mutex;
+      link_monitor_t monitor;
+    };
+
     struct SessionPeerContext {
       std::string session_id;
       lwrtc_peer_t *peer = nullptr;
@@ -2157,6 +2172,7 @@ namespace webrtc_stream {
       lwrtc_data_channel_t *input_channel = nullptr;
       std::shared_ptr<SessionDataChannelContext> data_channel_context;
       std::shared_ptr<SessionKeyframeContext> keyframe_context;
+      std::shared_ptr<SessionLinkContext> link_context;
   #ifdef _WIN32
       std::unique_ptr<D3D11Nv12Converter> d3d_converter;
   #endif
@@ -3295,6 +3311,132 @@ namespace webrtc_stream {
         }
         lwrtc_data_channel_register_observer(channel, nullptr, &on_data_channel_message, ctx);
       }
+    }
+
+    link_state_e link_state_from_peer_state(int state) {
+      switch (state) {
+        case LWRTC_PEER_STATE_NEW:
+        case LWRTC_PEER_STATE_CONNECTING:
+          return link_state_e::connecting;
+        case LWRTC_PEER_STATE_CONNECTED:
+          return link_state_e::connected;
+        case LWRTC_PEER_STATE_DISCONNECTED:
+          return link_state_e::disconnected;
+        case LWRTC_PEER_STATE_FAILED:
+          return link_state_e::failed;
+        case LWRTC_PEER_STATE_CLOSED:
+          return link_state_e::closed;
+        default:
+          return link_state_e::unknown;
+      }
+    }
+
+    link_state_e link_state_from_ice_state(int state) {
+      switch (state) {
+        case LWRTC_ICE_STATE_NEW:
+        case LWRTC_ICE_STATE_CHECKING:
+          return link_state_e::connecting;
+        case LWRTC_ICE_STATE_CONNECTED:
+        case LWRTC_ICE_STATE_COMPLETED:
+          return link_state_e::connected;
+        case LWRTC_ICE_STATE_DISCONNECTED:
+          return link_state_e::disconnected;
+        case LWRTC_ICE_STATE_FAILED:
+          return link_state_e::failed;
+        case LWRTC_ICE_STATE_CLOSED:
+          return link_state_e::closed;
+        default:
+          return link_state_e::unknown;
+      }
+    }
+
+    /**
+     * @brief Grace timer for a disconnected link: tear the session down if it never recovered.
+     *
+     * Runs on the task pool, so calling close_session() directly is safe here.
+     */
+    void on_link_grace_expired(const std::string &id, std::uint64_t epoch) {
+      std::shared_ptr<SessionLinkContext> ctx;
+      {
+        std::lock_guard lg {session_mutex};
+        auto it = sessions.find(id);
+        if (it == sessions.end()) {
+          return;
+        }
+        ctx = it->second.link_context;
+      }
+      if (!ctx || !ctx->active.load(std::memory_order_acquire)) {
+        return;
+      }
+      bool expired = false;
+      {
+        std::lock_guard lg {ctx->mutex};
+        expired = ctx->monitor.grace_expired(epoch);
+      }
+      if (!expired) {
+        return;
+      }
+      BOOST_LOG(warning) << "WebRTC: link still disconnected after " << kLinkDisconnectGrace.count()
+                         << " ms, closing session id=" << id;
+      close_session(id);
+    }
+
+    /**
+     * @brief Fold a peer-connection or ICE state report into the session's link monitor.
+     *
+     * Called on libwebrtc's signaling thread. It never waits on session_mutex (the peer is
+     * created and, on failure, closed while that lock is held) and never closes the session
+     * inline, since close_session() closes and releases the very peer that is calling us:
+     * teardown is always handed to the task pool.
+     */
+    void report_link_state(SessionLinkContext *ctx, const char *source, link_state_e state) {
+      if (!ctx || !ctx->active.load(std::memory_order_acquire)) {
+        return;
+      }
+      BOOST_LOG(info) << "WebRTC: " << source << " state=" << link_state_name(state) << " id=" << ctx->id;
+
+      link_action_e action = link_action_e::none;
+      std::uint64_t epoch = 0;
+      {
+        std::lock_guard lg {ctx->mutex};
+        action = ctx->monitor.report(state);
+        epoch = ctx->monitor.epoch();
+      }
+
+      switch (action) {
+        case link_action_e::close_session:
+          {
+            BOOST_LOG(warning) << "WebRTC: " << source << " failed, closing session id=" << ctx->id;
+            std::string id = ctx->id;
+            task_pool.push([id]() {
+              close_session(id);
+            });
+            break;
+          }
+        case link_action_e::start_grace_timer:
+          {
+            BOOST_LOG(info) << "WebRTC: link disconnected, closing session id=" << ctx->id
+                            << " unless it recovers within " << kLinkDisconnectGrace.count() << " ms";
+            std::string id = ctx->id;
+            task_pool.pushDelayed(
+              [id, epoch]() {
+                on_link_grace_expired(id, epoch);
+              },
+              kLinkDisconnectGrace
+            );
+            break;
+          }
+        case link_action_e::none:
+          break;
+      }
+    }
+
+    void on_peer_state(void *user, int state) {
+      report_link_state(static_cast<SessionLinkContext *>(user), "peer connection", link_state_from_peer_state(state));
+    }
+
+    void on_ice_state(void *user, int state) {
+      report_link_state(static_cast<SessionLinkContext *>(user), "ICE connection", link_state_from_ice_state(state));
     }
 
     void on_set_local_success(void *user) {
@@ -4668,6 +4810,7 @@ namespace webrtc_stream {
     lwrtc_data_channel_t *input_channel = nullptr;
     std::shared_ptr<SessionDataChannelContext> data_channel_context;
     std::shared_ptr<SessionKeyframeContext> keyframe_context;
+    std::shared_ptr<SessionLinkContext> link_context;
 #endif
     bool removed = false;
     // last_session is read only inside #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -4693,6 +4836,7 @@ namespace webrtc_stream {
       input_channel = it->second.input_channel;
       data_channel_context = it->second.data_channel_context;
       keyframe_context = it->second.keyframe_context;
+      link_context = it->second.link_context;
 #endif
       sessions.erase(it);
       removed = true;
@@ -4711,6 +4855,9 @@ namespace webrtc_stream {
       }
       if (keyframe_context) {
         keyframe_context->active.store(false, std::memory_order_release);
+      }
+      if (link_context) {
+        link_context->active.store(false, std::memory_order_release);
       }
       lwrtc_peer_close(peer);
       lwrtc_peer_release(peer);
@@ -5455,6 +5602,22 @@ namespace webrtc_stream {
         it->second.peer = new_peer;
         created_peer = true;
         active_peers.fetch_add(1, std::memory_order_relaxed);
+        // One link monitor per peer, registered once before anything can be reported:
+        // the wrapper reads the callback pointers unsynchronized on its signaling
+        // thread, so they are never rewritten on a re-offer.
+        if (it->second.link_context) {
+          it->second.link_context->active.store(false, std::memory_order_release);
+        }
+        auto link_context = std::make_shared<SessionLinkContext>();
+        link_context->id = session_id;
+        it->second.link_context = std::move(link_context);
+        BOOST_LOG(debug) << "WebRTC: registering peer state callbacks id=" << session_id;
+        lwrtc_peer_set_state_callback(
+          it->second.peer,
+          &on_peer_state,
+          &on_ice_state,
+          it->second.link_context.get()
+        );
       }
       if (!it->second.data_channel_context) {
         auto data_context = std::make_shared<SessionDataChannelContext>();
@@ -5471,6 +5634,13 @@ namespace webrtc_stream {
       if (!attach_media_tracks(it->second)) {
         BOOST_LOG(error) << "WebRTC: failed to attach media tracks id=" << session_id;
         if (created_peer && it->second.peer) {
+          // Deactivate the monitor before the peer goes away and keep it alive until
+          // the peer is released, so nothing the wrapper might still report is taken
+          // for a link loss. A later offer creates a fresh peer and monitor.
+          auto link_context = std::move(it->second.link_context);
+          if (link_context) {
+            link_context->active.store(false, std::memory_order_release);
+          }
           lwrtc_peer_close(it->second.peer);
           lwrtc_peer_release(it->second.peer);
           it->second.peer = nullptr;

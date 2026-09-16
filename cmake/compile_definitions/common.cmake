@@ -109,6 +109,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/session_monitor_client.cpp"
         "${CMAKE_SOURCE_DIR}/src/session_monitor_proxy.h"
         "${CMAKE_SOURCE_DIR}/src/session_monitor_proxy.cpp"
+        "${CMAKE_SOURCE_DIR}/src/webrtc_link_monitor.cpp"
+        "${CMAKE_SOURCE_DIR}/src/webrtc_link_monitor.h"
         "${CMAKE_SOURCE_DIR}/src/webrtc_stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/webrtc_stream.h"
         "${CMAKE_SOURCE_DIR}/src/rtsp.cpp"

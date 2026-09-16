@@ -35,9 +35,9 @@ unset(_luminalshine_default_webrtc_root)
 # into the shared deps cache and point WEBRTC_ROOT at it, so "cmake -B build"
 # just works and CI builds against a known binary. Bump LIBWEBRTC_TAG and
 # LIBWEBRTC_SHA256 together with the third-party/libwebrtc submodule.
-set(LIBWEBRTC_TAG "luminalshine-m150.0"
+set(LIBWEBRTC_TAG "luminalshine-m150.1"
         CACHE STRING "NortheBridge/libwebrtc release tag providing the prebuilt wrapper.")
-set(LIBWEBRTC_SHA256 "19366379368f5619195e59838cf2191c27f2988a801f55b6a6397d420111ea89"
+set(LIBWEBRTC_SHA256 "45fec22b910b92b414da4a1fa65179baa4367e4db13c43aefcf55b36490d77a0"
         CACHE STRING "SHA-256 of libwebrtc-win-x64-release.zip for LIBWEBRTC_TAG.")
 option(SUNSHINE_WEBRTC_FETCH_PREBUILT
         "Download the prebuilt libwebrtc wrapper when no local build is found." ON)
