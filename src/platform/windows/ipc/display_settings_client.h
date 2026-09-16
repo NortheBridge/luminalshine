@@ -81,6 +81,29 @@ namespace platf::display_helper_client {
 
   // Reset the cached connection so the next send will reconnect.
   void reset_connection();
+
+  /**
+   * @brief Bind the display helper's process handle so connect waits are bounded by its liveness.
+   *
+   * While a live process is bound, a connect keeps polling for the helper's pipe up to its time
+   * budget; once that process exits the wait ends immediately instead of running to the deadline.
+   * The client keeps its own duplicate of the handle, so the caller may close or replace the
+   * original at any time. Pass nullptr to unbind (connects then use the time bound only).
+   *
+   * @param process_handle A Win32 process HANDLE for the helper, or nullptr.
+   */
+  void bind_helper_process(void *process_handle);
+
+  /**
+   * @brief Establish (or re-establish) the cached connection to the helper's pipe.
+   *
+   * Polls CreateFileW / WaitNamedPipe every 50 ms for up to connect_timeout_ms, returning early if
+   * the bound helper process exits. Every connection runs the helper's anonymous-pipe handshake.
+   *
+   * @param connect_timeout_ms Upper bound on the wait; 0 means a single attempt.
+   * @return true when a connection is cached and ready for use.
+   */
+  bool ensure_connected(int connect_timeout_ms);
 }  // namespace platf::display_helper_client
 
 #endif

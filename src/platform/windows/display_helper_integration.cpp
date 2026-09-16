@@ -646,23 +646,38 @@ namespace {
   constexpr DWORD kHelperForceKillWaitMs = 2000;
 
   bool wait_for_helper_ipc_ready_locked() {
-    const auto deadline = std::chrono::steady_clock::now() + kHelperIpcReadyTimeout;
+    using namespace std::chrono;
+    const auto start = steady_clock::now();
+    const auto deadline = start + kHelperIpcReadyTimeout;
     int attempts = 0;
 
     platf::display_helper_client::reset_connection();
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (steady_clock::now() < deadline) {
       if (shutdown_requested()) {
         return false;
       }
-      if (platf::display_helper_client::send_ping()) {
-        if (attempts > 0) {
-          BOOST_LOG(debug) << "Display helper IPC became reachable after " << attempts << " retries.";
-        }
+      // The connect polls for the helper's pipe every 50 ms for the whole remaining budget and
+      // returns as soon as the pipe appears — or early, when the bound helper process exits. No
+      // fixed "give the helper a moment" delay is needed in front of it, and a helper that takes a
+      // second to come up under load is waited out instead of tripping a 500 ms attempt cap.
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
+      ++attempts;
+      if (platf::display_helper_client::ensure_connected(static_cast<int>(std::max<long long>(remaining.count(), 0))) &&
+          platf::display_helper_client::send_ping()) {
+        BOOST_LOG(debug) << "Display helper IPC became reachable after "
+                         << duration_cast<milliseconds>(steady_clock::now() - start).count()
+                         << " ms (" << attempts << " attempt(s)).";
         return true;
       }
-      ++attempts;
-      std::this_thread::sleep_for(kHelperIpcReadyPoll);
+      if (HANDLE h = helper_proc().get_process_handle(); h && WaitForSingleObject(h, 0) == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        GetExitCodeProcess(h, &exit_code);
+        BOOST_LOG(warning) << "Display helper exited (code=" << exit_code
+                           << ") before its IPC became reachable.";
+        return false;
+      }
       platf::display_helper_client::reset_connection();
+      std::this_thread::sleep_for(kHelperIpcReadyPoll);
     }
 
     BOOST_LOG(warning) << "Display helper IPC did not respond within " << kHelperIpcReadyTimeout.count()
@@ -1063,8 +1078,9 @@ namespace {
       }
     }
 
-    // Final initialization delay for pipe server creation
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Bound the pipe connect by this process's liveness: the client polls for the helper's pipe
+    // until it appears or the helper exits, so no fixed pipe-creation delay is needed here.
+    platf::display_helper_client::bind_helper_process(helper_proc().get_process_handle());
     return wait_for_helper_ipc_ready_locked();
   }
 
