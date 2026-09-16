@@ -68,8 +68,8 @@ namespace platf::display_helper_client {
       return h;
     }
 
-    // Liveness probe handed to the pipe factory. Unknown (nothing bound) reads as "still alive" so
-    // the connect falls back to its time bound rather than giving up at once.
+    // Liveness of the bound helper process. Unknown (nothing bound) reads as "still alive" so a
+    // connect falls back to its time bound rather than giving up at once.
     bool helper_process_exited() {
       std::lock_guard<std::mutex> lg(helper_process_mutex());
       const HANDLE h = bound_helper_process();
@@ -77,6 +77,13 @@ namespace platf::display_helper_client {
         return false;
       }
       return WaitForSingleObject(h, 0) == WAIT_OBJECT_0;
+    }
+
+    // Abort predicate handed to the pipe factory: polled every 50 ms while a connect waits for the
+    // helper's pipe, so neither a helper that died during startup nor a shutdown that begins
+    // mid-wait costs the full connect budget.
+    bool abort_connect_wait() {
+      return shutdown_requested() || helper_process_exited();
     }
 
   }  // namespace
@@ -118,13 +125,6 @@ namespace platf::display_helper_client {
         auto result = pipe.receive(buffer, bytes_read, timeout_ms);
 
         if (result == platf::dxgi::PipeResult::Timeout) {
-          // The reply can only arrive on the connection that carried the APPLY. The pipe object
-          // never reconnects behind our back (see ensure_connected_locked), so a connection that
-          // is no longer up means the reply is unreachable; stop instead of waiting out the budget.
-          if (!pipe.is_connected()) {
-            BOOST_LOG(error) << "Display helper IPC: connection dropped while waiting for APPLY result";
-            return std::nullopt;
-          }
           continue;
         }
         if (result != platf::dxgi::PipeResult::Success) {
@@ -243,18 +243,19 @@ namespace platf::display_helper_client {
   // Ensure connected while holding the pipe mutex. Returns true on success.
   //
   // Every connection goes through AnonymousPipeFactory, i.e. it consumes the helper's anonymous-pipe
-  // handshake. The helper's server always speaks that handshake: the first thing it writes on a new
-  // control connection is an 80-byte AnonConnectMsg preamble (a "{GUID}" in UTF-16) naming the data
-  // pipe. A client that skipped the handshake (the former raw named-pipe fallback) received that
-  // preamble inside its framed byte stream; FramedPipe's resync heuristic then locked onto a bogus
-  // frame length derived from the GUID's trailing bytes and swallowed every subsequent helper reply
-  // (APPLY accepted, APPLY result, ping echoes) while the host waited out the full completion
-  // timeout. AnonymousPipeFactory::create_client already degrades to the plain control pipe when no
-  // handshake message arrives, so there is no case the raw fallback served that this does not.
+  // handshake. The helper's server speaks that handshake whenever it can create an anonymous server
+  // (its own plain named-pipe server is only a fallback for when that creation fails): the first
+  // thing it writes on a new control connection is an 80-byte AnonConnectMsg preamble (a "{GUID}"
+  // in UTF-16) naming the data pipe. A client that skipped the handshake (the former raw named-pipe
+  // fallback) received that preamble inside its framed byte stream; FramedPipe's resync heuristic
+  // then locked onto a bogus frame length derived from the GUID's trailing bytes and swallowed every
+  // subsequent helper reply (APPLY accepted, APPLY result, ping echoes) while the host waited out
+  // the full completion timeout. AnonymousPipeFactory::create_client already degrades to the plain
+  // control pipe when no handshake message arrives, so there is no case the raw fallback served
+  // that this does not.
   //
-  // The connect wait is bounded by the budget below and by helper-process liveness (see
-  // bind_helper_process): a slow helper start is polled until its pipe appears, a crashed one is
-  // reported as soon as the process is gone.
+  // The connect wait is bounded by the budget below and by abort_connect_wait: a slow helper start
+  // is polled until its pipe appears; a helper that died, or a shutdown, ends the wait at once.
   static bool ensure_connected_locked(std::optional<int> connect_timeout_override_ms = std::nullopt) {
     if (shutdown_requested()) {
       return false;
@@ -276,7 +277,7 @@ namespace platf::display_helper_client {
 
     platf::dxgi::ClientConnectOptions connect_options;
     connect_options.retry.max_wait = std::chrono::milliseconds(connect_timeout_ms);
-    connect_options.server_exited = helper_process_exited;
+    connect_options.abort_wait = abort_connect_wait;
 
     auto anonymous_factory = std::make_unique<platf::dxgi::AnonymousPipeFactory>();
     anonymous_factory->set_client_connect_options(std::move(connect_options));
@@ -288,7 +289,9 @@ namespace platf::display_helper_client {
     }
     pipe.reset();
     BOOST_LOG(warning) << "Display helper IPC: connection failed"
-                       << (helper_process_exited() ? " (helper process has exited)" : "");
+                       << (shutdown_requested() ? " (shutdown requested)" :
+                           helper_process_exited() ? " (helper process has exited)" :
+                                                     "");
     return false;
   }
 

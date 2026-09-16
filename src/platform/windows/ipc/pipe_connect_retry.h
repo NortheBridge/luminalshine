@@ -10,8 +10,9 @@
  *
  * The wait is bounded in two ways: by a deadline (`ConnectRetryPolicy::max_wait`, an upper bound
  * the caller keeps short for fire-and-forget commands and long for a freshly launched server),
- * and by server-process liveness. When the caller knows the server process has exited there is
- * no point in polling until the deadline, so the policy gives up immediately.
+ * and by an abort signal from the caller. When the caller knows further waiting is pointless —
+ * the server process it launched has exited, or the caller itself is shutting down — the policy
+ * gives up immediately instead of polling until the deadline.
  */
 #pragma once
 
@@ -46,7 +47,7 @@ namespace platf::ipc {
   enum class GiveUpReason {
     none,
     fatal_error,  ///< The last attempt failed with an error retrying cannot fix.
-    server_exited,  ///< The caller reported the server process gone.
+    aborted,  ///< The caller asked to stop waiting (server process exited, shutdown, ...).
     deadline,  ///< `ConnectRetryPolicy::max_wait` elapsed.
   };
 
@@ -78,8 +79,9 @@ namespace platf::ipc {
    * @param policy Tunables (deadline and per-state waits).
    * @param elapsed Time since the first attempt started.
    * @param attempt Classification of the attempt that just finished.
-   * @param server_exited True when the caller knows the server process is gone. Ignored for a
-   *                      successful attempt: an open handle is an open handle.
+   * @param abort_requested True when the caller wants the wait to end now — typically because the
+   *                        server process it launched has exited, or because it is shutting down.
+   *                        Ignored for a successful attempt: an open handle is an open handle.
    * @return The next step. Waits are clamped to the remaining budget so the loop never overshoots
    *         `policy.max_wait` by more than one attempt, and are always at least 1 ms when non-zero.
    */
@@ -87,7 +89,7 @@ namespace platf::ipc {
     const ConnectRetryPolicy &policy,
     std::chrono::milliseconds elapsed,
     ConnectAttempt attempt,
-    bool server_exited
+    bool abort_requested
   ) {
     using std::chrono::milliseconds;
 
@@ -97,8 +99,8 @@ namespace platf::ipc {
     if (attempt == ConnectAttempt::fatal) {
       return {ConnectAction::give_up, milliseconds {0}, GiveUpReason::fatal_error};
     }
-    if (server_exited) {
-      return {ConnectAction::give_up, milliseconds {0}, GiveUpReason::server_exited};
+    if (abort_requested) {
+      return {ConnectAction::give_up, milliseconds {0}, GiveUpReason::aborted};
     }
 
     const milliseconds remaining = policy.max_wait - elapsed;

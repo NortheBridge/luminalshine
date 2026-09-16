@@ -434,16 +434,16 @@ namespace platf::dxgi {
   /**
    * @brief How a client factory waits for a server that has not created its pipe yet.
    *
-   * `retry` bounds the wait by time (default 500 ms, the historical behaviour). `server_exited` is an
-   * optional liveness probe for the server process: while it returns false the client keeps polling
-   * up to the deadline; once it returns true the wait ends immediately, because a pipe that process
-   * was going to create is never coming. Callers that launched the server themselves (the display
-   * helper client) bind the probe to the child's process handle so a slow start is waited out but a
-   * crashed start is reported at once instead of after the full deadline.
+   * `retry` bounds the wait by time (default 500 ms, the historical behaviour). `abort_wait` is an
+   * optional predicate polled between attempts: while it returns false the client keeps polling up
+   * to the deadline; once it returns true the wait ends immediately (`GiveUpReason::aborted`).
+   * Callers that launched the server themselves (the display helper client) answer it from the
+   * child's process handle — and from their own shutdown flag — so a slow start is waited out but a
+   * crashed start, or a shutdown, is reported at once instead of after the full deadline.
    */
   struct ClientConnectOptions {
     platf::ipc::ConnectRetryPolicy retry {};
-    std::function<bool()> server_exited;
+    std::function<bool()> abort_wait;
   };
 
   class NamedPipeFactory: public IAsyncPipeFactory {
@@ -474,6 +474,11 @@ namespace platf::dxgi {
      * 500 ms cap with no liveness probe.
      */
     void set_client_connect_options(ClientConnectOptions options);
+
+    /**
+     * @brief The options create_client currently uses.
+     */
+    const ClientConnectOptions &client_connect_options() const noexcept;
 
   private:
     /**
@@ -568,8 +573,9 @@ namespace platf::dxgi {
     /**
      * @brief Forward client connect options into the underlying NamedPipeFactory.
      *
-     * Governs the control-pipe connect and, because the same factory opens it, the data-pipe
-     * connect that follows a successful handshake.
+     * Governs the control-pipe connect. The data-pipe connect that follows a successful handshake
+     * keeps its historical shape (500 ms per attempt inside a 5 s retry loop) and shares only the
+     * abort predicate, so a long control-pipe budget is never multiplied into the handshake.
      */
     void set_client_connect_options(ClientConnectOptions options);
 

@@ -258,14 +258,20 @@ namespace platf::dxgi {
     _connect_options = std::move(options);
   }
 
+  const ClientConnectOptions &NamedPipeFactory::client_connect_options() const noexcept {
+    return _connect_options;
+  }
+
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
     auto wPipeBase = utf8_to_wide(pipeName);
     std::wstring fullPipeName = (wPipeBase.find(LR"(\\.\pipe\)") == 0) ? wPipeBase : LR"(\\.\pipe\)" + wPipeBase;
 
     winrt::file_handle hPipe = create_client_pipe(fullPipeName);
     if (!hPipe) {
+      // create_client_pipe has already logged why (timeout, abort, or the Win32 error) at the
+      // appropriate level; this line only records the failure code for the caller's context.
       DWORD err = GetLastError();
-      BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
+      BOOST_LOG(debug) << "NamedPipeFactory::create_client: no connection (" << err << ")";
       return nullptr;
     }
 
@@ -305,9 +311,9 @@ namespace platf::dxgi {
         attempt = ConnectAttempt::server_not_found;
       }
 
-      // Only consult the probe when we actually have to wait; an open handle is an open handle.
-      const bool server_exited = !pipe && _connect_options.server_exited && _connect_options.server_exited();
-      const auto step = platf::ipc::next_connect_step(policy, elapsed(), attempt, server_exited);
+      // Only consult the predicate when we actually have to wait; an open handle is an open handle.
+      const bool abort_requested = !pipe && _connect_options.abort_wait && _connect_options.abort_wait();
+      const auto step = platf::ipc::next_connect_step(policy, elapsed(), attempt, abort_requested);
 
       switch (step.action) {
         case ConnectAction::done:
@@ -338,10 +344,10 @@ namespace platf::dxgi {
 
         case ConnectAction::give_up:
           switch (step.reason) {
-            case GiveUpReason::server_exited:
+            case GiveUpReason::aborted:
               BOOST_LOG(warning) << "CreateFileW gave up after " << elapsed().count()
-                                 << "ms: the pipe server process has exited before creating the pipe"
-                                 << " (last error " << err << ").";
+                                 << "ms: the caller aborted the wait for the pipe server"
+                                 << " (server process exited or shutting down; last error " << err << ").";
               break;
             case GiveUpReason::deadline:
               if (err == ERROR_FILE_NOT_FOUND) {
@@ -945,13 +951,30 @@ namespace platf::dxgi {
   }
 
   std::unique_ptr<INamedPipe> AnonymousPipeFactory::connect_to_data_pipe(const std::string &pipeNameStr) {
+    // The server creates the data pipe as soon as it has read our ACK, so it normally appears within
+    // milliseconds. Keep the historical shape here — 500 ms per attempt inside a 5 s retry loop —
+    // instead of inheriting the control pipe's (possibly multi-second) per-attempt budget, which
+    // would multiply the worst case. Only the abort predicate is shared, so a server that dies
+    // mid-handshake, or a caller that starts shutting down, ends the loop at once.
+    const auto abort_wait = _pipe_factory.client_connect_options().abort_wait;
+    NamedPipeFactory data_factory = _pipe_factory;
+    {
+      ClientConnectOptions data_options;
+      data_options.abort_wait = abort_wait;
+      data_factory.set_client_connect_options(std::move(data_options));
+    }
+
     std::unique_ptr<INamedPipe> data_pipe = nullptr;
     auto retry_start = std::chrono::steady_clock::now();
     const auto retry_timeout = std::chrono::seconds(5);
 
     while (std::chrono::steady_clock::now() - retry_start < retry_timeout) {
-      data_pipe = _pipe_factory.create_client(pipeNameStr);
+      data_pipe = data_factory.create_client(pipeNameStr);
       if (data_pipe) {
+        break;
+      }
+      if (abort_wait && abort_wait()) {
+        BOOST_LOG(warning) << "Anonymous handshake: data pipe connect aborted (server exited or shutting down).";
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

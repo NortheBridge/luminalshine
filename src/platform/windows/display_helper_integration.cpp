@@ -975,6 +975,9 @@ namespace {
         BOOST_LOG(warning) << "Display helper: hard restart requested; terminating existing instance (pid=" << pid
                            << ") with no grace period.";
         platf::display_helper_client::reset_connection();
+        // The bound process is about to go away; until the replacement is bound, concurrent connects
+        // (watchdog ping, fast DISARM) should use their time bound rather than be told "exited".
+        platf::display_helper_client::bind_helper_process(nullptr);
         helper_proc().terminate();
 
         DWORD wait_result = WaitForSingleObject(h, kHelperForceKillWaitMs);
@@ -1004,6 +1007,7 @@ namespace {
       return false;
     }
 
+    platf::display_helper_client::bind_helper_process(nullptr);
     kill_all_helper_processes();
 
     // Compute path to luminalshine_display_helper.exe inside the tools subdirectory next to luminalshine.exe
@@ -1046,6 +1050,9 @@ namespace {
 
     DWORD pid = GetProcessId(h);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
+    // Bind immediately so every connect from here on — including concurrent ones that do not hold
+    // helper_mutex — is bounded by this process's liveness rather than a fixed delay.
+    platf::display_helper_client::bind_helper_process(h);
 
     // Give the helper process time to initialize and create its named pipe server
     // Check if it exits early (e.g., singleton mutex conflict from incomplete cleanup)
@@ -1065,6 +1072,7 @@ namespace {
             return false;
           }
           h = helper_proc().get_process_handle();
+          platf::display_helper_client::bind_helper_process(h);
           if (h) {
             pid = GetProcessId(h);
             BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
@@ -1078,9 +1086,8 @@ namespace {
       }
     }
 
-    // Bound the pipe connect by this process's liveness: the client polls for the helper's pipe
-    // until it appears or the helper exits, so no fixed pipe-creation delay is needed here.
-    platf::display_helper_client::bind_helper_process(helper_proc().get_process_handle());
+    // No fixed pipe-creation delay here: the connect below polls for the helper's pipe until it
+    // appears, the budget expires, or the (bound) helper process exits.
     return wait_for_helper_ipc_ready_locked();
   }
 

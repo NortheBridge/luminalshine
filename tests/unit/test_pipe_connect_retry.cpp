@@ -4,8 +4,8 @@
  *
  * Covers the decision logic behind NamedPipeFactory::create_client_pipe: a client that races the
  * display helper's startup must keep polling for the pipe up to its time budget, stop as soon as
- * the helper process is known to have exited, and never overshoot the budget by more than one
- * attempt. The policy is pure (no Win32), so these tests run on every platform.
+ * the caller aborts the wait (helper process exited, shutdown), and never overshoot the budget by
+ * more than one attempt. The policy is pure (no Win32), so these tests run on every platform.
  */
 #include "../tests_common.h"
 #include "src/platform/windows/ipc/pipe_connect_retry.h"
@@ -62,7 +62,7 @@ namespace {
 }  // namespace
 
 TEST(PipeConnectRetry, SuccessfulAttemptIsDoneRegardlessOfLiveness) {
-  const auto step = next_connect_step(kDefaultPolicy, 0ms, ConnectAttempt::connected, /*server_exited=*/true);
+  const auto step = next_connect_step(kDefaultPolicy, 0ms, ConnectAttempt::connected, /*abort_requested=*/true);
   EXPECT_EQ(step.action, ConnectAction::done);
   EXPECT_EQ(step.wait, 0ms);
   EXPECT_EQ(step.reason, GiveUpReason::none);
@@ -115,24 +115,24 @@ TEST(PipeConnectRetry, ZeroBudgetMeansSingleAttempt) {
   EXPECT_EQ(step.reason, GiveUpReason::deadline);
 }
 
-TEST(PipeConnectRetry, ServerExitGivesUpBeforeDeadline) {
+TEST(PipeConnectRetry, AbortGivesUpBeforeDeadline) {
   ConnectRetryPolicy policy;
   policy.max_wait = 5000ms;
 
   const auto not_found = next_connect_step(policy, 100ms, ConnectAttempt::server_not_found, true);
   EXPECT_EQ(not_found.action, ConnectAction::give_up);
-  EXPECT_EQ(not_found.reason, GiveUpReason::server_exited);
+  EXPECT_EQ(not_found.reason, GiveUpReason::aborted);
 
   // A busy pipe with our server gone belongs to something else; do not wait on it.
   const auto busy = next_connect_step(policy, 100ms, ConnectAttempt::server_busy, true);
   EXPECT_EQ(busy.action, ConnectAction::give_up);
-  EXPECT_EQ(busy.reason, GiveUpReason::server_exited);
+  EXPECT_EQ(busy.reason, GiveUpReason::aborted);
 }
 
-TEST(PipeConnectRetry, ServerExitOutranksDeadlineReason) {
+TEST(PipeConnectRetry, AbortOutranksDeadlineReason) {
   const auto step = next_connect_step(kDefaultPolicy, 5000ms, ConnectAttempt::server_not_found, true);
   EXPECT_EQ(step.action, ConnectAction::give_up);
-  EXPECT_EQ(step.reason, GiveUpReason::server_exited);
+  EXPECT_EQ(step.reason, GiveUpReason::aborted);
 }
 
 TEST(PipeConnectRetry, WaitsAreNeverZeroWhileRetrying) {
@@ -168,7 +168,7 @@ TEST(PipeConnectRetry, CrashedServerIsReportedPromptly) {
   policy.max_wait = 5000ms;
   const auto sim = SimulatedConnect::run(policy, std::nullopt, 300ms);
   EXPECT_EQ(sim.last.action, ConnectAction::give_up);
-  EXPECT_EQ(sim.last.reason, GiveUpReason::server_exited);
+  EXPECT_EQ(sim.last.reason, GiveUpReason::aborted);
   EXPECT_GE(sim.elapsed, 300ms);
   EXPECT_LT(sim.elapsed, 300ms + policy.not_found_poll);
 }
