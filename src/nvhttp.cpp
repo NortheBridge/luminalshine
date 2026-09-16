@@ -2275,6 +2275,19 @@ namespace nvhttp {
 
     preempt_webrtc_sessions_for_moonlight("launch");
 
+    // From here until this handler returns, a browser session must not start
+    // (webrtc_stream::moonlight_launch_is_pending()): the RTSP-active flag is
+    // raised only when the session starts, seconds after display preparation
+    // begins here. Deliberately not disabled on success -- once
+    // launch_session_raise() has run, rtsp_stream::launch_session_pending()
+    // carries the window until the client starts the session or the launch
+    // expires unclaimed, so a client that never connects cannot leave the
+    // host refusing browser sessions.
+    webrtc_stream::moonlight_launch_begin();
+    auto moonlight_launch_guard = util::fail_guard([]() {
+      webrtc_stream::moonlight_launch_end();
+    });
+
     const bool no_active_sessions =
       (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
     // Runtime overrides are global process state. Do not reapply them while
@@ -2590,6 +2603,12 @@ namespace nvhttp {
     }
 
     preempt_webrtc_sessions_for_moonlight("resume");
+
+    // Same latch as launch(): see the comment there.
+    webrtc_stream::moonlight_launch_begin();
+    auto moonlight_launch_guard = util::fail_guard([]() {
+      webrtc_stream::moonlight_launch_end();
+    });
 
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are

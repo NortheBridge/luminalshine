@@ -3090,12 +3090,24 @@ namespace confighttp {
     // failure path runs a virtual-display cleanup, and while Moonlight streams
     // (or is still tearing down, or holds a paused virtual display for resume)
     // the display belongs to the Moonlight session. session_count() covers the
-    // handshake window before stream.cpp raises the RTSP-active flag.
-    if (!webrtc_stream::capture_start_allowed(
-          rtsp_stream::session_count() > 0 || webrtc_stream::rtsp_sessions_are_active()
-        )) {
-      BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is streaming; the capture pipeline is exclusive.";
-      bad_request(response, request, "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session.");
+    // handshake window before stream.cpp raises the RTSP-active flag, and
+    // moonlight_launch_is_pending() the window before that: a /launch or
+    // /resume still preparing the display, or answered but not yet claimed by
+    // its client over RTSP.
+    const bool moonlight_streaming =
+      rtsp_stream::session_count() > 0 || webrtc_stream::rtsp_sessions_are_active();
+    const bool moonlight_launch_pending = webrtc_stream::moonlight_launch_is_pending();
+    if (!webrtc_stream::capture_start_allowed(moonlight_streaming, moonlight_launch_pending)) {
+      BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is "
+                         << (moonlight_streaming ? "streaming" : "starting")
+                         << "; the capture pipeline is exclusive.";
+      bad_request(
+        response,
+        request,
+        moonlight_streaming ?
+          "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session." :
+          "A Moonlight session is starting on this host. Wait for it to finish, or disconnect it, before starting a browser session."
+      );
       return;
     }
     if (auto error = webrtc_stream::ensure_capture_started(options)) {

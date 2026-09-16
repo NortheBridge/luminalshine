@@ -201,6 +201,16 @@ TEST(WebRtcExclusivity, BrowserSessionIsRefusedWhileMoonlightStreams) {
   // Two capture workers on one LuminalVGD ring split the frames between them
   // (2026-09-15: Moonlight fell to ~40 fps beside a browser session). Moonlight
   // has priority, so a browser capture never starts while an RTSP session runs.
-  EXPECT_FALSE(webrtc_stream::capture_start_allowed(true));
-  EXPECT_TRUE(webrtc_stream::capture_start_allowed(false));
+  EXPECT_FALSE(webrtc_stream::capture_start_allowed(/*rtsp_sessions_active=*/true, /*moonlight_launch_pending=*/false));
+  EXPECT_TRUE(webrtc_stream::capture_start_allowed(/*rtsp_sessions_active=*/false, /*moonlight_launch_pending=*/false));
+}
+
+TEST(WebRtcExclusivity, BrowserSessionIsRefusedWhileMoonlightLaunchIsPending) {
+  // The RTSP-active flag is raised only when the Moonlight session starts,
+  // seconds after /launch began preparing the display, and session_count()
+  // sees only sessions the RTSP handshake has inserted. A browser Connect in
+  // that window used to pass and start a second capture nothing stopped, so a
+  // pending launch refuses the browser exactly like a streaming session does.
+  EXPECT_FALSE(webrtc_stream::capture_start_allowed(/*rtsp_sessions_active=*/false, /*moonlight_launch_pending=*/true));
+  EXPECT_FALSE(webrtc_stream::capture_start_allowed(/*rtsp_sessions_active=*/true, /*moonlight_launch_pending=*/true));
 }
