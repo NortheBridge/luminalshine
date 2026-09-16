@@ -224,6 +224,12 @@
               <button @click="dismissNotification"><i class="fas fa-times"></i></button>
             </div>
           </Transition>
+
+          <!-- Esc hold progress (fullscreen only) -->
+          <div v-if="escHoldActive" class="esc-hold-hint">
+            <i class="fas fa-keyboard"></i>
+            <span>{{ $t('webrtc.esc_hold_progress') }}</span>
+          </div>
         </div>
 
         <!-- Quick Actions Bar -->
@@ -2056,7 +2062,16 @@ function startSessionStatusPolling(): void {
 }
 
 const ESC_HOLD_MS = 2000;
+// A single Esc tap (sent to the host) should not flash the pill; show it only
+// once the key has clearly been held.
+const ESC_HOLD_PILL_DELAY_MS = 250;
 let escHoldTimer: number | null = null;
+// 0 = no pending pill timer (browser timer ids are always positive).
+let escHoldPillTimer = 0;
+// True while Esc is being held towards the fullscreen exit; drives the on-screen pill.
+const escHoldActive = ref(false);
+// The "hold Esc" toast is shown once per connection, on the first fullscreen entry.
+let fullscreenHintShown = false;
 let fullscreenKeyboardLockRequested = false;
 
 function getFullscreenElement(): Element | null {
@@ -2165,12 +2180,18 @@ function isTabActive(): boolean {
 }
 
 const onFullscreenChange = () => {
+  const wasFullscreen = isFullscreen.value;
   const active = isFullscreenActive();
   if (active) pseudoFullscreen.value = false;
   isFullscreen.value = active || pseudoFullscreen.value;
   if (!isFullscreen.value) {
     cancelEscHold();
     releaseFullscreenKeyboardLock();
+  } else if (!wasFullscreen && !fullscreenHintShown) {
+    // With the keyboard locked a single Esc goes to the host; only a held Esc
+    // leaves fullscreen, and nothing on screen said so.
+    fullscreenHintShown = true;
+    notifyInfo(t('webrtc.fullscreen_hint_title'), t('webrtc.fullscreen_hint'));
   }
   modeSwitchDrainUntil = Date.now() + videoLatencyProfile.modeSwitchDrainMs;
   triggerVideoDrainWindow(videoLatencyProfile.modeSwitchDrainMs, 'fullscreen');
@@ -2216,15 +2237,18 @@ const onFullscreenEscapeDown = (event: KeyboardEvent) => {
   }
   event.preventDefault();
   event.stopPropagation();
+  escHoldPillTimer = window.setTimeout(() => {
+    escHoldPillTimer = 0;
+    escHoldActive.value = true;
+  }, ESC_HOLD_PILL_DELAY_MS);
   escHoldTimer = window.setTimeout(async () => {
     escHoldTimer = null;
-    if (getFullscreenElement()) {
-      try {
-        await exitFullscreen();
-      } catch {
-        /* ignore */
-      }
-    }
+    cancelEscHold();
+    if (!isFullscreen.value) return;
+    // Leave whichever mode is active. exitFullscreen() alone only covered the
+    // Fullscreen API, so in the pseudo-fullscreen fallback (used when the
+    // browser refuses requestFullscreen) Esc could never get out.
+    await toggleFullscreen();
   }, ESC_HOLD_MS);
 };
 
@@ -2241,6 +2265,11 @@ function cancelEscHold() {
     window.clearTimeout(escHoldTimer);
     escHoldTimer = null;
   }
+  if (escHoldPillTimer) {
+    window.clearTimeout(escHoldPillTimer);
+    escHoldPillTimer = 0;
+  }
+  escHoldActive.value = false;
 }
 
 function requestFullscreenKeyboardLock(): void {
@@ -2556,6 +2585,7 @@ async function startConnect() {
   primeAudioAutoplay();
   resetAudioDrainState();
   client.setAudioLatencyTargets(AUDIO_TARGET_BUFFER_MS, AUDIO_TARGET_PLAYOUT_MS);
+  fullscreenHintShown = false;
   if (autoFullscreen.value && inputTarget.value && !isFullscreen.value) {
     try {
       const target = inputTarget.value;
@@ -3641,6 +3671,25 @@ watch(
   aspect-ratio: unset;
   z-index: 9999;
   cursor: none;
+}
+
+.esc-hold-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 2rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  background: rgb(30 30 35 / 0.9);
+  border: 1px solid var(--border);
+  color: #fff;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10000;
 }
 
 .stream-video {

@@ -83,6 +83,18 @@ namespace {
     ));
   }
 
+  TEST(VideoWorkerReadiness, RtspConsumerAttachesOnlyOnceThePeerIsReady) {
+    // Moonlight: nothing is forwarded until stream.cpp raises video_peer_ready.
+    EXPECT_FALSE(platf::video_worker::network_consumer_attached_at_start(true, false));
+    EXPECT_TRUE(platf::video_worker::network_consumer_attached_at_start(true, true));
+  }
+
+  TEST(VideoWorkerReadiness, SessionsWithoutAUdpChannelAttachImmediately) {
+    // WebRTC passes no channel_data and has no UDP peer to wait for.
+    EXPECT_TRUE(platf::video_worker::network_consumer_attached_at_start(false, false));
+    EXPECT_TRUE(platf::video_worker::network_consumer_attached_at_start(false, true));
+  }
+
   TEST(VideoWorkerGeneration, PlaceholderIdrBootstrapsOnlyTheFirstAdmission) {
     // First admission ever: the synthetic bootstrap IDR may open the pipe.
     EXPECT_TRUE(platf::video_worker::packet_metadata_can_enter_capture_generation(

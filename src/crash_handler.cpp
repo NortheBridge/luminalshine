@@ -7,7 +7,9 @@
 #include "logging.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <exception>
@@ -89,6 +91,16 @@ namespace crash_handler {
 
     volatile LONG g_crash_in_progress = 0;
     volatile LONG g_terminate_in_progress = 0;
+    // Set by the atexit hook init() registers, which runs ahead of every
+    // static destructor registered before main(). Boost.Log's sinks die during
+    // that same exit sequence, and logging through them afterwards double-frees
+    // the heap -- exactly the 0xC0000374 the 2026-09-07 dump showed, with the
+    // real fault (a std::thread destroyed while joinable) hidden underneath.
+    std::atomic<bool> g_exit_started {false};
+
+    bool exit_started() {
+      return g_exit_started.load(std::memory_order_acquire);
+    }
 
     /// Narrow a wide path into a static buffer for the log line. No heap.
     const char *to_utf8(const wchar_t *src, char *dst, int dst_size) {
@@ -143,12 +155,14 @@ namespace crash_handler {
       // in-log silence the 2026-07-27 postmortem documents; the dump write
       // below is ordered after the flush so the log line survives even if
       // MiniDumpWriteDump takes the process down.
+      if (!exit_started()) {
       BOOST_LOG(fatal) << "CRASH: unhandled exception 0x" << std::hex << code << std::dec
                        << (code == kTerminateExceptionCode ? " (std::terminate escalation)" : "")
                        << " at address " << fault_address
                        << " in module " << (g_module_path_utf8[0] != '\0' ? g_module_path_utf8 : "<unknown>")
                        << "; writing minidump to " << g_dump_path_utf8;
       logging::log_flush();
+      }
 
       DWORD dump_error = ERROR_SUCCESS;
       BOOL dump_written = FALSE;
@@ -179,6 +193,7 @@ namespace crash_handler {
         dump_error = GetLastError();
       }
 
+      if (!exit_started()) {
       if (dump_written) {
         BOOST_LOG(fatal) << "CRASH: minidump written to " << g_dump_path_utf8;
       } else {
@@ -186,6 +201,7 @@ namespace crash_handler {
                          << " FAILED (error=" << dump_error << "); check WER CrashDumps instead";
       }
       logging::log_flush();
+      }
 
       // Let the process die: hand the exception on so WER still runs and
       // the SYSTEM-profile CrashDumps copy keeps existing as a backstop.
@@ -228,10 +244,15 @@ namespace crash_handler {
       OutputDebugStringA(description);
       OutputDebugStringA("\n");
 
+      if (!exit_started()) {
       BOOST_LOG(fatal) << "std::terminate called: " << description
                        << ". Raising exception 0x" << std::hex << kTerminateExceptionCode << std::dec
                        << " to capture a minidump.";
       logging::log_flush();
+      } else {
+        std::fputs("(process exit in progress; Boost.Log skipped)\n", stderr);
+        std::fflush(stderr);
+      }
 
       // Every step that could itself throw (std::current_exception, the
       // stderr writes, BOOST_LOG, log_flush) is now behind us, so the
@@ -260,7 +281,15 @@ namespace crash_handler {
     }
   }  // namespace
 
+  void note_exit_started() noexcept {
+    g_exit_started.store(true, std::memory_order_release);
+  }
+
   void init() {
+    // Registered from main(), so it runs before any static destructor the CRT
+    // registered during startup (reverse order) -- the handlers above stop
+    // logging through Boost.Log from that point on.
+    std::atexit(&note_exit_started);
     std::filesystem::path dump_dir;
     try {
       dump_dir = platf::appdata() / "crashdumps";

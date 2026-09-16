@@ -17,7 +17,16 @@ option(BUILD_WERROR "Enable -Werror flag." OFF)
 option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
 
 option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
-option(SUNSHINE_ENABLE_WEBRTC "Enable WebRTC streaming support (Windows only)." OFF)
+# WebRTC ships enabled on Windows: cmake/dependencies/webrtc.cmake fetches the
+# prebuilt NortheBridge/libwebrtc wrapper when no local build is present, so a
+# plain configure works. Pass -DSUNSHINE_ENABLE_WEBRTC=OFF to build without it.
+if(WIN32)
+    set(_luminalshine_webrtc_default ON)
+else()
+    set(_luminalshine_webrtc_default OFF)
+endif()
+option(SUNSHINE_ENABLE_WEBRTC "Enable WebRTC streaming support (Windows only)." ${_luminalshine_webrtc_default})
+unset(_luminalshine_webrtc_default)
 
 option(SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS "Use system installation of wayland-protocols rather than the submodule." OFF)
 

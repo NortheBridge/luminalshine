@@ -1007,6 +1007,13 @@ int main(int argc, char *argv[]) {
   // logging through Boost.Log after the sinks are torn down during CRT exit.
   stream::notify_shutdown();
   webrtc_stream::notify_shutdown();
+  // Close WebRTC sessions, stop their capture (which reverts the display the
+  // same way an ended Moonlight session does) and join the media thread now,
+  // while Boost.Log and the mailboxes are still alive. Without this the media
+  // thread reached CRT static destruction still joinable and its destructor
+  // terminated the process (heap fast-fail 0xC0000374 on every service stop
+  // after a WebRTC session).
+  webrtc_stream::shutdown();
   // An encode stalled against the OS-scale wait deadline must abandon it
   // now rather than hold teardown until the force-shutdown watchdog fires.
   nvenc::notify_shutdown();
