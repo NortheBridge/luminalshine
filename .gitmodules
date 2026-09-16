@@ -87,8 +87,8 @@
 	branch = master
 [submodule "third-party/libwebrtc"]
 	path = third-party/libwebrtc
-	url = https://github.com/Nonary/libwebrtc
-	branch = feat/upgrade-to-m137
+	url = https://github.com/NortheBridge/libwebrtc
+	branch = luminalshine/m150
 [submodule "third-party/depot_tools"]
 	path = third-party/depot_tools
 	url = https://chromium.googlesource.com/chromium/tools/depot_tools.git

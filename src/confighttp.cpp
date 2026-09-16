@@ -369,6 +369,10 @@ namespace confighttp {
     output["audio_queue_frames"] = state.audio_queue_frames;
     output["video_queue_frames"] = state.video_queue_frames;
     output["video_inflight_frames"] = state.video_inflight_frames;
+    output["video_pushed"] = state.video_pushed;
+    output["video_push_failed"] = state.video_push_failed;
+    output["video_keyframes_pushed"] = state.video_keyframes_pushed;
+    output["keyframe_requests"] = state.keyframe_requests;
     output["has_remote_offer"] = state.has_remote_offer;
     output["has_local_answer"] = state.has_local_answer;
     output["ice_candidates"] = state.ice_candidates;
@@ -3082,6 +3086,18 @@ namespace confighttp {
     }
 
     BOOST_LOG(debug) << "WebRTC: creating session";
+    // Exclusivity is decided here, before ensure_capture_started(): that call's
+    // failure path runs a virtual-display cleanup, and while Moonlight streams
+    // (or is still tearing down, or holds a paused virtual display for resume)
+    // the display belongs to the Moonlight session. session_count() covers the
+    // handshake window before stream.cpp raises the RTSP-active flag.
+    if (!webrtc_stream::capture_start_allowed(
+          rtsp_stream::session_count() > 0 || webrtc_stream::rtsp_sessions_are_active()
+        )) {
+      BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is streaming; the capture pipeline is exclusive.";
+      bad_request(response, request, "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session.");
+      return;
+    }
     if (auto error = webrtc_stream::ensure_capture_started(options)) {
 #ifdef _WIN32
       // Lifecycle gap: if capture start fails after a virtual display was created/applied but
@@ -3102,7 +3118,10 @@ namespace confighttp {
       service_unavailable(response, "Shutdown in progress");
       return;
     }
-    BOOST_LOG(debug) << "WebRTC: session created id=" << session->id;
+    BOOST_LOG(info) << "WebRTC: session created id=" << session->id
+                    << " codec=" << session->codec.value_or("h264")
+                    << " hdr=" << (session->hdr.value_or(false) ? "yes" : "no")
+                    << " audio_channels=" << session->audio_channels.value_or(2) << '.';
     nlohmann::json output;
     output["status"] = true;
     output["session"] = webrtc_session_to_json(*session);
