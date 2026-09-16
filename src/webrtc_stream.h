@@ -62,6 +62,14 @@ namespace webrtc_stream {
     bool has_local_answer = false;
     std::size_t ice_candidates = 0;
 
+    // Egress accounting for the encoded (passthrough) video path. video_packets
+    // counts what the capture handed to this session; these count what actually
+    // reached libwebrtc, and how often the browser asked for a keyframe.
+    std::uint64_t video_pushed = 0;
+    std::uint64_t video_push_failed = 0;
+    std::uint64_t video_keyframes_pushed = 0;
+    std::uint64_t keyframe_requests = 0;
+
     std::optional<int> width;
     std::optional<int> height;
     std::optional<int> fps;
@@ -86,6 +94,30 @@ namespace webrtc_stream {
   };
 
   bool has_active_sessions();
+
+  /**
+   * @brief Whether a browser (WebRTC) capture may start given the Moonlight state.
+   *
+   * The two transports never share one capture: each runs its own video worker,
+   * and on the LuminalVGD frame ring two workers split the published frames so
+   * both streams degrade (2026-09-15 host log: the Moonlight stream fell to ~40 fps
+   * while a browser session ran beside it). Moonlight has priority -- nvhttp closes
+   * the browser session when a Moonlight client launches or resumes, and this
+   * refuses a browser session while Moonlight streams.
+   */
+  bool capture_start_allowed(bool rtsp_sessions_active);
+
+  /**
+   * @brief Whether the browser capture (its video worker) is running.
+   *
+   * Distinct from has_active_sessions(): after the last browser disconnects the
+   * capture idles for a grace period with zero sessions, and Moonlight must
+   * preempt that worker too.
+   */
+  bool capture_active();
+
+  /** @brief Whether stream.cpp has flagged a running Moonlight (RTSP) session. */
+  bool rtsp_sessions_are_active();
 
   std::optional<SessionState> create_session(const SessionOptions &options);
   std::optional<std::string> ensure_capture_started(const SessionOptions &options);
