@@ -23,7 +23,19 @@
 namespace platf::display_helper_client {
 
   namespace {
-    constexpr int kConnectTimeoutMs = 2000;
+    // Cap for a routine command connect. 1000 ms is the bound `main` effectively had
+    // (500 ms anonymous attempt + 500 ms named fallback): a helper that is alive but
+    // has no connectable pipe should fall to the hard restart no later than before,
+    // and the watchdog ping must not hold pipe_mutex longer than it used to. The
+    // slow-start case is covered by the 5 s post-start ready wait, not by this.
+    constexpr int kConnectTimeoutMs = 1000;
+    // Floor for the fast DISARM connect. Its callers hand over a 75 ms (then ~37 ms)
+    // slice of their budget, which the old SelfHealingPipe silently ignored in favour
+    // of the 500 ms loop inside create_client_pipe. The helper re-creates its server
+    // instance up to 200 ms after a client disconnect, so honouring 75 ms literally
+    // would make a launch inside that window fail the DISARM and terminate a helper
+    // that is mid-restore.
+    constexpr int kFastConnectFloorMs = 500;
     constexpr int kSendTimeoutMs = 5000;
     constexpr int kShutdownIpcTimeoutMs = 500;
     // A display-helper completion is advisory: every caller verifies the
@@ -421,7 +433,7 @@ namespace platf::display_helper_client {
   bool send_disarm_restore_fast(int timeout_ms) {
     BOOST_LOG(debug) << "Display helper IPC: DISARM (fast) request queued (timeout_ms=" << timeout_ms << ")";
     std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked(timeout_ms)) {
+    if (!ensure_connected_locked(std::max(timeout_ms, kFastConnectFloorMs))) {
       return false;
     }
     std::vector<uint8_t> payload;
