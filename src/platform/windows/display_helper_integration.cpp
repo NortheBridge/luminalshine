@@ -34,6 +34,7 @@
   #include "src/gpu_recovery_policy.h"
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_coordinator.h"
+  #include "src/platform/windows/display_helper_policy.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/impersonating_display_device.h"
@@ -225,12 +226,38 @@ namespace {
   bool ensure_helper_started(bool force_restart = false, bool force_enable = false);
   const char *virtual_layout_to_string(const display_helper_integration::VirtualDisplayArrangement layout);
 
-  bool helper_process_running() {
-    std::lock_guard<std::mutex> lg(helper_mutex());
+  // Caller holds helper_mutex().
+  bool helper_process_running_locked() {
     if (HANDLE h = helper_proc().get_process_handle()) {
       return WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
     }
     return false;
+  }
+
+  bool helper_process_running() {
+    std::lock_guard<std::mutex> lg(helper_mutex());
+    return helper_process_running_locked();
+  }
+
+  /**
+   * @brief Wait briefly for the helper process to be gone.
+   *
+   * Used after an APPLY whose reply failed with a pipe error: a helper that was
+   * finishing a superseded restore closes its pipe and exits by design, and the
+   * process object lags the pipe closure by a few milliseconds.
+   * @return true once no helper process is running within `timeout`.
+   */
+  bool helper_exited_within(std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    for (;;) {
+      if (!helper_process_running()) {
+        return true;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
   }
 
   bool restore_expected_with_live_helper();
@@ -1371,6 +1398,11 @@ namespace display_helper_integration {
       }
 
       if (helper_ready) {
+        // From here on the display is about to change, so a verified restore is no
+        // longer the latest word: a later revert() must not treat itself as a
+        // duplicate of it, even inside the duplicate window (a launch that fails
+        // after its first APPLY still owes its fail-guard revert).
+        g_last_revert_completed_us.store(0, std::memory_order_release);
         DisplayApplyRequest final_request = request;
         bool direct_ring_admitted = true;
         auto verification_configuration = request.configuration;
@@ -1413,7 +1445,22 @@ namespace display_helper_integration {
           }
 
           BOOST_LOG(info) << "Display helper: stage 1/3 activating LuminalVGD alongside the physical topology.";
-          const auto activation_outcome = platf::display_helper_client::send_apply_json(*activation_payload);
+          auto activation_outcome = platf::display_helper_client::send_apply_json(*activation_payload);
+          if (activation_outcome == platf::display_helper_client::ApplyOutcome::indeterminate &&
+              helper_exited_within(std::chrono::milliseconds(500))) {
+            // A reused helper that was finishing a superseded restore exits, by
+            // design, the moment that restore confirms, and this APPLY can land on
+            // that exit: the reply is a pipe error, not a modeset in progress. Do
+            // not spend the activation timeout waiting on a dead helper; start a
+            // fresh one and send the activation once more.
+            BOOST_LOG(warning) << "Display helper: stage 1/3 APPLY got no reply and the helper has exited; "
+                                  "restarting it and re-sending the activation once.";
+            if (!ensure_helper_started(true, true)) {
+              g_last_apply_failure.store(ApplyFailure::helper_unavailable, std::memory_order_release);
+              return false;
+            }
+            activation_outcome = platf::display_helper_client::send_apply_json(*activation_payload);
+          }
           bool activated = wait_for_device_activation(
             activation_config.m_device_id,
             std::chrono::seconds(10)
@@ -1675,11 +1722,29 @@ namespace display_helper_integration {
 
   bool revert(bool prefer_golden_if_current_missing) {
     clear_pending_apply();
-    const auto completed_us = g_last_revert_completed_us.load(std::memory_order_acquire);
-    if (!prefer_golden_if_current_missing && completed_us > 0 &&
-        now_steady_us() - completed_us < 5'000'000 && !helper_process_running()) {
-      BOOST_LOG(info) << "Display helper: suppressing duplicate REVERT because the prior transactional restore just completed.";
-      return true;
+    // Two callers revert the same session within a fraction of a second: the RTSP
+    // session-end cleanup and the app-exit path (process.cpp). The first one's
+    // wait_for_revert_completion() holds helper_mutex for the whole transactional
+    // wait, so the duplicate check is taken under that mutex: it then runs after
+    // the in-flight restore has completed, with a fresh completion timestamp and
+    // the exited helper visible. Checked without the mutex, the second caller read
+    // a stale timestamp, blocked inside ensure_helper_started() until the first
+    // restore finished, then started a new helper only to send it a REVERT with
+    // nothing left to restore. Nobody waited on that redundant restore, so a
+    // launch inside the next ~10 s reused a helper that exited, by design, the
+    // instant its restore confirmed (2026-09-17 08:28: the launch's APPLY landed
+    // on that exit, and the host waited the activation timeout out; 503).
+    {
+      std::lock_guard<std::mutex> lg(helper_mutex());
+      if (duplicate_revert_suppressed(
+            prefer_golden_if_current_missing,
+            g_last_revert_completed_us.load(std::memory_order_acquire),
+            now_steady_us(),
+            helper_process_running_locked()
+          )) {
+        BOOST_LOG(info) << "Display helper: suppressing duplicate REVERT because the prior transactional restore just completed.";
+        return true;
+      }
     }
     if (!ensure_helper_started()) {
       BOOST_LOG(info) << "Display helper unavailable; cannot send revert.";
@@ -1713,9 +1778,11 @@ namespace display_helper_integration {
         BOOST_LOG(error) << "Display helper: timed out waiting for strictly verified REVERT completion.";
         return false;
       }
+      // Published before the mutex is released: revert() takes the same mutex
+      // for its duplicate check and must see this completion, not the previous one.
+      g_restore_expected.store(false, std::memory_order_release);
+      g_last_revert_completed_us.store(now_steady_us(), std::memory_order_release);
     }
-    g_restore_expected.store(false, std::memory_order_release);
-    g_last_revert_completed_us.store(now_steady_us(), std::memory_order_release);
     platf::display_helper_client::reset_connection();
     BOOST_LOG(info) << "Display helper: transactional REVERT completed and helper exited after verification.";
     return true;
