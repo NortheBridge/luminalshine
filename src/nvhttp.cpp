@@ -2228,6 +2228,22 @@ namespace nvhttp {
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
+    // Refuse browser (WebRTC) sessions for as long as this handler runs
+    // (webrtc_stream::moonlight_launch_is_pending()): the RTSP-active flag is
+    // raised only when the session starts, seconds after display preparation
+    // begins here. Taken before the browser preemption below so no browser
+    // session can slip in while shutdown_all_sessions() is still closing the
+    // previous one, and declared before the response guard so a failed launch
+    // keeps refusing until its display revert has run. Released on every
+    // exit: once launch_session_raise() has run, the RTSP server's own pending
+    // launch (rtsp_stream::launch_session_pending()) carries the window until
+    // the client starts the session or the launch expires unclaimed, so a
+    // client that never connects cannot leave the host refusing browsers.
+    webrtc_stream::moonlight_launch_begin();
+    auto moonlight_launch_guard = util::fail_guard([]() {
+      webrtc_stream::moonlight_launch_end();
+    });
+
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
@@ -2549,6 +2565,12 @@ namespace nvhttp {
 
   void resume(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+
+    // Same latch as launch(): see the comment there.
+    webrtc_stream::moonlight_launch_begin();
+    auto moonlight_launch_guard = util::fail_guard([]() {
+      webrtc_stream::moonlight_launch_end();
+    });
 
     pt::ptree tree;
     bool revert_display_configuration {false};

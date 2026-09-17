@@ -102,6 +102,18 @@ namespace rtsp_stream {
   void launch_session_clear(uint32_t launch_session_id);
 
   /**
+   * @brief Whether a launch session raised by nvhttp is still waiting for its
+   *        Moonlight client to connect.
+   *
+   * True from launch_session_raise() until the client's control stream connects
+   * (launch_session_clear()) or the pending launch expires unclaimed after
+   * ping_timeout. The browser (WebRTC) exclusivity check consults this so a
+   * browser session cannot start between Moonlight's /launch response and the
+   * start of its RTSP session.
+   */
+  bool launch_session_pending();
+
+  /**
    * @brief Get the number of active sessions.
    * @return Count of active sessions.
    */

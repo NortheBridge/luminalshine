@@ -103,9 +103,16 @@ namespace webrtc_stream {
    * both streams degrade (2026-09-15 host log: the Moonlight stream fell to ~40 fps
    * while a browser session ran beside it). Moonlight has priority -- nvhttp closes
    * the browser session when a Moonlight client launches or resumes, and this
-   * refuses a browser session while Moonlight streams.
+   * refuses a browser session while Moonlight streams or is about to.
+   *
+   * @param rtsp_sessions_active A Moonlight session is streaming (or its RTSP
+   *        handshake has already inserted the session).
+   * @param moonlight_launch_pending A Moonlight /launch or /resume is being
+   *        prepared, or has been answered and its client has not started the
+   *        RTSP session yet (see moonlight_launch_is_pending()).
+   * @return true only when neither is the case.
    */
-  bool capture_start_allowed(bool rtsp_sessions_active);
+  bool capture_start_allowed(bool rtsp_sessions_active, bool moonlight_launch_pending);
 
   /**
    * @brief Whether the browser capture (its video worker) is running.
@@ -118,6 +125,47 @@ namespace webrtc_stream {
 
   /** @brief Whether stream.cpp has flagged a running Moonlight (RTSP) session. */
   bool rtsp_sessions_are_active();
+
+  /**
+   * @brief Whether a Moonlight launch or resume is in flight but has not yet
+   *        produced an RTSP session.
+   *
+   * stream.cpp raises the RTSP-active flag only when the session starts, several
+   * seconds after Moonlight's /launch began preparing the display, and
+   * rtsp_stream::session_count() counts only sessions the RTSP handshake has
+   * inserted. A browser Connect inside that window would pass the exclusivity
+   * check and start a second capture that nothing stops. This covers the window
+   * in two pieces: the nvhttp handler latches itself in flight
+   * (moonlight_launch_begin()/moonlight_launch_end()), and once the handler has
+   * raised the launch session the RTSP server's own pending launch
+   * (rtsp_stream::launch_session_pending()) takes over until the client starts
+   * the session or the pending launch expires unclaimed.
+   */
+  bool moonlight_launch_is_pending();
+
+  /**
+   * @brief Mark a Moonlight /launch or /resume handler as in flight.
+   *
+   * Call at the top of the handler, before it preempts the browser session(s)
+   * and prepares the display; pair with moonlight_launch_end() when the handler
+   * returns, whether it succeeded or failed. nvhttp serves these handlers on a
+   * single thread today; counted rather than boolean so that concurrent
+   * handlers could not release each other's latch if that ever changes.
+   */
+  void moonlight_launch_begin();
+
+  /** @brief Undo one moonlight_launch_begin(). */
+  void moonlight_launch_end();
+
+  /**
+   * @brief Refusal messages for a browser session while Moonlight holds the
+   *        capture, shared by confighttp's pre-check and the capture start so
+   *        the two cannot drift apart.
+   */
+  inline constexpr const char *kMoonlightStreamingRefusal =
+    "A Moonlight session is already streaming on this host. Disconnect it before starting a browser session.";
+  inline constexpr const char *kMoonlightConnectingRefusal =
+    "A Moonlight client is connecting to this host. Wait for it to finish connecting, or disconnect it, before starting a browser session.";
 
   std::optional<SessionState> create_session(const SessionOptions &options);
   std::optional<std::string> ensure_capture_started(const SessionOptions &options);
@@ -180,7 +228,6 @@ namespace webrtc_stream {
   opus_sdp_result_t apply_opus_audio_params(std::string_view sdp, int channels);
 
   void set_rtsp_sessions_active(bool active);
-  void set_rtsp_capture_config(const video::config_t &video_config, const audio::config_t &audio_config);
 
   bool set_remote_offer(std::string_view id, const std::string &sdp, const std::string &type);
   bool add_ice_candidate(std::string_view id, std::string mid, int mline_index, std::string candidate);

@@ -84,24 +84,27 @@ Per-session pipelines create their own `safe::mail_raw_t` instances and use type
 
 ### Mutual exclusion between classic streaming and WebRTC
 
-WebRTC capture refuses to start if a classic streaming session is active:
+Each transport runs its own capture worker, and two workers on one LuminalVGD frame ring split the published frames between them (2026-09-15 host log: Moonlight fell to ~40 fps beside a browser session). Moonlight therefore has priority and the two never overlap:
+
+- **Moonlight preempts the browser.** `nvhttp::launch`/`resume` call `preempt_webrtc_sessions_for_moonlight()` (`src/nvhttp.cpp`) before preparing the display; it closes every browser session, and a browser capture still idling in its grace period, via `webrtc_stream::shutdown_all_sessions()`.
+- **The browser is refused while Moonlight streams or is starting.** The decision is the pure function `webrtc_stream::capture_start_allowed(rtsp_sessions_active, moonlight_launch_pending)` (`src/webrtc_stream.cpp`, unit-tested in `tests/unit/test_webrtc_sdp.cpp`). `confighttp`'s `createWebRTCSession` evaluates it before `ensure_capture_started()` so a refusal never runs the failure-path virtual-display cleanup against Moonlight's display, and `start_webrtc_capture()` re-checks it.
+
+The two inputs cover the whole Moonlight lifetime:
 
 ```cpp
-// src/webrtc_stream.cpp
-if (rtsp_sessions_active.load(std::memory_order_relaxed)) {
-  return std::string {"RTSP session already active"};
-}
+// src/confighttp.cpp
+const bool moonlight_streaming =
+  rtsp_stream::session_count() > 0 || webrtc_stream::rtsp_sessions_are_active();
+const bool moonlight_launch_pending = webrtc_stream::moonlight_launch_is_pending();
 ```
 
-Classic sessions toggle this flag:
+`rtsp_sessions_active` is raised by `stream::session::start` on the first session and cleared when the last one ends (`src/stream.cpp`); `session_count()` covers the RTSP handshake before that. `moonlight_launch_is_pending()` covers the window before *either* -- from `/launch` or `/resume` entering the handler until the client starts its session -- in two pieces: the nvhttp handler latches itself in flight (`moonlight_launch_begin()`/`moonlight_launch_end()`, taken before it preempts the browser and released when it returns), and from `launch_session_raise()` on the RTSP server's own pending launch (`rtsp_stream::launch_session_pending()`) carries it until the client's control stream connects or the launch expires unclaimed after `ping_timeout`. Because the second piece expires by itself, a client that never connects cannot leave the host refusing browser sessions; the cost is a bounded false "client is connecting" refusal for up to `ping_timeout` after a launch that was answered but never claimed (including one cancelled via `/cancel`, which does not pop the pending launch).
 
-```cpp
-// src/stream.cpp
-webrtc_stream::set_rtsp_sessions_active(true);   // on first session start
-webrtc_stream::set_rtsp_sessions_active(false);  // when last session ends
-```
+Because a browser capture can no longer coexist with a Moonlight session, `start_webrtc_capture()`, `create_session()` and the audio path do not consult the RTSP state at all after that check: the browser session always owns display changes, app launches, the frame limiter and its audio layout. The flag is still read on the way *down* -- `stop_webrtc_capture_if_idle()`, `close_session()` and `shutdown()` leave the display topology to Moonlight when a Moonlight session took over after the browser left.
 
-This is a key architectural constraint: **Sunshine runs either RTSP/GameStream streaming or WebRTC streaming, not both concurrently** (in the current implementation).
+Known gap: the mirror image is not latched. A browser session that has passed the pre-check but is still inside `start_webrtc_capture()` (display preparation, encoder probe) has no session and no active capture yet, so a Moonlight `/launch` arriving in those seconds finds nothing to preempt and both captures start. Closing it needs a late re-check before the browser capture goes active plus a matching guard on confighttp's failure-path virtual-display cleanup.
+
+This is a key architectural constraint: **LuminalShine runs either RTSP/GameStream streaming or WebRTC streaming, never both by design.**
 
 ---
 
@@ -229,7 +232,7 @@ The response includes:
 
 `start_webrtc_capture()` enforces:
 
-- No classic session active (`rtsp_sessions_active` check).
+- No classic session active or being launched (`capture_start_allowed()`; see §3).
 - A running app exists to “resume”, or an `app_id` is provided to launch.
 
 #### Launch + display prep (Windows-specific heavy lifting)

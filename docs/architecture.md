@@ -62,11 +62,16 @@ LuminalShine speaks two protocols:
 - **WebRTC.** Served at `/webrtc` in the built-in Web UI. Stream
   directly to any modern browser — no client install needed.
 
-**The two are mutually exclusive.** If a classic session is active,
-WebRTC capture refuses to start, and vice-versa. This is enforced
-inside [`src/webrtc_stream.cpp`](https://github.com/NortheBridge/luminalshine/tree/main/src/webrtc_stream.cpp)
-via a single `rtsp_sessions_active` flag toggled by
-[`src/stream.cpp`](https://github.com/NortheBridge/luminalshine/tree/main/src/stream.cpp).
+**The two are mutually exclusive, and Moonlight wins.** A Moonlight
+launch or resume closes any browser session first, and a browser
+session is refused while a Moonlight session is streaming or still
+starting. The decision lives in
+[`src/webrtc_stream.cpp`](https://github.com/NortheBridge/luminalshine/tree/main/src/webrtc_stream.cpp)
+(`capture_start_allowed()`), fed by the RTSP-active flag that
+[`src/stream.cpp`](https://github.com/NortheBridge/luminalshine/tree/main/src/stream.cpp)
+toggles and by the pending-launch state that
+[`src/nvhttp.cpp`](https://github.com/NortheBridge/luminalshine/tree/main/src/nvhttp.cpp)
+and the RTSP server maintain between `/launch` and the session start.
 
 ## Capture: WGC in service mode
 

@@ -633,6 +633,13 @@ namespace rtsp_stream {
     }
 
     /**
+     * @brief Whether a raised launch session is still waiting to be claimed.
+     */
+    bool session_pending() {
+      return static_cast<bool>(launch_event.view(0s));
+    }
+
+    /**
      * @brief Clear state for the oldest launch session.
      * @param launch_session_id The ID of the session to clear.
      */
@@ -827,6 +834,10 @@ namespace rtsp_stream {
 
   void launch_session_clear(uint32_t launch_session_id) {
     server.session_clear(launch_session_id);
+  }
+
+  bool launch_session_pending() {
+    return server.session_pending();
   }
 
   int session_count() {

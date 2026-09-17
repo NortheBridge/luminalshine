@@ -3158,9 +3158,6 @@ namespace stream {
 
       // If this is the first session, invoke the platform callbacks
       if (++running_sessions == 1) {
-        if (!webrtc_stream::has_active_sessions()) {
-          webrtc_stream::set_rtsp_capture_config(session.config.monitor, session.config.audio);
-        }
         webrtc_stream::set_rtsp_sessions_active(true);
 #ifdef _WIN32
         // Apply RTSS frame limit if enabled (Windows-only)

@@ -2225,14 +2225,9 @@ namespace webrtc_stream {
     std::atomic_uint active_peers {0};
 #endif
     std::atomic_bool rtsp_sessions_active {false};
-
-    struct RtspCaptureConfig {
-      video::config_t video;
-      audio::config_t audio;
-    };
-
-    std::mutex rtsp_config_mutex;
-    std::optional<RtspCaptureConfig> rtsp_capture_config;
+    // Moonlight /launch and /resume handlers currently preparing a session;
+    // see moonlight_launch_is_pending().
+    std::atomic_uint moonlight_launches_in_flight {0};
     std::atomic_uint32_t webrtc_launch_session_id {0};
     WebRtcCaptureState webrtc_capture;
 
@@ -2307,12 +2302,7 @@ namespace webrtc_stream {
     [[maybe_unused]] void request_keyframe(std::string_view reason) {
       auto mail = current_capture_mail();
       if (!mail) {
-        if (rtsp_sessions_active.load(std::memory_order_relaxed)) {
-          stream::request_idr_for_all_sessions();
-          BOOST_LOG(debug) << "WebRTC: keyframe requested via RTSP (" << reason << ')';
-        } else {
-          BOOST_LOG(debug) << "WebRTC: keyframe request skipped (" << reason << ") - no capture mail";
-        }
+        BOOST_LOG(debug) << "WebRTC: keyframe request skipped (" << reason << ") - no capture mail";
         return;
       }
 
@@ -2349,26 +2339,6 @@ namespace webrtc_stream {
         default:
           return "h264";
       }
-    }
-
-    std::optional<RtspCaptureConfig> snapshot_rtsp_capture_config() {
-      std::lock_guard<std::mutex> lock(rtsp_config_mutex);
-      return rtsp_capture_config;
-    }
-
-    void clear_rtsp_capture_config() {
-      std::lock_guard<std::mutex> lock(rtsp_config_mutex);
-      rtsp_capture_config.reset();
-    }
-
-    void apply_rtsp_video_overrides(
-      video::config_t &config,
-      const std::optional<RtspCaptureConfig> &rtsp_config
-    ) {
-      if (!rtsp_config) {
-        return;
-      }
-      config.framerate = rtsp_config->video.framerate;
     }
 
     struct Av1FmtpParams {
@@ -2971,18 +2941,21 @@ namespace webrtc_stream {
     }
 
     std::optional<std::string> start_webrtc_capture(const SessionOptions &options) {
-      const bool rtsp_active = rtsp_sessions_active.load(std::memory_order_relaxed);
-      if (!capture_start_allowed(rtsp_active)) {
-        // See capture_start_allowed(): a second capture worker on the same
-        // display halves the frame rate of the Moonlight stream beside it.
-        // Checked before the idle token is bumped so a refused start cannot
-        // cancel a pending idle stop of an earlier browser capture.
-        BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight session is streaming; the capture pipeline is exclusive.";
-        return std::string {"A Moonlight session is already streaming on this host. Disconnect it before starting a browser session."};
+      // See capture_start_allowed(): a second capture worker on the same
+      // display halves the frame rate of the Moonlight stream beside it.
+      // Checked before the idle token is bumped so a refused start cannot
+      // cancel a pending idle stop of an earlier browser capture. From here
+      // on no Moonlight session exists or is being prepared, so nothing below
+      // needs to consult the RTSP state.
+      const bool moonlight_streaming = rtsp_sessions_active.load(std::memory_order_relaxed);
+      if (!capture_start_allowed(moonlight_streaming, moonlight_launch_is_pending())) {
+        BOOST_LOG(warning) << "WebRTC: refusing a browser session while a Moonlight "
+                           << (moonlight_streaming ? "session is streaming" : "client is connecting")
+                           << "; the capture pipeline is exclusive.";
+        return std::string {moonlight_streaming ? kMoonlightStreamingRefusal : kMoonlightConnectingRefusal};
       }
       webrtc_idle_shutdown_token.fetch_add(1, std::memory_order_acq_rel);
       std::lock_guard<std::mutex> lock(webrtc_capture.mutex);
-      const auto rtsp_config = rtsp_active ? snapshot_rtsp_capture_config() : std::nullopt;
       const bool was_idle_shutdown_pending =
         webrtc_capture.idle_shutdown_pending.exchange(false, std::memory_order_acq_rel);
       if (webrtc_capture.active.load(std::memory_order_acquire) && !was_idle_shutdown_pending) {
@@ -3004,16 +2977,11 @@ namespace webrtc_stream {
 
       // If no app requested and nothing running, we'll stream the desktop (effective_app_id = 0)
 
-      if (rtsp_active && requested_app_id > 0 && requested_app_id != current_app_id) {
-        return std::string {"RTSP session already active"};
-      }
-
       const int effective_app_id = requested_app_id > 0 ? requested_app_id : current_app_id;
       webrtc_capture.stream_start_params = compute_stream_start_params(options, effective_app_id);
       const int audio_channels = options.audio_channels.value_or(kDefaultAudioChannels);
       auto video_config = build_video_config(options);
       auto audio_config = build_audio_config(options);
-      apply_rtsp_video_overrides(video_config, rtsp_config);
       const auto desired_key = build_capture_config_key(effective_app_id, video_config, options);
       const bool force_reconfigure = was_idle_shutdown_pending;
 
@@ -3027,12 +2995,12 @@ namespace webrtc_stream {
       }
 
       if (webrtc_capture.active.load(std::memory_order_acquire)) {
-        stop_webrtc_capture_locked(!rtsp_active);
+        stop_webrtc_capture_locked(true);
       }
 
       auto launch_session = build_launch_session(options, effective_app_id, audio_channels);
 
-      const bool allow_display_changes = !rtsp_active && !resume_only;
+      const bool allow_display_changes = !resume_only;
       if (allow_display_changes && launch_session->output_name_override && !launch_session->output_name_override->empty()) {
 #ifdef _WIN32
         if (!boost::iequals(*launch_session->output_name_override, VDISPLAY::SUDOVDA_VIRTUAL_DISPLAY_SELECTION)) {
@@ -3043,14 +3011,17 @@ namespace webrtc_stream {
 #endif
       }
 
-      if (!rtsp_active && requested_app_id > 0 && requested_app_id != current_app_id) {
+      if (requested_app_id > 0 && requested_app_id != current_app_id) {
         auto result = proc::proc.execute(requested_app_id, launch_session);
         if (result != 0) {
           return std::string {"Failed to launch application (code "} + std::to_string(result) + ")";
         }
       }
 
-      if (!rtsp_active) {
+      // Display preparation and encoder probing. The hot-apply read gate taken
+      // inside covers only this block, as it did when the block was the
+      // `!rtsp_active` branch.
+      {
 #ifdef _WIN32
         stream::cancel_paused_display_cleanup();
         webrtc_stream::cancel_paused_display_cleanup();
@@ -4708,8 +4679,8 @@ namespace webrtc_stream {
     return active_sessions.load(std::memory_order_relaxed) > 0;
   }
 
-  bool capture_start_allowed(bool rtsp_sessions_active) {
-    return !rtsp_sessions_active;
+  bool capture_start_allowed(bool rtsp_sessions_active, bool moonlight_launch_pending) {
+    return !rtsp_sessions_active && !moonlight_launch_pending;
   }
 
   bool capture_active() {
@@ -4720,13 +4691,30 @@ namespace webrtc_stream {
     return rtsp_sessions_active.load(std::memory_order_relaxed);
   }
 
+  bool moonlight_launch_is_pending() {
+    return moonlight_launches_in_flight.load(std::memory_order_acquire) > 0 ||
+           rtsp_stream::launch_session_pending();
+  }
+
+  void moonlight_launch_begin() {
+    moonlight_launches_in_flight.fetch_add(1, std::memory_order_acq_rel);
+  }
+
+  void moonlight_launch_end() {
+    const auto previous = moonlight_launches_in_flight.fetch_sub(1, std::memory_order_acq_rel);
+    if (previous == 0) {
+      // Unbalanced end(): undo the wrap so the latch cannot stick at UINT_MAX.
+      moonlight_launches_in_flight.fetch_add(1, std::memory_order_acq_rel);
+      BOOST_LOG(error) << "WebRTC: moonlight_launch_end() without a matching begin(); ignoring.";
+    }
+  }
+
   std::optional<std::string> ensure_capture_started(const SessionOptions &options) {
     return start_webrtc_capture(options);
   }
 
   std::optional<SessionState> create_session(const SessionOptions &options) {
     BOOST_LOG(debug) << "WebRTC: create_session enter";
-    const auto rtsp_config = rtsp_sessions_active.load(std::memory_order_relaxed) ? snapshot_rtsp_capture_config() : std::nullopt;
     Session session;
     session.state.id = uuid_util::uuid_t::generate().string();
 #ifdef SUNSHINE_ENABLE_WEBRTC
@@ -4742,7 +4730,6 @@ namespace webrtc_stream {
     session.state.client_name = options.client_name;
     session.state.client_uuid = options.client_uuid;
     session.video_config = build_video_config(options);
-    apply_rtsp_video_overrides(session.video_config, rtsp_config);
     session.state.width = session.video_config.width;
     session.state.height = session.video_config.height;
     session.state.fps = session.video_config.framerate;
@@ -5389,9 +5376,7 @@ namespace webrtc_stream {
     }
 
     const bool downmix_to_stereo =
-      channels > 2 &&
-      (rtsp_sessions_active.load(std::memory_order_relaxed) ||
-       (any_negotiated && negotiated_channels < channels));
+      channels > 2 && any_negotiated && negotiated_channels < channels;
 
     const float *input_samples = samples.data();
     int output_channels = channels;
@@ -5519,14 +5504,6 @@ namespace webrtc_stream {
 
   void set_rtsp_sessions_active(bool active) {
     rtsp_sessions_active.store(active, std::memory_order_relaxed);
-    if (!active) {
-      clear_rtsp_capture_config();
-    }
-  }
-
-  void set_rtsp_capture_config(const video::config_t &video_config, const audio::config_t &audio_config) {
-    std::lock_guard<std::mutex> lock(rtsp_config_mutex);
-    rtsp_capture_config = RtspCaptureConfig {video_config, audio_config};
   }
 
   bool set_remote_offer(std::string_view id, const std::string &sdp, const std::string &type) {
