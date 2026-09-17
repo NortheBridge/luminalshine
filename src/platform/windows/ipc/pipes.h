@@ -24,6 +24,7 @@
 // local includes
 #include "src/logging.h"
 #include "src/platform/windows/ipc/misc_utils.h"
+#include "src/platform/windows/ipc/pipe_connect_retry.h"
 
 // platform includes
 #ifndef WIN32_LEAN_AND_MEAN
@@ -430,6 +431,21 @@ namespace platf::dxgi {
     wchar_t pipe_name[40];
   };
 
+  /**
+   * @brief How a client factory waits for a server that has not created its pipe yet.
+   *
+   * `retry` bounds the wait by time (default 500 ms, the historical behaviour). `abort_wait` is an
+   * optional predicate polled between attempts: while it returns false the client keeps polling up
+   * to the deadline; once it returns true the wait ends immediately (`GiveUpReason::aborted`).
+   * Callers that launched the server themselves (the display helper client) answer it from the
+   * child's process handle — and from their own shutdown flag — so a slow start is waited out but a
+   * crashed start, or a shutdown, is reported at once instead of after the full deadline.
+   */
+  struct ClientConnectOptions {
+    platf::ipc::ConnectRetryPolicy retry {};
+    std::function<bool()> abort_wait;
+  };
+
   class NamedPipeFactory: public IAsyncPipeFactory {
   public:
     using SecurityDescriptorBuilder = std::function<bool(SECURITY_DESCRIPTOR &desc, PACL *out_pacl)>;
@@ -450,6 +466,19 @@ namespace platf::dxgi {
     // Optional: inject a custom security descriptor builder used by create_server.
     // If not set, defaults to existing behavior (SYSTEM-only SD, otherwise default security).
     void set_security_descriptor_builder(SecurityDescriptorBuilder builder);
+
+    /**
+     * @brief Configure how create_client waits for the server's pipe to appear.
+     *
+     * Applies to every create_client call on this factory. The default reproduces the historical
+     * 500 ms cap with no liveness probe.
+     */
+    void set_client_connect_options(ClientConnectOptions options);
+
+    /**
+     * @brief The options create_client currently uses.
+     */
+    const ClientConnectOptions &client_connect_options() const noexcept;
 
   private:
     /**
@@ -502,6 +531,7 @@ namespace platf::dxgi {
     winrt::file_handle create_client_pipe(const std::wstring &fullPipeName) const;
 
     SecurityDescriptorBuilder _secdesc_builder;  // optional custom SD builder (Playnite can override)
+    ClientConnectOptions _connect_options;  // how long create_client waits for a server that is still starting
   };
 
   class AnonymousPipeFactory: public IAsyncPipeFactory {
@@ -540,6 +570,15 @@ namespace platf::dxgi {
     // Forward a custom SD builder into the underlying NamedPipeFactory
     void set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder);
 
+    /**
+     * @brief Forward client connect options into the underlying NamedPipeFactory.
+     *
+     * Governs the control-pipe connect. The data-pipe connect that follows a successful handshake
+     * keeps its historical shape (500 ms per attempt inside a 5 s retry loop) and shares only the
+     * abort predicate, so a long control-pipe budget is never multiplied into the handshake.
+     */
+    void set_client_connect_options(ClientConnectOptions options);
+
   private:
     std::unique_ptr<INamedPipe> handshake_server(std::unique_ptr<INamedPipe> pipe);
     std::unique_ptr<INamedPipe> handshake_client(std::unique_ptr<INamedPipe> pipe);
@@ -551,28 +590,5 @@ namespace platf::dxgi {
     std::unique_ptr<INamedPipe> connect_to_data_pipe(const std::string &pipeNameStr);
 
     NamedPipeFactory _pipe_factory;
-  };
-
-  class SelfHealingPipe: public INamedPipe {
-  public:
-    using Creator = std::function<std::unique_ptr<INamedPipe>()>;
-
-    explicit SelfHealingPipe(Creator creator);
-
-    ~SelfHealingPipe() override = default;
-
-    bool send(std::span<const uint8_t> bytes, int timeout_ms) override;
-    PipeResult receive(std::span<uint8_t> dst, size_t &bytesRead, int timeout_ms) override;
-    PipeResult receive_latest(std::span<uint8_t> dst, size_t &bytesRead, int timeout_ms) override;
-    void wait_for_client_connection(int milliseconds) override;
-    void disconnect() override;
-    bool is_connected() override;
-
-  private:
-    bool ensure_connected();
-    void reconnect();
-
-    Creator _creator;
-    std::unique_ptr<INamedPipe> _inner;
   };
 }  // namespace platf::dxgi

@@ -646,23 +646,38 @@ namespace {
   constexpr DWORD kHelperForceKillWaitMs = 2000;
 
   bool wait_for_helper_ipc_ready_locked() {
-    const auto deadline = std::chrono::steady_clock::now() + kHelperIpcReadyTimeout;
+    using namespace std::chrono;
+    const auto start = steady_clock::now();
+    const auto deadline = start + kHelperIpcReadyTimeout;
     int attempts = 0;
 
     platf::display_helper_client::reset_connection();
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (steady_clock::now() < deadline) {
       if (shutdown_requested()) {
         return false;
       }
-      if (platf::display_helper_client::send_ping()) {
-        if (attempts > 0) {
-          BOOST_LOG(debug) << "Display helper IPC became reachable after " << attempts << " retries.";
-        }
+      // The connect polls for the helper's pipe every 50 ms for the whole remaining budget and
+      // returns as soon as the pipe appears — or early, when the bound helper process exits. No
+      // fixed "give the helper a moment" delay is needed in front of it, and a helper that takes a
+      // second to come up under load is waited out instead of tripping a 500 ms attempt cap.
+      const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
+      ++attempts;
+      if (platf::display_helper_client::ensure_connected(static_cast<int>(std::max<long long>(remaining.count(), 0))) &&
+          platf::display_helper_client::send_ping()) {
+        BOOST_LOG(debug) << "Display helper IPC became reachable after "
+                         << duration_cast<milliseconds>(steady_clock::now() - start).count()
+                         << " ms (" << attempts << " attempt(s)).";
         return true;
       }
-      ++attempts;
-      std::this_thread::sleep_for(kHelperIpcReadyPoll);
+      if (HANDLE h = helper_proc().get_process_handle(); h && WaitForSingleObject(h, 0) == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        GetExitCodeProcess(h, &exit_code);
+        BOOST_LOG(warning) << "Display helper exited (code=" << exit_code
+                           << ") before its IPC became reachable.";
+        return false;
+      }
       platf::display_helper_client::reset_connection();
+      std::this_thread::sleep_for(kHelperIpcReadyPoll);
     }
 
     BOOST_LOG(warning) << "Display helper IPC did not respond within " << kHelperIpcReadyTimeout.count()
@@ -960,6 +975,9 @@ namespace {
         BOOST_LOG(warning) << "Display helper: hard restart requested; terminating existing instance (pid=" << pid
                            << ") with no grace period.";
         platf::display_helper_client::reset_connection();
+        // The bound process is about to go away; until the replacement is bound, concurrent connects
+        // (watchdog ping, fast DISARM) should use their time bound rather than be told "exited".
+        platf::display_helper_client::bind_helper_process(nullptr);
         helper_proc().terminate();
 
         DWORD wait_result = WaitForSingleObject(h, kHelperForceKillWaitMs);
@@ -989,6 +1007,7 @@ namespace {
       return false;
     }
 
+    platf::display_helper_client::bind_helper_process(nullptr);
     kill_all_helper_processes();
 
     // Compute path to luminalshine_display_helper.exe inside the tools subdirectory next to luminalshine.exe
@@ -1031,6 +1050,9 @@ namespace {
 
     DWORD pid = GetProcessId(h);
     BOOST_LOG(info) << "Display helper successfully started (pid=" << pid << ")";
+    // Bind immediately so every connect from here on — including concurrent ones that do not hold
+    // helper_mutex — is bounded by this process's liveness rather than a fixed delay.
+    platf::display_helper_client::bind_helper_process(h);
 
     // Give the helper process time to initialize and create its named pipe server
     // Check if it exits early (e.g., singleton mutex conflict from incomplete cleanup)
@@ -1050,6 +1072,7 @@ namespace {
             return false;
           }
           h = helper_proc().get_process_handle();
+          platf::display_helper_client::bind_helper_process(h);
           if (h) {
             pid = GetProcessId(h);
             BOOST_LOG(info) << "Display helper retry succeeded (pid=" << pid << ")";
@@ -1063,8 +1086,8 @@ namespace {
       }
     }
 
-    // Final initialization delay for pipe server creation
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // No fixed pipe-creation delay here: the connect below polls for the helper's pipe until it
+    // appears, the budget expires, or the (bound) helper process exits.
     return wait_for_helper_ipc_ready_locked();
   }
 

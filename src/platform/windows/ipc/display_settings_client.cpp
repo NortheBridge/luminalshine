@@ -11,6 +11,7 @@
   #include <mutex>
   #include <optional>
   #include <string>
+  #include <utility>
   #include <vector>
 
   // local
@@ -22,7 +23,19 @@
 namespace platf::display_helper_client {
 
   namespace {
-    constexpr int kConnectTimeoutMs = 2000;
+    // Cap for a routine command connect. 1000 ms is the bound `main` effectively had
+    // (500 ms anonymous attempt + 500 ms named fallback): a helper that is alive but
+    // has no connectable pipe should fall to the hard restart no later than before,
+    // and the watchdog ping must not hold pipe_mutex longer than it used to. The
+    // slow-start case is covered by the 5 s post-start ready wait, not by this.
+    constexpr int kConnectTimeoutMs = 1000;
+    // Floor for the fast DISARM connect. Its callers hand over a 75 ms (then ~37 ms)
+    // slice of their budget, which the old SelfHealingPipe silently ignored in favour
+    // of the 500 ms loop inside create_client_pipe. The helper re-creates its server
+    // instance up to 200 ms after a client disconnect, so honouring 75 ms literally
+    // would make a launch inside that window fail the DISARM and terminate a helper
+    // that is mid-restore.
+    constexpr int kFastConnectFloorMs = 500;
     constexpr int kSendTimeoutMs = 5000;
     constexpr int kShutdownIpcTimeoutMs = 500;
     // A display-helper completion is advisory: every caller verifies the
@@ -53,6 +66,36 @@ namespace platf::display_helper_client {
 
     int effective_send_timeout() {
       return shutdown_requested() ? kShutdownIpcTimeoutMs : kSendTimeoutMs;
+    }
+
+    // Duplicate of the helper's process handle (owned here; see bind_helper_process). Only ever
+    // used to answer "has the helper exited?" while a connect is polling for its pipe.
+    std::mutex &helper_process_mutex() {
+      static std::mutex m;
+      return m;
+    }
+
+    HANDLE &bound_helper_process() {
+      static HANDLE h = nullptr;
+      return h;
+    }
+
+    // Liveness of the bound helper process. Unknown (nothing bound) reads as "still alive" so a
+    // connect falls back to its time bound rather than giving up at once.
+    bool helper_process_exited() {
+      std::lock_guard<std::mutex> lg(helper_process_mutex());
+      const HANDLE h = bound_helper_process();
+      if (!h) {
+        return false;
+      }
+      return WaitForSingleObject(h, 0) == WAIT_OBJECT_0;
+    }
+
+    // Abort predicate handed to the pipe factory: polled every 50 ms while a connect waits for the
+    // helper's pipe, so neither a helper that died during startup nor a shutdown that begins
+    // mid-wait costs the full connect budget.
+    bool abort_connect_wait() {
+      return shutdown_requested() || helper_process_exited();
     }
 
   }  // namespace
@@ -134,7 +177,8 @@ namespace platf::display_helper_client {
       }
 
       BOOST_LOG(error) << "Display helper IPC: timed out waiting for APPLY completion"
-                       << (accepted ? " after acceptance" : " before acceptance");
+                       << (accepted ? " after acceptance" : " before acceptance")
+                       << " (" << kApplyResultTimeoutMs << " ms)";
       return std::nullopt;
     }
     bool wait_for_revert_accepted_locked(platf::dxgi::INamedPipe &pipe) {
@@ -191,6 +235,11 @@ namespace platf::display_helper_client {
 
   // Persistent connection across a stream session. Helper stays alive until
   // successful revert; we reuse the data pipe for APPLY/REVERT.
+  //
+  // The object is a plain (framed) client pipe with no self-healing: a connection is either the one
+  // a request was sent on, or it is gone and the next command opens a new one via
+  // ensure_connected_locked. That keeps every request/response exchange bound to a single
+  // connection, so a reply can never be awaited on a connection other than the one it was sent on.
   static std::unique_ptr<platf::dxgi::INamedPipe> &pipe_singleton() {
     static std::unique_ptr<platf::dxgi::INamedPipe> s_pipe;
     return s_pipe;
@@ -204,6 +253,21 @@ namespace platf::display_helper_client {
   }
 
   // Ensure connected while holding the pipe mutex. Returns true on success.
+  //
+  // Every connection goes through AnonymousPipeFactory, i.e. it consumes the helper's anonymous-pipe
+  // handshake. The helper's server speaks that handshake whenever it can create an anonymous server
+  // (its own plain named-pipe server is only a fallback for when that creation fails): the first
+  // thing it writes on a new control connection is an 80-byte AnonConnectMsg preamble (a "{GUID}"
+  // in UTF-16) naming the data pipe. A client that skipped the handshake (the former raw named-pipe
+  // fallback) received that preamble inside its framed byte stream; FramedPipe's resync heuristic
+  // then locked onto a bogus frame length derived from the GUID's trailing bytes and swallowed every
+  // subsequent helper reply (APPLY accepted, APPLY result, ping echoes) while the host waited out
+  // the full completion timeout. AnonymousPipeFactory::create_client already degrades to the plain
+  // control pipe when no handshake message arrives, so there is no case the raw fallback served
+  // that this does not.
+  //
+  // The connect wait is bounded by the budget below and by abort_connect_wait: a slow helper start
+  // is polled until its pipe appears; a helper that died, or a shutdown, ends the wait at once.
   static bool ensure_connected_locked(std::optional<int> connect_timeout_override_ms = std::nullopt) {
     if (shutdown_requested()) {
       return false;
@@ -212,57 +276,34 @@ namespace platf::display_helper_client {
     if (pipe && pipe->is_connected()) {
       return true;
     }
+
+    // Never resume a dropped connection in place. The helper serves one client at a time and starts a
+    // fresh session (new epoch, new handshake) for every connect, so a reconnect must be a brand-new
+    // client object; any reply still owed on the old connection is gone with it.
+    pipe.reset();
+
+    const int connect_timeout_ms = std::max(0, connect_timeout_override_ms.value_or(effective_connect_timeout()));
     BOOST_LOG(debug) << "Display helper IPC: connecting to server pipe '"
-                     << platf::display_helper_client::display_helper_pipe_name << "'";
-    const int connect_timeout_ms = connect_timeout_override_ms.value_or(effective_connect_timeout());
-    const auto connect_start = std::chrono::steady_clock::now();
-    auto remaining_ms = [&]() -> int {
-      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - connect_start
-      );
-      const long long remaining = static_cast<long long>(connect_timeout_ms) - elapsed.count();
-      return static_cast<int>(std::max<long long>(0LL, remaining));
-    };
+                     << platf::display_helper_client::display_helper_pipe_name
+                     << "' (timeout_ms=" << connect_timeout_ms << ")";
 
-    // If we still have a pipe object (just disconnected), try reconnecting it
-    // instead of recreating - avoids unnecessary factory/timeout overhead
-    if (pipe) {
-      pipe->wait_for_client_connection(remaining_ms());
-      if (pipe->is_connected()) {
-        return true;
-      }
-      pipe.reset();
-    }
+    platf::dxgi::ClientConnectOptions connect_options;
+    connect_options.retry.max_wait = std::chrono::milliseconds(connect_timeout_ms);
+    connect_options.abort_wait = abort_connect_wait;
 
-    // Create fresh pipe - try anonymous first, then named fallback
-    if (remaining_ms() > 0) {
-      auto creator_anon = []() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-        platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::AnonymousPipeFactory>());
-        return ff.create_client(platf::display_helper_client::display_helper_pipe_name);
-      };
-      pipe = std::make_unique<platf::dxgi::SelfHealingPipe>(creator_anon);
-      if (pipe) {
-        pipe->wait_for_client_connection(remaining_ms());
-        if (pipe->is_connected()) {
-          return true;
-        }
-      }
+    auto anonymous_factory = std::make_unique<platf::dxgi::AnonymousPipeFactory>();
+    anonymous_factory->set_client_connect_options(std::move(connect_options));
+    platf::dxgi::FramedPipeFactory factory(std::move(anonymous_factory));
+
+    pipe = factory.create_client(platf::display_helper_client::display_helper_pipe_name);
+    if (pipe && pipe->is_connected()) {
+      return true;
     }
-    if (remaining_ms() > 0) {
-      BOOST_LOG(debug) << "Display helper IPC: anonymous connect failed; trying named fallback";
-      auto creator_named = []() -> std::unique_ptr<platf::dxgi::INamedPipe> {
-        platf::dxgi::FramedPipeFactory ff(std::make_unique<platf::dxgi::NamedPipeFactory>());
-        return ff.create_client(platf::display_helper_client::display_helper_pipe_name);
-      };
-      pipe = std::make_unique<platf::dxgi::SelfHealingPipe>(creator_named);
-      if (pipe) {
-        pipe->wait_for_client_connection(remaining_ms());
-        if (pipe->is_connected()) {
-          return true;
-        }
-      }
-    }
-    BOOST_LOG(warning) << "Display helper IPC: connection failed";
+    pipe.reset();
+    BOOST_LOG(warning) << "Display helper IPC: connection failed"
+                       << (shutdown_requested() ? " (shutdown requested)" :
+                           helper_process_exited() ? " (helper process has exited)" :
+                                                     "");
     return false;
   }
 
@@ -274,6 +315,30 @@ namespace platf::display_helper_client {
       pipe->disconnect();
     }
     pipe.reset();
+  }
+
+  void bind_helper_process(void *process_handle) {
+    HANDLE duplicate = nullptr;
+    if (process_handle) {
+      if (!DuplicateHandle(GetCurrentProcess(), static_cast<HANDLE>(process_handle), GetCurrentProcess(), &duplicate, SYNCHRONIZE, FALSE, 0)) {
+        BOOST_LOG(warning) << "Display helper IPC: could not duplicate the helper process handle (winerr="
+                           << GetLastError() << "); connect waits fall back to their time bound.";
+        duplicate = nullptr;
+      }
+    }
+    HANDLE previous = nullptr;
+    {
+      std::lock_guard<std::mutex> lg(helper_process_mutex());
+      previous = std::exchange(bound_helper_process(), duplicate);
+    }
+    if (previous) {
+      CloseHandle(previous);
+    }
+  }
+
+  bool ensure_connected(int connect_timeout_ms) {
+    std::lock_guard<std::mutex> lg(pipe_mutex());
+    return ensure_connected_locked(connect_timeout_ms);
   }
 
   ApplyOutcome send_apply_json(const std::string &json) {
@@ -368,7 +433,7 @@ namespace platf::display_helper_client {
   bool send_disarm_restore_fast(int timeout_ms) {
     BOOST_LOG(debug) << "Display helper IPC: DISARM (fast) request queued (timeout_ms=" << timeout_ms << ")";
     std::unique_lock<std::mutex> lk(pipe_mutex());
-    if (!ensure_connected_locked(timeout_ms)) {
+    if (!ensure_connected_locked(std::max(timeout_ms, kFastConnectFloorMs))) {
       return false;
     }
     std::vector<uint8_t> payload;

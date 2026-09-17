@@ -254,14 +254,24 @@ namespace platf::dxgi {
     _secdesc_builder = std::move(builder);
   }
 
+  void NamedPipeFactory::set_client_connect_options(ClientConnectOptions options) {
+    _connect_options = std::move(options);
+  }
+
+  const ClientConnectOptions &NamedPipeFactory::client_connect_options() const noexcept {
+    return _connect_options;
+  }
+
   std::unique_ptr<INamedPipe> NamedPipeFactory::create_client(const std::string &pipeName) {
     auto wPipeBase = utf8_to_wide(pipeName);
     std::wstring fullPipeName = (wPipeBase.find(LR"(\\.\pipe\)") == 0) ? wPipeBase : LR"(\\.\pipe\)" + wPipeBase;
 
     winrt::file_handle hPipe = create_client_pipe(fullPipeName);
     if (!hPipe) {
+      // create_client_pipe has already logged why (timeout, abort, or the Win32 error) at the
+      // appropriate level; this line only records the failure code for the caller's context.
       DWORD err = GetLastError();
-      BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
+      BOOST_LOG(debug) << "NamedPipeFactory::create_client: no connection (" << err << ")";
       return nullptr;
     }
 
@@ -270,58 +280,95 @@ namespace platf::dxgi {
   }
 
   winrt::file_handle NamedPipeFactory::create_client_pipe(const std::wstring &fullPipeName) const {
-    constexpr ULONGLONG kClientConnectDeadlineMs = 500;  // 500ms per attempt; callers retry externally
-    const ULONGLONG deadline = GetTickCount64() + kClientConnectDeadlineMs;
-    const ULONGLONG start_time = GetTickCount64();
-    int retry_count = 0;
-    DWORD last_error = 0;
+    using namespace std::chrono;
+    using platf::ipc::ConnectAction;
+    using platf::ipc::ConnectAttempt;
+    using platf::ipc::GiveUpReason;
 
-    while (GetTickCount64() < deadline) {
+    // The loop itself is deliberately thin: every "how long / when to stop" decision comes from
+    // platf::ipc::next_connect_step so it can be unit-tested without Win32. The policy bounds the
+    // wait by _connect_options.retry.max_wait and, when a liveness probe is installed, by the
+    // server process still being alive.
+    const auto &policy = _connect_options.retry;
+    const auto start_time = steady_clock::now();
+    auto elapsed = [&]() {
+      return duration_cast<milliseconds>(steady_clock::now() - start_time);
+    };
+    int retry_count = 0;
+
+    for (;;) {
       winrt::file_handle pipe {
         CreateFileW(fullPipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr)
       };
+      const DWORD err = pipe ? ERROR_SUCCESS : GetLastError();
 
+      ConnectAttempt attempt = ConnectAttempt::fatal;
       if (pipe) {
-        if (retry_count > 0) {
-          BOOST_LOG(debug) << "CreateFileW succeeded after " << retry_count << " retries in "
-                           << (GetTickCount64() - start_time) << "ms";
-        }
-        return pipe;  // success
+        attempt = ConnectAttempt::connected;
+      } else if (err == ERROR_PIPE_BUSY) {
+        attempt = ConnectAttempt::server_busy;
+      } else if (err == ERROR_FILE_NOT_FOUND) {
+        attempt = ConnectAttempt::server_not_found;
       }
 
-      const DWORD err = GetLastError();
-      last_error = err;
-      retry_count++;
+      // Only consult the predicate when we actually have to wait; an open handle is an open handle.
+      const bool abort_requested = !pipe && _connect_options.abort_wait && _connect_options.abort_wait();
+      const auto step = platf::ipc::next_connect_step(policy, elapsed(), attempt, abort_requested);
 
-      if (err == ERROR_PIPE_BUSY) {
-        if (retry_count == 1 || retry_count % 20 == 0) {
-          BOOST_LOG(debug) << "Pipe busy, waiting... (retry " << retry_count << ")";
-        }
-        WaitNamedPipeW(fullPipeName.c_str(), 250);
-        continue;
-      }
-      if (err == ERROR_FILE_NOT_FOUND) {
-        if (retry_count == 1) {
-          BOOST_LOG(debug) << "Pipe not found, waiting for server to create it...";
-        } else if (retry_count % 40 == 0) {
-          BOOST_LOG(warning) << "Still waiting for pipe after " << (GetTickCount64() - start_time)
-                             << "ms (" << retry_count << " retries)";
-        }
-        Sleep(50);
-        continue;
-      }
+      switch (step.action) {
+        case ConnectAction::done:
+          if (retry_count > 0) {
+            BOOST_LOG(debug) << "CreateFileW succeeded after " << retry_count << " retries in "
+                             << elapsed().count() << "ms";
+          }
+          return pipe;
 
-      BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
-      break;  // unrecoverable error
+        case ConnectAction::wait_busy:
+          ++retry_count;
+          if (retry_count == 1 || retry_count % 20 == 0) {
+            BOOST_LOG(debug) << "Pipe busy, waiting... (retry " << retry_count << ")";
+          }
+          WaitNamedPipeW(fullPipeName.c_str(), static_cast<DWORD>(step.wait.count()));
+          continue;
+
+        case ConnectAction::poll_not_found:
+          ++retry_count;
+          if (retry_count == 1) {
+            BOOST_LOG(debug) << "Pipe not found, waiting for server to create it...";
+          } else if (retry_count % 40 == 0) {
+            BOOST_LOG(warning) << "Still waiting for pipe after " << elapsed().count()
+                               << "ms (" << retry_count << " retries)";
+          }
+          Sleep(static_cast<DWORD>(step.wait.count()));
+          continue;
+
+        case ConnectAction::give_up:
+          switch (step.reason) {
+            case GiveUpReason::aborted:
+              BOOST_LOG(warning) << "CreateFileW gave up after " << elapsed().count()
+                                 << "ms: the caller aborted the wait for the pipe server"
+                                 << " (server process exited or shutting down; last error " << err << ").";
+              break;
+            case GiveUpReason::deadline:
+              if (err == ERROR_FILE_NOT_FOUND) {
+                BOOST_LOG(error) << "CreateFileW timed out after " << elapsed().count()
+                                 << "ms waiting for pipe server (ERROR_FILE_NOT_FOUND). "
+                                 << "The helper process may not be running or failed to create the pipe.";
+              } else {
+                BOOST_LOG(error) << "CreateFileW timed out after " << elapsed().count()
+                                 << "ms waiting for a free pipe instance (ERROR_PIPE_BUSY).";
+              }
+              break;
+            case GiveUpReason::fatal_error:
+            case GiveUpReason::none:
+              BOOST_LOG(error) << "CreateFileW failed (" << err << ")";
+              break;
+          }
+          // Leave the real failure code for the caller, which reports GetLastError().
+          SetLastError(err);
+          return {};  // invalid handle
+      }
     }
-
-    if (last_error == ERROR_FILE_NOT_FOUND) {
-      BOOST_LOG(error) << "CreateFileW timed out after " << (GetTickCount64() - start_time)
-                       << "ms waiting for pipe server (ERROR_FILE_NOT_FOUND). "
-                       << "The helper process may not be running or failed to create the pipe.";
-    }
-
-    return {};  // invalid handle
   }
 
   AnonymousPipeFactory::AnonymousPipeFactory() = default;
@@ -363,6 +410,10 @@ namespace platf::dxgi {
 
   void AnonymousPipeFactory::set_security_descriptor_builder(NamedPipeFactory::SecurityDescriptorBuilder builder) {
     _pipe_factory.set_security_descriptor_builder(std::move(builder));
+  }
+
+  void AnonymousPipeFactory::set_client_connect_options(ClientConnectOptions options) {
+    _pipe_factory.set_client_connect_options(std::move(options));
   }
 
   class PrefetchedPipe: public INamedPipe {
@@ -900,13 +951,30 @@ namespace platf::dxgi {
   }
 
   std::unique_ptr<INamedPipe> AnonymousPipeFactory::connect_to_data_pipe(const std::string &pipeNameStr) {
+    // The server creates the data pipe as soon as it has read our ACK, so it normally appears within
+    // milliseconds. Keep the historical shape here — 500 ms per attempt inside a 5 s retry loop —
+    // instead of inheriting the control pipe's (possibly multi-second) per-attempt budget, which
+    // would multiply the worst case. Only the abort predicate is shared, so a server that dies
+    // mid-handshake, or a caller that starts shutting down, ends the loop at once.
+    const auto abort_wait = _pipe_factory.client_connect_options().abort_wait;
+    NamedPipeFactory data_factory = _pipe_factory;
+    {
+      ClientConnectOptions data_options;
+      data_options.abort_wait = abort_wait;
+      data_factory.set_client_connect_options(std::move(data_options));
+    }
+
     std::unique_ptr<INamedPipe> data_pipe = nullptr;
     auto retry_start = std::chrono::steady_clock::now();
     const auto retry_timeout = std::chrono::seconds(5);
 
     while (std::chrono::steady_clock::now() - retry_start < retry_timeout) {
-      data_pipe = _pipe_factory.create_client(pipeNameStr);
+      data_pipe = data_factory.create_client(pipeNameStr);
       if (data_pipe) {
+        break;
+      }
+      if (abort_wait && abort_wait()) {
+        BOOST_LOG(warning) << "Anonymous handshake: data pipe connect aborted (server exited or shutting down).";
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1543,65 +1611,6 @@ namespace platf::dxgi {
   }
 
   bool FramedPipe::is_connected() {
-    return _inner && _inner->is_connected();
-  }
-
-  SelfHealingPipe::SelfHealingPipe(Creator creator):
-      _creator(std::move(creator)) {}
-
-  bool SelfHealingPipe::ensure_connected() {
-    if (_inner && _inner->is_connected()) {
-      return true;
-    }
-    reconnect();
-    return _inner && _inner->is_connected();
-  }
-
-  void SelfHealingPipe::reconnect() {
-    try {
-      _inner = _creator ? _creator() : nullptr;
-    } catch (...) {
-      _inner.reset();
-    }
-  }
-
-  bool SelfHealingPipe::send(std::span<const uint8_t> bytes, int timeout_ms) {
-    if (!ensure_connected()) {
-      return false;
-    }
-    return _inner->send(bytes, timeout_ms);
-  }
-
-  PipeResult SelfHealingPipe::receive(std::span<uint8_t> dst, size_t &bytesRead, int timeout_ms) {
-    bytesRead = 0;
-    if (!ensure_connected()) {
-      return PipeResult::Disconnected;
-    }
-    return _inner->receive(dst, bytesRead, timeout_ms);
-  }
-
-  PipeResult SelfHealingPipe::receive_latest(std::span<uint8_t> dst, size_t &bytesRead, int timeout_ms) {
-    bytesRead = 0;
-    if (!ensure_connected()) {
-      return PipeResult::Disconnected;
-    }
-    return _inner->receive_latest(dst, bytesRead, timeout_ms);
-  }
-
-  void SelfHealingPipe::wait_for_client_connection(int milliseconds) {
-    if (!ensure_connected()) {
-      return;
-    }
-    _inner->wait_for_client_connection(milliseconds);
-  }
-
-  void SelfHealingPipe::disconnect() {
-    if (_inner) {
-      _inner->disconnect();
-    }
-  }
-
-  bool SelfHealingPipe::is_connected() {
     return _inner && _inner->is_connected();
   }
 }  // namespace platf::dxgi
