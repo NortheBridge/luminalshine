@@ -387,6 +387,23 @@ function deepEqual<T>(a: T, b: T): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/**
+ * Read a boolean config value the way the host does. `/api/config` returns
+ * the conf file verbatim, so a key the user turned off arrives as the string
+ * "false" — and `"false" !== false`. Mirrors src/config.cpp: `bool_f` keeps
+ * the default for an absent or empty value, and `to_bool` accepts
+ * true/yes/enable/enabled/on (or any string containing '1'); everything else
+ * reads as off.
+ * @param fallback What an absent or empty value means — the key's default.
+ */
+export function coerceConfigBoolean(v: unknown, fallback: boolean): boolean {
+  if (v === true || v === false) return v;
+  if (v === null || v === undefined) return fallback;
+  const s = String(v).toLowerCase().trim();
+  if (!s) return fallback;
+  return ['true', 'yes', 'enable', 'enabled', 'on'].includes(s) || s.includes('1');
+}
+
 export const useConfigStore = defineStore('config', () => {
   const tabs = ref(defaultGroups); // keep existing export shape
   const _data = ref<ConfigData | null>(null); // only user/server values
@@ -600,42 +617,19 @@ export const useConfigStore = defineStore('config', () => {
       }
     }
 
-    // Normalize Playnite boolean-like fields to real booleans so toggles
-    // persist as true/false instead of enabled/disabled strings.
-    const playniteBoolKeys = [
-      'playnite_auto_sync',
-      'playnite_sync_all_installed',
-      'playnite_autosync_require_replacement',
-      'playnite_autosync_remove_uninstalled',
-      'playnite_focus_exit_on_first',
-      'playnite_fullscreen_entry_enabled',
-    ];
-    // Extend boolean normalization to cover RTSS enable flag
-    const otherBoolKeys = [
-      'frame_limiter_enable',
-      'frame_limiter_disable_vsync',
-      'dd_wa_virtual_double_refresh',
-      'dd_wa_dummy_plug_hdr10',
-    ];
-    const allBoolKeys = playniteBoolKeys.concat(otherBoolKeys);
-    const toBool = (v: any): boolean | null => {
-      if (v === true || v === false) return v;
-      if (v === 1 || v === 0) return !!v;
-      const s = String(v ?? '')
-        .toLowerCase()
-        .trim();
-      if (!s) return null;
-      if (['true', 'yes', 'enable', 'enabled', 'on', '1'].includes(s)) return true;
-      if (['false', 'no', 'disable', 'disabled', 'off', '0'].includes(s)) return false;
-      return null;
-    };
+    // Coerce every boolean-default key to a real boolean. /api/config hands
+    // back the raw conf-file strings ("true"/"false", "enabled"/"disabled"),
+    // and strict comparisons against them (`!== false`, `=== true`, `!!v`)
+    // read a stored "false" as on — issue #178's YUV 4:4:4 switch showed
+    // checked after every refresh while the file said off. Runs after the
+    // legacy-key migration above so the copied values are covered too.
     if (data) {
-      for (const k of allBoolKeys) {
-        if (!Object.prototype.hasOwnProperty.call(data, k)) continue;
-        const b = toBool(data[k]);
-        if (b !== null) {
-          data[k] = b;
-        }
+      for (const key of Object.keys(data)) {
+        if (!hasDefaultKey(key)) continue;
+        const dv = defaultMap[key];
+        const cur = data[key];
+        if (typeof dv !== 'boolean' || typeof cur === 'boolean') continue;
+        data[key] = coerceConfigBoolean(cur, dv);
       }
     }
 

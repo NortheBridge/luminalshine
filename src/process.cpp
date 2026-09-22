@@ -1951,7 +1951,7 @@ namespace proc {
     // If we can safely hot-apply immediately, restore global config now; otherwise defer.
     if (has_run) {
       config::clear_runtime_config_overrides();
-      if (rtsp_stream::session_count() == 0) {
+      if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
