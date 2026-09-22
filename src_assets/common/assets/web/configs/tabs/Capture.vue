@@ -11,7 +11,7 @@ import AmdAmfEncoder from '@/configs/tabs/encoders/AmdAmfEncoder.vue';
 import VideotoolboxEncoder from '@/configs/tabs/encoders/VideotoolboxEncoder.vue';
 import SoftwareEncoder from '@/configs/tabs/encoders/SoftwareEncoder.vue';
 import VAAPIEncoder from '@/configs/tabs/encoders/VAAPIEncoder.vue';
-import { useConfigStore } from '@/stores/config';
+import { coerceConfigBoolean, useConfigStore } from '@/stores/config';
 import { http } from '@/http';
 
 const props = defineProps({
@@ -41,9 +41,11 @@ const gpuSupportsYuv444 = computed(() => {
 
 // Effective state of the YUV 4:4:4 switch: on capable GPUs it follows the
 // stored value (default on); on GPUs without probed 4:4:4 support it always
-// reads off and the switch is locked, regardless of the stored value.
+// reads off and the switch is locked, regardless of the stored value. The
+// stored value is read through coerceConfigBoolean so a raw conf-file string
+// ("false") can never read as on again (issue #178).
 const yuv444StreamingModel = computed<boolean>({
-  get: () => gpuSupportsYuv444.value && config.value?.yuv444_streaming !== false,
+  get: () => gpuSupportsYuv444.value && coerceConfigBoolean(config.value?.yuv444_streaming, true),
   set: (v) => {
     if (config.value) config.value.yuv444_streaming = v;
   },

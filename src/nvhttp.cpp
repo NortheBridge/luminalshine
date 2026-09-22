@@ -2310,7 +2310,7 @@ namespace nvhttp {
       config::clear_runtime_config_overrides();
 
       // Restore global config immediately when safe; otherwise defer.
-      if (rtsp_stream::session_count() == 0) {
+      if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();

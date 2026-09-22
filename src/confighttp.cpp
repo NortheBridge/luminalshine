@@ -1188,39 +1188,57 @@ namespace confighttp {
   // legacy per-page handlers removed; SPA entry handles these routes
 
   /**
-   * @brief Get the favicon image.
+   * @brief Serve one file from the Web UI's images directory.
+   *
+   * /images is a reserved prefix in getSpaEntry, so a file under it is only
+   * reachable through an explicit route registered in start(). Keep that
+   * allowlist in step with the /images/ references in the Web UI sources —
+   * tests/integration/test_web_static_routes.cpp fails when they disagree.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
-   * @todo combine function with getSunshineLogoImage and possibly getNodeModules
-   * @todo use mime_types map
+   * @param relative_path Path under WEB_DIR, e.g. "images/sunshine.ico".
+   * @param content_type MIME type sent with the file.
    */
-  void getFaviconImage(resp_https_t response, req_https_t request) {
+  void getWebImage(resp_https_t response, req_https_t request, const char *relative_path, const char *content_type) {
     print_req(request);
 
-    std::ifstream in(WEB_DIR "images/sunshine.ico", std::ios::binary);
+    std::ifstream in(std::string(WEB_DIR) + relative_path, std::ios::binary);
+    if (!in) {
+      not_found(response, request);
+      return;
+    }
     SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "image/x-icon");
+    headers.emplace("Content-Type", content_type);
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
     response->write(success_ok, in, headers);
   }
 
   /**
-   * @brief Get the Sunshine logo image.
+   * @brief Get the favicon image.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
-   * @todo combine function with getFaviconImage and possibly getNodeModules
-   * @todo use mime_types map
+   */
+  void getFaviconImage(resp_https_t response, req_https_t request) {
+    getWebImage(response, request, "images/sunshine.ico", "image/x-icon");
+  }
+
+  /**
+   * @brief Get the upstream Sunshine logo image.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
    */
   void getSunshineLogoImage(resp_https_t response, req_https_t request) {
-    print_req(request);
+    getWebImage(response, request, "images/logo-sunshine-45.png", "image/png");
+  }
 
-    std::ifstream in(WEB_DIR "images/logo-sunshine-45.png", std::ios::binary);
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "image/png");
-    headers.emplace("X-Frame-Options", "DENY");
-    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
-    response->write(success_ok, in, headers);
+  /**
+   * @brief Get the LuminalShine brand mark used by the Web UI shell and login page.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getLuminalShineLogoImage(resp_https_t response, req_https_t request) {
+    getWebImage(response, request, "images/logo-luminalshine.png", "image/png");
   }
 
   /**
@@ -2772,7 +2790,10 @@ namespace confighttp {
       bool deferred = false;
 
       if (!restart_required) {
-        if (rtsp_stream::session_count() == 0) {
+        // A browser (WebRTC) stream is not an RTSP session; it must defer the
+        // same way, or the apply resets every config global beneath its live
+        // capture/input threads. stop_webrtc_capture_locked drains the reload.
+        if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;
@@ -2894,7 +2915,8 @@ namespace confighttp {
             break;
           }
         }
-        if (only_playnite || rtsp_stream::session_count() == 0) {
+        // WebRTC streams are not RTSP sessions; they must defer too (see saveConfig).
+        if (only_playnite || (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions())) {
           // Apply immediately
           config::apply_config_now();
           applied_now = true;
@@ -4551,6 +4573,7 @@ namespace confighttp {
 #endif
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
+    server.resource["^/images/logo-luminalshine.png$"]["GET"] = getLuminalShineLogoImage;
     server.resource["^/assets\\/.+$"]["GET"] = getNodeModules;
     register_api_route("^/api/token$", "POST", generateApiToken);
     register_api_route("^/api/tokens$", "GET", listApiTokens);
