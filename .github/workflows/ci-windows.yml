@@ -426,13 +426,21 @@ jobs:
       # `dotnet wix build` directly, so no env:WIX hint is needed.
 
       # ── Codesigning (SSL.com eSigner) ─────────────────────────────────────
-      # All four steps below are gated on `env.SIGN_ARTIFACTS == 'true'` and
+      # All signing setup/sign steps below are gated on
+      # `env.SIGN_ARTIFACTS == 'true'` and
       # skip entirely while the gate is off. Order matters: built EXEs are
       # signed first so their signatures are preserved when CPack stages
       # them into the MSI and the portable ZIP; the MSI is signed after
       # CPack emits it but before the bootstrapper embeds it as a payload
       # resource; the bootstrapper EXE is signed last so the outermost file
       # users execute carries a valid signature wrapping a signed payload.
+      - name: Setup Java for eSigner
+        if: env.SIGN_ARTIFACTS == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '11'
+
       - name: Setup eSigner CodeSignTool
         if: env.SIGN_ARTIFACTS == 'true'
         shell: pwsh
@@ -446,13 +454,21 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
           New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
           Expand-Archive -Path $zipPath -DestinationPath $stagingDir -Force
-          $bat = Get-ChildItem -Path $stagingDir -Filter 'CodeSignTool.bat' -Recurse -File |
+          $jar = Get-ChildItem -Path $stagingDir -Filter "code_sign_tool-$version.jar" -Recurse -File |
                    Select-Object -First 1
-          if (-not $bat) { throw 'CodeSignTool.bat not found after extracting the eSigner archive.' }
-          # Export the resolved path so subsequent sign steps can call it
-          # without re-discovering the extracted layout.
-          "CODESIGN_TOOL_BAT=$($bat.FullName)" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          Write-Host "CodeSignTool ready at $($bat.FullName)"
+          if (-not $jar) { throw 'CodeSignTool JAR not found after extracting the eSigner archive.' }
+          $java = Join-Path $env:JAVA_HOME 'bin/java.exe'
+          if (-not (Test-Path $java)) { throw "Temurin Java not found at $java" }
+          $toolDir = Split-Path -Parent (Split-Path -Parent $jar.FullName)
+          # The vendor's Windows launcher hardcodes its bundled Java 11.0.2,
+          # whose 2019 trust store cannot validate SSL.com's current TLS chain.
+          # Run the same vendor JAR with the maintained Temurin 11 provisioned
+          # above; this preserves normal PKIX and hostname verification.
+          "CODESIGN_TOOL_JAR=$($jar.FullName)" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "CODESIGN_TOOL_JAVA=$java" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "CODESIGN_TOOL_DIR=$toolDir" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          & $java -version
+          Write-Host "CodeSignTool v$version ready at $($jar.FullName)"
 
       - name: Sign built executables
         if: env.SIGN_ARTIFACTS == 'true'
@@ -464,8 +480,10 @@ jobs:
           SSLCOM_TOTP_SECRET: ${{ secrets.SSLCOM_TOTP_SECRET }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $bat = $env:CODESIGN_TOOL_BAT
-          if (-not $bat -or -not (Test-Path $bat)) {
+          $jar = $env:CODESIGN_TOOL_JAR
+          $java = $env:CODESIGN_TOOL_JAVA
+          $toolDir = $env:CODESIGN_TOOL_DIR
+          if (-not $jar -or -not (Test-Path $jar) -or -not $java -or -not (Test-Path $java)) {
             throw 'CodeSignTool not installed — Setup eSigner CodeSignTool step did not run.'
           }
           foreach ($name in 'SSLCOM_USERNAME','SSLCOM_PASSWORD','SSLCOM_CREDENTIAL_ID','SSLCOM_TOTP_SECRET') {
@@ -480,24 +498,20 @@ jobs:
           $targets = Get-ChildItem -Path 'build' -Filter '*.exe' -Recurse -File |
                        Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike 'test_*' }
           if (-not $targets) { throw 'No executables found under build/ to sign.' }
-          # CodeSignTool.bat resolves its bundled JRE (.\jdk-11.0.2\bin\java),
-          # its jar, and conf\code_sign_tool.properties (SSL.com OAuth
-          # endpoints + CLIENT_ID) RELATIVE to the current directory, so it
-          # must run from its own folder or it dies with "The system cannot
-          # find the path specified." before signing. Input paths below are
-          # absolute, so the location change doesn't affect them.
-          $toolDir = Split-Path -Parent $bat
+          # CodeSignTool resolves conf\code_sign_tool.properties (SSL.com OAuth
+          # endpoints + CLIENT_ID) relative to the current directory. Input
+          # paths below are absolute, so the location change doesn't affect them.
           Push-Location $toolDir
           try {
             foreach ($t in $targets) {
               Write-Host "Signing $($t.FullName)"
-              # CodeSignTool.bat exits 0 even when signing fails (e.g.
+              # CodeSignTool exits 0 even when signing fails (e.g.
               # "Error: The OTP is invalid"), so the exit-code check alone
               # is not enough: scan its output for error markers AND
               # positively verify the signature landed, so a broken
               # credential fails here instead of 25 minutes later at
               # "Verify signatures".
-              $out = & $bat sign `
+              $out = & $java -Xmx1024M -jar $jar sign `
                   -username="$env:SSLCOM_USERNAME" `
                   -password="$env:SSLCOM_PASSWORD" `
                   -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
@@ -598,18 +612,19 @@ jobs:
           SSLCOM_TOTP_SECRET: ${{ secrets.SSLCOM_TOTP_SECRET }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $bat = $env:CODESIGN_TOOL_BAT
+          $jar = $env:CODESIGN_TOOL_JAR
+          $java = $env:CODESIGN_TOOL_JAVA
+          $toolDir = $env:CODESIGN_TOOL_DIR
           $msi = Get-ChildItem -Path 'build/cpack_artifacts' -Filter '*.msi' -File |
                    Sort-Object LastWriteTime -Descending |
                    Select-Object -First 1
           if (-not $msi) { throw 'No MSI to sign under build/cpack_artifacts/.' }
           # Run from the tool dir — see "Sign built executables" for why.
-          $toolDir = Split-Path -Parent $bat
           Write-Host "Signing $($msi.FullName)"
           Push-Location $toolDir
           try {
             # Exit code alone is unreliable — see "Sign built executables".
-            $out = & $bat sign `
+            $out = & $java -Xmx1024M -jar $jar sign `
                 -username="$env:SSLCOM_USERNAME" `
                 -password="$env:SSLCOM_PASSWORD" `
                 -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
@@ -645,16 +660,17 @@ jobs:
           SSLCOM_TOTP_SECRET: ${{ secrets.SSLCOM_TOTP_SECRET }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $bat = $env:CODESIGN_TOOL_BAT
+          $jar = $env:CODESIGN_TOOL_JAR
+          $java = $env:CODESIGN_TOOL_JAVA
+          $toolDir = $env:CODESIGN_TOOL_DIR
           $exe = Join-Path $PWD 'build/cpack_artifacts/LuminalShineSetup.exe'
           if (-not (Test-Path $exe)) { throw "Bootstrapper EXE not found at $exe" }
           # Run from the tool dir — see "Sign built executables" for why.
-          $toolDir = Split-Path -Parent $bat
           Write-Host "Signing $exe"
           Push-Location $toolDir
           try {
             # Exit code alone is unreliable — see "Sign built executables".
-            $out = & $bat sign `
+            $out = & $java -Xmx1024M -jar $jar sign `
                 -username="$env:SSLCOM_USERNAME" `
                 -password="$env:SSLCOM_PASSWORD" `
                 -credential_id="$env:SSLCOM_CREDENTIAL_ID" `
