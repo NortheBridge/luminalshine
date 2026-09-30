@@ -1,0 +1,105 @@
+#version 450
+//
+// BGRA -> YCbCr 4:2:0 (BT.709 limited range) on the GPU, with bilinear scaling
+// from the capture (source) resolution to the encode (negotiated) resolution.
+//
+// Sunshine/PyroWave encoder helper (NOT part of the upstream codec). The captured
+// frame is sampled (either an uploaded BGRA image or a zero-copy imported dma-buf)
+// and this shader writes the three R8 planes the codec consumes. On the dma-buf
+// path the hardware cursor is a separate overlay plane that is NOT in the captured
+// frame, so it is supplied as a premultiplied-alpha RGBA texture and composited
+// here over the source before the YCbCr conversion.
+//
+// Coefficients match the previous CPU path (and the decoder's inverse) exactly so
+// colours are unchanged: Y' = 16/255 + (0.1826 R + 0.6142 G + 0.0620 B), etc.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform texture2D SrcImg;        // source frame (sampled .rgb == R,G,B)
+layout(set = 0, binding = 1) uniform sampler   LinSamp;       // linear, clamp-to-edge
+// Format-less: the planes are R8 (SDR) or R16 (HDR, 10-bit content); the
+// context enables shaderStorageImageWriteWithoutFormat unconditionally.
+layout(set = 0, binding = 2) uniform writeonly image2D OutY;
+layout(set = 0, binding = 3) uniform writeonly image2D OutCb;
+layout(set = 0, binding = 4) uniform writeonly image2D OutCr;
+layout(set = 0, binding = 5) uniform texture2D CursorImg;     // premultiplied-alpha RGBA cursor
+
+layout(push_constant) uniform Push {
+    ivec2 luma_size;      // encode resolution (width, height)
+    vec2  inv_luma_size;  // 1.0 / luma_size, for normalized sampling
+    int   flip_y;         // 1 = source is vertically flipped (GL/EGL capture)
+    int   have_cursor;    // 1 = composite the cursor texture
+    vec2  cursor_xy;      // cursor top-left, normalized over the source (top-down)
+    vec2  cursor_wh;      // cursor size, normalized over the source
+    int   chroma444;      // 1 = full-resolution chroma (4:4:4), else 4:2:0
+    int   hdr;            // 1 = HDR10 input: BT.2020-NCL matrix over PQ-encoded RGB
+} pc;
+
+// Limited-range YCbCr, matrix applied to the non-linear (gamma/PQ) components,
+// exactly like H.264/HEVC video. SDR: BT.709 coefficients; HDR10: BT.2020-NCL
+// over the PQ-encoded scanout values (PQ passes through untouched).
+float toY (vec3 c) {
+    return (pc.hdr == 1 || pc.hdr == 2)
+        ? 16.0 / 255.0 + (0.2256 * c.r + 0.5823 * c.g + 0.0509 * c.b)
+        : 16.0 / 255.0 + (0.1826 * c.r + 0.6142 * c.g + 0.0620 * c.b);
+}
+float toCb(vec3 c) {
+    return (pc.hdr == 1 || pc.hdr == 2)
+        ? 128.0 / 255.0 + (-0.1227 * c.r - 0.3166 * c.g + 0.4392 * c.b)
+        : 128.0 / 255.0 + (-0.1006 * c.r - 0.3386 * c.g + 0.4392 * c.b);
+}
+float toCr(vec3 c) {
+    return (pc.hdr == 1 || pc.hdr == 2)
+        ? 128.0 / 255.0 + (0.4392 * c.r - 0.4039 * c.g - 0.0353 * c.b)
+        : 128.0 / 255.0 + (0.4392 * c.r - 0.3989 * c.g - 0.0403 * c.b);
+}
+
+// Sample the source at normalized uv (encode-space 0..1 over the source frame) and
+// composite the cursor over it. flip_y handles a bottom-up (GL) capture; the cursor
+// rect is given in the same source space so the flipped uv lines it up correctly.
+vec3 sample_src(vec2 uv) {
+    if (pc.flip_y != 0) uv.y = 1.0 - uv.y;
+    vec3 rgb = textureLod(sampler2D(SrcImg, LinSamp), uv, 0.0).rgb;
+    if (pc.have_cursor != 0) {
+        vec2 c = (uv - pc.cursor_xy) / pc.cursor_wh;
+        if (all(greaterThanEqual(c, vec2(0.0))) && all(lessThan(c, vec2(1.0)))) {
+            vec4 cur = textureLod(sampler2D(CursorImg, LinSamp), c, 0.0);  // premult RGBA
+            rgb = cur.rgb + rgb * (1.0 - cur.a);
+        }
+    }
+    if (pc.hdr == 2) {
+        rgb = mat3(0.627404, 0.069097, 0.016391,
+                   0.329283, 0.919540, 0.088013,
+                   0.043313, 0.011362, 0.895595) * rgb;
+        vec3 v = pow(clamp(rgb * (80.0 / 10000.0), 0.0, 1.0), vec3(2610.0 / 16384.0));
+        rgb = pow((vec3(3424.0 / 4096.0) + (2413.0 / 128.0) * v) /
+                  (vec3(1.0) + (2392.0 / 128.0) * v), vec3(2523.0 / 32.0));
+    } else if (pc.hdr == 3) {
+        rgb = pow(clamp(rgb, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
+    return rgb;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.luma_size.x || p.y >= pc.luma_size.y)
+        return;
+
+    // Luma: one sample per output pixel (bilinear handles down/up-scaling).
+    vec3 rgb = sample_src((vec2(p) + 0.5) * pc.inv_luma_size);
+    imageStore(OutY, p, vec4(toY(rgb), 0.0, 0.0, 0.0));
+
+    if (pc.chroma444 != 0) {
+        // Chroma 4:4:4: full-resolution chroma from the same sample.
+        imageStore(OutCb, p, vec4(toCb(rgb), 0.0, 0.0, 0.0));
+        imageStore(OutCr, p, vec4(toCr(rgb), 0.0, 0.0, 0.0));
+    }
+    // Chroma 4:2:0: one writer per 2x2 luma block, sampled at the block centre so
+    // the linear filter averages the 2x2 footprint.
+    else if ((p.x & 1) == 0 && (p.y & 1) == 0) {
+        vec3 crgb = sample_src((vec2(p) + 1.0) * pc.inv_luma_size);
+        ivec2 cp = p >> 1;
+        imageStore(OutCb, cp, vec4(toCb(crgb), 0.0, 0.0, 0.0));
+        imageStore(OutCr, cp, vec4(toCr(crgb), 0.0, 0.0, 0.0));
+    }
+}

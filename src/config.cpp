@@ -74,6 +74,7 @@ namespace VDISPLAY {
 #define APPS_JSON_PATH platf::appdata().string() + "/apps.json"
 
 namespace config {
+  pyrowave_t pyrowave;
 
   namespace nv {
     constexpr std::string_view split_encode_key = "nvenc_split_encode"sv;
@@ -960,6 +961,7 @@ namespace config {
 
   namespace {
     const video_t default_video = video;
+    const pyrowave_t default_pyrowave = pyrowave;
     const audio_t default_audio = audio;
     const stream_t default_stream = stream;
     const input_t default_input = input;
@@ -990,6 +992,7 @@ namespace config {
       const auto preserved_cmd = sunshine.cmd;
 
       video = default_video;
+      pyrowave = default_pyrowave;
       audio = default_audio;
       stream = default_stream;
       input = default_input;
@@ -1629,6 +1632,8 @@ namespace config {
     bool_f(vars, "dd_wa_dummy_plug_hdr10", video.dd.wa.dummy_plug_hdr10);
     bool_f(vars, "dd_wa_virtual_double_refresh", video.dd.wa.virtual_double_refresh);
 
+    bool_f(vars, "pyrowave_enabled", pyrowave.enabled);
+    int_between_f(vars, "pyrowave_bitrate_mbps", pyrowave.bitrate_mbps, {0, 10000});
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
@@ -2152,6 +2157,8 @@ namespace config {
         "dd_mode_remapping",
         "dd_wa_virtual_double_refresh",
         "dd_wa_dummy_plug_hdr10",
+        "pyrowave_enabled",
+        "pyrowave_bitrate_mbps",
         "max_bitrate",
         "minimum_fps_target",
 

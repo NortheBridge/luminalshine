@@ -1,4 +1,5 @@
 #include "video_worker.h"
+#include "src/pyrowave/backend.h"
 
 #include <algorithm>
 #include <array>
@@ -92,7 +93,7 @@ namespace platf::video_worker {
     std::string g_child_pipe;
     std::uint32_t g_parent_pid {};
     constexpr std::uint32_t kProtocolMagic = 0x4C565750;  // LVWP
-    constexpr std::uint32_t kProtocolVersion = 8;
+    constexpr std::uint32_t kProtocolVersion = 9;
     std::atomic_bool g_capture_reinitializing {false};
     std::atomic<std::uint64_t> g_capture_generation {1};
     std::mutex g_capture_generation_mutex;
@@ -597,7 +598,7 @@ namespace platf::video_worker {
       (void) send(pipe, message_e::startup_error);
       return 12;
     }
-    if (start.config.videoFormat < 0 || start.config.videoFormat > 2 ||
+    if (start.config.videoFormat < 0 || start.config.videoFormat > pyrowave::kCodec ||
         start.config.dynamicRange < 0 || start.config.dynamicRange > 1 ||
         start.config.chromaSamplingType < 0 || start.config.chromaSamplingType > 1) {
       (void) send(pipe, message_e::startup_error);
@@ -606,9 +607,15 @@ namespace platf::video_worker {
     const auto codec = static_cast<std::size_t>(start.config.videoFormat);
     const auto dynamic_range_mask = std::uint32_t {1} << video::encoder_t::DYNAMIC_RANGE;
     const auto yuv444_mask = std::uint32_t {1} << video::encoder_t::YUV444;
-    if (!start.encoder.supported_codec[codec] ||
-        (start.config.dynamicRange && !(start.encoder.codec_capabilities[codec] & dynamic_range_mask)) ||
-        (start.config.chromaSamplingType && !(start.encoder.codec_capabilities[codec] & yuv444_mask))) {
+    const bool pyro = start.config.videoFormat == pyrowave::kCodec;
+    const bool supported = pyro ?
+      (pyrowave::available() && start.config.chromaSamplingType == 0 &&
+       pyrowave::valid_session(start.config.width, start.config.height, start.config.framerate,
+                               start.config.bitrate, start.config.pyrowave_packet_size)) :
+      (start.encoder.supported_codec[codec] &&
+       (!start.config.dynamicRange || (start.encoder.codec_capabilities[codec] & dynamic_range_mask)) &&
+       (!start.config.chromaSamplingType || (start.encoder.codec_capabilities[codec] & yuv444_mask)));
+    if (!supported) {
       BOOST_LOG(error) << "Video worker: requested stream format is inconsistent with the validated encoder snapshot.";
       (void) send(pipe, message_e::startup_error);
       return 17;

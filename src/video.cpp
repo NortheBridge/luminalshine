@@ -41,6 +41,7 @@ extern "C" {
 #include "sync.h"
 #include "tdr_state.h"
 #include "video.h"
+#include "pyrowave/backend.h"
 #include "webrtc_stream.h"
 #include "yuv444_fallback.h"
 #ifdef _WIN32
@@ -2138,6 +2139,17 @@ namespace video {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, host_processing_timestamp, capture_placeholder, capture_generation);
     }
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    if (auto packet = pyrowave::encode(session, frame_nr)) {
+      packet->channel_data = channel_data;
+      packet->frame_timestamp = frame_timestamp;
+      packet->host_processing_timestamp = host_processing_timestamp;
+      packet->capture_placeholder = capture_placeholder;
+      packet->capture_generation = capture_generation;
+      packets->raise(std::move(packet));
+      return 0;
+    }
+#endif
     return -1;
   }
 
@@ -2661,6 +2673,9 @@ namespace video {
   }
 
   std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    if (config.videoFormat == pyrowave::kCodec) return pyrowave::make_session(std::move(encode_device));
+#endif
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
       return make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
@@ -3097,6 +3112,9 @@ namespace video {
   std::unique_ptr<platf::encode_device_t> make_encode_device(platf::display_t &disp, const encoder_t &encoder, const config_t &config) {
     std::unique_ptr<platf::encode_device_t> result;
 
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    if (config.videoFormat == pyrowave::kCodec) return pyrowave::make_device(disp, config);
+#endif
     auto colorspace = colorspace_from_client_config(config, disp.is_hdr());
 
     platf::pix_fmt_e pix_fmt;
@@ -3292,12 +3310,6 @@ namespace video {
     int &display_p,
     encoder_recovery_gate_t &recovery_gate
   ) {
-    const auto *enc_ptr = chosen_encoder;
-    if (!enc_ptr) {
-      BOOST_LOG(error) << "No encoder available for sync encoding"sv;
-      return encode_e::error;
-    }
-    const auto &encoder = *enc_ptr;
 
     std::shared_ptr<platf::display_t> disp;
 
@@ -3311,6 +3323,13 @@ namespace video {
 
       synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*ctx)));
     }
+
+    const auto *enc_ptr = chosen_encoder;
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    if (synced_session_ctxs.front()->config.videoFormat == pyrowave::kCodec) enc_ptr = &pyrowave::encoder();
+#endif
+    if (!enc_ptr) return encode_e::error;
+    const auto &encoder = *enc_ptr;
 
     while (encode_session_ctx_queue.running()) {
 #ifdef _WIN32
@@ -3755,6 +3774,9 @@ namespace video {
 #endif
     // Snapshot the encoder pointer to avoid races with concurrent probe_encoders() calls
     auto *encoder = chosen_encoder;
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+    if (config.videoFormat == pyrowave::kCodec) encoder = &pyrowave::encoder();
+#endif
     if (!encoder) {
       BOOST_LOG(error) << "No encoder available for capture"sv;
       return;

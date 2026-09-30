@@ -39,7 +39,8 @@ namespace stream::video_qos {
     int payload_bitrate_kbps,
     int fec_percentage,
     std::size_t wire_packet_bytes,
-    std::size_t payload_packet_bytes
+    std::size_t payload_packet_bytes,
+    long double max_drain_bps = kMaxWireDrainBitrateBps
   ) {
     const auto safe_payload_bytes = std::max<std::size_t>(payload_packet_bytes, 1);
     const auto safe_wire_bytes = std::max<std::size_t>(wire_packet_bytes, 1);
@@ -50,7 +51,7 @@ namespace stream::video_qos {
       static_cast<long double>(safe_payload_bytes);
     const long double drain = std::min(
       average * kWirePacingHeadroom,
-      kMaxWireDrainBitrateBps
+      std::max(max_drain_bps, 1.0L)
     );
     const long double packet_bits = static_cast<long double>(safe_wire_bytes) * 8.0L;
     const auto interval = std::chrono::duration<long double> {packet_bits / drain};
