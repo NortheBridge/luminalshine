@@ -64,6 +64,7 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#include "pyrowave/backend.h"
 #include "webrtc_stream.h"
 
 using namespace std::literals;
@@ -2079,6 +2080,9 @@ namespace nvhttp {
       if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[2]) {
         codec_mode_flags |= SCM_AV1_HIGH10_444;
       }
+    }
+    if (config::pyrowave.enabled && pyrowave::available()) {
+      codec_mode_flags |= pyrowave::kServerSdr | pyrowave::kServerHdr;
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 

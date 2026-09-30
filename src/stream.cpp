@@ -2034,7 +2034,8 @@ namespace stream {
           pacing_bitrate_kbps,
           fecPercentage,
           wire_packet_bytes,
-          payload_blocksize
+          payload_blocksize,
+          session->config.monitor.videoFormat == 3 ? 15'000'000'000.0L : video_qos::kMaxWireDrainBitrateBps
         );
         const long double pacing_wire_bitrate_bps = pacing.drain_bitrate_bps;
         const auto packet_wire_interval = pacing.packet_interval;
@@ -3345,7 +3346,7 @@ namespace stream {
         md.client_uuid = launch_session.client_uuid;
         md.protocol    = "RTSP";
         const int video_format = config.monitor.videoFormat;
-        md.codec       = (video_format == 0) ? "H264" : (video_format == 1) ? "HEVC" : (video_format == 2) ? "AV1" : "?";
+        md.codec       = (video_format == 0) ? "H264" : (video_format == 1) ? "HEVC" : (video_format == 2) ? "AV1" : (video_format == 3) ? "PyroWave" : "?";
         md.width                = config.monitor.width;
         md.height               = config.monitor.height;
         md.fps                  = config.monitor.framerate;

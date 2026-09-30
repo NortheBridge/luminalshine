@@ -2628,6 +2628,25 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### pyrowave_enabled
+
+Enable the experimental Windows PyroWave encoder. Default: `disabled`.
+Requires a build configured with `SUNSHINE_ENABLE_PYROWAVE=ON`, a compatible
+Vulkan GPU with Direct3D sharing, and the pinned Aurora client described in
+[PyroWave testing](pyrowave.md). Existing H.264, HEVC and AV1 negotiation is preserved.
+The initial profiles are SDR BT.709 and HDR10 BT.2020/PQ, both 4:2:0.
+
+### pyrowave_bitrate_mbps
+
+PyroWave compressed video target in decimal Mbps. Default: `700`. Range:
+`0`–`10000`. Zero selects the automatic default of 700 Mbps. This host setting
+applies only to PyroWave, overriding the client's general-purpose bitrate
+request and the legacy `max_bitrate` setting. Changes apply at the next session.
+FEC, audio, encryption and packet headers increase network traffic beyond this
+video target. The current transport cannot carry every bitrate/FPS combination;
+requests exceeding its frame budget are rejected before starting capture.
+The 10,000 Mbps input limit is not a claim of verified 10 Gbps transport support.
+
 ### prefer_10bit_sdr
 
 <table>

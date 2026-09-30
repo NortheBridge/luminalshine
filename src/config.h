@@ -453,6 +453,11 @@ namespace config {
     int update_check_interval_seconds {86400};
   };
 
+  struct pyrowave_t {
+    bool enabled = false;
+    int bitrate_mbps = 700;
+  };
+  extern pyrowave_t pyrowave;
   extern video_t video;
   extern audio_t audio;
   extern stream_t stream;

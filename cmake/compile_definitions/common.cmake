@@ -241,3 +241,10 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         ${Boost_LIBRARIES}
         ${OPENSSL_LIBRARIES}
         ${PLATFORM_LIBRARIES})
+
+if(SUNSHINE_ENABLE_PYROWAVE)
+    list(APPEND SUNSHINE_TARGET_FILES
+        "${CMAKE_SOURCE_DIR}/src/pyrowave/backend.cpp"
+        "${CMAKE_SOURCE_DIR}/src/pyrowave/pyrowave_vk.cpp"
+        "${CMAKE_SOURCE_DIR}/src/pyrowave/pyrowave_encode.cpp")
+endif()

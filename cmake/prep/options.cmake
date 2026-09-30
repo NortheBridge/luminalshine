@@ -77,3 +77,5 @@ elseif(UNIX)  # Linux
     option(SUNSHINE_ENABLE_PORTAL
             "Enable XDG portal grab if available" ON)
 endif()
+
+option(SUNSHINE_ENABLE_PYROWAVE "Build experimental Windows PyroWave encoder" OFF)

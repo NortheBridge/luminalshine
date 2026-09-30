@@ -34,6 +34,7 @@ extern "C" {
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
+#include "pyrowave/backend.h"
 
 #ifdef _WIN32
   #include "src/platform/windows/display_helper_integration.h"
@@ -1025,6 +1026,9 @@ namespace rtsp_stream {
       ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
     }
 
+    if (config::pyrowave.enabled && pyrowave::available()) {
+      ss << "a=rtpmap:99 PYROWAVE/90000"sv << std::endl;
+    }
     if (!session.surround_params.empty()) {
       // If we have our own surround parameters, advertise them twice first
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
@@ -1370,6 +1374,24 @@ namespace rtsp_stream {
     if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
       BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
 
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    if (config.monitor.videoFormat == pyrowave::kCodec) {
+      config.monitor.bitrate = static_cast<int>(pyrowave::bitrate_kbps(config::pyrowave.bitrate_mbps));
+      config.monitor.pyrowave_packet_size = config.packetsize;
+      if (!config::pyrowave.enabled || !pyrowave::available() || config.monitor.chromaSamplingType != 0 ||
+          !pyrowave::valid_session(config.monitor.width, config.monitor.height, config.monitor.framerate,
+                                   config.monitor.bitrate, config.packetsize)) {
+        BOOST_LOG(error) << "PyroWave unavailable or requested mode exceeds the initial transport bounds";
+        respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return;
+      }
+      // This encoder emits limited-range BT.709 SDR or BT.2020/PQ HDR.
+      config.monitor.encoderCscMode = 2;
+      config.monitor.prefer_sdr_10bit = false;
+    } else if (config.monitor.videoFormat < 0 || config.monitor.videoFormat > 2) {
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }

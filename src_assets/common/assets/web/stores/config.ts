@@ -264,6 +264,8 @@ const defaultGroups = [
       min_threads: 2,
       hevc_mode: 0,
       av1_mode: 0,
+      pyrowave_enabled: false,
+      pyrowave_bitrate_mbps: 700,
       prefer_10bit_sdr: false,
       // Allow YUV 4:4:4 negotiation. Default ON to match the C++ struct's
       // `bool yuv444_streaming {true}`; the Capture tab locks the switch off

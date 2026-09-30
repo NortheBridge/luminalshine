@@ -41,3 +41,5 @@ elseif(UNIX)
         include("${CMAKE_MODULE_PATH}/dependencies/linux.cmake")
     endif()
 endif()
+
+include(dependencies/pyrowave)
