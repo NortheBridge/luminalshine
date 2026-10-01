@@ -1341,16 +1341,25 @@
     "success_msg": "Password has been changed successfully! This page will reload soon, your browser will ask you for the new credentials."
   },
   "pin": {
+    "ambiguous": "Select the client that displayed this PIN.",
+    "awaiting_client": "PIN submitted. Waiting for the client to finish pairing…",
+    "delivery_failed": "The client stopped waiting for the PIN. Start pairing again.",
     "device_name": "Device Name",
     "display_mode_override": "Display mode override",
     "display_mode_override_desc": "Force LuminalShine to use this resolution and refresh rate for this client (format: 1920x1080x60). Leave blank to use the client's request.",
+    "expired": "This pairing request expired. Start pairing again on the client.",
     "failure": "Pairing failed. Check the PIN and try again.",
+    "invalid": "The PIN must contain exactly four digits.",
+    "no_pending": "No matching client is waiting for a PIN. Start pairing on the client first.",
     "pair_failure": "Pairing Failed: Check if the PIN is typed correctly",
     "pair_success": "Success! Please check Moonlight to continue",
+    "pending_client": "Client waiting for this PIN",
     "pin": "PIN",
     "pin_pairing": "PIN Pairing",
+    "select_client": "Select a client",
     "send": "Pair",
     "success": "Paired.",
+    "waiting_for_request": "Start pairing on the client; it will appear here.",
     "warning_msg": "Make sure you have access to the client you are pairing with. This software can give total control to your computer, so be careful!"
   },
   "resource_card": {

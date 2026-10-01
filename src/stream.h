@@ -88,6 +88,11 @@ namespace stream {
 
     void stop(session_t &session);
     void join(session_t &session);
+    /**
+     * @brief Finish process-global cleanup yielded by an old session when the
+     *        successor launch aborts before reaching RUNNING.
+     */
+    void complete_deferred_global_cleanup(std::string_view reason);
     state_e state(session_t &session);
   }  // namespace session
 

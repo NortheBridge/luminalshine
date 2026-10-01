@@ -11,10 +11,13 @@ extern "C" {
 
 // standard includes
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <cstdlib>
 #include <format>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -29,17 +32,24 @@ extern "C" {
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "process.h"
 #include "requested_display_mode.h"
 #include "rtsp.h"
+#include "session_teardown_policy.h"
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
+#include "webrtc_stream.h"
 #include "pyrowave/backend.h"
 
 #ifdef _WIN32
   #include "src/platform/windows/display_helper_integration.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
+  #include "src/platform/windows/frame_limiter.h"
+  #include "src/platform/windows/misc.h"
+  #include "src/platform/windows/rtss_integration.h"
   #include "src/platform/windows/virtual_display.h"
+  #include "src/platform/windows/virtual_display_cleanup.h"
 #endif
 
 namespace asio = boost::asio;
@@ -582,17 +592,19 @@ namespace rtsp_stream {
      *       the session will be discarded.
      * @param launch_session Streaming session information.
      */
-    void session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    bool session_raise(std::shared_ptr<launch_session_t> launch_session) {
+      std::lock_guard lg {_launch_timer_mutex};
       // If a launch event is still pending, don't overwrite it.
       if (launch_event.view(0s)) {
-        return;
+        return false;
       }
 
       // Raise the new launch session to prepare for the RTSP handshake
       launch_event.raise(std::move(launch_session));
 
       // Arm the timer to expire this launch session if the client times out
-      arm_launch_timer(config::stream.ping_timeout);
+      arm_launch_timer_locked(config::stream.ping_timeout);
+      return true;
     }
 
     /**
@@ -608,14 +620,28 @@ namespace rtsp_stream {
      */
     void arm_launch_timer(std::chrono::milliseconds timeout) {
       std::lock_guard lg {_launch_timer_mutex};
+      arm_launch_timer_locked(timeout);
+    }
+
+    void arm_launch_timer_locked(std::chrono::milliseconds timeout) {
       const auto generation = ++_launch_timer_generation;
       raised_timer.expires_after(timeout);
       raised_timer.async_wait([this, generation](const boost::system::error_code &ec) {
-        if (!ec && generation == _launch_timer_generation.load(std::memory_order_acquire)) {
-          auto discarded = launch_event.pop(0s);
-          if (discarded) {
-            BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
+        std::shared_ptr<launch_session_t> discarded;
+        {
+          std::lock_guard timer_lock {_launch_timer_mutex};
+          if (!ec && generation == _launch_timer_generation.load(std::memory_order_acquire)) {
+            if (launch_event.view(0s)) {
+              // Keep WebRTC excluded continuously as pending visibility moves
+              // from launch_event to the asynchronous rollback worker.
+              webrtc_stream::moonlight_launch_begin();
+            }
+            discarded = launch_event.pop(0s);
           }
+        }
+        if (discarded) {
+          BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
+          reconcile_discarded_launch(discarded, "timeout", false, true);
         }
       });
     }
@@ -637,7 +663,39 @@ namespace rtsp_stream {
      * @brief Whether a raised launch session is still waiting to be claimed.
      */
     bool session_pending() {
+      std::lock_guard lg {_launch_timer_mutex};
       return static_cast<bool>(launch_event.view(0s));
+    }
+
+    /**
+     * @brief Cancel an unclaimed pending launch and release its lifecycle gate.
+     */
+    std::shared_ptr<launch_session_t> cancel_pending_launch(
+      std::optional<uint32_t> expected_id = std::nullopt,
+      std::string_view reason = "cancel",
+      bool rollback_unclaimed = false,
+      bool explicit_cancel = true
+    ) {
+      std::shared_ptr<launch_session_t> discarded;
+      {
+        std::lock_guard lg {_launch_timer_mutex};
+        const auto pending = launch_event.view(0s);
+        if (!pending || (expected_id && pending->id != *expected_id)) {
+          return {};
+        }
+        if (rollback_unclaimed) {
+          // Close the gap before launch_event is popped. The matching end is
+          // owned by reconcile_discarded_launch() or its rollback worker.
+          webrtc_stream::moonlight_launch_begin();
+        }
+        ++_launch_timer_generation;
+        raised_timer.cancel();
+        discarded = launch_event.pop(0s);
+      }
+      if (discarded) {
+        reconcile_discarded_launch(discarded, reason, explicit_cancel, rollback_unclaimed);
+      }
+      return discarded;
     }
 
     /**
@@ -647,19 +705,44 @@ namespace rtsp_stream {
     void session_clear(uint32_t launch_session_id) {
       // We currently only support a single pending RTSP session,
       // so the ID should always match the one for that session.
-      auto launch_session = launch_event.view(0s);
-      if (launch_session) {
+      std::shared_ptr<launch_session_t> launch_session;
+      {
+        std::lock_guard timer_lock {_launch_timer_mutex};
+        launch_session = launch_event.view(0s);
+        if (!launch_session) {
+          return;
+        }
         if (launch_session->id != launch_session_id) {
           BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
-        } else {
-          {
-            std::lock_guard lg {_launch_timer_mutex};
-            ++_launch_timer_generation;  // invalidate any queued expiry handler
-            raised_timer.cancel();
-          }
-          launch_event.pop();
+          return;
         }
       }
+
+      // Retire the shared admission object before removing the event. A socket
+      // accepted earlier may still hold this launch_session; it must not be
+      // able to ANNOUNCE after the control connection has consumed the slot.
+      // Never wait for ANNOUNCE's admission mutex while holding the timer
+      // mutex: session::start can be slow, and timer/cancel/retry operations
+      // must remain responsive throughout it.
+      if (launch_session->admission_state) {
+        std::lock_guard admission_lock {launch_session->admission_state->mutex};
+        (void) launch_session->admission_state->policy.retire(true);
+        launch_session->display_preparation_lease.reset();
+      } else {
+        launch_session->display_preparation_lease.reset();
+      }
+
+      // Expiry or /cancel may have popped the snapshot while we waited for
+      // admission. Verify identity under the timer lock so we can never clear
+      // a successor's event.
+      std::lock_guard timer_lock {_launch_timer_mutex};
+      const auto current = launch_event.view(0s);
+      if (!current || current.get() != launch_session.get() || current->id != launch_session_id) {
+        return;
+      }
+      ++_launch_timer_generation;  // invalidate any queued expiry handler
+      raised_timer.cancel();
+      launch_event.pop(0s);
     }
 
     /**
@@ -805,10 +888,204 @@ namespace rtsp_stream {
     void stop() {
       acceptor.close();
       io_context.stop();
+      (void) cancel_pending_launch();
       clear();
     }
 
   private:
+    void reconcile_discarded_launch(
+      const std::shared_ptr<launch_session_t> &discarded,
+      const std::string_view reason,
+      bool explicit_cancel,
+      bool rollback_unclaimed
+    ) {
+      // A prior last-session teardown may have deferred its global cleanup
+      // (including RTSP/WebRTC exclusivity reconciliation) to this launch.
+      // Serialize cancellation + lease release against ANNOUNCE's final
+      // admission claim/session insertion. If ANNOUNCE won, /cancel waits
+      // until the started session is visible to clear(true); if cancellation
+      // won, ANNOUNCE observes cancelled and cannot start afterward.
+      bool retired = true;
+      if (discarded->admission_state) {
+        std::lock_guard admission_lock {discarded->admission_state->mutex};
+        retired = discarded->admission_state->policy.retire(explicit_cancel);
+        // The event has been popped in both the retired and claimed-timeout
+        // cases. Drop its lease unconditionally; a stale accepted socket may
+        // retain launch_session, while the admitted session already published
+        // active/running ownership before marking itself claimed.
+        discarded->display_preparation_lease.reset();
+      } else {
+        discarded->display_preparation_lease.reset();
+      }
+
+      // ANNOUNCE completed session::start before the timeout acquired the
+      // admission mutex. That live session owns teardown now; the timeout may
+      // release only the pending event's reference.
+      if (!retired) {
+        BOOST_LOG(debug) << "Pending launch timeout lost to completed RTSP admission: " << discarded->unique_id;
+        if (rollback_unclaimed) {
+          webrtc_stream::moonlight_launch_end();
+        }
+        return;
+      }
+
+      if (rollback_unclaimed) {
+        schedule_unclaimed_launch_rollback(discarded, std::string {reason});
+        return;
+      }
+
+      // Reset-first plus a second logical-active read avoids both stale true
+      // after an old session stops and clobbering a successor that starts in
+      // the reconciliation window.
+      if (stream::lifecycle::expired_launch_should_clear_rtsp_active(
+            stream::session::active_sessions.load(std::memory_order_acquire)
+          )) {
+        webrtc_stream::set_rtsp_sessions_active(false);
+        // /cancel runs on an HTTP thread and can race the pending session's
+        // RTSP start. Restore true if that start won between our load/store.
+        if (stream::session::active_sessions.load(std::memory_order_acquire) > 0) {
+          webrtc_stream::set_rtsp_sessions_active(true);
+        }
+      }
+      BOOST_LOG(debug) << "Pending launch lifecycle ownership released after " << reason << '.';
+    }
+
+    void schedule_unclaimed_launch_rollback(
+      std::shared_ptr<launch_session_t> discarded,
+      std::string reason
+    ) {
+      constexpr auto rollback_window = 75s;
+      task_pool.push([this,
+                      discarded = std::move(discarded),
+                      reason = std::move(reason),
+                      deadline = std::chrono::steady_clock::now() + rollback_window]() mutable {
+        run_unclaimed_launch_rollback(std::move(discarded), std::move(reason), deadline);
+      });
+    }
+
+    void run_unclaimed_launch_rollback(
+      std::shared_ptr<launch_session_t> discarded,
+      std::string reason,
+      const std::chrono::steady_clock::time_point deadline
+    ) {
+      bool retry_scheduled = false;
+      auto exclusion_guard = util::fail_guard([&]() {
+        // A retry inherits this begin() rather than opening a browser-admission
+        // gap between attempts. Only a terminal success/abort releases it.
+        if (!retry_scheduled) {
+          webrtc_stream::moonlight_launch_end();
+        }
+      });
+
+      const auto successor_exists = []() {
+        return stream::session::active_sessions.load(std::memory_order_acquire) != 0 ||
+               webrtc_stream::has_active_sessions() || rtsp_stream::launch_session_pending();
+      };
+      if (successor_exists()) {
+        BOOST_LOG(info) << "Unclaimed launch rollback superseded by a live or pending successor.";
+        return;
+      }
+
+      const auto schedule_retry = [&]() {
+        if (std::chrono::steady_clock::now() >= deadline) {
+          BOOST_LOG(error) << "Unclaimed launch rollback exceeded its 75-second recovery window after " << reason
+                           << "; releasing admission for the teardown watchdog's controlled recovery.";
+          return false;
+        }
+        task_pool.pushDelayed(
+          [this, discarded = std::move(discarded), reason = std::move(reason), deadline]() mutable {
+            run_unclaimed_launch_rollback(std::move(discarded), std::move(reason), deadline);
+          },
+          250ms
+        );
+        retry_scheduled = true;
+        return true;
+      };
+
+      // A STOPPING predecessor has left active_sessions but still owns capture
+      // threads. Wait for its bounded join rather than tearing down VGD below
+      // those threads; its teardown watchdog resolves a genuine wedge.
+      if (stream::session::running_sessions.load(std::memory_order_acquire) != 0) {
+        (void) schedule_retry();
+        return;
+      }
+
+      auto cleanup = stream::lifecycle::coordinator().acquire_cleanup(250ms);
+      if (cleanup.result == stream::lifecycle::cleanup_acquire_result_e::superseded_by_launch) {
+        BOOST_LOG(info) << "Unclaimed launch rollback superseded by a newer display preparation.";
+        return;
+      }
+      if (cleanup.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
+        (void) schedule_retry();
+        return;
+      }
+      if (stream::session::running_sessions.load(std::memory_order_acquire) != 0 || successor_exists()) {
+        BOOST_LOG(info) << "Unclaimed launch rollback lost ownership to a successor during revalidation.";
+        return;
+      }
+
+      bool exact_app_terminated = false;
+      if (discarded->terminate_app_on_unclaimed && discarded->appid > 0 &&
+          discarded->launched_app_generation) {
+        BOOST_LOG(info) << "Unclaimed launch rollback: terminating application started for timed-out session.";
+        exact_app_terminated = proc::proc.terminate_if_active_session(
+          discarded->appid,
+          *discarded->launched_app_generation,
+          discarded->launched_app_client_uuid
+        );
+        if (!exact_app_terminated && proc::proc.active_session_guard().has_active_app) {
+          BOOST_LOG(info) << "Unclaimed launch rollback found a different application generation; preserving its app, overrides, and display state.";
+          return;
+        }
+      }
+      if (discarded->runtime_overrides_applied && !exact_app_terminated) {
+        // Desktop/appid=0 launches have no proc::terminate() path to perform
+        // this restoration. The lifecycle lease prevents a new launch from
+        // observing a half-restored global configuration.
+        config::clear_runtime_config_overrides();
+        config::apply_config_now();
+      }
+      config::set_runtime_output_name_override(std::nullopt);
+#ifdef _WIN32
+      // This routine itself runs on the single-thread task_pool. Its watchdog
+      // must therefore own an independent thread; a delayed task queued back
+      // to task_pool can never run while the cleanup below is blocked.
+      stream::session::teardown::independent_watchdog_t display_cleanup_watchdog {60s, []() {
+        BOOST_LOG(error) << "Unclaimed launch display cleanup exceeded 60 seconds; requesting a controlled host restart.";
+        logging::log_flush();
+        platf::restart();
+        std::this_thread::sleep_for(10s);
+        logging::log_flush();
+        std::_Exit(1);
+      }};
+      BOOST_LOG(debug) << "Unclaimed launch rollback phase: display cleanup.";
+      (void) platf::virtual_display_cleanup::run(
+        "unclaimed_rtsp_launch",
+        config::video.dd.config_revert_on_disconnect
+      );
+      display_cleanup_watchdog.complete();
+      if (!cleanup.deferred_cleanup_pending) {
+        // The prepared launch may have applied a physical HDR profile even
+        // when there was no predecessor cleanup to inherit.
+        VDISPLAY::restorePhysicalHdrProfiles();
+      }
+#endif
+
+      if (cleanup.deferred_cleanup_pending) {
+        stream::session::complete_deferred_global_cleanup("unclaimed RTSP launch");
+      } else {
+        config::maybe_apply_deferred();
+      }
+
+      if (stream::session::active_sessions.load(std::memory_order_acquire) == 0) {
+        webrtc_stream::set_rtsp_sessions_active(false);
+        if (stream::session::active_sessions.load(std::memory_order_acquire) > 0) {
+          webrtc_stream::set_rtsp_sessions_active(true);
+        }
+      }
+      BOOST_LOG(info) << "Rolled back unclaimed RTSP launch after " << reason << '.';
+    }
+
     std::unordered_map<std::string_view, cmd_func_t> _map_cmd_cb;
 
     struct session_state_t {
@@ -829,8 +1106,8 @@ namespace rtsp_stream {
 
   rtsp_server_t server {};
 
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
-    server.session_raise(std::move(launch_session));
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    return server.session_raise(std::move(launch_session));
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
@@ -848,8 +1125,14 @@ namespace rtsp_stream {
     return server.session_count();
   }
 
-  void terminate_sessions() {
+  int session_count_no_reap() {
+    return server.session_count();
+  }
+
+  std::shared_ptr<launch_session_t> terminate_sessions() {
+    auto pending = server.cancel_pending_launch();
     server.clear(true);
+    return pending;
   }
 
   std::list<std::string> get_all_session_client_uuids() {
@@ -1126,12 +1409,33 @@ namespace rtsp_stream {
 
   void cmd_announce(rtsp_server_t *server, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
     OPTION_ITEM option {};
+    bool admission_completed = false;
+    // Every terminal ANNOUNCE rejection retires its matching pending slot
+    // immediately. Otherwise malformed/unsupported clients strand display
+    // ownership until ping_timeout and make retries look like host outages.
+    auto pending_launch_guard = util::fail_guard([&]() {
+      if (!admission_completed) {
+        // An ANNOUNCE failure retires only an actually-unclaimed admission.
+        // A stale duplicate socket must not revoke the real socket's claimed
+        // live session; only /cancel has that authority.
+        server->cancel_pending_launch(session.id, "ANNOUNCE rejection", true, false);
+      }
+    });
 
     // I know these string literals will not be modified
     option.option = const_cast<char *>("CSeq");
 
     auto seqn_str = std::to_string(req->sequenceNumber);
     option.content = const_cast<char *>(seqn_str.c_str());
+
+    if (session.admission_state) {
+      std::lock_guard admission_lock {session.admission_state->mutex};
+      if (!session.admission_state->policy.can_start()) {
+        BOOST_LOG(info) << "Rejecting ANNOUNCE for a cancelled/expired pending launch.";
+        respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
+        return;
+      }
+    }
 
     std::string_view payload {req->payload, (size_t) req->payloadLength};
 
@@ -1406,6 +1710,20 @@ namespace rtsp_stream {
       return;
     }
 
+    // Atomically claim admission against /cancel or pending expiry. The lock
+    // stays held through insertion + session::start: if cancel wins first we
+    // reject, and if ANNOUNCE wins first cancel waits until clear(true) can see
+    // and stop the fully started session. No network wait occurs in this span.
+    std::unique_lock<std::mutex> admission_lock;
+    if (session.admission_state) {
+      admission_lock = std::unique_lock<std::mutex> {session.admission_state->mutex};
+      if (!session.admission_state->policy.can_start()) {
+        BOOST_LOG(info) << "Rejecting ANNOUNCE because its pending launch was cancelled during admission.";
+        respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
+        return;
+      }
+    }
+
     // Before starting a new session, apply any deferred config updates now
     // (e.g., capture method changes like switching to WGC). This ensures
     // the next session reflects the latest settings without requiring a restart.
@@ -1429,6 +1747,23 @@ namespace rtsp_stream {
       server->remove(stream_session);
       respond(sock, session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return;
+    }
+
+    if (session.admission_state) {
+      // admission_lock is still held, so timeout/cancel cannot cross between
+      // successful publication and this claim marker.
+      if (!session.admission_state->policy.mark_claimed()) {
+        BOOST_LOG(error) << "RTSP admission was retired while session start held the admission lock.";
+        stream::session::stop(*stream_session);
+        server->remove(stream_session);
+        respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
+        return;
+      }
+    }
+    admission_completed = true;
+
+    if (admission_lock.owns_lock()) {
+      admission_lock.unlock();
     }
 
 #ifdef _WIN32

@@ -39,6 +39,7 @@ extern "C" {
 #include "platform/common.h"
 #include "process.h"
 #include "session_monitor_client.h"
+#include "session_teardown_policy.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -447,6 +448,8 @@ namespace stream {
     // initializes, and every host-side establishment window is extended by
     // the same allowance so the hold cannot trip a cleanup timer.
     bool strict_client {false};
+
+    std::shared_ptr<lifecycle::coordinator_t::launch_lease_t> display_preparation_lease;
 
     // Lifetime anchor for mail::video_pipeline_ready (see session::alloc).
     safe::mail_raw_t::event_t<bool> video_pipeline_ready_event;
@@ -2811,6 +2814,56 @@ namespace stream {
 #endif
     }
 
+    void complete_deferred_global_cleanup(const std::string_view reason) {
+      using teardown::independent_watchdog_t;
+      using teardown::phase_e;
+
+      const auto run_phase = [&](const phase_e phase, const std::chrono::seconds timeout, auto &&operation) {
+        independent_watchdog_t watchdog {timeout, [phase, timeout, reason]() {
+          BOOST_LOG(error) << "Deferred session cleanup made no progress for "
+                           << timeout.count() << " seconds in "
+                           << teardown::phase_name(phase) << " after " << reason
+                           << "; requesting a controlled host restart.";
+#ifdef _WIN32
+          try {
+            (void) display_helper_integration::revert(true);
+          } catch (...) {
+          }
+#endif
+          logging::log_flush();
+          platf::restart();
+          std::this_thread::sleep_for(10s);
+          logging::log_flush();
+          std::_Exit(1);
+        }};
+        BOOST_LOG(debug) << "Deferred session cleanup phase: " << teardown::phase_name(phase)
+                         << " (reason=" << reason << ", deadline=" << timeout.count() << "s)";
+        operation();
+        watchdog.complete();
+      };
+
+      webrtc_stream::set_rtsp_sessions_active(false);
+      config::set_runtime_output_name_override(std::nullopt);
+#ifdef _WIN32
+      display_helper_integration::clear_pending_apply();
+      clear_deferred_stream_start_actions();
+      run_phase(phase_e::integration_cleanup, 15s, []() {
+        VDISPLAY::restorePhysicalHdrProfiles();
+        platf::rtss_set_sync_limiter_override(std::nullopt);
+      });
+      run_phase(phase_e::frame_limiter_cleanup, 60s, []() {
+        platf::frame_limiter_streaming_stop();
+      });
+#endif
+      run_phase(phase_e::platform_cleanup, 15s, []() {
+        platf::streaming_will_stop();
+      });
+      run_phase(phase_e::deferred_config, 10s, []() {
+        config::maybe_apply_deferred();
+      });
+      BOOST_LOG(info) << "Completed deferred process-global session cleanup after " << reason << '.';
+    }
+
     void stop(session_t &session) {
       while_starting_do_nothing(session.state);
       auto expected = state_e::RUNNING;
@@ -2857,36 +2910,17 @@ namespace stream {
       // We also publish a "phase" atomic so the watchdog logs WHICH wait stage was wedged
       // instead of just "Hang detected!". A future bug report then points at video/audio/control
       // join specifically rather than landing in dxgi.dll generically.
-      enum class join_phase_e : int {
-        starting = 0,
-        waiting_video = 1,
-        waiting_audio = 2,
-        waiting_control = 3,
-        resetting_input = 4,
-        cleanup = 5,
-        done = 6,
-      };
-      auto phase = std::make_shared<std::atomic<int>>(static_cast<int>(join_phase_e::starting));
-      auto phase_deadline_seconds = std::make_shared<std::atomic<int>>(10);
-      auto phase_name = [](int p) -> const char * {
-        switch (static_cast<join_phase_e>(p)) {
-          case join_phase_e::starting:        return "starting";
-          case join_phase_e::waiting_video:   return "videoThread.join";
-          case join_phase_e::waiting_audio:   return "audioThread.join";
-          case join_phase_e::waiting_control: return "controlEnd.view";
-          case join_phase_e::resetting_input: return "input::reset";
-          case join_phase_e::cleanup:         return "post-join cleanup";
-          case join_phase_e::done:            return "done";
-        }
-        return "unknown";
-      };
+      using teardown::phase_e;
+      using teardown::timeout_action_e;
 
-      auto task = [phase, phase_deadline_seconds, phase_name]() {
-        const int p = phase->load(std::memory_order_acquire);
-        BOOST_LOG(fatal) << "Hang detected! Session teardown phase made no progress for "
-                         << phase_deadline_seconds->load(std::memory_order_acquire)
+      auto arm_watchdog = [](const phase_e current_phase, const std::chrono::seconds deadline) {
+        return std::make_unique<teardown::independent_watchdog_t>(deadline, [current_phase, deadline]() {
+        const auto action = teardown::timeout_action(current_phase);
+        BOOST_LOG(error) << "Session teardown phase made no progress for "
+                         << deadline.count()
                          << " seconds. Wedged in phase: "
-                         << phase_name(p) << " (" << p << ")"sv;
+                         << teardown::phase_name(current_phase) << " (" << static_cast<int>(current_phase) << "); recovery="
+                         << (action == timeout_action_e::fast_exit ? "fast-exit" : "controlled-restart");
 #ifdef _WIN32
         // Best-effort: ask the display helper to restore monitor topology immediately. We don't
         // wait for ack — the helper is a separate process; the IPC frame is fire-and-forget and
@@ -2902,6 +2936,21 @@ namespace stream {
         }
 #endif
         logging::log_flush();
+        if (action == timeout_action_e::controlled_restart) {
+          // running_sessions has already reached zero in every cleanup phase.
+          // Ask the normal lifetime path to recycle the service so RTSP/HTTP
+          // ownership is released in order.  The process-wide shutdown
+          // watchdog remains the final bound if the vendor call that wedged
+          // this session also prevents the RTSP thread from joining.
+          BOOST_LOG(error) << "Session teardown cleanup stalled after session release; requesting a controlled host restart.";
+          logging::log_flush();
+          platf::restart();
+          // The orderly path may itself wait on the wedged teardown thread.
+          // Bound that wait independently of task_pool before hard exit.
+          std::this_thread::sleep_for(10s);
+          logging::log_flush();
+          std::_Exit(1);
+        }
         // Previously this called lifetime::debug_trap() (DebugBreak on Windows),
         // which surfaced as a Windows Error Reporting "Sunshine.exe stopped
         // working" dialog after every stream that wedged in dxgi.dll cleanup —
@@ -2914,40 +2963,57 @@ namespace stream {
         // die with the process, the display helper has the REVERT in its
         // queue, and SCM (or the user) can relaunch sunshine.
         std::_Exit(1);
+        });
       };
-      auto force_kill = task_pool.pushDelayed(task, 10s).task_id;
-      auto fg = util::fail_guard([&force_kill]() {
-        // Cancel the kill task if we manage to return from this function
-        task_pool.cancel(force_kill);
+      auto watchdog = arm_watchdog(phase_e::starting, 10s);
+      auto fg = util::fail_guard([&watchdog]() {
+        if (watchdog) {
+          watchdog->complete();
+        }
       });
 
-      auto advance_phase = [&](join_phase_e next, std::chrono::seconds deadline) {
-        task_pool.cancel(force_kill);
-        phase->store(static_cast<int>(next), std::memory_order_release);
-        phase_deadline_seconds->store(static_cast<int>(deadline.count()), std::memory_order_release);
-        force_kill = task_pool.pushDelayed(task, deadline).task_id;
+      auto advance_phase = [&](phase_e next, std::chrono::seconds deadline) {
+        watchdog->complete();
+        watchdog.reset();  // joins the old independent timer before re-arming
+        BOOST_LOG(debug) << "Session teardown phase: " << teardown::phase_name(next)
+                         << " (deadline=" << deadline.count() << "s)";
+        watchdog = arm_watchdog(next, deadline);
       };
 
-      advance_phase(join_phase_e::waiting_video, 10s);
+      advance_phase(phase_e::waiting_video, 10s);
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
       session.videoThread.join();
-      advance_phase(join_phase_e::waiting_audio, 10s);
+      advance_phase(phase_e::waiting_audio, 10s);
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
       session.audioThread.join();
-      advance_phase(join_phase_e::waiting_control, 10s);
+      advance_phase(phase_e::waiting_control, 10s);
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
-      advance_phase(join_phase_e::resetting_input, 10s);
+      advance_phase(phase_e::resetting_input, 10s);
       // Reset input on session stop to avoid stuck repeated keys
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
-      // Worker teardown and staged physical-display restoration legitimately
-      // take longer than a thread join. Give cleanup its own deadline instead
-      // of inheriting the nearly-expired 10-second video-join timer.
-      advance_phase(join_phase_e::cleanup, 30s);
+      advance_phase(phase_e::session_state, 10s);
 
-      // If this is the last session, invoke the platform callbacks
+      // If this is the last session, invoke the platform callbacks. Acquire
+      // cleanup ownership before touching any global display/timing state. A
+      // HTTP launch that arrived first wins, and this old teardown must leave
+      // its display preparation alone without blocking the RTSP handler.
       if (--running_sessions == 0) {
+        auto cleanup_ownership = lifecycle::coordinator().acquire_cleanup(8s);
+        if (cleanup_ownership.result == lifecycle::cleanup_acquire_result_e::superseded_by_launch) {
+          BOOST_LOG(info) << "Session teardown: launch owns display preparation; skipping old-session global cleanup without blocking RTSP.";
+        } else if (cleanup_ownership.result == lifecycle::cleanup_acquire_result_e::timed_out) {
+          BOOST_LOG(error) << "Session teardown: timed out waiting for display lifecycle ownership; skipping destructive cleanup to preserve the in-flight launch.";
+        } else if (!lifecycle::last_session_cleanup_still_valid(
+                     running_sessions.load(std::memory_order_acquire),
+                     active_sessions.load(std::memory_order_acquire)
+                   )) {
+          // A successor can complete session::start between our zero-result
+          // decrement and coordinator acquisition. Never clear RTSP-active or
+          // restore global display/timing state underneath that live session.
+          BOOST_LOG(info) << "Session teardown: successor session became active before cleanup ownership; skipping old-session global cleanup.";
+        } else {
         webrtc_stream::set_rtsp_sessions_active(false);
         config::set_runtime_output_name_override(std::nullopt);
 #ifdef _WIN32
@@ -2981,6 +3047,10 @@ namespace stream {
         const bool keep_virtual_display_due_to_pause = is_paused && !revert_display_config && paused_timeout_secs == 0;
 
 #ifdef _WIN32
+        // Worker teardown and staged physical-display restoration legitimately
+        // take longer than a thread join. Give display cleanup its own deadline
+        // instead of sharing one opaque "post-join cleanup" phase.
+        advance_phase(phase_e::display_cleanup, 30s);
         if (webrtc_active) {
           BOOST_LOG(debug) << "Display cleanup: WebRTC session is still active; skipping RTSP-triggered teardown.";
         } else if (delay_virtual_display_cleanup_due_to_pause) {
@@ -3011,6 +3081,7 @@ namespace stream {
 
         // Restore any Windows-only integrations first
 #ifdef _WIN32
+        advance_phase(phase_e::integration_cleanup, 15s);
         VDISPLAY::restorePhysicalHdrProfiles();
         platf::rtss_set_sync_limiter_override(std::nullopt);
         // The NVCP restore inside frame_limiter_streaming_stop tears down and
@@ -3024,17 +3095,21 @@ namespace stream {
         // undo files as a crash backstop. Re-arm the hang watchdog with a
         // longer bound for this stage so we don't _Exit() out from under a
         // driver call that would complete on its own.
-        advance_phase(join_phase_e::cleanup, 60s);
+        advance_phase(phase_e::frame_limiter_cleanup, 60s);
         BOOST_LOG(debug) << "Restoring frame limiter / NVIDIA Control Panel state..."sv;
         platf::frame_limiter_streaming_stop();
 #endif
+        advance_phase(phase_e::platform_cleanup, 15s);
         platf::streaming_will_stop();
 
         // No active sessions now; apply any deferred config updates
+        advance_phase(phase_e::deferred_config, 10s);
         config::maybe_apply_deferred();
+        }
       }
 
-      phase->store(static_cast<int>(join_phase_e::done), std::memory_order_release);
+      watchdog->complete();
+      watchdog.reset();
       BOOST_LOG(info) << "Session ended"sv;
     }
 
@@ -3235,6 +3310,14 @@ namespace stream {
 #endif
       }
 
+      // The new running/active counters and first-session platform work are
+      // now published. Releasing the launch lease lets a later (not the old)
+      // last-session teardown acquire cleanup ownership safely.
+      if (session.display_preparation_lease) {
+        session.display_preparation_lease->mark_started();
+      }
+      session.display_preparation_lease.reset();
+
       return 0;
     }
 
@@ -3250,6 +3333,12 @@ namespace stream {
       // with the expiring event object.
       session->video_pipeline_ready_event = mail->event<bool>(mail::video_pipeline_ready);
       session->launch_session_id = launch_session.id;
+      // Keep the pending launch_event's shared owner until the control stream
+      // claims (or expires) it. session::start releases only its copy. Moving
+      // here opened a window where a second HTTP launch could prepare a
+      // display, then be silently rejected by RTSP because the first pending
+      // event still occupied the single launch slot.
+      session->display_preparation_lease = launch_session.display_preparation_lease;
 
       session->config = config;
 #ifdef _WIN32

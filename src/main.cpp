@@ -906,11 +906,12 @@ int main(int argc, char *argv[]) {
     }
 
 #ifdef _WIN32
-    // The probe's display/encoder init raises this process to REALTIME/HIGH
-    // GPU scheduling priority; revert it — nothing is capturing yet. Stream
-    // capture init re-raises it for the session and streaming_will_stop()
-    // reverts it again.
-    platf::reset_gpu_scheduling_priority();
+    // Do not demote the process GPU scheduling class here. The D3DKMT call can
+    // block indefinitely while WDDM is settling, which would make the service
+    // advertise but never accept a stream after a startup probe. An idle host
+    // submits no GPU work, capture init reasserts the desired priority, and the
+    // OS drops the class when the process exits.
+    BOOST_LOG(debug) << "Startup encoder probe: GPU scheduling priority demotion deferred until process exit.";
 #endif
   };
 

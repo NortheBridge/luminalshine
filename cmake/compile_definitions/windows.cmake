@@ -6,6 +6,14 @@ enable_language(RC)
 set(CMAKE_RC_COMPILER windres)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
 
+# Clang's MinGW driver otherwise falls back to GNU ld, which cannot safely
+# coalesce the COMDATs emitted by the current UCRT64 C++ runtime and our
+# prepared static codec libraries.  Keep local builds on the same linker as
+# Windows CI instead of relying on CI-only LDFLAGS.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_link_options(-fuse-ld=lld)
+endif()
+
 # gcc complains about misleading indentation in some mingw includes
 list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-misleading-indentation)
 

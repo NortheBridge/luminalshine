@@ -28,6 +28,14 @@ import NavIcon from '@/components/shell/NavIcon.vue';
 import TrustedDevicesCard from '@/components/TrustedDevicesCard.vue';
 import ApiTokenManager from '@/ApiTokenManager.vue';
 import AppEditConfigOverridesSection from '@/components/app-edit/AppEditConfigOverridesSection.vue';
+import {
+  choosePendingPairing,
+  findPairingState,
+  pairingOptionLabel,
+  parsePairingSubmission,
+  type PairingApiEntry,
+  type PairingState,
+} from '@/utils/pairing';
 
 const { t } = useI18n();
 const t2 = useT2();
@@ -621,47 +629,146 @@ const pairOpen = ref(false);
 const pin = ref('');
 const deviceName = ref('');
 const pairing = ref(false);
-const pairResult = ref<'ok' | 'fail' | null>(null);
+const pairResult = ref<'waiting' | 'ok' | 'fail' | null>(null);
+const pairFailureReason = ref('');
+const pairingRequests = ref<PairingApiEntry[]>([]);
+const selectedPairingId = ref<string | null>(null);
+let pairingRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+const pendingPairingOptions = computed(() =>
+  pairingRequests.value
+    .filter((entry) => entry.state === 'pending_pin')
+    .map((entry) => ({ label: pairingOptionLabel(entry), value: entry.pairing_id })),
+);
+const canSubmitPairing = computed(
+  () => /^\d{4}$/.test(pin.value.trim()) && selectedPairingId.value !== null,
+);
+
+const pairingFailureText = computed(() => {
+  switch (pairFailureReason.value) {
+    case 'ambiguous_request':
+      return t2('pin.ambiguous', 'Select the client that displayed this PIN.');
+    case 'expired':
+      return t2('pin.expired', 'This pairing request expired. Start pairing again on the client.');
+    case 'no_pending_request':
+    case 'unknown_pairing_id':
+      return t2('pin.no_pending', 'No matching client is waiting for a PIN. Start pairing on the client first.');
+    case 'invalid_pin':
+      return t2('pin.invalid', 'The PIN must contain exactly four digits.');
+    case 'delivery_failed':
+    case 'response_unavailable':
+      return t2('pin.delivery_failed', 'The client stopped waiting for the PIN. Start pairing again.');
+    default:
+      return t2('pin.failure', 'Pairing failed. Check the client and try again.');
+  }
+});
+
+function isPairingState(value: unknown): value is PairingState {
+  return (
+    value === 'pending_pin' ||
+    value === 'awaiting_client' ||
+    value === 'paired' ||
+    value === 'failed' ||
+    value === 'expired'
+  );
+}
+
+async function finishPairing(): Promise<void> {
+  if (pairResult.value === 'ok') return;
+  pairResult.value = 'ok';
+  await refreshClients();
+  await host.refreshClients();
+  pin.value = '';
+  deviceName.value = '';
+}
+
+async function refreshPairingRequests(): Promise<void> {
+  try {
+    const r = await http.get('./api/pin', { validateStatus: () => true });
+    const body = r.data as { pairings?: unknown } | undefined;
+    if (r.status < 200 || r.status >= 300 || !Array.isArray(body?.pairings)) return;
+
+    pairingRequests.value = body.pairings.flatMap((raw): PairingApiEntry[] => {
+      if (!raw || typeof raw !== 'object') return [];
+      const item = raw as Record<string, unknown>;
+      if (typeof item['pairing_id'] !== 'string' || !isPairingState(item['state'])) return [];
+      const entry: PairingApiEntry = {
+        pairing_id: item['pairing_id'],
+        state: item['state'],
+      };
+      if (typeof item['client_address'] === 'string') {
+        entry.client_address = item['client_address'];
+      }
+      if (typeof item['age_seconds'] === 'number') entry.age_seconds = item['age_seconds'];
+      if (typeof item['device_uuid'] === 'string') entry.device_uuid = item['device_uuid'];
+      return [entry];
+    });
+
+    const trackedState = findPairingState(pairingRequests.value, selectedPairingId.value);
+    if (pairResult.value === 'waiting' && trackedState === 'paired') {
+      await finishPairing();
+      return;
+    }
+    if (pairResult.value === 'waiting' && (trackedState === 'failed' || trackedState === 'expired')) {
+      pairResult.value = 'fail';
+      pairFailureReason.value = trackedState;
+      return;
+    }
+    if (pairResult.value !== 'waiting') {
+      selectedPairingId.value = choosePendingPairing(
+        pairingRequests.value,
+        selectedPairingId.value,
+      );
+    }
+  } catch {
+    // A transient UI/API refresh failure must not cancel the client's pending
+    // GameStream request. The next poll can recover without resubmitting PIN.
+  }
+}
+
 function openPair(): void {
   pairResult.value = null;
+  pairFailureReason.value = '';
+  selectedPairingId.value = null;
   pairOpen.value = true;
 }
 async function pair(): Promise<void> {
   if (pairing.value || pin.value.trim().length !== 4) return;
   pairing.value = true;
   pairResult.value = null;
+  pairFailureReason.value = '';
   try {
+    await refreshPairingRequests();
+    const pairingId = selectedPairingId.value;
+    if (!pairingId) {
+      pairResult.value = 'fail';
+      pairFailureReason.value =
+        pendingPairingOptions.value.length > 1 ? 'ambiguous_request' : 'no_pending_request';
+      return;
+    }
     const name = deviceName.value.trim();
     const r = await http.post(
       './api/pin',
-      { pin: pin.value.trim(), name },
+      { pin: pin.value.trim(), name, pairing_id: pairingId },
       { validateStatus: () => true },
     );
-    const body = r.data as { status?: unknown } | undefined;
-    const ok =
-      r.status >= 200 &&
-      r.status < 300 &&
-      (body?.status === true || body?.status === 'true' || body?.status === 1);
-    pairResult.value = ok ? 'ok' : 'fail';
-    if (ok) {
-      const before = clients.value.length;
-      const deadline = Date.now() + 5000;
-      const target = name.toLowerCase();
-      do {
-        await refreshClients();
-        if (
-          clients.value.some((c) => c.name.toLowerCase() === target) ||
-          clients.value.length > before
-        )
-          break;
-        await new Promise((res) => setTimeout(res, 400));
-      } while (Date.now() < deadline);
-      await host.refreshClients();
-      pin.value = '';
-      deviceName.value = '';
+    const result = parsePairingSubmission(
+      r.status >= 200 && r.status < 300,
+      r.data as { status?: unknown; result?: unknown; state?: unknown; pairing_id?: unknown },
+    );
+    if (result.pairingId) selectedPairingId.value = result.pairingId;
+    if (result.state === 'paired') {
+      await finishPairing();
+    } else if (result.accepted) {
+      pairResult.value = 'waiting';
+      await refreshPairingRequests();
+    } else {
+      pairResult.value = 'fail';
+      pairFailureReason.value = result.reason;
     }
   } catch {
     pairResult.value = 'fail';
+    pairFailureReason.value = 'delivery_failed';
   } finally {
     pairing.value = false;
   }
@@ -688,8 +795,19 @@ watch(
     if (c) select(c);
   },
 );
+watch(pairOpen, (open) => {
+  if (pairingRefreshTimer) {
+    clearInterval(pairingRefreshTimer);
+    pairingRefreshTimer = null;
+  }
+  if (open) {
+    void refreshPairingRequests();
+    pairingRefreshTimer = setInterval(() => void refreshPairingRequests(), 1000);
+  }
+});
 onBeforeUnmount(() => {
   if (refreshTimer) clearInterval(refreshTimer);
+  if (pairingRefreshTimer) clearInterval(pairingRefreshTimer);
 });
 </script>
 
@@ -830,6 +948,21 @@ onBeforeUnmount(() => {
         </div>
         <div class="space-y-3 px-4 py-4">
           <p class="text-xs text-ink-3">{{ t('clients.pair_desc') }}</p>
+          <div v-if="pairResult !== 'waiting' && pairResult !== 'ok'">
+            <div class="mc-field-label mb-1">
+              {{ t2('pin.pending_client', 'Client waiting for this PIN') }}
+            </div>
+            <NSelect
+              v-if="pendingPairingOptions.length > 0"
+              v-model:value="selectedPairingId"
+              size="small"
+              :options="pendingPairingOptions"
+              :placeholder="t2('pin.select_client', 'Select a client')"
+            />
+            <div v-else class="text-xs text-ink-3">
+              {{ t2('pin.waiting_for_request', 'Start pairing on the client; it will appear here.') }}
+            </div>
+          </div>
           <div>
             <div class="mc-field-label mb-1">{{ t2('pin.pin', 'PIN') }}</div>
             <NInput
@@ -853,8 +986,11 @@ onBeforeUnmount(() => {
           <div v-if="pairResult === 'ok'" class="mc-tag mc-tag-ok">
             {{ t2('pin.success', 'Paired.') }}
           </div>
+          <div v-else-if="pairResult === 'waiting'" class="mc-tag">
+            {{ t2('pin.awaiting_client', 'PIN submitted. Waiting for the client to finish pairing…') }}
+          </div>
           <div v-else-if="pairResult === 'fail'" class="mc-tag mc-tag-danger">
-            {{ t2('pin.failure', 'Pairing failed. Check the PIN and try again.') }}
+            {{ pairingFailureText }}
           </div>
         </div>
         <div class="flex justify-end gap-2 border-t border-line px-4 py-3">
@@ -863,7 +999,7 @@ onBeforeUnmount(() => {
             size="small"
             type="primary"
             :loading="pairing"
-            :disabled="pin.trim().length !== 4"
+            :disabled="!canSubmitPairing || pairResult === 'waiting' || pairResult === 'ok'"
             @click="pair"
             >{{ t2('pin.send', 'Pair') }}</NButton
           >

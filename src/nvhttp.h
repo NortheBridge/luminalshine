@@ -6,8 +6,12 @@
 #pragma once
 
 // standard includes
+#include <chrono>
+#include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -83,6 +87,10 @@ namespace nvhttp {
     CLIENTPAIRINGSECRET  ///< Sunshine is in the client pairing secret phase
   };
 
+  using pair_http_response_t = std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response>;
+  using pair_https_response_t = std::shared_ptr<typename SimpleWeb::ServerBase<SunshineHTTPS>::Response>;
+  using pair_response_t = util::Either<pair_http_response_t, pair_https_response_t>;
+
   struct pair_session_t {
     struct {
       std::string uniqueID = {};
@@ -97,12 +105,21 @@ namespace nvhttp {
     std::string serverchallenge = {};
 
     struct {
-      util::Either<
-        std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response>,
-        std::shared_ptr<typename SimpleWeb::ServerBase<SunshineHTTPS>::Response>>
-        response;
+      pair_response_t response;
       std::string salt = {};
     } async_insert_pin;
+
+    // Opaque host-generated identifier used by the authenticated Web UI to
+    // address this exact pending request.  The GameStream uniqueID remains the
+    // protocol map key and is deliberately not exposed through /api/pin.
+    std::string pairing_id = {};
+    std::string client_address = {};
+    std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point updated_at = created_at;
+    // Incremented for every accepted phase-one request, including an
+    // idempotent retry after the PIN has been submitted. This lets the PIN
+    // delivery path distinguish its held HTTP response from a newer retry.
+    std::uint64_t phase_one_generation = 0;
 
     /**
      * @brief used as a security measure to prevent out of order calls
@@ -166,6 +183,97 @@ namespace nvhttp {
    * the client secret has been signed by Moonlight
    */
   void clientpairingsecret(pair_session_t &sess, std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, boost::property_tree::ptree &tree, const std::string &client_pairing_secret);
+
+  enum class pairing_state_e {
+    PENDING_PIN,
+    AWAITING_CLIENT,
+    PAIRED,
+    FAILED,
+    EXPIRED
+  };
+
+  enum class pin_result_e {
+    PIN_DELIVERED,
+    ALREADY_SUBMITTED,
+    ALREADY_PAIRED,
+    NO_PENDING_REQUEST,
+    AMBIGUOUS_REQUEST,
+    UNKNOWN_PAIRING_ID,
+    EXPIRED,
+    INVALID_PIN,
+    RESPONSE_UNAVAILABLE,
+    DELIVERY_FAILED,
+    PAIRING_FAILED
+  };
+
+  struct pairing_request_t {
+    std::string pairing_id;
+    std::string client_address;
+    pairing_state_e state = pairing_state_e::PENDING_PIN;
+    std::uint64_t age_seconds = 0;
+    std::string device_uuid;
+  };
+
+  struct pin_result_t {
+    pin_result_e result = pin_result_e::NO_PENDING_REQUEST;
+    std::string pairing_id;
+
+    [[nodiscard]] bool accepted() const noexcept {
+      return result == pin_result_e::PIN_DELIVERED ||
+             result == pin_result_e::ALREADY_SUBMITTED ||
+             result == pin_result_e::ALREADY_PAIRED;
+    }
+  };
+
+  namespace pairing_detail {
+    struct candidate_t {
+      std::string_view pairing_id;
+      bool awaiting_pin = false;
+      bool response_available = false;
+    };
+
+    bool valid_pin(std::string_view pin) noexcept;
+    bool session_expired(
+      std::chrono::steady_clock::time_point updated_at,
+      std::chrono::steady_clock::time_point now
+    ) noexcept;
+    bool phase_one_retry_matches(
+      std::string_view expected_address,
+      std::string_view expected_certificate,
+      std::string_view expected_salt,
+      std::string_view received_address,
+      std::string_view received_certificate,
+      std::string_view received_salt,
+      PAIR_PHASE current_phase
+    ) noexcept;
+    bool phase_one_delivery_is_current(
+      PAIR_PHASE current_phase,
+      std::uint64_t current_generation,
+      std::uint64_t attempted_generation
+    ) noexcept;
+    pin_result_e outcome_pin_result(pairing_state_e state) noexcept;
+    pin_result_t select_candidate(
+      std::span<const candidate_t> candidates,
+      std::optional<std::string_view> pairing_id
+    );
+  }  // namespace pairing_detail
+
+  /**
+   * @brief Return active and recently-completed pairing requests for the authenticated UI.
+   * @details Entries contain only an opaque request id, peer address, state, age and final
+   *          device UUID. Certificate, salt and PIN material are never exposed.
+   */
+  std::vector<pairing_request_t> get_pairing_requests();
+
+  /**
+   * @brief Submit a PIN to one exact pending request.
+   * @param pairing_id Opaque id returned by get_pairing_requests(). If omitted, legacy
+   *        behavior is retained only when exactly one eligible request exists.
+   */
+  pin_result_t submit_pin(std::string pin, std::string name, std::optional<std::string> pairing_id = std::nullopt);
+
+  std::string_view pairing_state_name(pairing_state_e state) noexcept;
+  std::string_view pin_result_name(pin_result_e result) noexcept;
 
   /**
    * @brief Compare the user supplied pin to the Moonlight pin.
