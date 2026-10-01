@@ -1963,11 +1963,29 @@ namespace proc {
     std::scoped_lock lk(_lifecycle_mutex, _apps_mutex);
     active_session_guard_t guard;
     guard.has_active_app = _app_id > 0;
+    guard.app_id = guard.has_active_app ? _app_id : 0;
     guard.playnite_id = guard.has_active_app ? _app.playnite_id : std::string();
     guard.uses_playnite = guard.has_active_app && !_app.playnite_id.empty();
     guard.client_uuid = guard.has_active_app ? _active_client_uuid : std::string();
     guard.launch_started_at = _app_launch_time;
     return guard;
+  }
+
+  bool proc_t::terminate_if_active_session(
+    int app_id,
+    std::chrono::steady_clock::time_point launch_started_at,
+    std::string_view client_uuid,
+    bool skip_display_revert
+  ) {
+    // recursive_mutex lets terminate() retain its existing single entry point
+    // while the comparison and transition remain one atomic lifecycle action.
+    std::lock_guard lifecycle_lock(_lifecycle_mutex);
+    if (_app_id != app_id || _app_launch_time != launch_started_at ||
+        _active_client_uuid != client_uuid) {
+      return false;
+    }
+    terminate(skip_display_revert);
+    return true;
   }
 
   std::vector<ctx_t> proc_t::get_apps() const {

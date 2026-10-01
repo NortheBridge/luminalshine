@@ -3931,6 +3931,33 @@ namespace confighttp {
   }
 
   /**
+   * @brief List active and recently completed PIN pairing requests.
+   */
+  void getPinPairings(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["pairings"] = nlohmann::json::array();
+    for (const auto &pairing : nvhttp::get_pairing_requests()) {
+      nlohmann::json item {
+        {"pairing_id", pairing.pairing_id},
+        {"client_address", pairing.client_address},
+        {"state", nvhttp::pairing_state_name(pairing.state)},
+        {"age_seconds", pairing.age_seconds},
+      };
+      if (!pairing.device_uuid.empty()) {
+        item["device_uuid"] = pairing.device_uuid;
+      }
+      output_tree["pairings"].push_back(std::move(item));
+    }
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Send a pin code to the host. The pin is generated from the Moonlight client during the pairing process.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -3938,7 +3965,8 @@ namespace confighttp {
    * @code{.json}
    * {
    *   "pin": "<pin>",
-   *   "name": "Friendly Client Name"
+   *   "name": "Friendly Client Name",
+   *   "pairing_id": "Optional opaque id returned by GET /api/pin"
    * }
    * @endcode
    *
@@ -3961,14 +3989,31 @@ namespace confighttp {
       nlohmann::json input_tree = nlohmann::json::parse(ss);
       const std::string name = input_tree.value("name", "");
       const std::string pin = input_tree.value("pin", "");
-
-      int _pin = 0;
-      _pin = std::stoi(pin);
-      if (_pin < 0 || _pin > 9999) {
-        bad_request(response, request, "PIN must be between 0000 and 9999");
+      std::optional<std::string> pairing_id;
+      if (const auto id = input_tree.find("pairing_id"); id != input_tree.end()) {
+        if (!id->is_string()) {
+          bad_request(response, request, "pairing_id must be a string");
+          return;
+        }
+        auto value = id->get<std::string>();
+        if (value.empty()) {
+          bad_request(response, request, "pairing_id must not be empty");
+          return;
+        }
+        pairing_id = std::move(value);
       }
 
-      output_tree["status"] = nvhttp::pin(pin, name);
+      const auto result = nvhttp::submit_pin(pin, name, std::move(pairing_id));
+      output_tree["status"] = result.accepted();  // Legacy Web UI/API compatibility.
+      output_tree["result"] = nvhttp::pin_result_name(result.result);
+      if (!result.pairing_id.empty()) {
+        output_tree["pairing_id"] = result.pairing_id;
+      }
+      if (result.result == nvhttp::pin_result_e::ALREADY_PAIRED) {
+        output_tree["state"] = nvhttp::pairing_state_name(nvhttp::pairing_state_e::PAIRED);
+      } else if (result.accepted()) {
+        output_tree["state"] = nvhttp::pairing_state_name(nvhttp::pairing_state_e::AWAITING_CLIENT);
+      }
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePin: "sv << e.what();
@@ -4485,6 +4530,7 @@ namespace confighttp {
       record_token_route(normalize_route_pattern(pattern), method);
     };
 
+    register_api_route("^/api/pin$", "GET", getPinPairings);
     register_api_route("^/api/pin$", "POST", savePin);
     register_api_route("^/api/apps$", "GET", getApps);
     register_api_route("^/api/logs$", "GET", getLogs);

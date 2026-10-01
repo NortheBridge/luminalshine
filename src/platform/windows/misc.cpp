@@ -1703,27 +1703,6 @@ namespace platf {
     }
   }
 
-  void reset_gpu_scheduling_priority() {
-    // Mirrors display_base.cpp's D3DKMT declarations; NORMAL is 2 in
-    // D3DKMT_SCHEDULINGPRIORITYCLASS (idle, below_normal, normal, ...).
-    typedef NTSTATUS(WINAPI *set_process_priority_fn)(HANDLE, int);
-    constexpr int k_d3dkmt_priority_normal = 2;
-
-    auto gdi32 = GetModuleHandleA("GDI32");
-    if (!gdi32) {
-      return;
-    }
-    auto fn = (set_process_priority_fn) GetProcAddress(gdi32, "D3DKMTSetProcessSchedulingPriorityClass");
-    if (!fn) {
-      return;
-    }
-    if (FAILED(fn(GetCurrentProcess(), k_d3dkmt_priority_normal))) {
-      BOOST_LOG(warning) << "Failed to restore GPU scheduling priority to normal"sv;
-    } else {
-      BOOST_LOG(info) << "GPU scheduling priority restored to normal"sv;
-    }
-  }
-
   void streaming_will_stop() {
     // If the client disconnected without /cancel, Sunshine can leave the app running to allow /resume.
     // In that "paused" state, we must keep feeding the display helper heartbeat to prevent it from
@@ -1737,11 +1716,21 @@ namespace platf {
     // Demote ourselves back to normal priority class
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
 
-    // Capture raised our GPU scheduling priority to REALTIME/HIGH; drop back
-    // to NORMAL so an idle host never preempts a foreground game's GPU work.
-    reset_gpu_scheduling_priority();
+    // Do not call D3DKMTSetProcessSchedulingPriorityClass here.  On current
+    // NVIDIA/WDDM stacks that ostensibly non-blocking demotion can wait inside
+    // the kernel while a virtual-display transition is unwinding.  It wedged
+    // session::join for 60 seconds immediately after a successful NVCP restore
+    // in the 2026-09-30 field trace and forced the entire host to exit.
+    //
+    // Scheduling priority only affects GPU work submitted by this process. An
+    // idle host submits none, capture init reasserts HIGH/REALTIME for the next
+    // session, and Windows discards the process priority at process exit. Not
+    // issuing a late demotion also avoids racing an immediately reconnecting
+    // client and demoting its newly-started capture pipeline.
+    BOOST_LOG(info) << "GPU scheduling priority demotion deferred until process exit (teardown-safe policy)."sv;
 
     // End our 0.5ms timer request
+    BOOST_LOG(debug) << "Platform cleanup: restoring timer resolution."sv;
     if (used_nt_set_timer_resolution) {
       used_nt_set_timer_resolution = false;
       if (!nt_set_timer_resolution_min()) {
@@ -1752,15 +1741,18 @@ namespace platf {
     }
 
     // Disable MMCSS scheduling for DWM
+    BOOST_LOG(debug) << "Platform cleanup: disabling DWM MMCSS scheduling."sv;
     DwmEnableMMCSS(false);
 
     // Closing our WLAN client handle will undo our optimizations
+    BOOST_LOG(debug) << "Platform cleanup: releasing WLAN low-latency mode."sv;
     if (wlan_handle != nullptr) {
       fn_WlanCloseHandle(wlan_handle, nullptr);
       wlan_handle = nullptr;
     }
 
     // Restore Mouse Keys back to the previous settings if we turned it on
+    BOOST_LOG(debug) << "Platform cleanup: restoring Mouse Keys state."sv;
     if (enabled_mouse_keys) {
       enabled_mouse_keys = false;
       if (!SystemParametersInfoW(SPI_SETMOUSEKEYS, 0, &previous_mouse_keys_state, 0)) {

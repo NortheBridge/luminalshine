@@ -13,15 +13,23 @@
 #include <cstdint>
 #include <list>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
 // local includes
 #include "crypto.h"
+#include "session_lifecycle_coordinator.h"
 #include "thread_safe.h"
 
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;
+
+  struct launch_admission_state_t {
+    std::mutex mutex;
+    stream::lifecycle::admission_state_policy_t policy;
+  };
 
   struct launch_session_t {
     uint32_t id;
@@ -44,6 +52,13 @@ namespace rtsp_stream {
     std::string requested_display_mode_source;
     int gcmap;
     int appid;
+    // True only for /launch after this handler successfully started the app.
+    // An unclaimed RTSP timeout may terminate that exact app while /resume
+    // must leave the already-running application alone.
+    bool terminate_app_on_unclaimed = false;
+    std::optional<std::chrono::steady_clock::time_point> launched_app_generation;
+    std::string launched_app_client_uuid;
+    bool runtime_overrides_applied = false;
 
     struct app_metadata_t {
       std::string id;
@@ -70,6 +85,14 @@ namespace rtsp_stream {
     std::optional<config::video_t::dd_t::config_option_e> dd_config_option_override;
     std::optional<std::string> output_name_override;
     bool display_config_preapplied = false;
+    // Held from /launch or /resume through RTSP admission. While present, an
+    // older session's last-session teardown cannot destroy this session's
+    // freshly prepared display. session::start releases it after publishing
+    // the new running-session ownership.
+    std::shared_ptr<stream::lifecycle::coordinator_t::launch_lease_t> display_preparation_lease;
+    // Shared by the pending event and any socket that already captured this
+    // launch. /cancel and expiry use it to reject stale ANNOUNCE admission.
+    std::shared_ptr<launch_admission_state_t> admission_state = std::make_shared<launch_admission_state_t>();
     std::array<std::uint8_t, 16> virtual_display_guid_bytes {};
     std::string virtual_display_device_id;
     std::optional<std::chrono::steady_clock::time_point> virtual_display_ready_since;
@@ -93,7 +116,11 @@ namespace rtsp_stream {
     uint32_t rtsp_iv_counter;
   };
 
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
+  /**
+   * @brief Publish a pending GameStream launch for RTSP admission.
+   * @return False when another pending launch already occupies the slot.
+   */
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
 
   /**
    * @brief Clear state for the specified launch session.
@@ -120,9 +147,17 @@ namespace rtsp_stream {
   int session_count();
 
   /**
+   * @brief Get the number of tracked sessions without reaping STOPPING ones.
+   *
+   * Unlike session_count(), this never calls session::join(). It is safe on
+   * the single RTSP handler and while display lifecycle ownership is held.
+   */
+  int session_count_no_reap();
+
+  /**
    * @brief Terminates all running streaming sessions.
    */
-  void terminate_sessions();
+  std::shared_ptr<launch_session_t> terminate_sessions();
 
   /**
    * @brief Get the client UUIDs for all active sessions.

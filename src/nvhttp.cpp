@@ -906,6 +906,19 @@ namespace nvhttp {
   // lookup corrupts the heap.
   std::mutex map_id_sess_mutex;
   std::unordered_map<std::string, pair_session_t> map_id_sess;
+
+  struct pairing_outcome_t {
+    pairing_request_t request;
+    std::chrono::steady_clock::time_point updated_at = std::chrono::steady_clock::now();
+  };
+
+  std::unordered_map<std::string, pairing_outcome_t> pairing_outcomes;
+
+  constexpr auto kPairingSessionTtl = std::chrono::minutes(5);
+  constexpr auto kPairingOutcomeTtl = std::chrono::minutes(5);
+  constexpr std::size_t kMaxPendingPairings = 32;
+  constexpr std::size_t kMaxPairingOutcomes = 64;
+
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
@@ -1193,7 +1206,7 @@ namespace nvhttp {
     client_root = client;
   }
 
-  void add_authorized_client(const std::string &name, std::string &&cert) {
+  std::string add_authorized_client(const std::string &name, std::string &&cert) {
     client_t &client = client_root;
     named_cert_t named_cert;
     named_cert.name = name;
@@ -1213,6 +1226,7 @@ namespace nvhttp {
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
       save_state();
     }
+    return named_cert.uuid;
   }
 
   /**
@@ -1644,6 +1658,274 @@ namespace nvhttp {
     return launch_session;
   }
 
+  std::string_view pairing_state_name(const pairing_state_e state) noexcept {
+    switch (state) {
+      case pairing_state_e::PENDING_PIN:
+        return "pending_pin"sv;
+      case pairing_state_e::AWAITING_CLIENT:
+        return "awaiting_client"sv;
+      case pairing_state_e::PAIRED:
+        return "paired"sv;
+      case pairing_state_e::FAILED:
+        return "failed"sv;
+      case pairing_state_e::EXPIRED:
+        return "expired"sv;
+    }
+    return "failed"sv;
+  }
+
+  std::string_view pin_result_name(const pin_result_e result) noexcept {
+    switch (result) {
+      case pin_result_e::PIN_DELIVERED:
+        return "pin_delivered"sv;
+      case pin_result_e::ALREADY_SUBMITTED:
+        return "already_submitted"sv;
+      case pin_result_e::ALREADY_PAIRED:
+        return "already_paired"sv;
+      case pin_result_e::NO_PENDING_REQUEST:
+        return "no_pending_request"sv;
+      case pin_result_e::AMBIGUOUS_REQUEST:
+        return "ambiguous_request"sv;
+      case pin_result_e::UNKNOWN_PAIRING_ID:
+        return "unknown_pairing_id"sv;
+      case pin_result_e::EXPIRED:
+        return "expired"sv;
+      case pin_result_e::INVALID_PIN:
+        return "invalid_pin"sv;
+      case pin_result_e::RESPONSE_UNAVAILABLE:
+        return "response_unavailable"sv;
+      case pin_result_e::DELIVERY_FAILED:
+        return "delivery_failed"sv;
+      case pin_result_e::PAIRING_FAILED:
+        return "pairing_failed"sv;
+    }
+    return "pairing_failed"sv;
+  }
+
+  namespace pairing_detail {
+    bool valid_pin(const std::string_view pin) noexcept {
+      return pin.size() == 4 && std::ranges::all_of(pin, [](const unsigned char c) {
+               return c >= '0' && c <= '9';
+             });
+    }
+
+    bool session_expired(
+      const std::chrono::steady_clock::time_point updated_at,
+      const std::chrono::steady_clock::time_point now
+    ) noexcept {
+      return now - updated_at >= kPairingSessionTtl;
+    }
+
+    bool phase_one_retry_matches(
+      const std::string_view expected_address,
+      const std::string_view expected_certificate,
+      const std::string_view expected_salt,
+      const std::string_view received_address,
+      const std::string_view received_certificate,
+      const std::string_view received_salt,
+      const PAIR_PHASE current_phase
+    ) noexcept {
+      if (expected_address.empty() ||
+          expected_address != received_address ||
+          expected_certificate != received_certificate) {
+        return false;
+      }
+
+      // Before the PIN is consumed, a Moonlight retry is allowed to generate
+      // a fresh salt and replace its abandoned held HTTP request. Once the PIN
+      // has derived the cipher key, the salt is part of the exchange identity
+      // and must remain unchanged.
+      return current_phase == PAIR_PHASE::NONE || expected_salt == received_salt;
+    }
+
+    bool phase_one_delivery_is_current(
+      const PAIR_PHASE current_phase,
+      const std::uint64_t current_generation,
+      const std::uint64_t attempted_generation
+    ) noexcept {
+      return current_phase == PAIR_PHASE::GETSERVERCERT &&
+             current_generation == attempted_generation;
+    }
+
+    pin_result_e outcome_pin_result(const pairing_state_e state) noexcept {
+      switch (state) {
+        case pairing_state_e::PAIRED:
+          return pin_result_e::ALREADY_PAIRED;
+        case pairing_state_e::EXPIRED:
+          return pin_result_e::EXPIRED;
+        case pairing_state_e::FAILED:
+          return pin_result_e::PAIRING_FAILED;
+        default:
+          return pin_result_e::UNKNOWN_PAIRING_ID;
+      }
+    }
+
+    pin_result_t select_candidate(
+      const std::span<const candidate_t> candidates,
+      const std::optional<std::string_view> pairing_id
+    ) {
+      if (pairing_id && !pairing_id->empty()) {
+        const auto selected = std::ranges::find(candidates, *pairing_id, &candidate_t::pairing_id);
+        if (selected == candidates.end()) {
+          return {.result = pin_result_e::UNKNOWN_PAIRING_ID, .pairing_id = std::string {*pairing_id}};
+        }
+        if (!selected->awaiting_pin) {
+          return {.result = pin_result_e::ALREADY_SUBMITTED, .pairing_id = std::string {selected->pairing_id}};
+        }
+        if (!selected->response_available) {
+          return {.result = pin_result_e::RESPONSE_UNAVAILABLE, .pairing_id = std::string {selected->pairing_id}};
+        }
+        return {.result = pin_result_e::PIN_DELIVERED, .pairing_id = std::string {selected->pairing_id}};
+      }
+
+      const candidate_t *selected = nullptr;
+      for (const auto &candidate : candidates) {
+        if (!candidate.awaiting_pin) {
+          continue;
+        }
+        if (selected) {
+          return {.result = pin_result_e::AMBIGUOUS_REQUEST};
+        }
+        selected = &candidate;
+      }
+      if (!selected) {
+        return {.result = pin_result_e::NO_PENDING_REQUEST};
+      }
+      if (!selected->response_available) {
+        return {.result = pin_result_e::RESPONSE_UNAVAILABLE, .pairing_id = std::string {selected->pairing_id}};
+      }
+      return {.result = pin_result_e::PIN_DELIVERED, .pairing_id = std::string {selected->pairing_id}};
+    }
+  }  // namespace pairing_detail
+
+  namespace {
+    bool pairing_response_available(const pair_response_t &response) {
+      return (response.has_left() && response.left()) ||
+             (response.has_right() && response.right());
+    }
+
+    bool write_pairing_response(pair_response_t &response, const std::string &data) {
+      try {
+        if (response.has_left() && response.left()) {
+          response.left()->write(data);
+          return true;
+        }
+        if (response.has_right() && response.right()) {
+          response.right()->write(data);
+          return true;
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Pairing response delivery failed: "sv << e.what();
+      } catch (...) {
+        BOOST_LOG(warning) << "Pairing response delivery failed with an unknown exception."sv;
+      }
+      return false;
+    }
+
+    std::string pairing_error_xml(const std::string_view message, const int status_code = 408) {
+      pt::ptree tree;
+      tree.put("root.paired", 0);
+      tree.put("root.<xmlattr>.status_code", status_code);
+      tree.put("root.<xmlattr>.status_message", message);
+      std::ostringstream data;
+      pt::write_xml(data, tree);
+      return data.str();
+    }
+
+    void record_pairing_outcome_locked(
+      const pair_session_t &sess,
+      const pairing_state_e state,
+      std::string device_uuid = {}
+    ) {
+      if (sess.pairing_id.empty()) {
+        return;
+      }
+      pairing_outcome_t outcome;
+      outcome.request.pairing_id = sess.pairing_id;
+      outcome.request.client_address = sess.client_address;
+      outcome.request.state = state;
+      outcome.request.device_uuid = std::move(device_uuid);
+      outcome.updated_at = std::chrono::steady_clock::now();
+      pairing_outcomes.insert_or_assign(outcome.request.pairing_id, std::move(outcome));
+    }
+
+    void prune_pairing_outcomes_locked(const std::chrono::steady_clock::time_point now) {
+      for (auto it = pairing_outcomes.begin(); it != pairing_outcomes.end();) {
+        if (now - it->second.updated_at >= kPairingOutcomeTtl) {
+          it = pairing_outcomes.erase(it);
+        } else {
+          ++it;
+        }
+      }
+      while (pairing_outcomes.size() > kMaxPairingOutcomes) {
+        const auto oldest = std::min_element(
+          pairing_outcomes.begin(), pairing_outcomes.end(),
+          [](const auto &left, const auto &right) {
+            return left.second.updated_at < right.second.updated_at;
+          }
+        );
+        if (oldest == pairing_outcomes.end()) {
+          break;
+        }
+        pairing_outcomes.erase(oldest);
+      }
+    }
+
+    void prune_expired_pairings_locked(
+      const std::chrono::steady_clock::time_point now,
+      std::vector<pair_response_t> &expired_responses
+    ) {
+      prune_pairing_outcomes_locked(now);
+      for (auto it = map_id_sess.begin(); it != map_id_sess.end();) {
+        auto &sess = it->second;
+        if (pairing_detail::session_expired(sess.updated_at, now)) {
+          BOOST_LOG(info) << "Pairing request expired: id="sv << sess.pairing_id
+                          << " peer="sv << sess.client_address;
+          record_pairing_outcome_locked(sess, pairing_state_e::EXPIRED);
+          expired_responses.emplace_back(std::move(sess.async_insert_pin.response));
+          it = map_id_sess.erase(it);
+        } else {
+          ++it;
+        }
+      }
+      prune_pairing_outcomes_locked(now);
+    }
+
+    void finish_pairing_responses(
+      std::vector<pair_response_t> &responses,
+      const std::string_view message,
+      const int status_code
+    ) {
+      if (responses.empty()) {
+        return;
+      }
+      const auto data = pairing_error_xml(message, status_code);
+      for (auto &response : responses) {
+        write_pairing_response(response, data);
+      }
+    }
+
+    void finish_expired_pairing_responses(std::vector<pair_response_t> &responses) {
+      finish_pairing_responses(responses, "Pairing request expired", 408);
+    }
+
+    pairing_request_t pairing_request_from_session(
+      const pair_session_t &sess,
+      const std::chrono::steady_clock::time_point now
+    ) {
+      pairing_request_t request;
+      request.pairing_id = sess.pairing_id;
+      request.client_address = sess.client_address;
+      request.state = sess.last_phase == PAIR_PHASE::NONE ?
+                        pairing_state_e::PENDING_PIN : pairing_state_e::AWAITING_CLIENT;
+      request.age_seconds = static_cast<std::uint64_t>(std::max(
+        std::chrono::steady_clock::duration::zero(),
+        now - sess.created_at
+      ) / std::chrono::seconds(1));
+      return request;
+    }
+  }  // namespace
+
   void remove_session(const pair_session_t &sess) {
     map_id_sess.erase(sess.client.uniqueID);
   }
@@ -1652,6 +1934,7 @@ namespace nvhttp {
     tree.put("root.paired", 0);
     tree.put("root.<xmlattr>.status_code", 400);
     tree.put("root.<xmlattr>.status_message", status_msg);
+    record_pairing_outcome_locked(sess, pairing_state_e::FAILED);
     remove_session(sess);  // Security measure, delete the session when something went wrong and force a re-pair
   }
 
@@ -1661,6 +1944,7 @@ namespace nvhttp {
       return;
     }
     sess.last_phase = PAIR_PHASE::GETSERVERCERT;
+    sess.updated_at = std::chrono::steady_clock::now();
 
     if (sess.async_insert_pin.salt.size() < 32) {
       fail_pair(sess, tree, "Salt too short");
@@ -1685,6 +1969,7 @@ namespace nvhttp {
       return;
     }
     sess.last_phase = PAIR_PHASE::CLIENTCHALLENGE;
+    sess.updated_at = std::chrono::steady_clock::now();
 
     if (!sess.cipher_key) {
       fail_pair(sess, tree, "Cipher key not set");
@@ -1728,6 +2013,7 @@ namespace nvhttp {
       return;
     }
     sess.last_phase = PAIR_PHASE::SERVERCHALLENGERESP;
+    sess.updated_at = std::chrono::steady_clock::now();
 
     if (!sess.cipher_key || sess.serversecret.empty()) {
       fail_pair(sess, tree, "Cipher key or serversecret not set");
@@ -1757,6 +2043,7 @@ namespace nvhttp {
       return;
     }
     sess.last_phase = PAIR_PHASE::CLIENTPAIRINGSECRET;
+    sess.updated_at = std::chrono::steady_clock::now();
 
     auto &client = sess.client;
 
@@ -1792,9 +2079,11 @@ namespace nvhttp {
       add_cert->raise(crypto::x509(client.cert));
 
       // The client is now successfully paired and will be authorized to connect
-      add_authorized_client(client.name, std::move(client.cert));
+      auto device_uuid = add_authorized_client(client.name, std::move(client.cert));
+      record_pairing_outcome_locked(sess, pairing_state_e::PAIRED, std::move(device_uuid));
     } else {
       tree.put("root.paired", 0);
+      record_pairing_outcome_locked(sess, pairing_state_e::FAILED);
     }
 
     remove_session(sess);
@@ -1855,7 +2144,12 @@ namespace nvhttp {
 
   template<class T>
   void pair(std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
-    print_req<T>(request);
+    // Pairing query values include certificate material and the cryptographic
+    // challenge transcript. Never pass this endpoint through print_req(),
+    // which logs query values at verbose level.
+    BOOST_LOG(verbose) << "HTTP "sv << request->method << ' ' << request->path
+                       << " tunnel="sv << tunnel<T>::to_string
+                       << " (pairing query values redacted)"sv;
 
     pt::ptree tree;
 
@@ -1875,37 +2169,127 @@ namespace nvhttp {
       return;
     }
 
-    auto uniqID {get_arg(args, "uniqueid")};
+    const auto uniqID = get_arg(args, "uniqueid");
+    const auto incoming_peer = request->remote_endpoint();
+    const auto incoming_address = net::addr_to_normalized_string(incoming_peer.address());
+    std::vector<pair_response_t> expired_responses;
+    auto expired_response_guard = util::fail_guard([&]() {
+      // This guard was created before sess_lock, so every response write runs
+      // only after the pairing-map lock has been released.
+      finish_expired_pairing_responses(expired_responses);
+    });
+    pair_response_t superseded_response;
+    auto superseded_response_guard = util::fail_guard([&]() {
+      if (pairing_response_available(superseded_response)) {
+        const auto data = pairing_error_xml("Pairing request superseded by retry", 409);
+        write_pairing_response(superseded_response, data);
+      }
+    });
+    pair_response_t invalidated_response;
+    auto invalidated_response_guard = util::fail_guard([&]() {
+      if (pairing_response_available(invalidated_response)) {
+        const auto data = pairing_error_xml("Pairing exchange invalidated", 400);
+        write_pairing_response(invalidated_response, data);
+      }
+    });
 
-    // Held for the whole pairing phase: every branch below either inserts,
-    // looks up, or (via fail_pair) erases the session record, and the two
-    // server threads plus the Web UI's pin() run this concurrently.
+    // Pairing phase state is serialized across the HTTP, HTTPS and Web UI
+    // threads. Network response writes are deliberately deferred until after
+    // this guard is destroyed.
     std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
+    const auto now = std::chrono::steady_clock::now();
+    prune_expired_pairings_locked(now, expired_responses);
 
     args_t::const_iterator it;
     if (it = args.find("phrase"); it != std::end(args)) {
       if (it->second == "getservercert"sv) {
-        pair_session_t sess;
+        const auto client_cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
+        const auto salt = get_arg(args, "salt");
+        auto sess_it = map_id_sess.find(uniqID);
 
-        sess.client.uniqueID = std::move(uniqID);
-        sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
+        if (sess_it != map_id_sess.end() && sess_it->second.last_phase != PAIR_PHASE::NONE) {
+          // A retransmission of the same phase-one request is safe to answer
+          // idempotently. Never replace an exchange after its PIN was applied.
+          if (sess_it->second.last_phase == PAIR_PHASE::GETSERVERCERT &&
+              pairing_detail::phase_one_retry_matches(
+                sess_it->second.client_address,
+                sess_it->second.client.cert,
+                sess_it->second.async_insert_pin.salt,
+                incoming_address,
+                client_cert,
+                salt,
+                sess_it->second.last_phase
+              )) {
+            ++sess_it->second.phase_one_generation;
+            sess_it->second.updated_at = now;
+            tree.put("root.paired", 1);
+            tree.put("root.plaincert", util::hex_vec(conf_intern.servercert, true));
+            tree.put("root.<xmlattr>.status_code", 200);
+          } else {
+            tree.put("root.paired", 0);
+            tree.put("root.<xmlattr>.status_code", 409);
+            tree.put("root.<xmlattr>.status_message", "Pairing exchange already in progress");
+          }
+          return;
+        }
 
-        BOOST_LOG(verbose) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        if (sess_it == map_id_sess.end()) {
+          if (map_id_sess.size() >= kMaxPendingPairings) {
+            tree.put("root.paired", 0);
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "Too many pending pairing requests");
+            return;
+          }
 
-        ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
+          pair_session_t sess;
+          sess.client.uniqueID = uniqID;
+          sess.pairing_id = uuid_util::uuid_t::generate().string();
+          sess.created_at = now;
+          sess.updated_at = now;
+          sess.client_address = incoming_address;
+          sess_it = map_id_sess.emplace(uniqID, std::move(sess)).first;
+        } else {
+          // Same client retried while still waiting for its PIN. Keep the
+          // opaque id stable, retire the abandoned held response, and refresh
+          // only the phase-one request data.
+          if (!pairing_detail::phase_one_retry_matches(
+                sess_it->second.client_address,
+                sess_it->second.client.cert,
+                sess_it->second.async_insert_pin.salt,
+                incoming_address,
+                client_cert,
+                salt,
+                sess_it->second.last_phase
+              )) {
+            tree.put("root.paired", 0);
+            tree.put("root.<xmlattr>.status_code", 409);
+            tree.put("root.<xmlattr>.status_message", "Pairing request identity mismatch");
+            return;
+          }
+          superseded_response = std::move(sess_it->second.async_insert_pin.response);
+          sess_it->second.updated_at = now;
+        }
+
+        auto &sess = sess_it->second;
+        sess.client.cert = client_cert;
+        sess.async_insert_pin.salt = salt;
+        ++sess.phase_one_generation;
+        BOOST_LOG(info) << "Pairing request awaiting PIN: id="sv << sess.pairing_id
+                        << " peer="sv << sess.client_address;
+
         if (config::sunshine.flags[config::flag::PIN_STDIN]) {
           std::string pin;
 
           std::cout << "Please insert pin: "sv;
           std::getline(std::cin, pin);
 
-          getservercert(ptr->second, tree, pin);
+          getservercert(sess, tree, pin);
+          return;
         } else {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_require_pin();
 #endif
-          ptr->second.async_insert_pin.response = std::move(response);
+          sess.async_insert_pin.response = std::move(response);
 
           fg.disable();
           return;
@@ -1925,13 +2309,33 @@ namespace nvhttp {
       return;
     }
 
+    if (sess_it->second.client_address != incoming_address) {
+      tree.put("root.paired", 0);
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Pairing request peer mismatch");
+      return;
+    }
+
+    const auto detach_held_response = [&]() {
+      // An out-of-order phase request can make fail_pair() erase a phase-one
+      // session that is still holding the original /pair response. Detach it
+      // first so connection I/O and destruction happen after sess_lock unwinds.
+      if (pairing_response_available(sess_it->second.async_insert_pin.response)) {
+        invalidated_response = std::move(sess_it->second.async_insert_pin.response);
+        sess_it->second.async_insert_pin.response = pair_response_t {};
+      }
+    };
+
     if (it = args.find("clientchallenge"); it != std::end(args)) {
+      detach_held_response();
       auto challenge = util::from_hex_vec(it->second, true);
       clientchallenge(sess_it->second, tree, challenge);
     } else if (it = args.find("serverchallengeresp"); it != std::end(args)) {
+      detach_held_response();
       auto encrypted_response = util::from_hex_vec(it->second, true);
       serverchallengeresp(sess_it->second, tree, encrypted_response);
     } else if (it = args.find("clientpairingsecret"); it != std::end(args)) {
+      detach_held_response();
       auto pairingsecret = util::from_hex_vec(it->second, true);
       clientpairingsecret(sess_it->second, add_cert, tree, pairingsecret);
     } else {
@@ -1940,62 +2344,147 @@ namespace nvhttp {
     }
   }
 
-  bool pin(std::string pin, std::string name) {
+  std::vector<pairing_request_t> get_pairing_requests() {
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<pair_response_t> expired_responses;
+    std::vector<pairing_request_t> requests;
+    {
+      std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
+      prune_expired_pairings_locked(now, expired_responses);
+      requests.reserve(map_id_sess.size() + pairing_outcomes.size());
+      for (const auto &[_, sess] : map_id_sess) {
+        requests.emplace_back(pairing_request_from_session(sess, now));
+      }
+      for (const auto &[_, outcome] : pairing_outcomes) {
+        auto request = outcome.request;
+        request.age_seconds = static_cast<std::uint64_t>(std::max(
+          std::chrono::steady_clock::duration::zero(),
+          now - outcome.updated_at
+        ) / std::chrono::seconds(1));
+        requests.emplace_back(std::move(request));
+      }
+    }
+
+    finish_expired_pairing_responses(expired_responses);
+    std::ranges::sort(requests, [](const auto &left, const auto &right) {
+      if (left.state != right.state) {
+        return left.state < right.state;
+      }
+      return left.pairing_id < right.pairing_id;
+    });
+    return requests;
+  }
+
+  pin_result_t submit_pin(std::string pin, std::string name, std::optional<std::string> pairing_id) {
+    if (!pairing_detail::valid_pin(pin)) {
+      return {.result = pin_result_e::INVALID_PIN};
+    }
+
     pt::ptree tree;
-    std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
-    if (map_id_sess.empty()) {
-      return false;
+    pair_response_t async_response;
+    std::vector<pair_response_t> expired_responses;
+    auto expired_response_guard = util::fail_guard([&]() {
+      finish_expired_pairing_responses(expired_responses);
+    });
+    std::string selected_pairing_id;
+    std::uint64_t selected_phase_one_generation = 0;
+
+    {
+      std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
+      const auto now = std::chrono::steady_clock::now();
+      prune_expired_pairings_locked(now, expired_responses);
+
+      std::vector<pairing_detail::candidate_t> candidates;
+      candidates.reserve(map_id_sess.size());
+      for (const auto &[_, sess] : map_id_sess) {
+        candidates.push_back({
+          .pairing_id = sess.pairing_id,
+          .awaiting_pin = sess.last_phase == PAIR_PHASE::NONE,
+          .response_available = pairing_response_available(sess.async_insert_pin.response),
+        });
+      }
+      const auto requested_id = pairing_id ?
+                                  std::optional<std::string_view> {*pairing_id} : std::nullopt;
+      auto selection = pairing_detail::select_candidate(candidates, requested_id);
+      if (selection.result == pin_result_e::UNKNOWN_PAIRING_ID && pairing_id) {
+          if (const auto outcome = pairing_outcomes.find(*pairing_id); outcome != pairing_outcomes.end()) {
+            const auto result = pairing_detail::outcome_pin_result(outcome->second.request.state);
+            if (result != pin_result_e::UNKNOWN_PAIRING_ID) {
+              return {.result = result, .pairing_id = *pairing_id};
+            }
+          }
+      }
+      if (selection.result != pin_result_e::PIN_DELIVERED) {
+        return selection;
+      }
+
+      const auto selected = std::find_if(map_id_sess.begin(), map_id_sess.end(), [&](const auto &entry) {
+        return entry.second.pairing_id == selection.pairing_id;
+      });
+      if (selected == map_id_sess.end()) {
+        return {.result = pin_result_e::UNKNOWN_PAIRING_ID, .pairing_id = std::move(selection.pairing_id)};
+      }
+
+      auto &sess = selected->second;
+      selected_pairing_id = sess.pairing_id;
+      selected_phase_one_generation = sess.phase_one_generation;
+
+      async_response = std::move(sess.async_insert_pin.response);
+      sess.async_insert_pin.response = pair_response_t {};
+      sess.client.name = boost::algorithm::trim_copy(name);
+      getservercert(sess, tree, pin);
+      // A malformed/stale request can erase sess through fail_pair(). Do not
+      // access sess or selected after this point.
     }
 
-    // ensure pin is 4 digits
-    if (pin.size() != 4) {
-      tree.put("root.paired", 0);
-      tree.put("root.<xmlattr>.status_code", 400);
-      tree.put(
-        "root.<xmlattr>.status_message",
-        std::format("Pin must be 4 digits, {} provided", pin.size())
-      );
-      return false;
-    }
+    finish_expired_pairing_responses(expired_responses);
+    expired_response_guard.disable();
 
-    // ensure all pin characters are numeric
-    if (!std::all_of(pin.begin(), pin.end(), ::isdigit)) {
-      tree.put("root.paired", 0);
-      tree.put("root.<xmlattr>.status_code", 400);
-      tree.put("root.<xmlattr>.status_message", "Pin must be numeric");
-      return false;
-    }
-
-    // Take our own reference to the pending response and clear the stored
-    // one BEFORE running the pairing phase: getservercert() rejects an
-    // out-of-order call (e.g. a double-submitted PIN form, or a retry
-    // against a session left in a non-NONE phase) via fail_pair() ->
-    // remove_session(), which erases this very map entry and destroys
-    // `sess`. Everything below used to run on the freed node — a heap
-    // write-after-free plus a call through a dangling response pointer.
-    auto sess_it = std::begin(map_id_sess);
-    auto &sess = sess_it->second;
-    auto async_response = std::move(sess.async_insert_pin.response);
-    sess.async_insert_pin.response = std::decay_t<decltype(async_response.left())>();
-    sess.client.name = name;
-
-    getservercert(sess, tree, pin);
-    // `sess` and `sess_it` may be dangling from here on — do not touch them.
-
-    // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
+    if (!write_pairing_response(async_response, data.str())) {
+      std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
+      const auto failed = std::find_if(map_id_sess.begin(), map_id_sess.end(), [&](const auto &entry) {
+        return entry.second.pairing_id == selected_pairing_id;
+      });
+      if (failed != map_id_sess.end()) {
+        if (pairing_detail::phase_one_delivery_is_current(
+              failed->second.last_phase,
+              failed->second.phase_one_generation,
+              selected_phase_one_generation
+            )) {
+          record_pairing_outcome_locked(failed->second, pairing_state_e::FAILED);
+          map_id_sess.erase(failed);
+          return {.result = pin_result_e::DELIVERY_FAILED, .pairing_id = std::move(selected_pairing_id)};
+        }
 
-    if (async_response.has_left() && async_response.left()) {
-      async_response.left()->write(data.str());
-    } else if (async_response.has_right() && async_response.right()) {
-      async_response.right()->write(data.str());
-    } else {
-      return false;
+        // A newer phase-one retry or a later protocol phase now owns this
+        // exchange. The failed write belongs to the superseded response and
+        // must not destroy the live session.
+        BOOST_LOG(info) << "Ignoring stale phase-one response delivery failure: id="sv
+                        << selected_pairing_id;
+        return {.result = pin_result_e::ALREADY_SUBMITTED, .pairing_id = std::move(selected_pairing_id)};
+      }
+
+      if (const auto outcome = pairing_outcomes.find(selected_pairing_id); outcome != pairing_outcomes.end()) {
+        const auto result = pairing_detail::outcome_pin_result(outcome->second.request.state);
+        if (result != pin_result_e::UNKNOWN_PAIRING_ID) {
+          return {.result = result, .pairing_id = std::move(selected_pairing_id)};
+        }
+      }
+      return {.result = pin_result_e::DELIVERY_FAILED, .pairing_id = std::move(selected_pairing_id)};
     }
 
-    // response to the current request
-    return true;
+    if (tree.get<int>("root.paired", 0) != 1) {
+      return {.result = pin_result_e::PAIRING_FAILED, .pairing_id = std::move(selected_pairing_id)};
+    }
+
+    BOOST_LOG(info) << "Pairing PIN delivered; awaiting client proof: id="sv << selected_pairing_id;
+    return {.result = pin_result_e::PIN_DELIVERED, .pairing_id = std::move(selected_pairing_id)};
+  }
+
+  bool pin(std::string pin, std::string name) {
+    return submit_pin(std::move(pin), std::move(name)).accepted();
   }
 
   template<class T>
@@ -2249,6 +2738,45 @@ namespace nvhttp {
     });
 
     pt::ptree tree;
+    // Declared before the response/revert guard so failure unwinds in this
+    // order: revert the partially prepared display, then release lifecycle
+    // ownership. A waiting teardown/new launch must never overlap revert().
+    std::optional<stream::lifecycle::coordinator_t::launch_lease_t> display_preparation_lease;
+    std::shared_ptr<stream::lifecycle::coordinator_t::launch_lease_t> retained_display_lease;
+    bool launch_handoff_complete {false};
+    auto rtsp_active_reconcile_guard = util::fail_guard([&]() {
+      const bool owns_lifecycle = retained_display_lease ||
+                                  (display_preparation_lease && static_cast<bool>(*display_preparation_lease));
+      if (!launch_handoff_complete && owns_lifecycle &&
+          stream::session::active_sessions.load(std::memory_order_acquire) == 0) {
+        // An old RTSP teardown defers to any in-flight launch so it cannot
+        // block ANNOUNCE. If this launch then aborts, it owns reconciliation
+        // of the exclusivity flag after its display revert and before releasing
+        // the lease; otherwise WebRTC would remain disabled indefinitely.
+        webrtc_stream::set_rtsp_sessions_active(false);
+      }
+    });
+    auto deferred_cleanup_guard = util::fail_guard([&]() {
+      if (launch_handoff_complete) {
+        return;
+      }
+      // Release launch ownership first, then acquire cleanup ownership. This
+      // closes both orderings with the old RTSP teardown: if it yielded first,
+      // the acquisition carries its deferred obligation; if it arrives later,
+      // it performs the ordinary cleanup itself.
+      retained_display_lease.reset();
+      if (display_preparation_lease) {
+        display_preparation_lease->reset();
+      }
+      auto cleanup = stream::lifecycle::coordinator().acquire_cleanup(8s);
+      if (cleanup.result == stream::lifecycle::cleanup_acquire_result_e::acquired &&
+          cleanup.deferred_cleanup_pending) {
+        stream::session::complete_deferred_global_cleanup("aborted HTTP launch");
+      }
+      if (stream::session::active_sessions.load(std::memory_order_acquire) == 0) {
+        webrtc_stream::set_rtsp_sessions_active(false);
+      }
+    });
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
@@ -2293,10 +2821,51 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
 
+    // Fast-path retries/duplicates before waiting on lifecycle ownership. The
+    // final check after acquire remains necessary to close the observation-to-
+    // acquisition race, but a known pending launch must not consume Xbox or
+    // webOS's connection budget in an eight-second wait.
+    if (rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(warning) << "Launch refused: another RTSP launch is still pending admission.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Another client launch is already pending; retry the connection.");
+      tree.put("root.gamesession", 0);
+      return;
+    }
+
+    // Serialize display preparation against the prior last-session cleanup.
+    // The lease is bounded so a genuinely wedged cleanup returns an explicit
+    // retryable response instead of letting the two paths tear down each
+    // other's LuminalVGD/display state.
+    display_preparation_lease = stream::lifecycle::coordinator().acquire_launch(8s);
+    if (!display_preparation_lease) {
+      BOOST_LOG(warning) << "Launch refused: previous session cleanup still owns display preparation after 8 seconds.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "The previous stream is still restoring the display; retry the connection.");
+      tree.put("root.gamesession", 0);
+      return;
+    }
+    if (rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(warning) << "Launch refused: another RTSP launch is still pending admission.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Another client launch is already pending; retry the connection.");
+      tree.put("root.gamesession", 0);
+      return;
+    }
+
     preempt_webrtc_sessions_for_moonlight("launch");
 
-    const bool no_active_sessions =
-      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions();
+    // Do not call rtsp_stream::session_count() while holding the launch lease:
+    // that API reaps STOPPING sessions by synchronously joining them, and the
+    // join must acquire cleanup ownership from this coordinator. The logical
+    // active count excludes STOPPING sessions without doing blocking work.
+    const bool no_active_sessions = stream::lifecycle::capture_is_logically_idle(
+      stream::session::active_sessions.load(std::memory_order_acquire),
+      webrtc_stream::has_active_sessions()
+    );
     // Runtime overrides are global process state. Do not reapply them while
     // another RTSP session is active, otherwise a second client can mutate
     // active stream limits (e.g. fps/encoding-related settings) mid-session.
@@ -2314,7 +2883,10 @@ namespace nvhttp {
       config::clear_runtime_config_overrides();
 
       // Restore global config immediately when safe; otherwise defer.
-      if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
+      if (stream::lifecycle::capture_is_logically_idle(
+            stream::session::active_sessions.load(std::memory_order_acquire),
+            webrtc_stream::has_active_sessions()
+          )) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
@@ -2373,6 +2945,7 @@ namespace nvhttp {
 
     const bool allow_display_changes = true;
     auto launch_session = make_launch_session(host_audio, args, request, allow_display_changes);
+    launch_session->runtime_overrides_applied = runtime_overrides_applied;
     std::optional<std::string> pending_output_override;
     auto output_override_guard = util::fail_guard([&]() {
       if (pending_output_override) {
@@ -2400,7 +2973,10 @@ namespace nvhttp {
     prepare_virtual_display_for_session(launch_session, no_active_sessions, allow_display_changes, pending_output_override);
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
-      if (rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions()) {
+      if (!stream::lifecycle::capture_is_logically_idle(
+            stream::session::active_sessions.load(std::memory_order_acquire),
+            webrtc_stream::has_active_sessions()
+          )) {
         return;
       }
 
@@ -2524,7 +3100,12 @@ namespace nvhttp {
       return;
     }
 
+    std::optional<proc::active_session_guard_t> launched_app;
     if (appid > 0) {
+      // proc::execute() may terminate a failed/partial application, and that
+      // path restores runtime configuration through the exclusive apply gate.
+      // Never hold our shared gate across process lifecycle transitions.
+      _hot_apply_gate.unlock();
       auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
         tree.put("root.<xmlattr>.status_code", err);
@@ -2533,6 +3114,16 @@ namespace nvhttp {
 
         return;
       }
+      const auto started_app = proc::proc.active_session_guard();
+      if (started_app.has_active_app && started_app.app_id == appid) {
+        launched_app = started_app;
+        launch_session->terminate_app_on_unclaimed = true;
+        launch_session->launched_app_generation = started_app.launch_started_at;
+        launch_session->launched_app_client_uuid = started_app.client_uuid;
+      } else {
+        BOOST_LOG(warning) << "Launch application returned success but its lifecycle generation could not be captured; unclaimed cleanup will not terminate a later ambiguous app instance.";
+      }
+      _hot_apply_gate.lock();
     }
 
     // From this point forward, the app is considered started and runtime overrides (if any)
@@ -2556,7 +3147,29 @@ namespace nvhttp {
     tree.put("root.VirtualDisplayDriverReady", false);
 #endif
 
-    rtsp_stream::launch_session_raise(launch_session);
+    retained_display_lease =
+      std::make_shared<stream::lifecycle::coordinator_t::launch_lease_t>(std::move(*display_preparation_lease));
+    retained_display_lease->commit();
+    launch_session->display_preparation_lease = retained_display_lease;
+    if (!rtsp_stream::launch_session_raise(launch_session)) {
+      BOOST_LOG(error) << "Launch refused at RTSP handoff: another pending launch already owns the admission slot.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Another client launch is already pending; retry the connection.");
+      tree.put("root.gamesession", 0);
+      keep_runtime_overrides = false;
+      _hot_apply_gate.unlock();
+      if (launched_app) {
+        (void) proc::proc.terminate_if_active_session(
+          launched_app->app_id,
+          launched_app->launch_started_at,
+          launched_app->client_uuid
+        );
+      }
+      return;
+    }
+    launch_handoff_complete = true;
+    retained_display_lease.reset();
 #ifdef _WIN32
     virtual_display_teardown_guard.disable();
 #endif
@@ -2577,6 +3190,37 @@ namespace nvhttp {
     });
 
     pt::ptree tree;
+    // Keep lifecycle ownership until after the failure guard has reverted any
+    // partially prepared display state (destruction is reverse declaration
+    // order). This closes the failure-path race with last-session cleanup.
+    std::optional<stream::lifecycle::coordinator_t::launch_lease_t> display_preparation_lease;
+    std::shared_ptr<stream::lifecycle::coordinator_t::launch_lease_t> retained_display_lease;
+    bool launch_handoff_complete {false};
+    auto rtsp_active_reconcile_guard = util::fail_guard([&]() {
+      const bool owns_lifecycle = retained_display_lease ||
+                                  (display_preparation_lease && static_cast<bool>(*display_preparation_lease));
+      if (!launch_handoff_complete && owns_lifecycle &&
+          stream::session::active_sessions.load(std::memory_order_acquire) == 0) {
+        webrtc_stream::set_rtsp_sessions_active(false);
+      }
+    });
+    auto deferred_cleanup_guard = util::fail_guard([&]() {
+      if (launch_handoff_complete) {
+        return;
+      }
+      retained_display_lease.reset();
+      if (display_preparation_lease) {
+        display_preparation_lease->reset();
+      }
+      auto cleanup = stream::lifecycle::coordinator().acquire_cleanup(8s);
+      if (cleanup.result == stream::lifecycle::cleanup_acquire_result_e::acquired &&
+          cleanup.deferred_cleanup_pending) {
+        stream::session::complete_deferred_global_cleanup("aborted HTTP resume");
+      }
+      if (stream::session::active_sessions.load(std::memory_order_acquire) == 0) {
+        webrtc_stream::set_rtsp_sessions_active(false);
+      }
+    });
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
@@ -2615,14 +3259,39 @@ namespace nvhttp {
       return;
     }
 
+    if (rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(warning) << "Resume refused: another RTSP launch is still pending admission.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Another client launch is already pending; retry the connection.");
+      return;
+    }
+
+    display_preparation_lease = stream::lifecycle::coordinator().acquire_launch(8s);
+    if (!display_preparation_lease) {
+      BOOST_LOG(warning) << "Resume refused: previous session cleanup still owns display preparation after 8 seconds.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "The previous stream is still restoring the display; retry the connection.");
+      return;
+    }
+    if (rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(warning) << "Resume refused: another RTSP launch is still pending admission.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Another client launch is already pending; retry the connection.");
+      return;
+    }
+
     preempt_webrtc_sessions_for_moonlight("resume");
 
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {
-      (rtsp_stream::session_count() == 0) && !webrtc_stream::has_active_sessions()
-    };
+    const bool no_active_sessions = stream::lifecycle::capture_is_logically_idle(
+      stream::session::active_sessions.load(std::memory_order_acquire),
+      webrtc_stream::has_active_sessions()
+    );
     const bool allow_display_changes = config::video.dd.config_revert_on_disconnect;
     if (no_active_sessions && allow_display_changes) {
       config::set_runtime_output_name_override(std::nullopt);
@@ -2666,7 +3335,10 @@ namespace nvhttp {
     prepare_virtual_display_for_session(launch_session, no_active_sessions, allow_display_changes, pending_output_override);
 
     auto virtual_display_teardown_guard = util::fail_guard([&]() {
-      if (rtsp_stream::session_count() > 0 || webrtc_stream::has_active_sessions()) {
+      if (!stream::lifecycle::capture_is_logically_idle(
+            stream::session::active_sessions.load(std::memory_order_acquire),
+            webrtc_stream::has_active_sessions()
+          )) {
         return;
       }
 
@@ -2813,7 +3485,19 @@ namespace nvhttp {
     tree.put("root.VirtualDisplayDriverReady", false);
 #endif
 
-    rtsp_stream::launch_session_raise(launch_session);
+    retained_display_lease =
+      std::make_shared<stream::lifecycle::coordinator_t::launch_lease_t>(std::move(*display_preparation_lease));
+    retained_display_lease->commit();
+    launch_session->display_preparation_lease = retained_display_lease;
+    if (!rtsp_stream::launch_session_raise(launch_session)) {
+      BOOST_LOG(error) << "Resume refused at RTSP handoff: another pending launch already owns the admission slot.";
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Another client launch is already pending; retry the connection.");
+      return;
+    }
+    launch_handoff_complete = true;
+    retained_display_lease.reset();
 #ifdef _WIN32
     virtual_display_teardown_guard.disable();
 #endif
@@ -2823,6 +3507,14 @@ namespace nvhttp {
 
   void cancel(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+
+    // Keep browser admission closed across the entire destructive cancel
+    // transaction, including the interval after a pending Moonlight launch is
+    // popped and before its display/application state is restored.
+    webrtc_stream::moonlight_launch_begin();
+    auto moonlight_cancel_guard = util::fail_guard([]() {
+      webrtc_stream::moonlight_launch_end();
+    });
 
     pt::ptree tree;
     auto g = util::fail_guard([&]() {
@@ -2836,12 +3528,30 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    rtsp_stream::terminate_sessions();
+    const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
 #ifdef _WIN32
     platf::video_worker::cancel_prewarm();
 #endif
 
+    // A successor /launch may arrive after terminate_sessions() releases the
+    // old session. Whichever path obtains lifecycle ownership first wins: do
+    // not terminate its app or remove its freshly prepared VGD.
+    auto cleanup_ownership = stream::lifecycle::coordinator().acquire_cleanup(8s);
+    if (cleanup_ownership.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
+      BOOST_LOG(info) << "Cancel cleanup superseded by a newer launch; leaving successor state untouched.";
+      return;
+    }
+    if (stream::session::active_sessions.load(std::memory_order_acquire) != 0 ||
+        rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(info) << "Cancel cleanup observed a successor session after ownership acquisition; skipping destructive cleanup.";
+      return;
+    }
+
     const bool has_running_app = proc::proc.running() > 0;
+    const bool clear_cancelled_desktop_overrides =
+      cancelled_pending_launch &&
+      cancelled_pending_launch->runtime_overrides_applied &&
+      !has_running_app;
 #ifdef _WIN32
     const bool preserve_deferred_launch =
       has_running_app &&
@@ -2866,6 +3576,13 @@ namespace nvhttp {
       cleanup_virtual_display_if_idle();
     }
 #endif
+    if (clear_cancelled_desktop_overrides) {
+      config::clear_runtime_config_overrides();
+      config::apply_config_now();
+    }
+    if (cleanup_ownership.deferred_cleanup_pending) {
+      stream::session::complete_deferred_global_cleanup("explicit client cancel");
+    }
   }
 
   void appasset(resp_https_t response, req_https_t request) {
@@ -3172,6 +3889,20 @@ namespace nvhttp {
       cert_chain.clear();
       http::unique_id = uuid_util::uuid_t::generate().string();
     }
+
+    std::vector<pair_response_t> reset_pairing_responses;
+    {
+      std::lock_guard<std::mutex> sess_lock {map_id_sess_mutex};
+      reset_pairing_responses.reserve(map_id_sess.size());
+      for (auto &[_, sess] : map_id_sess) {
+        reset_pairing_responses.emplace_back(std::move(sess.async_insert_pin.response));
+      }
+      map_id_sess.clear();
+      pairing_outcomes.clear();
+    }
+    // Never write to a held GameStream HTTP response while the pairing-map
+    // lock (or the state-file lock above) is held.
+    finish_pairing_responses(reset_pairing_responses, "Host pairing state was reset", 410);
 
     // save_state takes the lock itself. With in-memory pairings cleared
     // and the old files archived, this writes a fresh primary + .bak.

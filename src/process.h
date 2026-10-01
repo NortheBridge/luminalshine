@@ -57,6 +57,7 @@ namespace proc {
 
   struct active_session_guard_t {
     bool has_active_app {false};
+    int app_id {0};
     bool uses_playnite {false};
     std::string playnite_id;
     std::string client_uuid;
@@ -165,6 +166,15 @@ namespace proc {
 
     // Return a snapshot copy to avoid concurrent access races
     active_session_guard_t active_session_guard() const;
+    // Atomically compare the launch generation and terminate only that exact
+    // application instance. Prevents a delayed cleanup from killing a later
+    // launch that happens to reuse the same app id.
+    bool terminate_if_active_session(
+      int app_id,
+      std::chrono::steady_clock::time_point launch_started_at,
+      std::string_view client_uuid,
+      bool skip_display_revert = false
+    );
     std::vector<ctx_t> get_apps() const;
     std::string get_app_image(int app_id);
     std::string get_last_run_app_name();

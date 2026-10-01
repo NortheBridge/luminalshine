@@ -2440,7 +2440,11 @@ namespace config {
                                      (prev_vgd_hdr_peak_nits != video.vgd_hdr_peak_nits);
 
       // If any DD settings changed and there are no active sessions, revert to clear cached state
-      if (dd_config_changed && rtsp_stream::session_count() == 0 && runtime_overrides.empty()) {
+      // Never reap/join a STOPPING RTSP session from configuration apply.
+      // Launch and ANNOUNCE both invoke this path while holding display or
+      // admission ownership; a synchronous join there can self-wait on that
+      // ownership and consume the client's entire connection budget.
+      if (dd_config_changed && rtsp_stream::session_count_no_reap() == 0 && runtime_overrides.empty()) {
         BOOST_LOG(info) << "Hot-apply: DD configuration changed with no active sessions; reverting cached display state.";
         display_helper_integration::revert();
 
@@ -2495,8 +2499,16 @@ namespace config {
   }
 
   void maybe_apply_deferred() {
+    // Check the cheap flag first, then use the non-reaping snapshot. This is
+    // called on the RTSP handler during ANNOUNCE and must never synchronously
+    // join a STOPPING predecessor. Keep the flag set until the tracked set is
+    // actually empty so a later safe point can apply it.
+    if (!g_deferred_reload.load(std::memory_order_acquire) ||
+        rtsp_stream::session_count_no_reap() != 0) {
+      return;
+    }
     // Single-shot winner clears the flag and applies atomically.
-    if (rtsp_stream::session_count() == 0 && g_deferred_reload.exchange(false, std::memory_order_acq_rel)) {
+    if (g_deferred_reload.exchange(false, std::memory_order_acq_rel)) {
       apply_config_now();
     }
   }
