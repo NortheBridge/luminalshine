@@ -124,6 +124,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_session_deferral.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_watchdog.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_helper_watchdog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/exact_device_window_router_policy.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_cleanup.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/virtual_display_cleanup.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/hotkey_manager.h"
