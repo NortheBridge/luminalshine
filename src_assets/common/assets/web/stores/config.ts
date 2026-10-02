@@ -52,6 +52,7 @@ export interface MetaInfo {
     h264_available?: boolean;
     hevc_available?: boolean;
     av1_available?: boolean;
+    pyrowave_advertised?: boolean;
     h264_yuv444?: boolean;
     hevc_yuv444?: boolean;
     av1_yuv444?: boolean;
