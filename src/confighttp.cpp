@@ -55,6 +55,7 @@
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
+#include "pyrowave/backend.h"
 #include "state_storage.h"
 #include "tdr_state.h"
 #include "webrtc_stream.h"
@@ -2692,6 +2693,10 @@ namespace confighttp {
       node["h264_available"] = video::last_encoder_probe_supported_codec[0];
       node["hevc_available"] = video::last_encoder_probe_supported_codec[1];
       node["av1_available"] = video::last_encoder_probe_supported_codec[2];
+      // PyroWave is outside the fixed three-codec encoder snapshot. Report
+      // whether it is actually advertised to compatible GameStream clients,
+      // and never run its one-time Vulkan probe while the feature is disabled.
+      node["pyrowave_advertised"] = config::pyrowave.enabled && pyrowave::available();
       node["h264_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[0];
       node["hevc_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[1];
       node["av1_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[2];

@@ -10,6 +10,7 @@ import { useHostStore } from '@/stores/host';
 import { useConfigStore } from '@/stores/config';
 import { useConnectivityStore } from '@/stores/connectivity';
 import { useT2 } from '@/composables/useT2';
+import { encoderCodecLabels } from '@/utils/encoderMetadata';
 import SavingStatus from '@/components/SavingStatus.vue';
 import GlobalSearch from '@/components/shell/GlobalSearch.vue';
 
@@ -43,13 +44,7 @@ const encoderLabel = computed(() => {
   return raw ? (ENCODER_LABELS[raw] ?? raw.toUpperCase()) : t2('shell.encoder_auto', 'Auto');
 });
 const codecs = computed(() => {
-  const probe = metadata.value?.encoder_probe;
-  if (!probe?.probed) return '';
-  const out: string[] = [];
-  if (probe.h264_available) out.push('H.264');
-  if (probe.hevc_available) out.push('HEVC');
-  if (probe.av1_available) out.push('AV1');
-  return out.join(' · ');
+  return encoderCodecLabels(metadata.value?.encoder_probe).join(' · ');
 });
 
 const displayText = computed(() => {
