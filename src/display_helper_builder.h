@@ -73,6 +73,9 @@ namespace display_helper_integration {
     bool enable_virtual_display_watchdog {false};
     bool attach_hdr_toggle_flag {false};
     bool dark_recovery_anchor {false};
+    // Provenance-preserving identity copied directly from the launch session.
+    // This must never be synthesized from an any-VGD resolver fallback.
+    std::optional<std::string> exact_virtual_display_device_id;
     // Internal pre-capture phase: apply synchronously without scheduling any
     // delayed verification/reapply/HDR/shell work that could overlap the next phase.
     bool transitional_apply {false};

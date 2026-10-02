@@ -1236,6 +1236,10 @@ namespace {
       j["sunshine_dark_recovery_anchor"] = true;
     }
 
+    if (request.exact_virtual_display_device_id && !request.exact_virtual_display_device_id->empty()) {
+      j["sunshine_exact_virtual_device_id"] = *request.exact_virtual_display_device_id;
+    }
+
     if (request.virtual_display_arrangement) {
       j["sunshine_virtual_layout"] = virtual_layout_to_string(*request.virtual_display_arrangement);
     }
@@ -1561,6 +1565,9 @@ namespace display_helper_integration {
             BOOST_LOG(warning) << "Display helper: LuminalVGD did not expose a ring target; retaining VGD-primary extended topology and selecting HDR-capable fallback capture.";
             final_request.configuration = primary_config;
             final_request.virtual_display_arrangement = VirtualDisplayArrangement::ExtendedPrimary;
+            // This is a real extended fallback, not anchored-exclusive. Do not
+            // steal application windows or cover the remaining displays.
+            final_request.dark_recovery_anchor = false;
           } else {
             // Preserve the stable session identity across the exclusive APPLY,
             // but deliberately do not preserve this generation: Windows will

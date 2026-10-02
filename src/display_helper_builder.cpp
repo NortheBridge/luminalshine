@@ -69,6 +69,9 @@ namespace display_helper_integration {
     request.enable_virtual_display_watchdog = enable_virtual_display_watchdog_;
     request.attach_hdr_toggle_flag = attach_hdr_toggle_flag_;
     request.dark_recovery_anchor = dark_recovery_anchor_;
+    if (session_ && session_->virtual_display && !session_->virtual_display_device_id.empty()) {
+      request.exact_virtual_display_device_id = session_->virtual_display_device_id;
+    }
     request.topology = topology_;
     request.session = session_;
     request.virtual_display_arrangement = virtual_display_arrangement_;

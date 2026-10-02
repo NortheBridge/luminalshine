@@ -20,8 +20,8 @@
   #include <cwchar>
   #include <filesystem>
   #include <functional>
-  #include <memory>
   #include <map>
+  #include <memory>
   #include <mutex>
   #include <optional>
   #include <set>
@@ -30,12 +30,14 @@
   #include <string>
   #include <thread>
   #include <unordered_map>
+  #include <unordered_set>
   #include <utility>
   #include <vector>
 
 // third-party (libdisplaydevice)
   #include "src/logging.h"
   #include "src/platform/windows/display_helper_wedge_escalation.h"
+  #include "src/platform/windows/exact_device_window_router_policy.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
   #include "src/platform/windows/ipc/pipes.h"
 
@@ -2336,83 +2338,396 @@ namespace {
   bool delete_restore_scheduled_task();
 
   /**
-   * Keeps every non-primary scan-out surface solid black while the VGD target
-   * is primary. This runs in the interactive helper (not the SYSTEM service),
-   * so the windows are composed onto the user's actual desktop. OLED pixels
-   * receive RGB zero while the physical VidPn path remains active for WDDM
-   * recovery.
+   * Interactive-desktop guard used while a virtual display is active.
+   *
+   * Window routing and OLED-safe black covers intentionally have independent
+   * lifecycle switches. Routing is suspended before every modeset/restore,
+   * and existing covers receive a bounded teardown acknowledgement first. All
+   * expensive work is performed on this helper-owned thread; APPLY only
+   * publishes a generation and signals an event.
    */
-  class DarkRecoveryAnchor {
+  class ExactDeviceDesktopGuard {
   public:
-    DarkRecoveryAnchor(): worker_([this](std::stop_token st) { run(st); }) {}
-
-    ~DarkRecoveryAnchor() {
-      worker_.request_stop();
-      enabled_.store(false, std::memory_order_release);
+    ExactDeviceDesktopGuard():
+        wake_event_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        teardown_event_(CreateEventW(nullptr, TRUE, TRUE, nullptr)) {
+      if (!wake_event_) {
+        BOOST_LOG(error) << "Exact-device window router: failed to create worker wake event; router remains disabled.";
+        return;
+      }
+      // Start explicitly from the constructor body. Every member has now been
+      // initialized, so run() cannot observe partially constructed state.
+      worker_ = std::jthread([this](std::stop_token st) {
+        run(st);
+      });
     }
 
-    void enable(bool enabled) noexcept {
-      enabled_.store(enabled, std::memory_order_release);
-      generation_.fetch_add(1, std::memory_order_acq_rel);
+    ~ExactDeviceDesktopGuard() {
+      worker_.request_stop();
+      if (wake_event_) {
+        SetEvent(wake_event_);
+      }
+      if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+        PostMessageW(hwnd, WM_QUIT, 0, 0);
+      }
+      if (worker_.joinable()) {
+        worker_.join();
+      }
+      if (wake_event_) {
+        CloseHandle(wake_event_);
+      }
+      if (teardown_event_) {
+        CloseHandle(teardown_event_);
+      }
+    }
+
+    ExactDeviceDesktopGuard(const ExactDeviceDesktopGuard &) = delete;
+    ExactDeviceDesktopGuard &operator=(const ExactDeviceDesktopGuard &) = delete;
+
+    void suspend_routing() noexcept {
+      // Close the gate synchronously, then cross the tiny action barrier so no
+      // window mutation can be issued after this function returns. Publish a
+      // fully inert generation: the worker tears down, but performs no display
+      // enumeration while the caller begins a modeset or restore.
+      routing_gate_.store(false, std::memory_order_release);
+      bool await_cover_teardown = false;
+      {
+        std::scoped_lock action_lock(route_action_mutex_);
+        std::lock_guard config_lock(config_mutex_);
+        // The action/config barrier invalidates pending publication, while the
+        // resource-work flag accounts for any off-lock provisional resources
+        // that still need to acknowledge teardown before a modeset.
+        await_cover_teardown =
+          (covers_present_.load(std::memory_order_acquire) || resource_work_active_.load(std::memory_order_acquire)) &&
+          teardown_event_;
+        if (await_cover_teardown) {
+          ResetEvent(teardown_event_);
+        }
+        routing_gate_.store(false, std::memory_order_release);
+        config_.cover_other_displays = false;
+        config_.routing_enabled = false;
+        config_.exact_device_id.clear();
+        ++config_.generation;
+      }
+      if (wake_event_) {
+        SetEvent(wake_event_);
+      }
+      if (await_cover_teardown && WaitForSingleObject(teardown_event_, 250) != WAIT_OBJECT_0) {
+        BOOST_LOG(warning) << "Exact-device window router: cover teardown did not acknowledge within 250ms; proceeding fail-open.";
+      }
+    }
+
+    void configure(bool cover_other_displays, std::optional<std::string> exact_virtual_device_id) noexcept {
+      routing_gate_.store(false, std::memory_order_release);
+      {
+        std::scoped_lock action_lock(route_action_mutex_);
+        std::lock_guard config_lock(config_mutex_);
+        routing_gate_.store(false, std::memory_order_release);
+        config_.cover_other_displays = cover_other_displays;
+        config_.exact_device_id = exact_virtual_device_id.value_or(std::string {});
+        config_.routing_enabled = !config_.exact_device_id.empty();
+        ++config_.generation;
+      }
+      if (wake_event_) {
+        SetEvent(wake_event_);
+      }
+    }
+
+    void disable_all() noexcept {
+      routing_gate_.store(false, std::memory_order_release);
+      {
+        std::scoped_lock action_lock(route_action_mutex_);
+        std::lock_guard config_lock(config_mutex_);
+        routing_gate_.store(false, std::memory_order_release);
+        config_.cover_other_displays = false;
+        config_.routing_enabled = false;
+        config_.exact_device_id.clear();
+        ++config_.generation;
+      }
+      if (wake_event_) {
+        SetEvent(wake_event_);
+      }
     }
 
   private:
-    static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-      if (msg == WM_ERASEBKGND) {
-        RECT rc {};
-        GetClientRect(hwnd, &rc);
-        FillRect(reinterpret_cast<HDC>(wparam), &rc, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        return 1;
+    using policy_rect_t = platf::window_router_policy::rect_t;
+
+    static constexpr UINT kRouteWindowMessage = WM_APP + 0x219;
+    static constexpr UINT_PTR kResolveTimer = 0x51A7;
+    static constexpr unsigned int kMaxResolveAttempts = 20;
+
+    struct Configuration {
+      bool cover_other_displays {false};
+      bool routing_enabled {false};
+      std::string exact_device_id;
+      std::uint64_t generation {1};
+    };
+
+    struct Target {
+      Target() {
+        monitor_info.cbSize = sizeof(monitor_info);
       }
-      if (msg == WM_PAINT) {
-        PAINTSTRUCT ps {};
-        HDC dc = BeginPaint(hwnd, &ps);
-        FillRect(dc, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        EndPaint(hwnd, &ps);
-        return 0;
+
+      std::string device_id;
+      std::wstring display_name;
+      HMONITOR monitor {nullptr};
+      MONITORINFOEXW monitor_info {};
+    };
+
+    struct MonitorEntry {
+      MonitorEntry() {
+        info.cbSize = sizeof(info);
       }
-      return DefWindowProcW(hwnd, msg, wparam, lparam);
+
+      HMONITOR monitor {nullptr};
+      MONITORINFOEXW info {};
+    };
+
+    struct ResourceWorkGuard {
+      ResourceWorkGuard(std::atomic<bool> &active, HANDLE completion_event):
+          active_(active),
+          completion_event_(completion_event) {
+        active_.store(true, std::memory_order_release);
+      }
+
+      ~ResourceWorkGuard() {
+        active_.store(false, std::memory_order_release);
+        if (completion_event_) {
+          SetEvent(completion_event_);
+        }
+      }
+
+      ResourceWorkGuard(const ResourceWorkGuard &) = delete;
+      ResourceWorkGuard &operator=(const ResourceWorkGuard &) = delete;
+
+    private:
+      std::atomic<bool> &active_;
+      HANDLE completion_event_;
+    };
+
+    [[nodiscard]] platf::window_router_policy::routing_token_t active_token() const noexcept {
+      return {
+        active_config_.generation,
+        topology_generation_.load(std::memory_order_acquire),
+      };
     }
 
-    static BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM context) {
-      auto *rects = reinterpret_cast<std::vector<RECT> *>(context);
-      MONITORINFO info {.cbSize = sizeof(MONITORINFO)};
-      if (GetMonitorInfoW(monitor, &info) && (info.dwFlags & MONITORINFOF_PRIMARY) == 0) {
-        rects->push_back(info.rcMonitor);
+    [[nodiscard]] bool published_token_is_current_locked(
+      platf::window_router_policy::routing_token_t token
+    ) const noexcept {
+      return config_.generation == token.config_generation &&
+             topology_generation_.load(std::memory_order_acquire) == token.topology_generation;
+    }
+
+    [[nodiscard]] bool published_token_is_current(
+      platf::window_router_policy::routing_token_t token
+    ) noexcept {
+      std::lock_guard lock(config_mutex_);
+      return published_token_is_current_locked(token);
+    }
+
+    static bool contains_ci(std::string_view value, std::string_view needle) {
+      if (needle.empty()) {
+        return true;
+      }
+      if (value.size() < needle.size()) {
+        return false;
+      }
+      for (std::size_t i = 0; i + needle.size() <= value.size(); ++i) {
+        if (platf::window_router_policy::ascii_iequals(value.substr(i, needle.size()), needle)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    static bool starts_with_ci(std::string_view value, std::string_view prefix) {
+      return value.size() >= prefix.size() &&
+             platf::window_router_policy::ascii_iequals(value.substr(0, prefix.size()), prefix);
+    }
+
+    static bool is_known_virtual_display(const display_device::EnumeratedDevice &device) {
+      if (contains_ci(device.m_monitor_device_path, "SUDOVDA") || contains_ci(device.m_monitor_device_path, "SUDOMAKER")) {
+        return true;
+      }
+      if (!device.m_monitor_device_path.empty()) {
+        const auto first_hash = device.m_monitor_device_path.find('#');
+        if (first_hash != std::string::npos) {
+          const auto second_hash = device.m_monitor_device_path.find('#', first_hash + 1);
+          const auto hardware_id = device.m_monitor_device_path.substr(
+            first_hash + 1,
+            second_hash == std::string::npos ? std::string::npos : second_hash - first_hash - 1
+          );
+          if (starts_with_ci(hardware_id, "SMK") || starts_with_ci(hardware_id, "NBF")) {
+            return true;
+          }
+        }
+      }
+      if (platf::window_router_policy::ascii_iequals(device.m_friendly_name, "SudoMaker Virtual Display Adapter") || platf::window_router_policy::ascii_iequals(device.m_friendly_name, "Luminal Video Graphics Display")) {
+        return true;
+      }
+      return device.m_edid &&
+             (starts_with_ci(device.m_edid->m_manufacturer_id, "SMK") ||
+              starts_with_ci(device.m_edid->m_manufacturer_id, "NBF"));
+    }
+
+    static BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM parameter) {
+      auto &monitors = *reinterpret_cast<std::vector<MonitorEntry> *>(parameter);
+      MonitorEntry entry;
+      entry.monitor = monitor;
+      if (GetMonitorInfoW(monitor, &entry.info)) {
+        monitors.push_back(entry);
       }
       return TRUE;
     }
 
-    static bool same_rects(const std::vector<RECT> &a, const std::vector<RECT> &b) {
-      if (a.size() != b.size()) return false;
-      for (std::size_t i = 0; i < a.size(); ++i) {
-        if (a[i].left != b[i].left || a[i].top != b[i].top ||
-            a[i].right != b[i].right || a[i].bottom != b[i].bottom) {
+    static std::vector<MonitorEntry> enumerate_monitors() {
+      std::vector<MonitorEntry> monitors;
+      EnumDisplayMonitors(nullptr, nullptr, &collect_monitor, reinterpret_cast<LPARAM>(&monitors));
+      return monitors;
+    }
+
+    static std::optional<Target> resolve_exact_target(std::string_view exact_device_id) {
+      if (exact_device_id.empty()) {
+        return std::nullopt;
+      }
+      try {
+        auto api = std::make_shared<display_device::WinApiLayer>();
+        display_device::WinDisplayDevice display {std::move(api)};
+        // Minimal still carries the exact id, active GDI name, monitor path,
+        // and EDID manufacturer. Avoid querying every supported mode/HDR/DPI
+        // field merely to route a window.
+        const auto devices = display.enumAvailableDevices(display_device::DeviceEnumerationDetail::Minimal);
+        std::vector<platf::window_router_policy::device_identity_t> identities;
+        identities.reserve(devices.size());
+        for (const auto &device : devices) {
+          identities.push_back({
+            device.m_device_id,
+            device.m_display_name,
+            device.m_info.has_value() && !device.m_display_name.empty(),
+            is_known_virtual_display(device),
+          });
+        }
+        const auto display_name = platf::window_router_policy::select_exact_active_virtual_display(
+          identities,
+          exact_device_id
+        );
+        if (!display_name) {
+          return std::nullopt;
+        }
+
+        const auto wide_name = std::wstring(display_name->begin(), display_name->end());
+        for (const auto &monitor : enumerate_monitors()) {
+          if (_wcsicmp(monitor.info.szDevice, wide_name.c_str()) == 0) {
+            Target target;
+            target.device_id = std::string(exact_device_id);
+            target.display_name = wide_name;
+            target.monitor = monitor.monitor;
+            target.monitor_info = monitor.info;
+            return target;
+          }
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(debug) << "Exact-device window router: target resolution failed: " << e.what();
+      } catch (...) {
+        BOOST_LOG(debug) << "Exact-device window router: target resolution failed.";
+      }
+      return std::nullopt;
+    }
+
+    static bool same_rects(const std::vector<RECT> &lhs, const std::vector<RECT> &rhs) {
+      if (lhs.size() != rhs.size()) {
+        return false;
+      }
+      for (std::size_t i = 0; i < lhs.size(); ++i) {
+        if (lhs[i].left != rhs[i].left || lhs[i].top != rhs[i].top || lhs[i].right != rhs[i].right || lhs[i].bottom != rhs[i].bottom) {
           return false;
         }
       }
       return true;
     }
 
-    void destroy_windows() {
-      for (HWND hwnd : windows_) {
-        if (hwnd) DestroyWindow(hwnd);
-      }
-      windows_.clear();
-      covered_rects_.clear();
+    static bool shell_surface(HWND hwnd) {
+      wchar_t klass[128] {};
+      GetClassNameW(hwnd, klass, static_cast<int>(std::size(klass)));
+      return _wcsicmp(klass, L"Progman") == 0 ||
+             _wcsicmp(klass, L"WorkerW") == 0 ||
+             _wcsicmp(klass, L"Shell_TrayWnd") == 0 ||
+             _wcsicmp(klass, L"Shell_SecondaryTrayWnd") == 0;
     }
 
-    void refresh_windows(HINSTANCE instance, const wchar_t *klass) {
-      std::vector<RECT> rects;
-      EnumDisplayMonitors(nullptr, nullptr, &collect_monitor, reinterpret_cast<LPARAM>(&rects));
-      if (same_rects(rects, covered_rects_) && windows_.size() == rects.size()) return;
+    static bool dwm_cloaked(HWND hwnd) {
+      using get_attribute_t = HRESULT(WINAPI *)(HWND, DWORD, PVOID, DWORD);
+      static const HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+      static const auto get_attribute = dwm ?
+                                          reinterpret_cast<get_attribute_t>(GetProcAddress(dwm, "DwmGetWindowAttribute")) :
+                                          nullptr;
+      if (!get_attribute) {
+        return false;
+      }
+      constexpr DWORD kDwmwaCloaked = 14;
+      DWORD cloaked = 0;
+      return SUCCEEDED(get_attribute(hwnd, kDwmwaCloaked, &cloaked, sizeof(cloaked))) && cloaked != 0;
+    }
 
-      destroy_windows();
+    bool excluded_window(HWND hwnd) const {
+      if (!IsWindow(hwnd) || dwm_cloaked(hwnd)) {
+        return true;
+      }
+      const auto exstyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      return !platf::window_router_policy::should_route_window({
+        .visible = IsWindowVisible(hwnd) != FALSE,
+        .iconic = IsIconic(hwnd) != FALSE,
+        .root = GetAncestor(hwnd, GA_ROOT) == hwnd,
+        .tool_window = (exstyle & WS_EX_TOOLWINDOW) != 0,
+        .no_activate = (exstyle & WS_EX_NOACTIVATE) != 0,
+        .helper_process = pid == 0 || pid == GetCurrentProcessId(),
+        .shell_surface = shell_surface(hwnd),
+      });
+    }
+
+    void destroy_cover_windows() {
+      for (const HWND hwnd : cover_windows_) {
+        if (hwnd) {
+          DestroyWindow(hwnd);
+        }
+      }
+      cover_windows_.clear();
+      covered_rects_.clear();
+      covers_present_.store(false, std::memory_order_release);
+    }
+
+    void refresh_cover_windows() {
+      if (!active_config_.cover_other_displays || !target_) {
+        destroy_cover_windows();
+        return;
+      }
+      std::vector<RECT> rects;
+      bool exact_target_present = false;
+      for (const auto &monitor : enumerate_monitors()) {
+        if (_wcsicmp(monitor.info.szDevice, target_->display_name.c_str()) == 0) {
+          exact_target_present = true;
+          continue;
+        }
+        rects.push_back(monitor.info.rcMonitor);
+      }
+      if (!exact_target_present) {
+        destroy_cover_windows();
+        return;
+      }
+      if (same_rects(rects, covered_rects_) && cover_windows_.size() == rects.size()) {
+        return;
+      }
+
+      destroy_cover_windows();
       covered_rects_ = rects;
+      const auto instance = GetModuleHandleW(nullptr);
       for (const auto &rect : rects) {
-        HWND hwnd = CreateWindowExW(
+        const HWND hwnd = CreateWindowExW(
           WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-          klass,
+          window_class_name_,
           L"LuminalShine OLED-safe recovery anchor",
           WS_POPUP,
           rect.left,
@@ -2422,136 +2737,456 @@ namespace {
           nullptr,
           nullptr,
           instance,
-          nullptr
+          this
         );
-        if (!hwnd) continue;
-        SetWindowPos(hwnd, HWND_TOPMOST, rect.left, rect.top, rect.right - rect.left,
-                     rect.bottom - rect.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        windows_.push_back(hwnd);
+        if (!hwnd) {
+          continue;
+        }
+        cover_windows_.push_back(hwnd);
       }
     }
 
-    struct ContainmentContext {
-      RECT primary {};
-      HMONITOR primary_monitor {nullptr};
-      DWORD helper_pid {0};
-    };
-
-    static bool excluded_window(HWND hwnd, DWORD helper_pid) {
-      if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) return true;
-      const auto exstyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
-      if (exstyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) return true;
-      DWORD pid = 0;
-      GetWindowThreadProcessId(hwnd, &pid);
-      if (pid == 0 || pid == helper_pid) return true;
-      wchar_t klass[128] {};
-      GetClassNameW(hwnd, klass, static_cast<int>(std::size(klass)));
-      return _wcsicmp(klass, L"Progman") == 0 ||
-             _wcsicmp(klass, L"WorkerW") == 0 ||
-             _wcsicmp(klass, L"Shell_TrayWnd") == 0 ||
-             _wcsicmp(klass, L"Shell_SecondaryTrayWnd") == 0;
+    void show_cover_windows() {
+      for (const HWND hwnd : cover_windows_) {
+        if (hwnd) {
+          SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_ASYNCWINDOWPOS | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+          );
+        }
+      }
+      covers_present_.store(!cover_windows_.empty(), std::memory_order_release);
     }
 
-    static BOOL CALLBACK contain_window(HWND hwnd, LPARAM parameter) {
-      auto &ctx = *reinterpret_cast<ContainmentContext *>(parameter);
-      if (excluded_window(hwnd, ctx.helper_pid)) return TRUE;
-      const HMONITOR current = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-      if (!current || current == ctx.primary_monitor) return TRUE;
-
-      RECT current_monitor {};
-      MONITORINFO current_info {.cbSize = sizeof(MONITORINFO)};
-      if (!GetMonitorInfoW(current, &current_info)) return TRUE;
-      current_monitor = current_info.rcMonitor;
-
-      WINDOWPLACEMENT placement {.length = sizeof(WINDOWPLACEMENT)};
-      RECT window_rect {};
-      if (!GetWindowPlacement(hwnd, &placement) || !GetWindowRect(hwnd, &window_rect)) return TRUE;
-
-      const int primary_width = ctx.primary.right - ctx.primary.left;
-      const int primary_height = ctx.primary.bottom - ctx.primary.top;
-      const int width = std::max(1L, window_rect.right - window_rect.left);
-      const int height = std::max(1L, window_rect.bottom - window_rect.top);
-      const bool fullscreen = width >= (current_monitor.right - current_monitor.left - 2) &&
-                              height >= (current_monitor.bottom - current_monitor.top - 2);
-      const int target_width = fullscreen ? primary_width : std::min(width, primary_width);
-      const int target_height = fullscreen ? primary_height : std::min(height, primary_height);
-      const int relative_x = window_rect.left - current_monitor.left;
-      const int relative_y = window_rect.top - current_monitor.top;
-      const int target_x = fullscreen ? ctx.primary.left :
-        std::clamp(ctx.primary.left + relative_x, ctx.primary.left, ctx.primary.right - target_width);
-      const int target_y = fullscreen ? ctx.primary.top :
-        std::clamp(ctx.primary.top + relative_y, ctx.primary.top, ctx.primary.bottom - target_height);
-
-      if (placement.showCmd == SW_SHOWMAXIMIZED) {
-        placement.rcNormalPosition = {target_x, target_y, target_x + target_width, target_y + target_height};
-        SetWindowPlacement(hwnd, &placement);
-      } else {
-        SetWindowPos(hwnd, nullptr, target_x, target_y, target_width, target_height,
-                     SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+    void uninstall_hooks() {
+      routing_gate_.store(false, std::memory_order_release);
+      hook_owner_.store(nullptr, std::memory_order_release);
+      for (auto &hook : hooks_) {
+        if (hook) {
+          UnhookWinEvent(hook);
+        }
+        hook = nullptr;
       }
-      DWORD pid = 0;
-      GetWindowThreadProcessId(hwnd, &pid);
-      BOOST_LOG(info) << "Virtual-display containment: moved top-level window pid=" << pid
-                      << " from a physical recovery anchor to the primary LuminalVGD desktop.";
+      pending_windows_.clear();
+    }
+
+    static void CALLBACK win_event_callback(
+      HWINEVENTHOOK,
+      DWORD event,
+      HWND hwnd,
+      LONG object_id,
+      LONG child_id,
+      DWORD,
+      DWORD
+    ) {
+      auto *owner = hook_owner_.load(std::memory_order_acquire);
+      if (!owner || !hwnd) {
+        return;
+      }
+      if (event != EVENT_SYSTEM_FOREGROUND && (object_id != OBJID_WINDOW || child_id != CHILDID_SELF)) {
+        return;
+      }
+      if (event != EVENT_SYSTEM_FOREGROUND && event != EVENT_OBJECT_CREATE && event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_LOCATIONCHANGE) {
+        return;
+      }
+      owner->queue_window(hwnd);
+    }
+
+    bool install_hooks() {
+      if (hooks_[0] || !control_window_.load(std::memory_order_acquire)) {
+        return hooks_[0] != nullptr;
+      }
+      constexpr DWORD flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+      hooks_[0] = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, nullptr, &win_event_callback, 0, 0, flags);
+      hooks_[1] = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, &win_event_callback, 0, 0, flags);
+      hooks_[2] = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, &win_event_callback, 0, 0, flags);
+      if (!hooks_[0] || !hooks_[1] || !hooks_[2]) {
+        BOOST_LOG(warning) << "Exact-device window router: failed to install one or more WinEvent hooks; routing suspended.";
+        uninstall_hooks();
+        return false;
+      }
+      hook_owner_.store(this, std::memory_order_release);
+      return true;
+    }
+
+    void queue_window(HWND hwnd) {
+      if (!routing_gate_.load(std::memory_order_acquire) || !active_config_.routing_enabled || !target_) {
+        return;
+      }
+      if (pending_windows_.enqueue(reinterpret_cast<std::uintptr_t>(hwnd), active_token())) {
+        PostMessageW(control_window_.load(std::memory_order_acquire), kRouteWindowMessage, reinterpret_cast<WPARAM>(hwnd), 0);
+      }
+    }
+
+    static BOOL CALLBACK queue_initial_window(HWND hwnd, LPARAM parameter) {
+      auto *self = reinterpret_cast<ExactDeviceDesktopGuard *>(parameter);
+      // The initial sweep cannot drain its posted messages until EnumWindows
+      // returns. Filter here so hidden/shell/tool windows cannot exhaust the
+      // bounded queue ahead of real applications.
+      if (!self->excluded_window(hwnd)) {
+        self->queue_window(hwnd);
+      }
       return TRUE;
     }
 
-    void contain_applications_on_primary() {
-      POINT origin {0, 0};
-      const HMONITOR primary = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
-      MONITORINFO info {.cbSize = sizeof(MONITORINFO)};
-      if (!primary || !GetMonitorInfoW(primary, &info) || (info.dwFlags & MONITORINFOF_PRIMARY) == 0) return;
-      ContainmentContext context {info.rcWork, primary, GetCurrentProcessId()};
-      EnumWindows(&contain_window, reinterpret_cast<LPARAM>(&context));
+    void route_window(HWND hwnd) {
+      const auto token = active_token();
+      if (!pending_windows_.take_if_current(reinterpret_cast<std::uintptr_t>(hwnd), token) || !routing_gate_.load(std::memory_order_acquire) || !active_config_.routing_enabled || !target_ || excluded_window(hwnd)) {
+        return;
+      }
+
+      MONITORINFOEXW target_info {};
+      target_info.cbSize = sizeof(target_info);
+      if (!GetMonitorInfoW(target_->monitor, &target_info) || _wcsicmp(target_info.szDevice, target_->display_name.c_str()) != 0) {
+        schedule_target_refresh();
+        return;
+      }
+
+      const HMONITOR current = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      if (!current || current == target_->monitor) {
+        return;
+      }
+      MONITORINFOEXW current_info {};
+      current_info.cbSize = sizeof(current_info);
+      if (!GetMonitorInfoW(current, &current_info)) {
+        return;
+      }
+
+      WINDOWPLACEMENT placement {.length = sizeof(WINDOWPLACEMENT)};
+      RECT window_rect {};
+      if (!GetWindowPlacement(hwnd, &placement) || !GetWindowRect(hwnd, &window_rect)) {
+        return;
+      }
+      const long width = std::max(1L, window_rect.right - window_rect.left);
+      const long height = std::max(1L, window_rect.bottom - window_rect.top);
+      const bool fullscreen = placement.showCmd != SW_SHOWMAXIMIZED &&
+                              placement.showCmd != SW_SHOWMINIMIZED &&
+                              width >= current_info.rcMonitor.right - current_info.rcMonitor.left - 2 &&
+                              height >= current_info.rcMonitor.bottom - current_info.rcMonitor.top - 2;
+      RECT geometry = window_rect;
+      if ((placement.showCmd == SW_SHOWMAXIMIZED || placement.showCmd == SW_SHOWMINIMIZED) && !fullscreen) {
+        geometry = placement.rcNormalPosition;
+      }
+      const RECT &destination = fullscreen ? target_info.rcMonitor : target_info.rcWork;
+      const auto routed = platf::window_router_policy::route_rect(
+        {current_info.rcMonitor.left, current_info.rcMonitor.top, current_info.rcMonitor.right, current_info.rcMonitor.bottom},
+        {destination.left, destination.top, destination.right, destination.bottom},
+        {geometry.left, geometry.top, geometry.right, geometry.bottom},
+        fullscreen
+      );
+
+      // Revalidate at the last possible point. suspend_routing() crosses this
+      // same barrier before returning, so a retired generation cannot issue a
+      // move into a topology that is already changing.
+      std::scoped_lock action_lock(route_action_mutex_);
+      if (!routing_gate_.load(std::memory_order_acquire)) {
+        return;
+      }
+      {
+        std::lock_guard config_lock(config_mutex_);
+        if (!published_token_is_current_locked(token)) {
+          return;
+        }
+      }
+
+      bool moved = false;
+      if (placement.showCmd == SW_SHOWMAXIMIZED || placement.showCmd == SW_SHOWMINIMIZED) {
+        placement.rcNormalPosition = {routed.left, routed.top, routed.right, routed.bottom};
+        placement.flags |= WPF_ASYNCWINDOWPLACEMENT;
+        moved = SetWindowPlacement(hwnd, &placement) != FALSE;
+      } else {
+        moved = SetWindowPos(
+                  hwnd,
+                  nullptr,
+                  routed.left,
+                  routed.top,
+                  routed.right - routed.left,
+                  routed.bottom - routed.top,
+                  SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER
+                ) != FALSE;
+      }
+      if (moved) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (logged_processes_.insert(pid).second) {
+          BOOST_LOG(info) << "Exact-device window router: moved application pid=" << pid
+                          << " to VGD device_id='" << target_->device_id << "'.";
+        }
+      }
+    }
+
+    void schedule_target_refresh() {
+      topology_generation_.fetch_add(1, std::memory_order_acq_rel);
+      uninstall_hooks();
+      target_.reset();
+      destroy_cover_windows();
+      resolve_attempts_ = 0;
+      if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+        SetTimer(hwnd, kResolveTimer, 500, nullptr);
+      }
+    }
+
+    void resolve_and_arm() {
+      if (active_config_.exact_device_id.empty()) {
+        target_.reset();
+        destroy_cover_windows();
+        uninstall_hooks();
+        return;
+      }
+      ResourceWorkGuard resource_work {resource_work_active_, teardown_event_};
+      const auto token = active_token();
+      if (!published_token_is_current(token)) {
+        return;
+      }
+      auto resolved_target = resolve_exact_target(active_config_.exact_device_id);
+      if (!published_token_is_current(token)) {
+        return;
+      }
+      if (!resolved_target) {
+        destroy_cover_windows();
+        uninstall_hooks();
+        if (++resolve_attempts_ >= kMaxResolveAttempts) {
+          if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+            KillTimer(hwnd, kResolveTimer);
+          }
+          BOOST_LOG(warning) << "Exact-device window router: exact active virtual target '"
+                             << active_config_.exact_device_id
+                             << "' was not resolved; routing and OLED covers remain disabled (no fallback).";
+        } else if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+          SetTimer(hwnd, kResolveTimer, 500, nullptr);
+        }
+        return;
+      }
+
+      if (!published_token_is_current(token)) {
+        return;
+      }
+      target_ = std::move(resolved_target);
+      if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+        KillTimer(hwnd, kResolveTimer);
+      }
+      resolve_attempts_ = 0;
+      // These USER32/display calls deliberately run without config_mutex_. A
+      // command can always publish an inert successor immediately; the final
+      // token check below either publishes these provisional resources or
+      // destroys them.
+      refresh_cover_windows();
+      const bool hooks_installed = active_config_.routing_enabled && install_hooks();
+      bool publish = false;
+      {
+        std::scoped_lock action_lock(route_action_mutex_);
+        std::lock_guard config_lock(config_mutex_);
+        if (!published_token_is_current_locked(token)) {
+          routing_gate_.store(false, std::memory_order_release);
+        } else {
+          routing_gate_.store(hooks_installed, std::memory_order_release);
+          publish = true;
+        }
+      }
+      if (!publish) {
+        uninstall_hooks();
+        destroy_cover_windows();
+        target_.reset();
+        return;
+      }
+
+      if (active_config_.cover_other_displays) {
+        show_cover_windows();
+      }
+      if (!published_token_is_current(token)) {
+        uninstall_hooks();
+        destroy_cover_windows();
+        target_.reset();
+        return;
+      }
+      if (hooks_installed && routing_gate_.load(std::memory_order_acquire)) {
+        // Hook first, then sweep: a window created between the two is queued by
+        // the hook and coalesced with the enumeration result.
+        EnumWindows(&queue_initial_window, reinterpret_cast<LPARAM>(this));
+      }
+      BOOST_LOG(info) << "Exact-device window router: resolved device_id='" << target_->device_id
+                      << "' display='" << std::string(target_->display_name.begin(), target_->display_name.end())
+                      << "' routing=" << (hooks_installed ? "on" : "off")
+                      << " covers=" << (active_config_.cover_other_displays ? "on" : "off") << ".";
+    }
+
+    void apply_published_configuration() {
+      Configuration next;
+      {
+        std::lock_guard lock(config_mutex_);
+        next = config_;
+      }
+      if (next.generation == active_config_.generation) {
+        return;
+      }
+      active_config_ = std::move(next);
+      logged_processes_.clear();
+      pending_windows_.clear();
+      uninstall_hooks();
+      target_.reset();
+      destroy_cover_windows();
+      resolve_attempts_ = 0;
+      resolve_and_arm();
+      if (!active_config_.routing_enabled && teardown_event_) {
+        SetEvent(teardown_event_);
+      }
+    }
+
+    void on_topology_change() {
+      if (active_config_.exact_device_id.empty()) {
+        return;
+      }
+      routing_gate_.store(false, std::memory_order_release);
+      schedule_target_refresh();
+    }
+
+    static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+      if (msg == WM_NCCREATE) {
+        const auto *create = reinterpret_cast<const CREATESTRUCTW *>(lparam);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+      }
+      auto *self = reinterpret_cast<ExactDeviceDesktopGuard *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+      if (msg == WM_ERASEBKGND) {
+        RECT rc {};
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wparam), &rc, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        return 1;
+      }
+      if (msg == WM_PAINT) {
+        PAINTSTRUCT ps {};
+        const HDC dc = BeginPaint(hwnd, &ps);
+        FillRect(dc, &ps.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        EndPaint(hwnd, &ps);
+        return 0;
+      }
+      if (msg == WM_NCHITTEST) {
+        return HTTRANSPARENT;
+      }
+      if (!self) {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+      }
+      if (msg == kRouteWindowMessage) {
+        self->route_window(reinterpret_cast<HWND>(wparam));
+        return 0;
+      }
+      if (msg == WM_TIMER && wparam == kResolveTimer) {
+        const auto token = self->active_token();
+        if (self->published_token_is_current(token)) {
+          self->resolve_and_arm();
+        } else {
+          KillTimer(hwnd, kResolveTimer);
+        }
+        return 0;
+      }
+      if ((msg == WM_DISPLAYCHANGE || msg == WM_DEVICECHANGE) && hwnd == self->control_window_.load(std::memory_order_acquire)) {
+        self->on_topology_change();
+      }
+      return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
     void run(std::stop_token st) {
+      SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
       const auto instance = GetModuleHandleW(nullptr);
-      const wchar_t *klass = L"LuminalShineDarkRecoveryAnchor";
       WNDCLASSEXW wc {.cbSize = sizeof(WNDCLASSEXW)};
       wc.lpfnWndProc = &wnd_proc;
       wc.hInstance = instance;
       wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-      wc.lpszClassName = klass;
-      RegisterClassExW(&wc);
-
-      std::uint64_t observed_generation = 0;
-      while (!st.stop_requested()) {
-        MSG msg {};
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-          TranslateMessage(&msg);
-          DispatchMessageW(&msg);
-        }
-
-        const auto generation = generation_.load(std::memory_order_acquire);
-        if (!enabled_.load(std::memory_order_acquire)) {
-          if (!windows_.empty()) destroy_windows();
-        } else if (generation != observed_generation || windows_.empty()) {
-          refresh_windows(instance, klass);
-        } else {
-          // Re-enumerate periodically so a DWM reset or hotplug cannot expose
-          // a static desktop on the OLED anchor.
-          refresh_windows(instance, klass);
-        }
-        if (enabled_.load(std::memory_order_acquire)) {
-          // Primary is LuminalVGD in anchored-exclusive mode. Re-run this
-          // inexpensive sweep because launchers commonly restore a saved
-          // physical-monitor position and move the game again after creation.
-          contain_applications_on_primary();
-        }
-        observed_generation = generation;
-        std::this_thread::sleep_for(500ms);
+      wc.lpszClassName = window_class_name_;
+      if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        return;
       }
 
-      destroy_windows();
-      UnregisterClassW(klass, instance);
+      const HWND control = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        window_class_name_,
+        L"LuminalShine exact-device window router",
+        WS_POPUP,
+        0,
+        0,
+        0,
+        0,
+        nullptr,
+        nullptr,
+        instance,
+        this
+      );
+      if (!control) {
+        UnregisterClassW(window_class_name_, instance);
+        return;
+      }
+      control_window_.store(control, std::memory_order_release);
+
+      DEV_BROADCAST_DEVICEINTERFACE_W filter {};
+      filter.dbcc_size = sizeof(filter);
+      filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+      filter.dbcc_classguid = kMonitorInterfaceGuid;
+      const HDEVNOTIFY device_notification = RegisterDeviceNotificationW(control, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+
+      while (!st.stop_requested()) {
+        const DWORD wait = MsgWaitForMultipleObjects(1, &wake_event_, FALSE, INFINITE, QS_ALLINPUT);
+        if (wait == WAIT_FAILED) {
+          BOOST_LOG(error) << "Exact-device window router: worker wait failed (error=" << GetLastError() << ").";
+          break;
+        }
+        if (wait == WAIT_OBJECT_0) {
+          ResetEvent(wake_event_);
+          apply_published_configuration();
+        }
+        if (wait == WAIT_OBJECT_0 + 1) {
+          MSG msg {};
+          while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+              worker_.request_stop();
+              break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+          }
+        }
+      }
+
+      uninstall_hooks();
+      destroy_cover_windows();
+      if (teardown_event_) {
+        SetEvent(teardown_event_);
+      }
+      if (device_notification) {
+        UnregisterDeviceNotification(device_notification);
+      }
+      control_window_.store(nullptr, std::memory_order_release);
+      DestroyWindow(control);
+      UnregisterClassW(window_class_name_, instance);
     }
 
-    std::jthread worker_;
-    std::atomic<bool> enabled_ {false};
-    std::atomic<std::uint64_t> generation_ {0};
-    std::vector<HWND> windows_;
+    inline static std::atomic<ExactDeviceDesktopGuard *> hook_owner_ {nullptr};
+    inline static constexpr const wchar_t *window_class_name_ = L"LuminalShineExactDeviceDesktopGuard";
+
+    HANDLE wake_event_ {nullptr};
+    HANDLE teardown_event_ {nullptr};
+    std::mutex config_mutex_;
+    std::mutex route_action_mutex_;
+    Configuration config_;
+    Configuration active_config_ {.generation = 0};
+    std::atomic<HWND> control_window_ {nullptr};
+    std::atomic<bool> routing_gate_ {false};
+    std::atomic<bool> covers_present_ {false};
+    std::atomic<bool> resource_work_active_ {false};
+    std::atomic<std::uint64_t> topology_generation_ {1};
+    std::array<HWINEVENTHOOK, 3> hooks_ {};
+    std::optional<Target> target_;
+    unsigned int resolve_attempts_ {0};
+    platf::window_router_policy::pending_window_set_t pending_windows_;
+    std::unordered_set<DWORD> logged_processes_;
+    std::vector<HWND> cover_windows_;
     std::vector<RECT> covered_rects_;
+    // Starts last: run() may access every member above as soon as the thread
+    // constructor returns control to the new worker.
+    std::jthread worker_;
   };
 
   struct ServiceState {
@@ -2560,8 +3195,15 @@ namespace {
       Event
     };
 
+    struct DesktopGuardResume {
+      bool cover_other_displays {false};
+      std::optional<std::string> exact_device_id;
+      std::uint64_t apply_generation {0};
+      std::uint64_t connection_epoch {0};
+    };
+
     DisplayController controller;
-    DarkRecoveryAnchor dark_recovery_anchor;
+    ExactDeviceDesktopGuard desktop_guard;
     DisplayEventPump event_pump;
     std::atomic<bool> event_pump_running {false};
     std::mutex restore_event_mutex;
@@ -3728,6 +4370,12 @@ namespace {
         return;
       }
 
+      // A restore can make a physical display primary before it completes.
+      // Retire the VGD routing generation immediately so queued WinEvents can
+      // never follow that primary transition. OLED covers have a separate
+      // lifecycle and remain until restoration is confirmed.
+      desktop_guard.suspend_routing();
+
       bool pump_expected = false;
       if (event_pump_running.compare_exchange_strong(pump_expected, true, std::memory_order_acq_rel)) {
         event_pump.start([this](const char *event_reason) {
@@ -3778,8 +4426,8 @@ namespace {
     void disarm_restore_requests(const char *reason = nullptr) {
       const bool had_pending = restore_requested.load(std::memory_order_acquire);
       stop_restore_polling();
-      cancel_delayed_reapply();
       cancel_post_apply_tasks();
+      cancel_delayed_reapply();
       delete_restore_scheduled_task();
       direct_revert_bypass_grace.store(false, std::memory_order_release);
       exit_after_revert.store(false, std::memory_order_release);
@@ -3864,6 +4512,7 @@ namespace {
         const bool has_golden = std::filesystem::exists(self->golden_path, ec2);
         if (!has_session && !has_previous && !has_golden) {
           BOOST_LOG(info) << "Restore polling: no session/previous or golden snapshot present; exiting helper.";
+          self->desktop_guard.disable_all();
           if (self->running_flag) {
             self->running_flag->store(false, std::memory_order_release);
           }
@@ -3910,6 +4559,7 @@ namespace {
         self->wedge_escalation.reset();
         self->retry_revert_on_topology.store(false, std::memory_order_release);
         self->exit_after_revert.store(false, std::memory_order_release);
+        self->desktop_guard.disable_all();
         run_restore_cleanup("initial attempt");
 
         if (cancelled()) {
@@ -4066,6 +4716,7 @@ namespace {
           self->wedge_escalation.reset();
           self->retry_revert_on_topology.store(false, std::memory_order_release);
           self->exit_after_revert.store(false, std::memory_order_release);
+          self->desktop_guard.disable_all();
           run_restore_cleanup("polling attempt");
 
           if (cancelled()) {
@@ -4145,7 +4796,10 @@ namespace {
     // Schedule delayed re-apply attempts to work around Windows sometimes forcing native
     // resolution immediately after activating a display. The provided delays represent
     // the windows (relative to now) when verification/re-apply should be attempted.
-    void schedule_delayed_reapply(std::vector<std::chrono::milliseconds> delays = {250ms, 750ms}) {
+    void schedule_delayed_reapply(
+      std::vector<std::chrono::milliseconds> delays = {250ms, 750ms},
+      std::optional<DesktopGuardResume> desktop_guard_resume = std::nullopt
+    ) {
       if (delayed_reapply_thread.joinable()) {
         delayed_reapply_thread.request_stop();
         delayed_reapply_thread.join();
@@ -4153,7 +4807,20 @@ namespace {
       if (!last_cfg || delays.empty()) {
         return;
       }
-      delayed_reapply_thread = std::jthread(&ServiceState::delayed_reapply_proc, this, std::move(delays));
+      const auto expected_generation = desktop_guard_resume ?
+                                         desktop_guard_resume->apply_generation :
+                                         apply_generation.load(std::memory_order_acquire);
+      const auto expected_connection_epoch = desktop_guard_resume ?
+                                               desktop_guard_resume->connection_epoch :
+                                               current_connection_epoch();
+      delayed_reapply_thread = std::jthread(
+        &ServiceState::delayed_reapply_proc,
+        this,
+        std::move(delays),
+        std::move(desktop_guard_resume),
+        expected_generation,
+        expected_connection_epoch
+      );
     }
 
     void cancel_delayed_reapply() {
@@ -4230,22 +4897,49 @@ namespace {
       return !(st.stop_requested() || cancelled());
     }
 
-    static void delayed_reapply_proc(std::stop_token st, ServiceState *self, std::vector<std::chrono::milliseconds> delays) {
+    static void delayed_reapply_proc(
+      std::stop_token st,
+      ServiceState *self,
+      std::vector<std::chrono::milliseconds> delays,
+      std::optional<DesktopGuardResume> desktop_guard_resume,
+      std::uint64_t expected_generation,
+      std::uint64_t expected_connection_epoch
+    ) {
+      const auto may_run = [&]() {
+        return platf::window_router_policy::may_run_delayed_reapply(
+          expected_generation,
+          self->apply_generation.load(std::memory_order_acquire),
+          expected_connection_epoch,
+          self->current_connection_epoch(),
+          self->restore_requested.load(std::memory_order_acquire),
+          st.stop_requested()
+        );
+      };
       for (auto delay : delays) {
         if (!wait_with_stop(st, delay)) {
           return;
         }
-        if (self->restore_requested.load(std::memory_order_acquire)) {
+        if (!may_run()) {
           return;
         }
         if (self->verify_last_configuration_sticky(kVerificationSettleDelay, st)) {
           continue;
         }
-        if (self->restore_requested.load(std::memory_order_acquire)) {
+        if (!may_run()) {
           return;
         }
-        BOOST_LOG(info) << "Delayed re-apply attempt after activation 213Q902";
+        BOOST_LOG(info) << "Delayed re-apply attempt after activation";
+        self->desktop_guard.suspend_routing();
+        if (!may_run()) {
+          return;
+        }
         self->best_effort_apply_last_cfg();
+        if (desktop_guard_resume && may_run()) {
+          self->desktop_guard.configure(
+            desktop_guard_resume->cover_other_displays,
+            desktop_guard_resume->exact_device_id
+          );
+        }
       }
     }
 
@@ -4296,7 +4990,9 @@ namespace {
       std::optional<std::string> requested_virtual_layout,
       std::vector<std::pair<std::string, display_device::Point>> monitor_position_overrides,
       std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> refresh_rate_overrides,
-      std::vector<std::chrono::milliseconds> reapply_delays
+      std::vector<std::chrono::milliseconds> reapply_delays,
+      bool cover_other_displays,
+      std::optional<std::string> exact_router_target
     ) {
       cancel_post_apply_tasks();
       post_apply_thread = std::jthread(
@@ -4308,7 +5004,9 @@ namespace {
          requested_virtual_layout = std::move(requested_virtual_layout),
          monitor_position_overrides = std::move(monitor_position_overrides),
          refresh_rate_overrides = std::move(refresh_rate_overrides),
-         reapply_delays = std::move(reapply_delays)](std::stop_token st) mutable {
+         reapply_delays = std::move(reapply_delays),
+         cover_other_displays,
+         exact_router_target = std::move(exact_router_target)](std::stop_token st) mutable {
           const auto apply_epoch = current_connection_epoch();
           auto cancelled = [&]() {
             return st.stop_requested() || !is_connection_epoch_current(apply_epoch) ||
@@ -4333,15 +5031,6 @@ namespace {
             return;
           }
           retry_apply_on_topology.store(false, std::memory_order_release);
-          if (!reapply_delays.empty()) {
-            if (cancelled()) {
-              return;
-            }
-            schedule_delayed_reapply(std::move(reapply_delays));
-          }
-          if (cancelled()) {
-            return;
-          }
 
           // Reposition physical monitors BEFORE the shell refresh and HDR
           // blank passes: repositioning is a desktop-geometry modeset, and
@@ -4435,7 +5124,12 @@ namespace {
           if (cancelled()) {
             return;
           }
-          schedule_hdr_blank_if_needed(wa_hdr_toggle);
+          // HDR blanking can itself alter display state. Keep it serialized on
+          // this already-asynchronous post-apply worker and finish it before
+          // publishing the router target.
+          if (wa_hdr_toggle) {
+            controller.blank_hdr_states(1000ms);
+          }
           if (cancelled()) {
             return;
           }
@@ -4469,6 +5163,27 @@ namespace {
               rate_result = rate_result && ok;
             }
             BOOST_LOG(info) << "Display helper: refresh rate overrides applied result=" << (rate_result ? "true" : "false");
+          }
+
+          if (cancelled()) {
+            return;
+          }
+
+          desktop_guard.configure(cover_other_displays, exact_router_target);
+          BOOST_LOG(info) << "Display helper: exact-device desktop guard "
+                          << (exact_router_target ? "published" : "disabled")
+                          << " after topology-writing post-apply work.";
+
+          if (!reapply_delays.empty()) {
+            schedule_delayed_reapply(
+              std::move(reapply_delays),
+              DesktopGuardResume {
+                .cover_other_displays = cover_other_displays,
+                .exact_device_id = std::move(exact_router_target),
+                .apply_generation = expected_apply_generation,
+                .connection_epoch = apply_epoch,
+              }
+            );
           }
         }
       );
@@ -5197,16 +5912,25 @@ namespace {
 
   bool handle_apply(ServiceState &state, std::span<const uint8_t> payload, std::string &error_msg) {
     // Cancel any ongoing restore activity since a new APPLY supersedes it
-    state.stop_restore_polling();
-    state.cancel_delayed_reapply();
-    state.cancel_post_apply_tasks();
-    state.exit_after_revert.store(false, std::memory_order_release);
+    // and retire queued events from the previous exact target before the
+    // topology starts changing. Cover teardown is bounded; producer joins are
+    // completed before the final router barrier below.
     const uint64_t apply_generation = state.apply_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+    state.desktop_guard.suspend_routing();
+    state.stop_restore_polling();
+    state.cancel_post_apply_tasks();
+    state.cancel_delayed_reapply();
+    // A retiring producer may already have passed its cancellation check.
+    // Cross the barrier again after every producer is joined so it cannot
+    // republish an old exact target into this APPLY.
+    state.desktop_guard.suspend_routing();
+    state.exit_after_revert.store(false, std::memory_order_release);
 
     std::string json(reinterpret_cast<const char *>(payload.data()), payload.size());
     bool wa_hdr_toggle = false;
     bool transitional_apply = false;
     bool dark_recovery_anchor = false;
+    std::optional<std::string> exact_virtual_device_id;
     std::optional<std::string> requested_virtual_layout;
     std::vector<std::pair<std::string, display_device::Point>> monitor_position_overrides;
     std::vector<std::pair<std::string, std::pair<unsigned int, unsigned int>>> refresh_rate_overrides;
@@ -5227,6 +5951,10 @@ namespace {
         if (j.contains("sunshine_dark_recovery_anchor") && j["sunshine_dark_recovery_anchor"].is_boolean()) {
           dark_recovery_anchor = j["sunshine_dark_recovery_anchor"].get<bool>();
           j.erase("sunshine_dark_recovery_anchor");
+        }
+        if (j.contains("sunshine_exact_virtual_device_id") && j["sunshine_exact_virtual_device_id"].is_string()) {
+          exact_virtual_device_id = j["sunshine_exact_virtual_device_id"].get<std::string>();
+          j.erase("sunshine_exact_virtual_device_id");
         }
         if (j.contains("sunshine_virtual_layout") && j["sunshine_virtual_layout"].is_string()) {
           requested_virtual_layout = j["sunshine_virtual_layout"].get<std::string>();
@@ -5283,10 +6011,14 @@ namespace {
         if (j.contains("sunshine_device_refresh_rate_overrides") && j["sunshine_device_refresh_rate_overrides"].is_object()) {
           for (auto it = j["sunshine_device_refresh_rate_overrides"].begin(); it != j["sunshine_device_refresh_rate_overrides"].end(); ++it) {
             const auto &node = it.value();
-            if (!node.is_object()) continue;
+            if (!node.is_object()) {
+              continue;
+            }
             auto num_it = node.find("num");
             auto den_it = node.find("den");
-            if (num_it == node.end() || den_it == node.end() || !num_it->is_number_unsigned() || !den_it->is_number_unsigned()) continue;
+            if (num_it == node.end() || den_it == node.end() || !num_it->is_number_unsigned() || !den_it->is_number_unsigned()) {
+              continue;
+            }
             refresh_rate_overrides.emplace_back(
               it.key(),
               std::make_pair(num_it->get<unsigned int>(), den_it->get<unsigned int>())
@@ -5361,9 +6093,7 @@ namespace {
       // dropping it there would run validate_topology_with_os and could skip the
       // apply entirely, which is a refusal, not a fix.
       auto pre_apply_topology = sunshine_topology;
-      if (requested_virtual_layout && *requested_virtual_layout == "exclusive" &&
-          cfg.m_device_prep == display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay &&
-          !cfg.m_device_id.empty()) {
+      if (requested_virtual_layout && *requested_virtual_layout == "exclusive" && cfg.m_device_prep == display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay && !cfg.m_device_id.empty()) {
         BOOST_LOG(info) << "Display helper: exclusive layout targeting " << cfg.m_device_id
                         << "; skipping the redundant pre-apply setTopology so the real pre-change "
                            "topology is recorded as the revert target.";
@@ -5406,9 +6136,20 @@ namespace {
 
       state.retry_apply_on_topology.store(false, std::memory_order_release);
       if (!transitional_apply) {
-        state.dark_recovery_anchor.enable(dark_recovery_anchor);
+        // Anchored-exclusive is the only layout that intentionally retains a
+        // physical recovery display while presenting a single client desktop.
+        // Extended layouts are intentionally multi-monitor and must not have
+        // their windows stolen. Publish the exact per-client VGD identity;
+        // the worker resolves it asynchronously and never falls back.
+        std::optional<std::string> exact_router_target;
+        if (exact_virtual_device_id && platf::window_router_policy::should_arm_exact_router(dark_recovery_anchor, *exact_virtual_device_id, cfg.m_device_id)) {
+          exact_router_target = *exact_virtual_device_id;
+        } else if (dark_recovery_anchor) {
+          BOOST_LOG(warning) << "Exact-device window router: anchored-exclusive request lacks a matching "
+                                "authoritative VGD identity; routing and OLED covers remain disabled.";
+        }
         BOOST_LOG(info) << "Display helper: OLED-safe dark recovery anchor "
-                        << (dark_recovery_anchor ? "enabled" : "disabled") << ".";
+                        << (exact_router_target ? "pending exact-target validation" : "disabled") << ".";
         state.schedule_post_apply_tasks(
           apply_generation,
           false,
@@ -5417,7 +6158,9 @@ namespace {
           requested_virtual_layout,
           std::move(monitor_position_overrides),
           std::move(refresh_rate_overrides),
-          std::move(reapply_delays)
+          std::move(reapply_delays),
+          exact_router_target.has_value(),
+          std::move(exact_router_target)
         );
       } else {
         state.retry_apply_on_topology.store(false, std::memory_order_release);
@@ -5433,6 +6176,8 @@ namespace {
   }
 
   void handle_revert(ServiceState &state, std::atomic<bool> &running, std::span<const uint8_t> payload) {
+    state.apply_generation.fetch_add(1, std::memory_order_acq_rel);
+    state.desktop_guard.suspend_routing();
     const bool prefer_golden_if_current_missing = parse_revert_prefer_golden_payload(payload);
     const bool clean_session_revert = parse_clean_session_revert_payload(payload);
     BOOST_LOG(info) << "REVERT command received - initiating display settings restoration"
@@ -5442,8 +6187,9 @@ namespace {
       BOOST_LOG(info) << "REVERT policy: clean session shutdown; restoring the current pre-session snapshot before golden fallback.";
     }
     state.retry_apply_on_topology.store(false, std::memory_order_release);
-    state.cancel_delayed_reapply();
     state.cancel_post_apply_tasks();
+    state.cancel_delayed_reapply();
+    state.desktop_guard.suspend_routing();
     state.direct_revert_bypass_grace.store(true, std::memory_order_release);
     state.exit_after_revert.store(true, std::memory_order_release);
     state.restore_requested.store(true, std::memory_order_release);
@@ -5468,8 +6214,7 @@ namespace {
       state.retry_apply_on_topology.store(false, std::memory_order_release);
       state.retry_revert_on_topology.store(false, std::memory_order_release);
     } else if (type == MsgType::Disarm) {
-      if (state.restore_requested.load(std::memory_order_acquire) &&
-          state.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
+      if (state.restore_requested.load(std::memory_order_acquire) && state.restore_attempted_unconfirmed.load(std::memory_order_acquire)) {
         BOOST_LOG(info) << "DISARM command ignored because an unconfirmed restore attempt is still pending.";
         return;
       }
@@ -5508,6 +6253,11 @@ namespace {
     } else if (type == MsgType::Revert) {
       handle_revert(state, running, payload);
     } else if (type == MsgType::Stop) {
+      state.apply_generation.fetch_add(1, std::memory_order_acq_rel);
+      state.desktop_guard.suspend_routing();
+      state.cancel_post_apply_tasks();
+      state.cancel_delayed_reapply();
+      state.desktop_guard.suspend_routing();
       running.store(false, std::memory_order_release);
     } else {
       handle_misc(state, async_pipe, type, payload);
@@ -5520,12 +6270,17 @@ namespace {
                       << ", current=" << state.current_connection_epoch() << ")";
       return;
     }
+    state.desktop_guard.suspend_routing();
     auto still_current = [&]() {
       return state.is_connection_epoch_current(connection_epoch);
     };
     // Pipe broken -> Sunshine might have crashed. Begin autonomous restore.
     state.retry_apply_on_topology.store(false, std::memory_order_release);
+    state.cancel_post_apply_tasks();
     state.cancel_delayed_reapply();
+    if (still_current()) {
+      state.desktop_guard.suspend_routing();
+    }
     const bool potentially_modified = state.last_cfg.has_value() ||
                                       state.exit_after_revert.load(std::memory_order_acquire);
     if (!potentially_modified) {
