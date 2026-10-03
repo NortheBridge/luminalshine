@@ -805,6 +805,10 @@ jobs:
         working-directory: build/tests
         run: ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml
 
+      - name: GameStream serverinfo health-check self-test
+        shell: pwsh
+        run: ./scripts/test_luminalshine_serverinfo.ps1 -SelfTest
+
       - name: Config consistency gate
         # Unlike the advisory run above, the config-consistency suite reads
         # only repo files copied into build/tests at configure time — no
