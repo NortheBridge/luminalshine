@@ -11,6 +11,7 @@
  *                 it; the decoder reassembles and walks the block headers).
  */
 #include "pyrowave_encode.h"
+#include "contract.h"
 
 #include <algorithm>
 #include <cmath>
@@ -168,6 +169,7 @@ namespace pyrowave_enc {
       width_ = width;
       height_ = height;
       target_size_ = (size_t) std::max<int64_t>(1, bitrate_bps / (int64_t(fps) * 8));
+      base_bitrate_kbps_ = static_cast<int>(std::clamp<int64_t>(bitrate_bps / 1000, 1, 10'000'000));
 
       auto &device = ctx_->device();
 
@@ -543,7 +545,7 @@ namespace pyrowave_enc {
       PyroWave::Encoder::BitstreamBuffers buffers {
         .meta = {.buffer = meta_buf_, .offset = 0, .size = meta_buf_.info().size},
         .bitstream = {.buffer = data_buf_, .offset = 0, .size = data_buf_.info().size},
-        .target_size = adaptive_target_size(),
+        .target_size = prepare_adaptive_submission(),
       };
       if (!enc_->encode(cmd_, views, buffers)) {
         BOOST_LOG(error) << "pyrowave encode() failed to record";
@@ -596,6 +598,7 @@ namespace pyrowave_enc {
     out.frame_index = frame_index;
     out.idr = true;  // intra-only
     if (!busy_ && !image_initialized_) return out;
+    bool consumed_refresh = false;
     op_watch watch(op_deadline_ms_, op_name_, "encode_frame()");
     try {
       auto &device = ctx_->device();
@@ -608,7 +611,7 @@ namespace pyrowave_enc {
         PyroWave::Encoder::BitstreamBuffers buffers {
           .meta = {.buffer = meta_buf_, .offset = 0, .size = meta_buf_.info().size},
           .bitstream = {.buffer = data_buf_, .offset = 0, .size = data_buf_.info().size},
-          .target_size = target_size_};
+          .target_size = prepare_adaptive_submission()};
         if (!enc_->encode(cmd_, views, buffers)) return out;
         seq_mirror_ = (seq_mirror_ + 1) & 7;
         cmd_.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost,
@@ -694,24 +697,8 @@ namespace pyrowave_enc {
 
       const bool replenish = refresh_interval_ > 0;
       const bool refresh_requested = full_refresh_.exchange(false, std::memory_order_relaxed);
-
-      // Adaptive bitrate (client opt-in): a refresh request after stream start
-      // means unrecoverable loss - back off; otherwise creep back up.
-      if (adaptive_bitrate_) {
-        if (refresh_requested && frame_counter_ > 0) {
-          const double prev = bitrate_scale_;
-          bitrate_scale_ = std::max(0.5, bitrate_scale_ * 0.8);
-          if (bitrate_scale_ != prev) {
-            BOOST_LOG(info) << "pyrowave: adaptive bitrate backing off to "
-                            << int(bitrate_scale_ * 100.0) << "% (loss reported)";
-          }
-        } else if (!refresh_requested && bitrate_scale_ < 1.0) {
-          bitrate_scale_ = std::min(1.0, bitrate_scale_ * 1.0006);  // ~+3.7%/s at 60 fps
-          if (bitrate_scale_ == 1.0) {
-            BOOST_LOG(info) << "pyrowave: adaptive bitrate fully recovered";
-          }
-        }
-      }
+      consumed_refresh = refresh_requested;
+      out.pacing_bitrate_kbps = submitted_pacing_bitrate_kbps_;
 
       // A refresh request always yields a hard full (code-0) frame: the
       // requesting client may have no valid coefficient state at all (it
@@ -740,6 +727,10 @@ namespace pyrowave_enc {
 
       // Decide per block: 0 = skip, 1 = send coded data, 2 = explicit zero block.
       std::vector<uint8_t> actions(size_t(block_count), 0);
+      // A failed/oversized refresh must not advance the encoder's notion of
+      // client-delivered coefficients. Stage hashes and commit only after the
+      // complete frame passes the hard output bound.
+      auto next_block_hashes = block_hashes_;
       size_t send_bytes = 0;
       uint32_t sent_blocks = 0;
       for (int i = 0; i < block_count; ++i) {
@@ -760,7 +751,7 @@ namespace pyrowave_enc {
             action = present ? 1 : 2;
           }
         }
-        block_hashes_[i] = cur;
+        next_block_hashes[i] = cur;
         actions[i] = action;
         if (action == 1) {
           send_bytes += size_t(blocks[i].num_words) * 4;
@@ -872,8 +863,10 @@ namespace pyrowave_enc {
       if (out.data.size() > max_output_bytes) {
         BOOST_LOG(error) << "PyroWave output exceeds negotiated frame bound";
         out.data.clear();
+        if (consumed_refresh) full_refresh_.store(true, std::memory_order_relaxed);
         return out;
       }
+      block_hashes_.swap(next_block_hashes);
       frame_counter_++;
 
       // Adaptive budget: spend replenishment savings on quality. Coarse, rare
@@ -911,16 +904,62 @@ namespace pyrowave_enc {
                         << sent_blocks << "/" << block_count << " blocks, "
                         << (full ? "full" : "keep") << ")";
       }
+      consumed_refresh = false;
       return out;
     } catch (const std::exception &e) {
+      if (consumed_refresh) full_refresh_.store(true, std::memory_order_relaxed);
       BOOST_LOG(error) << "pyrowave encode_frame() failed: " << e.what();
       out.data.clear();
       return out;
     }
   }
 
+  size_t pyrowave_encode_device_t::prepare_adaptive_submission() {
+    if (adaptive_bitrate_) {
+      if (loss_reported_.exchange(false, std::memory_order_acq_rel)) {
+        const double previous = bitrate_scale_;
+        bitrate_scale_ = std::max(0.5, bitrate_scale_ * 0.8);
+        if (bitrate_scale_ != previous) {
+          BOOST_LOG(info) << "pyrowave: adaptive bitrate backing off to "
+                          << int(bitrate_scale_ * 100.0) << "% (packet loss reported)";
+        }
+      } else if (bitrate_scale_ < 1.0) {
+        bitrate_scale_ = std::min(1.0, bitrate_scale_ * 1.0006);  // ~+3.7%/s at 60 fps
+        if (bitrate_scale_ == 1.0) {
+          BOOST_LOG(info) << "pyrowave: adaptive bitrate fully recovered";
+        }
+      }
+    } else {
+      // Do not let reports accumulate before/after a session-level opt-in
+      // change; this encoder instance's negotiation is immutable.
+      loss_reported_.store(false, std::memory_order_relaxed);
+    }
+    const auto fec_scale = std::clamp(
+      fec_video_scale_percent_.load(std::memory_order_acquire), 1, 100);
+    const auto fec_scaled_bitrate_kbps = std::max(
+      1, pyrowave::apply_video_scale_percent(base_bitrate_kbps_, fec_scale));
+    submitted_pacing_bitrate_kbps_ = pyrowave::adaptive_pacing_bitrate_kbps(
+      fec_scaled_bitrate_kbps, bitrate_scale_);
+    return adaptive_target_size();
+  }
+
   size_t pyrowave_encode_device_t::adaptive_target_size() const {
-    return target_size_;
+    // Bound the RDO input by both the negotiated four-FEC-block transport
+    // ceiling and the actual Vulkan bitstream allocation. Use long-double
+    // arithmetic in the shared helper so a boundary session cannot wrap size_t
+    // when replenishment spends its savings on quality.
+    const std::uint64_t buffer_cap = data_buf_ ?
+      static_cast<std::uint64_t>(data_buf_.info().size) :
+      static_cast<std::uint64_t>(max_output_bytes);
+    const std::uint64_t hard_output_cap = max_output_bytes;
+    const std::uint64_t safe_target_cap = hard_output_cap - hard_output_cap / 4;
+    const auto cap = std::min(safe_target_cap, buffer_cap);
+    const auto fec_scale = std::clamp(
+      fec_video_scale_percent_.load(std::memory_order_acquire), 1, 100);
+    const auto fec_scaled_target = std::max<std::uint64_t>(
+      1, pyrowave::apply_video_scale_percent(static_cast<std::uint64_t>(target_size_), fec_scale));
+    return static_cast<size_t>(pyrowave::adaptive_frame_budget_bytes(
+      fec_scaled_target, bitrate_scale_, budget_scale_, cap));
   }
 
   void pyrowave_encode_device_t::watchdog_proc() {

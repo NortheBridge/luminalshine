@@ -1,9 +1,9 @@
 # Experimental PyroWave on Windows
 
-The first integration targets 700 Mbps SDR BT.709 and HDR10 BT.2020/PQ,
-4:2:0, through LuminalShine's existing GPU capture path. It does not require a
-LuminalVGD driver update. H.264, HEVC and AV1 keep their encoder selection,
-capability snapshots and transport defaults.
+The Windows integration targets SDR BT.709 and HDR10 BT.2020/PQ at 4:2:0 or
+4:4:4 through LuminalShine's existing GPU capture path. The default target is
+700 Mbps. It does not require a LuminalVGD driver update. H.264, HEVC and AV1
+keep their encoder selection, capability snapshots and transport defaults.
 
 ## Pinned client and codec
 
@@ -14,11 +14,20 @@ capability snapshots and transport defaults.
 - Vendored codec and initial host adapter reference: `Koloses/Solarflare` at
   `48ae555e73428926ae4be234f15513967a839397`.
 
-The host uses stream format 3, SDP `PYROWAVE/90000`, SDR server capability
-`0x00800000`, and HDR10 capability `0x02000000`. It does not advertise 4:4:4,
-adaptive replenishment, adaptive bitrate, or the client's timing-feedback
-extensions. Every transmitted frame is a complete intra frame. A stock
-Moonlight client continues to negotiate a regular codec.
+The host uses stream format 3 and SDP `PYROWAVE/90000`. It probes the four wire
+profiles independently and advertises only those that initialize successfully:
+
+- SDR 4:2:0: `0x00800000`
+- SDR 4:4:4: `0x01000000`
+- HDR10 4:2:0: `0x02000000`
+- HDR10 4:4:4: `0x04000000`
+
+Aurora selects the profile through its corresponding video-format bit, with
+the existing dynamic-range and chroma attributes identifying the selected
+format in ANNOUNCE. Optional exact `0`/`1` ANNOUNCE attributes negotiate
+adaptive RTP FEC and adaptive bitrate per session. A stock Moonlight client
+continues to negotiate a regular codec. The client's phase-offset extension is
+not applied to the Windows capture clock in this milestone.
 
 ## Building and selecting
 
@@ -41,21 +50,42 @@ In Advanced settings enable experimental PyroWave and retain 700 Mbps, or set:
 ```ini
 pyrowave_enabled = enabled
 pyrowave_bitrate_mbps = 700
+pyrowave_quality_bias = 0
+pyrowave_refresh_interval = 0
 ```
 
-Select PyroWave in the pinned client and leave 4:4:4 disabled. Start with
-1920x1080 at 60 FPS, then test the intended resolution and frame rate. For HDR,
-enable HDR in the client and ensure display preparation enables HDR on the
-LuminalVGD monitor. A requested HDR stream with an SDR capture source fails
-setup rather than falsely labelling SDR pixels as HDR.
+Select PyroWave in the pinned client. Start with 1920x1080 at 60 FPS and SDR
+4:2:0, then test the intended resolution, frame rate, and advertised 4:4:4
+profile. For HDR, enable HDR in the client and ensure display preparation
+enables HDR on the LuminalVGD monitor. A requested HDR stream with an SDR
+capture source fails setup rather than falsely labelling SDR pixels as HDR.
 
 The target describes compressed video, not total link traffic. FEC/audio/header
 overhead requires additional capacity. Use a network with sufficient headroom.
+When a pinned client negotiates adaptive FEC, each parity increase reduces the
+next submitted video/RDO budget by the matching ratio, so video plus FEC stays
+inside the session's original video-and-base-FEC envelope. Negotiated adaptive
+bitrate composes with that reduction; the controllers remain session-local.
 Zero selects the 700 Mbps automatic default. The UI accepts up to 10,000 Mbps,
 but the current four-block GameStream transport cannot carry all combinations
 of bitrate and FPS: excessive frame budgets are rejected before capture.
 Large frames may use the existing no-FEC fallback. Full 10 Gbps transport and
 client-coordinated fragmentation are a separate milestone.
+
+`pyrowave_quality_bias` ranges from 0 to 3 and adds that many bits to the
+encoder's initial quantization ceiling. Keep the default 0 unless a measured
+high-bitrate workload is saturating the default ceiling; higher values allow
+the rate-distortion optimizer to spend more of the available frame budget.
+
+`pyrowave_refresh_interval` ranges from 0 to 255 frames. The safe default 0
+sends a complete intra frame every time. A value greater than zero is an
+experimental operator opt-in to conditional replenishment: unchanged blocks
+may keep their previously decoded state, while every block is forced to refresh
+within the configured interval. The wire protocol has no separate
+replenishment-capability attribute, so that mode is certified only for the exact
+Aurora and `moonlight-common-c` SHAs pinned above. Leave it at 0 for stock or
+differently-versioned clients. This control is not `pyrowaveAdaptiveFec`; it
+neither enables nor changes GameStream FEC.
 
 ## Capture and recovery contract
 
@@ -72,10 +102,11 @@ linear BT.709 at 80 nits/unit to BT.2020/PQ for HDR. The capture layer already
 composites the cursor. Static desktops re-encode retained YCbCr planes, without
 retaining a driver ring slot or pooled image.
 
-Worker IPC version 9 carries the negotiated packet-size bound. The three
-regular codec capability arrays and the 32 MiB worker message cap remain
-unchanged. The experimental codec has a separate bounded dispatch. Pending
-GPU resources are retained on fence timeout until worker exit.
+Worker IPC version 10 carries the negotiated packet-size bound, Step 2 feature
+snapshot, and per-frame adaptive pacing rate. The three regular codec
+capability arrays and the 32 MiB worker message cap remain unchanged. The
+experimental codec has a separate bounded dispatch. Pending GPU resources are
+retained on fence timeout until worker exit.
 
 ## Verification
 

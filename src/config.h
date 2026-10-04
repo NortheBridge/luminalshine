@@ -456,6 +456,8 @@ namespace config {
   struct pyrowave_t {
     bool enabled = false;
     int bitrate_mbps = 700;
+    int quality_bias = 0;
+    int refresh_interval = 0;
   };
   extern pyrowave_t pyrowave;
   extern video_t video;

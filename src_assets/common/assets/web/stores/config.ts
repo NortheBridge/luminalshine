@@ -52,6 +52,7 @@ export interface MetaInfo {
     h264_available?: boolean;
     hevc_available?: boolean;
     av1_available?: boolean;
+    pyrowave_compiled?: boolean;
     pyrowave_advertised?: boolean;
     h264_yuv444?: boolean;
     hevc_yuv444?: boolean;
@@ -267,6 +268,8 @@ const defaultGroups = [
       av1_mode: 0,
       pyrowave_enabled: false,
       pyrowave_bitrate_mbps: 700,
+      pyrowave_quality_bias: 0,
+      pyrowave_refresh_interval: 0,
       prefer_10bit_sdr: false,
       // Allow YUV 4:4:4 negotiation. Default ON to match the C++ struct's
       // `bool yuv444_streaming {true}`; the Capture tab locks the switch off

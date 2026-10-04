@@ -44,7 +44,17 @@ const encoderLabel = computed(() => {
   return raw ? (ENCODER_LABELS[raw] ?? raw.toUpperCase()) : t2('shell.encoder_auto', 'Auto');
 });
 const codecs = computed(() => {
-  return encoderCodecLabels(metadata.value?.encoder_probe).join(' · ');
+  const probe = metadata.value?.encoder_probe;
+  const labels = encoderCodecLabels(probe);
+
+  // PyroWave is a build-time codec path rather than part of the legacy
+  // three-codec hardware probe. Keep it explicitly after AV1 in the host
+  // strip whenever this LuminalShine build contains the backend. Whether the
+  // host is currently advertising it to a compatible client remains a
+  // separate, truthful pyrowave_advertised metadata value.
+  if (probe?.pyrowave_compiled) labels.push('PyroWave');
+
+  return labels.join(' · ');
 });
 
 const displayText = computed(() => {

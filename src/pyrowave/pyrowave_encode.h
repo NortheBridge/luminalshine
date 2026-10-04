@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -42,6 +43,7 @@ namespace pyrowave_enc {
     bool idr = true;  ///< True for full-refresh frames (every block present). With
                       ///< conditional replenishment enabled, most frames omit
                       ///< unchanged blocks and are sent as P-frames.
+    int pacing_bitrate_kbps = 0;  ///< Per-frame egress target after adaptive scaling.
   };
 
   /**
@@ -99,10 +101,21 @@ namespace pyrowave_enc {
       full_refresh_.store(true, std::memory_order_relaxed);
     }
 
+    /// Record client-reported packet loss. The encoder thread consumes this
+    /// before its next GPU submission; no control thread mutates rate state.
+    void notify_packet_loss() {
+      loss_reported_.store(true, std::memory_order_release);
+    }
+
+    void set_fec_video_scale(int percent) {
+      fec_video_scale_percent_.store(std::clamp(percent, 1, 100), std::memory_order_release);
+    }
+
   private:
     pyrowave_encode_device_t() = default;
 
     bool init(int width, int height, int64_t bitrate_bps, int fps);
+    size_t prepare_adaptive_submission();  ///< consume loss, update ABR, snapshot pacing, return RDO target
     size_t adaptive_target_size() const;  ///< per-frame RDO budget incl. replenishment savings
     bool upload_image(platf::img_t &img);  ///< memcpy the BGRA capture into the source staging buffer.
     bool ensure_source(uint32_t src_w, uint32_t src_h);  ///< (re)create the GPU source image at capture res.
@@ -114,6 +127,7 @@ namespace pyrowave_enc {
     int width_ = 0;
     int height_ = 0;
     size_t target_size_ = 0;  ///< per-frame byte budget (base, from the bitrate)
+    int base_bitrate_kbps_ = 0;
 
     // --- Aligned packetization + conditional replenishment ------------------
     size_t shard_payload_size_ = 0;  ///< RTP payload bytes per packet (0 = no alignment)
@@ -147,6 +161,9 @@ namespace pyrowave_enc {
     // (floor 50%) and recover slowly (~3.7%/s at 60 fps) while clean.
     bool adaptive_bitrate_ = false;
     double bitrate_scale_ = 1.0;
+    std::atomic<bool> loss_reported_ {false};
+    std::atomic<int> fec_video_scale_percent_ {100};
+    int submitted_pacing_bitrate_kbps_ = 0;
 
     // NB: a client-requested refresh MUST be answered with a hard full
     // (code-0) frame: the requester may have missed the stream's initial full

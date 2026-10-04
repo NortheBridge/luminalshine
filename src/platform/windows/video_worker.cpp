@@ -37,6 +37,8 @@ namespace platf::video_worker {
       start = 1,
       shutdown,
       idr,
+      pyrowave_loss,
+      pyrowave_fec_scale,
       invalidate,
       packet,
       hdr,
@@ -59,6 +61,7 @@ namespace platf::video_worker {
       std::int64_t frame_index;
       std::int64_t frame_timestamp_ns;
       std::int64_t host_processing_timestamp_ns;
+      std::int32_t pacing_bitrate_kbps;
       std::uint32_t data_size;
       std::uint8_t idr;
       std::uint8_t after_rfi;
@@ -74,6 +77,10 @@ namespace platf::video_worker {
       std::int64_t first;
       std::int64_t last;
     };
+
+    struct pyrowave_fec_scale_t {
+      std::int32_t percent;
+    };
     struct start_t {
       std::uint32_t magic;
       std::uint32_t protocol_version;
@@ -81,7 +88,8 @@ namespace platf::video_worker {
       video::encoder_probe_snapshot_t encoder;
       std::uint8_t direct_vgd;
       std::uint8_t safe_capture;
-      std::uint8_t reserved[6];
+      std::uint8_t pyrowave_profiles;
+      std::uint8_t reserved[5];
       std::uint64_t vgd_session_id;
       std::uint32_t vgd_ring_slots;
       std::uint32_t vgd_transport_flags;
@@ -93,11 +101,49 @@ namespace platf::video_worker {
     std::string g_child_pipe;
     std::uint32_t g_parent_pid {};
     constexpr std::uint32_t kProtocolMagic = 0x4C565750;  // LVWP
-    constexpr std::uint32_t kProtocolVersion = 9;
+    constexpr std::uint32_t kProtocolVersion = 10;
     std::atomic_bool g_capture_reinitializing {false};
     std::atomic<std::uint64_t> g_capture_generation {1};
     std::mutex g_capture_generation_mutex;
     constexpr std::size_t kMaxPacketPayload = 32u * 1024u * 1024u - sizeof(packet_header_t);
+
+    constexpr bool valid_message_size(message_e type, std::uint32_t size) {
+      switch (type) {
+        case message_e::start: return size == sizeof(start_t);
+        case message_e::shutdown:
+        case message_e::idr:
+        case message_e::pyrowave_loss:
+        case message_e::chroma_downgrade:
+        case message_e::finished:
+        case message_e::heartbeat:
+        case message_e::encoder_ready:
+        case message_e::startup_error:
+          return size == 0;
+        case message_e::pyrowave_fec_scale: return size == sizeof(pyrowave_fec_scale_t);
+        case message_e::capture_ready:
+        case message_e::capture_reinitializing: return size == sizeof(generation_t);
+        case message_e::invalidate: return size == sizeof(invalidate_t);
+        case message_e::hdr: return size == sizeof(video::hdr_info_raw_t);
+        case message_e::touch: return size == sizeof(input::touch_port_t);
+        case message_e::packet:
+          return size >= sizeof(packet_header_t) && size <= 32u * 1024u * 1024u;
+      }
+      return false;
+    }
+
+    static_assert(valid_message_size(message_e::pyrowave_loss, 0));
+    static_assert(!valid_message_size(message_e::pyrowave_loss, 1));
+    static_assert(valid_message_size(message_e::pyrowave_fec_scale, sizeof(pyrowave_fec_scale_t)));
+
+    bool empty_encoder_snapshot(const video::encoder_probe_snapshot_t &snapshot) {
+      return snapshot.version == 0 &&
+             std::all_of(snapshot.encoder_name.begin(), snapshot.encoder_name.end(), [](char value) { return value == 0; }) &&
+             snapshot.active_hevc_mode == 0 && snapshot.active_av1_mode == 0 &&
+             std::all_of(snapshot.codec_capabilities.begin(), snapshot.codec_capabilities.end(), [](auto value) { return value == 0; }) &&
+             snapshot.ref_frames_invalidation == 0 &&
+             std::all_of(snapshot.yuv444_for_codec.begin(), snapshot.yuv444_for_codec.end(), [](auto value) { return value == 0; }) &&
+             std::all_of(snapshot.supported_codec.begin(), snapshot.supported_codec.end(), [](auto value) { return value == 0; });
+    }
 
     static_assert(std::is_trivially_copyable_v<video::config_t>);
     static_assert(std::is_trivially_copyable_v<video::encoder_probe_snapshot_t>);
@@ -225,27 +271,7 @@ namespace platf::video_worker {
       if (!read_exact(pipe, &header, sizeof(header), timeout)) {
         return false;
       }
-      const auto valid_size = [&] {
-        switch (header.type) {
-          case message_e::start: return header.size == sizeof(start_t);
-          case message_e::shutdown:
-          case message_e::idr:
-          case message_e::chroma_downgrade:
-          case message_e::finished:
-          case message_e::heartbeat:
-          case message_e::encoder_ready:
-          case message_e::startup_error:
-            return header.size == 0;
-          case message_e::capture_ready:
-          case message_e::capture_reinitializing: return header.size == sizeof(generation_t);
-          case message_e::invalidate: return header.size == sizeof(invalidate_t);
-          case message_e::hdr: return header.size == sizeof(video::hdr_info_raw_t);
-          case message_e::touch: return header.size == sizeof(input::touch_port_t);
-          case message_e::packet:
-            return header.size >= sizeof(packet_header_t) && header.size <= 32u * 1024u * 1024u;
-        }
-        return false;
-      }();
+      const auto valid_size = valid_message_size(header.type, header.size);
       if (!valid_size) return false;
       payload.resize(header.size);
       // Once a valid header has arrived, the payload is already being written
@@ -593,14 +619,14 @@ namespace platf::video_worker {
     }
     VDISPLAY::vgd::set_worker_safe_capture(start.safe_capture != 0);
 
-    if (!video::import_encoder_probe_snapshot(start.encoder)) {
-      BOOST_LOG(error) << "Video worker: rejected invalid or unavailable encoder capability snapshot.";
-      (void) send(pipe, message_e::startup_error);
-      return 12;
-    }
     if (start.config.videoFormat < 0 || start.config.videoFormat > pyrowave::kCodec ||
         start.config.dynamicRange < 0 || start.config.dynamicRange > 1 ||
-        start.config.chromaSamplingType < 0 || start.config.chromaSamplingType > 1) {
+        start.config.chromaSamplingType < 0 || start.config.chromaSamplingType > 1 ||
+        start.config.pyrowave_quality_bias < 0 || start.config.pyrowave_quality_bias > 3 ||
+        start.config.pyrowave_refresh_interval < 0 || start.config.pyrowave_refresh_interval > 255 ||
+        start.config.pyrowave_adaptive_fec < 0 || start.config.pyrowave_adaptive_fec > 1 ||
+        start.config.pyrowave_adaptive_bitrate < 0 || start.config.pyrowave_adaptive_bitrate > 1 ||
+        (start.pyrowave_profiles & ~std::uint8_t {0x0F}) != 0) {
       (void) send(pipe, message_e::startup_error);
       return 16;
     }
@@ -608,11 +634,25 @@ namespace platf::video_worker {
     const auto dynamic_range_mask = std::uint32_t {1} << video::encoder_t::DYNAMIC_RANGE;
     const auto yuv444_mask = std::uint32_t {1} << video::encoder_t::YUV444;
     const bool pyro = start.config.videoFormat == pyrowave::kCodec;
+    if (pyro ? !empty_encoder_snapshot(start.encoder) :
+               !video::import_encoder_probe_snapshot(start.encoder)) {
+      BOOST_LOG(error) << "Video worker: rejected an inconsistent encoder capability snapshot.";
+      (void) send(pipe, message_e::startup_error);
+      return 12;
+    }
     const bool supported = pyro ?
-      (pyrowave::available() && start.config.chromaSamplingType == 0 &&
+      (pyrowave::profile_mask_supports(start.pyrowave_profiles,
+                                       start.config.dynamicRange != 0,
+                                       start.config.chromaSamplingType != 0) &&
        pyrowave::valid_session(start.config.width, start.config.height, start.config.framerate,
                                start.config.bitrate, start.config.pyrowave_packet_size)) :
-      (start.encoder.supported_codec[codec] &&
+      (start.config.pyrowave_packet_size == 0 &&
+       start.pyrowave_profiles == 0 &&
+       start.config.pyrowave_quality_bias == 0 &&
+       start.config.pyrowave_refresh_interval == 0 &&
+       start.config.pyrowave_adaptive_fec == 0 &&
+       start.config.pyrowave_adaptive_bitrate == 0 &&
+       start.encoder.supported_codec[codec] &&
        (!start.config.dynamicRange || (start.encoder.codec_capabilities[codec] & dynamic_range_mask)) &&
        (!start.config.chromaSamplingType || (start.encoder.codec_capabilities[codec] & yuv444_mask)));
     if (!supported) {
@@ -639,6 +679,17 @@ namespace platf::video_worker {
           break;
         } else if (command.type == message_e::idr) {
           session_mail->event<bool>(mail::idr)->raise(true);
+        } else if (command.type == message_e::pyrowave_loss && body.empty()) {
+          session_mail->event<bool>(mail::pyrowave_loss)->raise(true);
+        } else if (command.type == message_e::pyrowave_fec_scale && body.size() == sizeof(pyrowave_fec_scale_t)) {
+          pyrowave_fec_scale_t wire {};
+          std::memcpy(&wire, body.data(), sizeof(wire));
+          if (wire.percent < 1 || wire.percent > 100) {
+            BOOST_LOG(error) << "Video worker: rejected an invalid PyroWave FEC budget scale.";
+            shutdown->raise(true);
+            break;
+          }
+          session_mail->event<int>(mail::pyrowave_fec_scale)->raise(wire.percent);
         } else if (command.type == message_e::invalidate && body.size() == sizeof(invalidate_t)) {
           invalidate_t wire {};
           std::memcpy(&wire, body.data(), sizeof(wire));
@@ -729,6 +780,7 @@ namespace platf::video_worker {
           packet_header.frame_index = packet->frame_index();
           packet_header.frame_timestamp_ns = packet->frame_timestamp ? serialize_timestamp(*packet->frame_timestamp) : 0;
           packet_header.host_processing_timestamp_ns = packet->host_processing_timestamp ? serialize_timestamp(*packet->host_processing_timestamp) : 0;
+          packet_header.pacing_bitrate_kbps = packet->pacing_bitrate_kbps;
           packet_header.data_size = static_cast<std::uint32_t>(encoded_bytes.size());
           packet_header.idr = static_cast<std::uint8_t>(packet->is_idr());
           packet_header.after_rfi = static_cast<std::uint8_t>(packet->after_ref_frame_invalidation);
@@ -831,7 +883,19 @@ namespace platf::video_worker {
     start.magic = kProtocolMagic;
     start.protocol_version = kProtocolVersion;
     start.config = config;
-    if (!video::export_encoder_probe_snapshot(start.encoder)) {
+    // RTSP already validated this profile against the parent's cached probe.
+    // Serialize that certificate into IPC so the child can accept startup
+    // without synchronously creating four Vulkan encoders inside the fixed
+    // PROCESS_READY window. The adapter-bound create remains authoritative
+    // once capture opens the selected display.
+    start.pyrowave_profiles = config.videoFormat == pyrowave::kCodec ? pyrowave::profile_mask() : 0;
+    if (config.videoFormat == pyrowave::kCodec) {
+      // Format 3 has a separate certified profile mask and deliberately does
+      // not depend on a successful H.264/HEVC/AV1 probe. Mark the legacy
+      // snapshot reserved/empty so the child can detect cross-protocol state.
+      start.encoder = {};
+      start.encoder.version = 0;
+    } else if (!video::export_encoder_probe_snapshot(start.encoder)) {
       if (direct_vgd) {
         // No pipeline of any kind will run for a direct-VGD session. End it
         // promptly (also releases a strict client's held ANNOUNCE) instead of
@@ -1121,6 +1185,7 @@ namespace platf::video_worker {
             std::vector<std::uint8_t> bytes(packet_header.data_size);
             std::memcpy(bytes.data(), body.data() + sizeof(packet_header), bytes.size());
             auto packet = std::make_unique<video::packet_raw_generic>(std::move(bytes), packet_header.frame_index, packet_header.idr != 0);
+            packet->pacing_bitrate_kbps = packet_header.pacing_bitrate_kbps;
             packet->after_ref_frame_invalidation = packet_header.after_rfi != 0;
             packet->capture_placeholder = packet_header.capture_placeholder != 0;
             if (packet_header.has_frame_timestamp) {
@@ -1203,6 +1268,8 @@ namespace platf::video_worker {
     });
 
     auto idr = mail->event<bool>(mail::idr);
+    auto pyrowave_loss = mail->event<bool>(mail::pyrowave_loss);
+    auto pyrowave_fec_scale = mail->event<int>(mail::pyrowave_fec_scale);
     auto invalidate = mail->event<std::pair<std::int64_t, std::int64_t>>(mail::invalidate_ref_frames);
     auto discontinuity = mail->event<bool>(mail::video_discontinuity);
     auto submitted_idr = mail->event<std::int64_t>(mail::video_idr_submitted);
@@ -1245,6 +1312,20 @@ namespace platf::video_worker {
       }
 
       const bool explicit_idr = idr->pop(25ms);
+      if (pyrowave_loss->pop(0ms) && !send(child.pipe, message_e::pyrowave_loss)) {
+        BOOST_LOG(error) << "Video worker: failed to forward PyroWave loss telemetry.";
+        poisoned = true;
+        break;
+      }
+      while (auto scale = pyrowave_fec_scale->pop(0ms)) {
+        const pyrowave_fec_scale_t wire {std::clamp(*scale, 1, 100)};
+        if (!send(child.pipe, message_e::pyrowave_fec_scale, &wire, sizeof(wire))) {
+          BOOST_LOG(error) << "Video worker: failed to forward PyroWave FEC budget scale.";
+          poisoned = true;
+          break;
+        }
+      }
+      if (poisoned) break;
       const bool host_discontinuity = discontinuity->pop(0ms);
       bool valid_invalidation = false;
       std::int64_t merged_first = std::numeric_limits<std::int64_t>::max();

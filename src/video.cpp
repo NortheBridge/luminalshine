@@ -735,6 +735,8 @@ namespace video {
     safe::mail_raw_t::event_t<bool> shutdown_event;
     safe::mail_raw_t::queue_t<packet_t> packets;
     safe::mail_raw_t::event_t<bool> idr_events;
+    safe::mail_raw_t::event_t<bool> pyrowave_loss_events;
+    safe::mail_raw_t::event_t<int> pyrowave_fec_scale_events;
     safe::mail_raw_t::event_t<hdr_info_t> hdr_events;
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;
     safe::mail_raw_t::event_t<bool> chroma_downgrade_events;
@@ -2760,6 +2762,17 @@ namespace video {
     const char *stage,
     const std::function<bool()> &settle_downgrade
   ) {
+    // PyroWave 4:4:4 is a distinct negotiated wire profile. Mutating it to
+    // 4:2:0 after ANNOUNCE would make the decoder interpret the stream with
+    // the wrong plane layout. Fail the build and let the existing recovery or
+    // reconnect path renegotiate instead; legacy codecs retain their current
+    // in-session downgrade behavior below.
+    if (config.videoFormat == pyrowave::kCodec && config.chromaSamplingType == 1) {
+      BOOST_LOG(error) << "PyroWave YUV 4:4:4 "sv << stage
+                       << " failed; refusing an unnegotiated in-session downgrade to 4:2:0."sv;
+      return false;
+    }
+
     yuv444_fallback_t fallback {config.chromaSamplingType};
 
     switch (fallback.attempt(disp && disp->capture_recovering())) {
@@ -2899,6 +2912,8 @@ namespace video {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     auto packets = packet_queue(mail, mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
+    auto pyrowave_loss_events = mail->event<bool>(mail::pyrowave_loss);
+    auto pyrowave_fec_scale_events = mail->event<int>(mail::pyrowave_fec_scale);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
 
     {
@@ -2970,6 +2985,14 @@ namespace video {
         if (auto frames = invalidate_ref_frames_events->pop(0ms)) {
           session->invalidate_ref_frames(frames->first, frames->second);
         }
+      }
+
+      if (pyrowave_loss_events->peek()) {
+        pyrowave_loss_events->pop();
+        session->notify_packet_loss();
+      }
+      while (auto scale = pyrowave_fec_scale_events->pop(0ms)) {
+        session->set_fec_video_scale(*scale);
       }
 
       if (idr_events->peek()) {
@@ -3458,6 +3481,14 @@ namespace video {
             ctx->idr_events->pop();
           }
 
+          if (ctx->pyrowave_loss_events->peek()) {
+            pos->session->notify_packet_loss();
+            ctx->pyrowave_loss_events->pop();
+          }
+          while (auto scale = ctx->pyrowave_fec_scale_events->pop(0ms)) {
+            pos->session->set_fec_video_scale(*scale);
+          }
+
           if (hold_for_recovery) {
             // Shutdown, IDR and (below) display-switch handling all still run;
             // only the GPU work waits. The client keeps its last frame until
@@ -3795,6 +3826,8 @@ namespace video {
         mail->event<bool>(mail::shutdown),
         packet_queue(mail, mail::video_packets),
         std::move(idr_events),
+        mail->event<bool>(mail::pyrowave_loss),
+        mail->event<int>(mail::pyrowave_fec_scale),
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
         mail->event<bool>(mail::chroma_downgrade),

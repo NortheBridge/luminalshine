@@ -53,6 +53,12 @@ namespace mail {
   MAIL(touch_port);
   MAIL(idr);
   MAIL(invalidate_ref_frames);
+  // Session-local PyroWave packet-loss telemetry. This is distinct from IDR:
+  // recovered FEC loss should adapt rate/FEC without forcing a full refresh.
+  MAIL(pyrowave_loss);
+  // Percentage of the negotiated video budget left after adaptive FEC parity
+  // is reserved (1-100). Kept per session; never mutates global stream config.
+  MAIL(pyrowave_fec_scale);
   MAIL(gamepad_feedback);
   MAIL(hdr);
   MAIL(chroma_downgrade);

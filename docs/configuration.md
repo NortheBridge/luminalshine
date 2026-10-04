@@ -2634,7 +2634,9 @@ Enable the experimental Windows PyroWave encoder. Default: `disabled`.
 Requires a build configured with `SUNSHINE_ENABLE_PYROWAVE=ON`, a compatible
 Vulkan GPU with Direct3D sharing, and the pinned Aurora client described in
 [PyroWave testing](pyrowave.md). Existing H.264, HEVC and AV1 negotiation is preserved.
-The initial profiles are SDR BT.709 and HDR10 BT.2020/PQ, both 4:2:0.
+LuminalShine probes SDR BT.709 and HDR10 BT.2020/PQ independently at 4:2:0
+and 4:4:4 during startup, then advertises only the profiles that initialize
+successfully. Restart LuminalShine after enabling this option.
 
 ### pyrowave_bitrate_mbps
 
@@ -2645,7 +2647,31 @@ request and the legacy `max_bitrate` setting. Changes apply at the next session.
 FEC, audio, encryption and packet headers increase network traffic beyond this
 video target. The current transport cannot carry every bitrate/FPS combination;
 requests exceeding its frame budget are rejected before starting capture.
+If a compatible client negotiates adaptive FEC, LuminalShine reserves each
+temporary parity increase from the next submitted video/RDO budget rather than
+increasing the session's existing video-plus-base-FEC wire envelope.
 The 10,000 Mbps input limit is not a claim of verified 10 Gbps transport support.
+
+### pyrowave_quality_bias
+
+Adds extra bits to PyroWave's initial quantization ceiling. Default: `0`.
+Range: `0`–`3`. Higher values let the rate-distortion optimizer spend large
+per-frame budgets on finer coefficients instead of saturating at the default
+ceiling. The wire format is unchanged. Changes apply at the next session.
+
+### pyrowave_refresh_interval
+
+Controls PyroWave conditional replenishment in frames. Default: `0`. Range:
+`0`–`255`. Zero is the safe full-frame mode: every frame contains every block.
+A value greater than zero is an experimental operator opt-in to conditional
+replenishment: unchanged blocks retain their previous decoded state and every
+block is re-sent at least once within the configured number of frames. The
+current protocol has no separate replenishment-capability attribute, so this
+setting is certified only with the exact pinned Aurora and `moonlight-common-c`
+revisions in [PyroWave testing](pyrowave.md); leave it at zero for other
+clients. This setting is not `pyrowaveAdaptiveFec` and does not change
+GameStream FEC.
+Changes apply at the next session.
 
 ### prefer_10bit_sdr
 
