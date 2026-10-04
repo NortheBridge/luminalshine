@@ -3,6 +3,7 @@ export interface EncoderProbeMetadata {
   h264_available?: boolean;
   hevc_available?: boolean;
   av1_available?: boolean;
+  pyrowave_compiled?: boolean;
   pyrowave_advertised?: boolean;
 }
 
@@ -15,6 +16,5 @@ export function encoderCodecLabels(probe?: EncoderProbeMetadata): string[] {
     if (probe.hevc_available) labels.push('HEVC');
     if (probe.av1_available) labels.push('AV1');
   }
-  if (probe.pyrowave_advertised) labels.push('PyroWave');
   return labels;
 }

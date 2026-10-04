@@ -2571,7 +2571,7 @@ namespace nvhttp {
       }
     }
     if (config::pyrowave.enabled && pyrowave::available()) {
-      codec_mode_flags |= pyrowave::kServerSdr | pyrowave::kServerHdr;
+      codec_mode_flags |= pyrowave::server_codec_mask(allow_yuv444);
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 

@@ -2694,8 +2694,16 @@ namespace confighttp {
       node["hevc_available"] = video::last_encoder_probe_supported_codec[1];
       node["av1_available"] = video::last_encoder_probe_supported_codec[2];
       // PyroWave is outside the fixed three-codec encoder snapshot. Report
-      // whether it is actually advertised to compatible GameStream clients,
-      // and never run its one-time Vulkan probe while the feature is disabled.
+      // build presence independently from whether it is currently advertised
+      // to compatible GameStream clients. This lets the UI describe the
+      // installed host without turning an availability label into a claim
+      // about live negotiation. Never run the one-time Vulkan probe while the
+      // feature is disabled.
+#ifdef SUNSHINE_ENABLE_PYROWAVE
+      node["pyrowave_compiled"] = true;
+#else
+      node["pyrowave_compiled"] = false;
+#endif
       node["pyrowave_advertised"] = config::pyrowave.enabled && pyrowave::available();
       node["h264_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[0];
       node["hevc_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[1];

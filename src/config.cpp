@@ -1634,6 +1634,8 @@ namespace config {
 
     bool_f(vars, "pyrowave_enabled", pyrowave.enabled);
     int_between_f(vars, "pyrowave_bitrate_mbps", pyrowave.bitrate_mbps, {0, 10000});
+    int_between_f(vars, "pyrowave_quality_bias", pyrowave.quality_bias, {0, 3});
+    int_between_f(vars, "pyrowave_refresh_interval", pyrowave.refresh_interval, {0, 255});
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
@@ -2159,6 +2161,8 @@ namespace config {
         "dd_wa_dummy_plug_hdr10",
         "pyrowave_enabled",
         "pyrowave_bitrate_mbps",
+        "pyrowave_quality_bias",
+        "pyrowave_refresh_interval",
         "max_bitrate",
         "minimum_fps_target",
 

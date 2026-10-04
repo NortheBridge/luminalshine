@@ -38,6 +38,7 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "pyrowave/contract.h"
 #include "session_monitor_client.h"
 #include "session_teardown_policy.h"
 #include "stream.h"
@@ -512,6 +513,14 @@ namespace stream {
       // transmitted. videoThread watches it to decide whether the client's
       // no-video-traffic clock needs a keepalive extension.
       std::atomic_bool frame_transmitted {false};
+
+      // PyroWave adaptive FEC is negotiated per client. Keep its loss signal
+      // and boost entirely session-local so one receiver can never change the
+      // global FEC setting or another receiver's packet layout.
+      pyrowave::adaptive_fec_controller_t pyrowave_fec;
+      int pyrowave_base_fec {0};
+      std::atomic<std::uint32_t> pyrowave_last_loss_frame {std::numeric_limits<std::uint32_t>::max()};
+      std::atomic<std::uint32_t> pyrowave_last_unrecoverable_frame {std::numeric_limits<std::uint32_t>::max()};
     } video;
 
     struct {
@@ -1310,6 +1319,47 @@ namespace stream {
       session->video.idr_events->raise(true);
     });
 
+    // Pinned moonlight-common-c sends one packed, big-endian status for each
+    // completed FEC block. Unlike an IDR request this reports recovered loss,
+    // allowing the negotiated controllers to adapt before video becomes
+    // undecodable. 0x5502 is also a host->client RGB-feedback type, but the
+    // directions are distinct and this callback accepts only the exact 21-byte
+    // client status payload while a PyroWave session is active.
+    constexpr short kPyrowaveFrameFecStatusPtype = 0x5502;
+    server->map(kPyrowaveFrameFecStatusPtype, [&](session_t *session, const std::string_view &payload) {
+      if (session->config.monitor.videoFormat != pyrowave::kCodec) return;
+      const auto status = pyrowave::parse_frame_fec_status(payload);
+      if (!status) {
+        BOOST_LOG(warning) << "Dropping malformed PyroWave frame FEC status (len=" << payload.size() << ')';
+        return;
+      }
+      if (!session->video.frame_transmitted.load(std::memory_order_acquire) || !status->has_loss()) return;
+
+      const auto first_loss_report_for_frame =
+        session->video.pyrowave_last_loss_frame.exchange(status->frame_index, std::memory_order_acq_rel) != status->frame_index;
+      if (first_loss_report_for_frame) {
+        if (session->config.monitor.pyrowave_adaptive_fec != 0) {
+          const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+          ).count();
+          const auto update = session->video.pyrowave_fec.report_loss(now_ms);
+          if (update.scale_changed) {
+            session->mail->event<int>(mail::pyrowave_fec_scale)->raise(update.video_scale_percent);
+          }
+        }
+        if (session->config.monitor.pyrowave_adaptive_bitrate != 0) {
+          session->mail->event<bool>(mail::pyrowave_loss)->raise(true);
+        }
+      }
+
+      if (status->unrecoverable() && session->config.monitor.pyrowave_refresh_interval > 0 &&
+          session->video.pyrowave_last_unrecoverable_frame.exchange(status->frame_index, std::memory_order_acq_rel) != status->frame_index) {
+        // Conditional replenishment needs one hard full refresh after an
+        // unrecoverable block. Full-frame mode already self-heals next frame.
+        session->video.idr_events->raise(true);
+      }
+    });
+
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
       // Requires two 64-bit frame indices; reject short payloads to avoid an OOB read.
       if (payload.size() < 2 * sizeof(std::int64_t)) {
@@ -1956,7 +2006,20 @@ namespace stream {
         frame_header.frame_processing_latency = 0;
       }
 
-      auto fecPercentage = config::stream.fec_percentage;
+      auto fecPercentage = session->video.pyrowave_base_fec;
+      auto fecVideoScale = 100;
+      if (session->config.monitor.videoFormat == pyrowave::kCodec &&
+          session->config.monitor.pyrowave_adaptive_fec != 0) {
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+        const auto update = session->video.pyrowave_fec.sample(now_ms);
+        fecPercentage = update.fec_percentage;
+        fecVideoScale = update.video_scale_percent;
+        if (update.scale_changed) {
+          session->mail->event<int>(mail::pyrowave_fec_scale)->raise(update.video_scale_percent);
+        }
+      }
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
@@ -2024,7 +2087,20 @@ namespace stream {
         // otherwise integer packets/ms
         // floors a 65 Mbps stream to about 56 Mbps before FEC and the bounded
         // broadcast queue repeatedly overflows under motion.
-        const auto pacing_bitrate_kbps = std::max(session->config.monitor.bitrate, 1000);
+        auto codec_pacing_bitrate_kbps =
+          session->config.monitor.videoFormat == pyrowave::kCodec && packet->pacing_bitrate_kbps > 0 ?
+            std::min(packet->pacing_bitrate_kbps, session->config.monitor.bitrate) :
+            session->config.monitor.bitrate;
+        if (session->config.monitor.videoFormat == pyrowave::kCodec &&
+            session->config.monitor.pyrowave_adaptive_fec != 0) {
+          // The encoder receives scale changes asynchronously. Cap even an
+          // already-queued old-rate packet immediately so extra parity never
+          // increases the negotiated wire envelope during that handoff.
+          codec_pacing_bitrate_kbps = std::min(
+            codec_pacing_bitrate_kbps,
+            pyrowave::apply_video_scale_percent(session->config.monitor.bitrate, fecVideoScale));
+        }
+        const auto pacing_bitrate_kbps = std::max(codec_pacing_bitrate_kbps, 1000);
         const auto wire_packet_bytes = blocksize +
           (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
         // Shape each client independently just above its FEC/header-aware wire
@@ -2038,7 +2114,7 @@ namespace stream {
           fecPercentage,
           wire_packet_bytes,
           payload_blocksize,
-          session->config.monitor.videoFormat == 3 ? 15'000'000'000.0L : video_qos::kMaxWireDrainBitrateBps
+          session->config.monitor.videoFormat == pyrowave::kCodec ? 15'000'000'000.0L : video_qos::kMaxWireDrainBitrateBps
         );
         const long double pacing_wire_bitrate_bps = pacing.drain_bitrate_bps;
         const auto packet_wire_interval = pacing.packet_interval;
@@ -3341,6 +3417,8 @@ namespace stream {
       session->display_preparation_lease = launch_session.display_preparation_lease;
 
       session->config = config;
+      session->video.pyrowave_base_fec = std::max(0, ::config::stream.fec_percentage);
+      session->video.pyrowave_fec.set_base(session->video.pyrowave_base_fec);
 #ifdef _WIN32
       // Strict-first-frame accommodations exist only where the ANNOUNCE hold
       // exists; other platforms keep upstream-identical windows.

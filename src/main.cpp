@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <codecvt>
 #include <csignal>
@@ -15,6 +16,9 @@
 #include <iostream>
 #include <limits>
 #include <thread>
+
+// lib includes
+#include <boost/log/core.hpp>
 
 // local includes
 #include "confighttp.h"
@@ -28,6 +32,7 @@
 #include "nvhttp.h"
 #include "nvenc/nvenc_base.h"
 #include "process.h"
+#include "pyrowave/backend.h"
 #include "rtsp.h"
 #include "session_monitor_client.h"
 #include "startup_display_wait.h"
@@ -146,9 +151,58 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
   }
   return FALSE;
 }
+
+namespace {
+  bool prepare_internal_gpu_probe_environment() noexcept {
+    // The private child branches before normal startup, so duplicate the two
+    // security-critical pieces of Windows initialization here. Fail closed:
+    // a non-sentinel exit keeps PyroWave unadvertised until host restart.
+    if (!::SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+      return false;
+    }
+    // A disposable internal helper must never display a critical-error dialog
+    // that outlives the parent's bounded wait or blocks service startup.
+    if (!::SetThreadErrorMode(
+          SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX,
+          nullptr)) {
+      return false;
+    }
+
+    wchar_t executable_path[32768] {};
+    const DWORD length = ::GetModuleFileNameW(nullptr, executable_path, _countof(executable_path));
+    if (!length || length >= _countof(executable_path)) return false;
+    DWORD separator = length;
+    while (separator > 0 && executable_path[separator - 1] != L'\\' && executable_path[separator - 1] != L'/') {
+      --separator;
+    }
+    if (separator == 0) return false;
+    // Preserve the separator for a drive-root installation (C:\app.exe).
+    // For ordinary and UNC paths, removing the final separator yields the
+    // exact executable directory.
+    const DWORD directory_end = (separator == 3 && executable_path[1] == L':') ? separator : separator - 1;
+    executable_path[directory_end] = L'\0';
+    return ::SetCurrentDirectoryW(executable_path) != FALSE;
+  }
+}
 #endif
 
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+  // This private mode must run before lifetime/config/logging/service setup.
+  // The parent passes canonical hex tokens containing snapshotted selectors;
+  // the disposable child performs all display/DXGI resolution and creates and
+  // destroys the potentially fragile Vulkan encoder objects.
+  if (argc >= 2 && std::string_view(argv[1]) == "--internal-pyrowave-probe"sv) {
+    if (argc != 5 || !argv[2] || !argv[3] || !argv[4]) return 9;
+    if (!prepare_internal_gpu_probe_environment()) return 9;
+    // There are intentionally no sinks/config files in this disposable child.
+    // Disable the core so diagnostics inside the shared Vulkan/encoder code are
+    // dropped rather than buffered before the normal logging lifetime exists.
+    boost::log::core::get()->set_logging_enabled(false);
+    return pyrowave::run_profile_probe_child(argv[2], argv[3], argv[4]);
+  }
+#endif
+
   lifetime::argv = argv;
 
 #ifdef _WIN32
@@ -953,6 +1007,30 @@ int main(int argc, char *argv[]) {
     task_pool.pushDelayed(s_probe_retry_tick, 10s);
   }
 #endif
+
+  // Complete optional PyroWave capability discovery before publishing any
+  // listener or mDNS endpoint. The probe itself runs in a disposable child,
+  // but creating four GPU encoder profiles concurrently with a client's video
+  // worker can still contend inside WDDM. Finishing (or failing closed) here
+  // also prevents an early serverinfo response from caching a legacy-only
+  // capability mask. Shutdown cancels and kills the bounded child promptly.
+  if (config::pyrowave.enabled && !shutdown_event->peek()) {
+    std::atomic_bool probe_finished {false};
+    std::thread probe_thread([&probe_finished] {
+      platf::set_thread_name("pyrowave_probe");
+      pyrowave::initialize_profile_probe();
+      probe_finished.store(true, std::memory_order_release);
+    });
+    while (!probe_finished.load(std::memory_order_acquire)) {
+      if (shutdown_event->peek()) {
+        pyrowave::cancel_profile_probe();
+        break;
+      }
+      std::this_thread::sleep_for(100ms);
+    }
+    probe_thread.join();
+    if (shutdown_event->peek()) return lifetime::desired_exit_code;
+  }
 
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;

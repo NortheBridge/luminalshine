@@ -1462,6 +1462,12 @@ namespace rtsp_stream {
 
     std::string_view client;
     std::unordered_map<std::string_view, std::string_view> args;
+    bool duplicate_pyrowave_feature_attribute = false;
+
+    const auto is_pyrowave_feature_attribute = [](std::string_view name) {
+      return name == "x-ss-video[0].pyrowaveAdaptiveFec"sv ||
+             name == "x-ss-video[0].pyrowaveAdaptiveBitrate"sv;
+    };
 
     for (auto line : lines) {
       auto type = line.substr(0, 2);
@@ -1473,10 +1479,16 @@ namespace rtsp_stream {
         auto name = line.substr(2, pos - 2);
         auto val = line.substr(pos + 1);
 
-        if (val[val.size() - 1] == ' ') {
+        // Preserve the exact PyroWave feature value for its strict 0/1 parser.
+        // Legacy SDP parameters retain Sunshine's historical single trailing
+        // space tolerance.
+        if (!is_pyrowave_feature_attribute(name) && !val.empty() && val.back() == ' ') {
           val = val.substr(0, val.size() - 1);
         }
-        args.emplace(name, val);
+        const auto [_, inserted] = args.emplace(name, val);
+        if (!inserted && is_pyrowave_feature_attribute(name)) {
+          duplicate_pyrowave_feature_attribute = true;
+        }
       }
     }
 
@@ -1540,7 +1552,8 @@ namespace rtsp_stream {
       // Clients normally only request 4:4:4 when we advertised it, but the
       // toggle may have been flipped since the serverinfo query — enforce it
       // here so a disabled host never starts a 4:4:4 session.
-      if (config.monitor.chromaSamplingType == 1 && !config::video.yuv444_streaming) {
+      if (config.monitor.chromaSamplingType == 1 && !config::video.yuv444_streaming &&
+          config.monitor.videoFormat != pyrowave::kCodec) {
         BOOST_LOG(warning) << "Client requested YUV 4:4:4 but yuv444_streaming is disabled; downgrading to YUV 4:2:0"sv;
         config.monitor.chromaSamplingType = 0;
       }
@@ -1565,16 +1578,6 @@ namespace rtsp_stream {
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
-
-#ifdef _WIN32
-    const int rtsp_fps = config.monitor.framerateX100 > 0 ?
-                           static_cast<int>(std::lround(config.monitor.framerateX100 / 100.0)) :
-                           config.monitor.framerate;
-    if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
-      respond(sock, session, &option, 503, "Virtual display mode reconciliation failed", req->sequenceNumber, {});
-      return;
-    }
-#endif
 
     // Validate the client-supplied video packet size. It is used downstream in stream.cpp
     // both as a modulus divisor (packetsize - sizeof(NV_VIDEO_PACKET)) and to size RTP block
@@ -1683,18 +1686,58 @@ namespace rtsp_stream {
     }
 
     if (config.monitor.videoFormat == pyrowave::kCodec) {
+      if (duplicate_pyrowave_feature_attribute) {
+        BOOST_LOG(error) << "Rejecting duplicate PyroWave feature attribute";
+        respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return;
+      }
       config.monitor.bitrate = static_cast<int>(pyrowave::bitrate_kbps(config::pyrowave.bitrate_mbps));
       config.monitor.pyrowave_packet_size = config.packetsize;
-      if (!config::pyrowave.enabled || !pyrowave::available() || config.monitor.chromaSamplingType != 0 ||
+      config.monitor.pyrowave_quality_bias = config::pyrowave.quality_bias;
+      config.monitor.pyrowave_refresh_interval = config::pyrowave.refresh_interval;
+
+      const auto parse_optional_feature = [&](std::string_view name, int &destination) {
+        const auto value = args.find(name);
+        if (value == args.end()) {
+          destination = 0;
+          return true;
+        }
+        const auto parsed = pyrowave::parse_wire_bool(value->second);
+        if (!parsed) {
+          BOOST_LOG(error) << "Rejecting malformed PyroWave feature attribute " << name
+                           << "=" << value->second << "; expected exactly 0 or 1";
+          return false;
+        }
+        destination = *parsed ? 1 : 0;
+        return true;
+      };
+
+      if (!parse_optional_feature("x-ss-video[0].pyrowaveAdaptiveFec"sv, config.monitor.pyrowave_adaptive_fec) ||
+          !parse_optional_feature("x-ss-video[0].pyrowaveAdaptiveBitrate"sv, config.monitor.pyrowave_adaptive_bitrate)) {
+        respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return;
+      }
+
+      if (!config::pyrowave.enabled ||
+          (config.monitor.chromaSamplingType == 1 && !config::video.yuv444_streaming) ||
+          !pyrowave::supports_profile(config.monitor.dynamicRange != 0, config.monitor.chromaSamplingType != 0) ||
           !pyrowave::valid_session(config.monitor.width, config.monitor.height, config.monitor.framerate,
                                    config.monitor.bitrate, config.packetsize)) {
-        BOOST_LOG(error) << "PyroWave unavailable or requested mode exceeds the initial transport bounds";
+        BOOST_LOG(error) << "PyroWave unavailable, requested profile was not advertised, or mode exceeds transport bounds";
         respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
         return;
       }
       // This encoder emits limited-range BT.709 SDR or BT.2020/PQ HDR.
       config.monitor.encoderCscMode = 2;
       config.monitor.prefer_sdr_10bit = false;
+      BOOST_LOG(info) << "PyroWave negotiated: " << config.monitor.width << 'x' << config.monitor.height
+                      << '@' << config.monitor.framerate
+                      << (config.monitor.dynamicRange ? " HDR" : " SDR")
+                      << (config.monitor.chromaSamplingType ? " 4:4:4" : " 4:2:0")
+                      << ", adaptive FEC=" << config.monitor.pyrowave_adaptive_fec
+                      << ", adaptive bitrate=" << config.monitor.pyrowave_adaptive_bitrate
+                      << ", quality bias=" << config.monitor.pyrowave_quality_bias
+                      << ", refresh interval=" << config.monitor.pyrowave_refresh_interval;
     } else if (config.monitor.videoFormat < 0 || config.monitor.videoFormat > 2) {
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
@@ -1731,6 +1774,20 @@ namespace rtsp_stream {
 
     // Prevent interleaving with hot-apply while we allocate/start a session from RTSP
     auto _hot_apply_gate = config::acquire_apply_read_gate();
+
+#ifdef _WIN32
+    // Rebuilding a virtual display is externally visible and may temporarily
+    // remove the only capture target. Every pure ANNOUNCE check has already
+    // passed, and the admission/config gates now keep cancellation or hot
+    // apply from crossing this modeset and stranding the next connection.
+    const int rtsp_fps = config.monitor.framerateX100 > 0 ?
+                           static_cast<int>(std::lround(config.monitor.framerateX100 / 100.0)) :
+                           config.monitor.framerate;
+    if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
+      respond(sock, session, &option, 503, "Virtual display mode reconciliation failed", req->sequenceNumber, {});
+      return;
+    }
+#endif
 
     config.gen1_framegen_fix = session.gen1_framegen_fix;
     config.gen2_framegen_fix = session.gen2_framegen_fix;

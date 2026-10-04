@@ -13,16 +13,17 @@ describe('encoder top-bar metadata', () => {
     ).toEqual(['H.264', 'HEVC', 'AV1']);
   });
 
-  it('appends advertised PyroWave capability', () => {
+  it('leaves build-only PyroWave placement to HostStrip', () => {
     expect(
       encoderCodecLabels({
         probed: true,
         h264_available: true,
         hevc_available: true,
         av1_available: true,
+        pyrowave_compiled: true,
         pyrowave_advertised: true,
       }),
-    ).toEqual(['H.264', 'HEVC', 'AV1', 'PyroWave']);
+    ).toEqual(['H.264', 'HEVC', 'AV1']);
   });
 
   it('stays backward compatible when PyroWave metadata is absent or false', () => {
@@ -36,14 +37,15 @@ describe('encoder top-bar metadata', () => {
     ).toEqual(['H.264']);
   });
 
-  it('keeps the independent PyroWave result while regular probing is incomplete', () => {
+  it('does not confuse advertisement state with regular probe results', () => {
     expect(
       encoderCodecLabels({
         probed: false,
         h264_available: true,
+        pyrowave_compiled: true,
         pyrowave_advertised: true,
       }),
-    ).toEqual(['PyroWave']);
+    ).toEqual([]);
     expect(encoderCodecLabels()).toEqual([]);
   });
 });

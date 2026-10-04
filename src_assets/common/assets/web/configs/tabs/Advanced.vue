@@ -42,6 +42,16 @@ const config = store.config;
         :aria-label="t('config.pyrowave_bitrate_mbps')"
         class="mt-3 w-full accent-primary"
       />
+      <ConfigFieldRenderer
+        v-model="config.pyrowave_quality_bias"
+        setting-key="pyrowave_quality_bias"
+        class="mt-6"
+      />
+      <ConfigFieldRenderer
+        v-model="config.pyrowave_refresh_interval"
+        setting-key="pyrowave_refresh_interval"
+        class="mt-6"
+      />
     </div>
   </div>
 </template>

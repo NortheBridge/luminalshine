@@ -46,7 +46,11 @@ namespace video {
     int chromaSamplingType;  // 0 - 4:2:0, 1 - 4:4:4
 
     int enableIntraRefresh;  // 0 - disabled, 1 - enabled
-    int pyrowave_packet_size = 0;  // Negotiated packet bound; worker IPC v9.
+    int pyrowave_packet_size = 0;  // Negotiated packet bound; worker IPC v10.
+    int pyrowave_quality_bias = 0;  // Host-selected RDO quality ceiling adjustment (0-3).
+    int pyrowave_refresh_interval = 0;  // Certified conditional replenishment interval (0-255).
+    int pyrowave_adaptive_fec = 0;  // Client-negotiated dynamic RTP FEC support (strict 0/1).
+    int pyrowave_adaptive_bitrate = 0;  // Client-negotiated encoder/pacing adaptation (strict 0/1).
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
@@ -228,6 +232,14 @@ namespace video {
     virtual void request_normal_frame() = 0;
 
     virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
+
+    // Optional codec-specific congestion signal. Legacy encoders deliberately
+    // ignore it; PyroWave uses it to adjust the next submitted frame budget.
+    virtual void notify_packet_loss() {}
+
+    // Optional session-local video-budget scale used when negotiated adaptive
+    // FEC adds parity. Legacy encoders deliberately ignore it.
+    virtual void set_fec_video_scale(int) {}
   };
 
   // encoders
@@ -283,6 +295,10 @@ namespace video {
     /// Capture-source epoch inherited from the image/session that produced the
     /// packet. The isolated worker must never replace this at IPC-send time.
     std::uint64_t capture_generation = 0;
+    /// Optional codec-selected egress pacing rate. PyroWave uses this to keep
+    /// transport pacing synchronized with its negotiated adaptive bitrate.
+    /// Zero preserves the session's negotiated bitrate for legacy codecs.
+    int pacing_bitrate_kbps = 0;
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
     std::optional<std::chrono::steady_clock::time_point> host_processing_timestamp;
   };
