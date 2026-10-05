@@ -208,6 +208,7 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-cppwinrt"
             "mingw-w64-${TOOLCHAIN}-curl-winssl"
             "mingw-w64-${TOOLCHAIN}-graphviz"
+            "mingw-w64-${TOOLCHAIN}-glslang"
             "mingw-w64-${TOOLCHAIN}-lld"
             "mingw-w64-${TOOLCHAIN}-miniupnpc"
             "mingw-w64-${TOOLCHAIN}-nlohmann-json"
@@ -216,6 +217,8 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-openssl"
             "mingw-w64-${TOOLCHAIN}-opus"
             "mingw-w64-${TOOLCHAIN}-toolchain"
+            "mingw-w64-${TOOLCHAIN}-vulkan-headers"
+            "mingw-w64-${TOOLCHAIN}-vulkan-loader"
           )
 
           if [[ "${MATRIX_MSYSTEM}" == "ucrt64" ]]; then
@@ -417,6 +420,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++ \
             -DSUNSHINE_ASSETS_DIR=assets \
             -DSUNSHINE_ENABLE_WEBRTC=ON \
+            -DSUNSHINE_ENABLE_PYROWAVE=ON \
             -DSUNSHINE_PUBLISHER_NAME="NortheBridge Foundation" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://northebridge.com/" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/NortheBridge/luminalshine"
@@ -808,6 +812,17 @@ jobs:
       - name: GameStream serverinfo health-check self-test
         shell: pwsh
         run: ./scripts/test_luminalshine_serverinfo.ps1 -SelfTest
+
+      - name: PyroWave and connection-path gate
+        # These suites are deterministic and require no display adapter. Keep
+        # them blocking even though the broader hardware-sensitive run above is
+        # advisory: release builds must preserve legacy client admission while
+        # adding PyroWave's separately negotiated format.
+        shell: msys2 {0}
+        working-directory: build/tests
+        run: >-
+          ./test_sunshine.exe --gtest_color=yes
+          --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*'
 
       - name: Config consistency gate
         # Unlike the advisory run above, the config-consistency suite reads
