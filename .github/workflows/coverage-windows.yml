@@ -121,6 +121,7 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-cmake"
             "mingw-w64-${TOOLCHAIN}-cppwinrt"
             "mingw-w64-${TOOLCHAIN}-curl-winssl"
+            "mingw-w64-${TOOLCHAIN}-glslang"
             "mingw-w64-${TOOLCHAIN}-lld"
             "mingw-w64-${TOOLCHAIN}-miniupnpc"
             "mingw-w64-${TOOLCHAIN}-nlohmann-json"
@@ -130,6 +131,8 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-opus"
             "mingw-w64-${TOOLCHAIN}-toolchain"
             "mingw-w64-${TOOLCHAIN}-MinHook"
+            "mingw-w64-${TOOLCHAIN}-vulkan-headers"
+            "mingw-w64-${TOOLCHAIN}-vulkan-loader"
             "mingw-w64-${TOOLCHAIN}-python-gcovr"
             "mingw-w64-${TOOLCHAIN}-compiler-rt"
           )
@@ -200,6 +203,7 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DSUNSHINE_ASSETS_DIR=assets \
+            -DSUNSHINE_ENABLE_PYROWAVE=ON \
             -DSUNSHINE_PUBLISHER_NAME="NortheBridge Foundation" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://northebridge.com/" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/NortheBridge/luminalshine"

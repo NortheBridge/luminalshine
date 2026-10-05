@@ -25,6 +25,11 @@ import LinkButton from '@/components/shell/LinkButton.vue';
 import ConfigFieldRenderer from '@/ConfigFieldRenderer.vue';
 import HighPerformanceCard from '@/components/HighPerformanceCard.vue';
 import PlayniteReinstallButton from '@/components/PlayniteReinstallButton.vue';
+import {
+  codecModeDescription,
+  formatAutomaticBitrate,
+  parseAutomaticBitrate,
+} from '@/utils/missionControlStreamSettings';
 
 const t2 = useT2();
 const host = useHostStore();
@@ -37,6 +42,13 @@ const dialog = useDialog();
 const { config, metadata } = storeToRefs(configStore);
 const update = useUpdateCheck();
 const crash = useCrashDump();
+
+const describeCodecMode = (codec: 'hevc' | 'av1', value: unknown) =>
+  codecModeDescription(t2, codec, value);
+const formatMaxBitrate = (value: number | null) =>
+  formatAutomaticBitrate(value, t2('_common.auto', 'Automatic'));
+const parseMaxBitrate = (value: string) =>
+  parseAutomaticBitrate(value, t2('_common.auto', 'Automatic'));
 
 // ---- clock (for live durations / relative times) ---------------------------
 const nowSec = ref(Math.floor(Date.now() / 1000));
@@ -1019,16 +1031,18 @@ onBeforeUnmount(() => {
         <ConfigFieldRenderer
           v-model="config.hevc_mode"
           setting-key="hevc_mode"
-          desc=""
+          :desc="describeCodecMode('hevc', config.hevc_mode)"
           size="small"
+          :consistent-menu-width="false"
         />
       </div>
       <div class="mc-field">
         <ConfigFieldRenderer
           v-model="config.av1_mode"
           setting-key="av1_mode"
-          desc=""
+          :desc="describeCodecMode('av1', config.av1_mode)"
           size="small"
+          :consistent-menu-width="false"
         />
       </div>
       <div class="mc-field">
@@ -1037,6 +1051,8 @@ onBeforeUnmount(() => {
           setting-key="max_bitrate"
           desc=""
           size="small"
+          :format="formatMaxBitrate"
+          :parse="parseMaxBitrate"
         />
       </div>
       <div v-if="isWindows" class="mc-field">
