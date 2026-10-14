@@ -66,6 +66,17 @@ namespace nvhttp {
    */
   void setup(const std::string &pkey, const std::string &cert);
 
+  /**
+   * @brief Add the LuminalShine release version to a `/serverinfo` response tree.
+   * @details Puts `root.LuminalShineVersion` with `PROJECT_VERSION`. `appversion` and `GfeVersion`
+   *          carry GameStream emulation constants, so this element is how a client tells a
+   *          LuminalShine host, and its release, apart from Sunshine. `serverinfo` adds it only
+   *          on the HTTPS server, which answers paired clients only, so the release is not
+   *          exposed to unauthenticated peers on the HTTP port.
+   * @param tree The `/serverinfo` response tree.
+   */
+  void put_luminalshine_version(boost::property_tree::ptree &tree);
+
   class SunshineHTTPS: public SimpleWeb::HTTPS {
   public:
     SunshineHTTPS(boost::asio::io_context &io_context, boost::asio::ssl::context &ctx):
