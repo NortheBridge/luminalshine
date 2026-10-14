@@ -2134,11 +2134,6 @@ namespace nvhttp {
 
     pt::write_xml(data, tree);
     response->write(data.str());
-
-    *response
-      << "HTTP/1.1 404 NOT FOUND\r\n"
-      << data.str();
-
     response->close_connection_after_response = true;
   }
 
