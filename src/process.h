@@ -162,6 +162,15 @@ namespace proc {
      */
     int running();
 
+    /**
+     * @brief Like running(), for callers that must not stall (the GameStream serverinfo).
+     * @details running() waits for `_lifecycle_mutex`, which execute() holds for its whole
+     *          body. While that lock is busy this returns the app id of the last
+     *          execute()/terminate() instead of waiting; otherwise it is exactly running().
+     * @return The app id if an app is running (or being started), otherwise `0`.
+     */
+    int running_nowait();
+
     ~proc_t();
 
     // Return a snapshot copy to avoid concurrent access races
@@ -200,7 +209,16 @@ namespace proc {
   private:
     int launch_app_commands();
 
+    // Every write to _app_id goes through here so that running_nowait() can read
+    // the id without the lifecycle lock. Callers hold _lifecycle_mutex, except
+    // the move operations, which run before the object is shared.
+    void set_app_id(int app_id) {
+      _app_id = app_id;
+      _app_id_published.store(app_id, std::memory_order_relaxed);
+    }
+
     int _app_id;
+    std::atomic<int> _app_id_published {0};
 
     bp::environment _env;
     std::vector<ctx_t> _apps;

@@ -2584,7 +2584,9 @@ namespace nvhttp {
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 
-    auto current_appid = proc::proc.running();
+    // Not running(): that waits for the lifecycle lock a launch holds while it
+    // starts the app, and this handler runs on the io thread.
+    auto current_appid = proc::proc.running_nowait();
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
     tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
