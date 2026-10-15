@@ -203,14 +203,18 @@ namespace {
       get("/slow", 15, slow_body);
       slow_done.store(true);
     }};
-    std::jthread queued_client {[&]() {
-      get("/queued", 15, queued_body);
-    }};
+    std::jthread queued_client;
     open_on_exit_t release_on_exit {gate};
 
+    // /queued must be enqueued strictly after /slow is running, or it could
+    // reach the worker first and run to completion before stop() starts. So
+    // its client only starts once /slow is blocked on the gate.
     ASSERT_TRUE(wait_until([this]() {
       return slow_started.load();
     }));
+    queued_client = std::jthread {[&]() {
+      get("/queued", 15, queued_body);
+    }};
     ASSERT_TRUE(wait_until([this]() {
       return queued_posted.load();
     }));
