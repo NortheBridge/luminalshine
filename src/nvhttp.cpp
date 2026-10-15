@@ -58,6 +58,7 @@
 #endif
 #include "process.h"
 #include "rtsp.h"
+#include "serial_executor.h"
 #include "stream.h"
 #include "system_tray.h"
 #include "update.h"
@@ -3603,6 +3604,51 @@ namespace nvhttp {
     conf_intern.servercert = cert;
   }
 
+  namespace {
+    /**
+     * @brief Run a slow HTTPS handler on the launch worker instead of the io thread.
+     * @details The HTTPS server has a single io thread that also performs every TLS handshake,
+     *          so a handler that blocks it (/launch spends about 14 s preparing the display and
+     *          starting the app) leaves all other clients without an answer. The handler runs
+     *          on @p worker and writes the response from there: Simple-Web-Server queues those
+     *          writes on the connection's strand, as it does for the pairing responses that are
+     *          held until the PIN arrives. One worker keeps these handlers serialised with each
+     *          other, in arrival order, as they were on the io thread.
+     * @param worker The launch worker.
+     * @param name The route name, for the log.
+     * @param response The response, written by @p handler.
+     * @param request The request.
+     * @param handler Called as `handler(response, request)`.
+     */
+    template<class Handler>
+    void run_on_launch_worker(util::serial_executor_t &worker, std::string_view name, resp_https_t response, req_https_t request, Handler handler) {
+      const bool queued = worker.post([name, response, request, handler = std::move(handler)]() {
+        // Tasks must not throw; Simple-Web-Server used to swallow handler exceptions on the io thread.
+        try {
+          handler(response, request);
+        } catch (const std::exception &err) {
+          BOOST_LOG(error) << "/"sv << name << " handler terminated by exception: "sv << err.what();
+        } catch (...) {
+          BOOST_LOG(error) << "/"sv << name << " handler terminated by an unknown exception."sv;
+        }
+      });
+      if (queued) {
+        return;
+      }
+
+      // The worker only stops while the servers shut down. Queued requests are
+      // dropped silently then (their connections are closed); this one arrived
+      // in the gap between the two, so give it the usual XML error.
+      pt::ptree tree;
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "The host is shutting down.");
+      std::ostringstream data;
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    }
+  }  // namespace
+
   void start() {
     platf::set_thread_name("nvhttp");
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
@@ -3629,6 +3675,17 @@ namespace nvhttp {
 
     https_server_t https_server {config::nvhttp.cert, config::nvhttp.pkey};
     http_server_t http_server;
+
+    // /launch, /resume and /cancel run here, not on the HTTPS io thread, so that
+    // a launch that takes seconds does not stop every other request (including
+    // the TLS handshakes) from being served. host_audio is only touched by
+    // launch and resume, which both run on this one worker, so it needs no
+    // lock. Declared after the servers: it is stopped explicitly below and, on
+    // an early exit, destroyed (joined) before the servers whose responses its
+    // queued tasks hold.
+    util::serial_executor_t launch_worker {[]() {
+      platf::set_thread_name("nvhttp::launch");
+    }};
 
     // Verify certificates after establishing connection
     https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &peer_endpoint) {
@@ -3727,13 +3784,22 @@ namespace nvhttp {
     };
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
-    https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
-      launch(host_audio, resp, req);
+    https_server.resource["^/launch$"]["GET"] = [&host_audio, &launch_worker](resp_https_t resp, req_https_t req) {
+      run_on_launch_worker(launch_worker, "launch"sv, std::move(resp), std::move(req), [&host_audio](resp_https_t response, req_https_t request) {
+        launch(host_audio, std::move(response), std::move(request));
+      });
     };
-    https_server.resource["^/resume$"]["GET"] = [&host_audio](auto resp, auto req) {
-      resume(host_audio, resp, req);
+    https_server.resource["^/resume$"]["GET"] = [&host_audio, &launch_worker](resp_https_t resp, req_https_t req) {
+      run_on_launch_worker(launch_worker, "resume"sv, std::move(resp), std::move(req), [&host_audio](resp_https_t response, req_https_t request) {
+        resume(host_audio, std::move(response), std::move(request));
+      });
     };
-    https_server.resource["^/cancel$"]["GET"] = cancel;
+    // Queued behind any launch/resume in progress, as it was when all three ran
+    // on the io thread: cancelling while a launch holds the display lease would
+    // otherwise wait for it and then give up ("superseded") without cleaning up.
+    https_server.resource["^/cancel$"]["GET"] = [&launch_worker](resp_https_t resp, req_https_t req) {
+      run_on_launch_worker(launch_worker, "cancel"sv, std::move(resp), std::move(req), cancel);
+    };
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);
@@ -3789,6 +3855,11 @@ namespace nvhttp {
 
     https_server.stop();
     http_server.stop();
+
+    // Drop the launch/resume/cancel requests still queued (their connections
+    // were just closed, so there is nobody to answer) and wait for the one in
+    // flight, so that no handler outlives the servers.
+    launch_worker.stop();
 
     ssl.join();
     tcp.join();

@@ -38,7 +38,13 @@ LuminalShine runs as a **single Windows service process**. Long-lived
 threads handle the three "front doors" the service listens on:
 
 - **`nvhttp` thread** — the NVIDIA GameStream-compatible HTTP control
-  plane that Moonlight clients pair against.
+  plane that Moonlight clients pair against. Each of its two servers
+  has a single io thread, which also performs the TLS handshakes, so
+  the slow `/launch`, `/resume` and `/cancel` handlers run, in arrival
+  order, on a dedicated `nvhttp::launch` worker
+  (`util::serial_executor_t`) instead. `serverinfo`, `applist`,
+  pairing and the other clients' requests keep being answered while a
+  launch is in progress.
 - **`confighttp` thread** — the HTTPS Web UI + REST API. Also hosts
   the WebRTC signaling endpoints under `/api/webrtc/`.
 - **`rtsp_stream` thread** — the classic streaming media + control

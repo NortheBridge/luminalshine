@@ -59,18 +59,23 @@ namespace {
   TEST(SerialExecutor, PostReturnsBeforeALongTaskFinishes) {
     util::serial_executor_t executor;
 
+    std::promise<void> running;
     std::promise<void> release;
     auto release_future = release.get_future().share();
     std::atomic<bool> finished {false};
 
     const auto posted_at = std::chrono::steady_clock::now();
     ASSERT_TRUE(executor.post([&]() {
+      running.set_value();
       release_future.wait_for(kWait);
       finished.store(true);
     }));
     const auto post_took = std::chrono::steady_clock::now() - posted_at;
 
-    // Release the worker first so a failure cannot leave it blocked.
+    // The task is running and blocked, yet post() has already returned.
+    ASSERT_EQ(running.get_future().wait_for(kWait), std::future_status::ready);
+    EXPECT_FALSE(finished.load());
+
     release.set_value();
     executor.stop();
 
