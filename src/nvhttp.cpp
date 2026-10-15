@@ -2538,36 +2538,44 @@ namespace nvhttp {
       tree.put("root.LocalIP", net::addr_to_normalized_string(local_endpoint.address()));
     }
 
-    tree.put("root.MaxLumaPixelsHEVC", video::active_hevc_mode > 1 ? "1869449984" : "0");
+    // A launch on another thread may be re-probing the encoders: read each
+    // value once so this response is at least consistent with itself.
+    const int hevc_mode = video::active_hevc_mode;
+    const int av1_mode = video::active_av1_mode;
+    const bool yuv444_h264 = video::last_encoder_probe_supported_yuv444_for_codec[0];
+    const bool yuv444_hevc = video::last_encoder_probe_supported_yuv444_for_codec[1];
+    const bool yuv444_av1 = video::last_encoder_probe_supported_yuv444_for_codec[2];
+
+    tree.put("root.MaxLumaPixelsHEVC", hevc_mode > 1 ? "1869449984" : "0");
 
     // YUV 4:4:4 modes are only advertised when the encoder probe confirmed
     // the GPU can encode them AND the user hasn't disabled 4:4:4 streaming.
     const bool allow_yuv444 = config::video.yuv444_streaming;
     uint32_t codec_mode_flags = SCM_H264;
-    if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[0]) {
+    if (allow_yuv444 && yuv444_h264) {
       codec_mode_flags |= SCM_H264_HIGH8_444;
     }
-    if (video::active_hevc_mode >= 2) {
+    if (hevc_mode >= 2) {
       codec_mode_flags |= SCM_HEVC;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[1]) {
+      if (allow_yuv444 && yuv444_hevc) {
         codec_mode_flags |= SCM_HEVC_REXT8_444;
       }
     }
-    if (video::active_hevc_mode >= 3) {
+    if (hevc_mode >= 3) {
       codec_mode_flags |= SCM_HEVC_MAIN10;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[1]) {
+      if (allow_yuv444 && yuv444_hevc) {
         codec_mode_flags |= SCM_HEVC_REXT10_444;
       }
     }
-    if (video::active_av1_mode >= 2) {
+    if (av1_mode >= 2) {
       codec_mode_flags |= SCM_AV1_MAIN8;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[2]) {
+      if (allow_yuv444 && yuv444_av1) {
         codec_mode_flags |= SCM_AV1_HIGH8_444;
       }
     }
-    if (video::active_av1_mode >= 3) {
+    if (av1_mode >= 3) {
       codec_mode_flags |= SCM_AV1_MAIN10;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[2]) {
+      if (allow_yuv444 && yuv444_av1) {
         codec_mode_flags |= SCM_AV1_HIGH10_444;
       }
     }
