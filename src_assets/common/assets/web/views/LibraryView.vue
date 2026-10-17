@@ -6,7 +6,7 @@
  */
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { NButton, NInput, useMessage } from 'naive-ui';
+import { NButton, NInput, useDialog, useMessage } from 'naive-ui';
 import { http } from '@/http';
 import { useT2 } from '@/composables/useT2';
 import { useAppsStore, type App } from '@/stores/apps';
@@ -22,6 +22,9 @@ const AppEditModal = defineAsyncComponent(() => import('@/components/AppEditModa
 const t2 = useT2();
 const route = useRoute();
 const message = useMessage();
+const dialog = useDialog();
+const importInput = ref<HTMLInputElement>();
+const importing = ref(false);
 const appsStore = useAppsStore();
 const auth = useAuthStore();
 const configStore = useConfigStore();
@@ -216,6 +219,64 @@ async function forceSync(): Promise<void> {
   }
 }
 
+async function importFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file || importing.value) return;
+  try {
+    if (file.size > 5 * 1024 * 1024)
+      throw new Error(t2('library.import_size', 'apps.json must be no larger than 5 MiB.'));
+    const contents = await file.text();
+    const document: unknown = JSON.parse(contents.replace(/^\uFEFF/, ''));
+    if (
+      !document ||
+      typeof document !== 'object' ||
+      !('apps' in document) ||
+      !Array.isArray(document.apps)
+    )
+      throw new Error(
+        t2('library.import_invalid', 'Select an apps.json file containing an apps array.'),
+      );
+    dialog.warning({
+      title: t2('library.import_title', 'Import apps.json'),
+      content: `${document.apps.length} ${t2('library.import_confirm', 'apps will replace the configured applications and environment variables. Auto-synced catalogues are unaffected. Only import files you trust: app and preparation commands can execute on this host. Referenced programs and cover images are not copied.')}`,
+      positiveText: t2('library.import_replace', 'Replace and import'),
+      negativeText: t2('_common.cancel', 'Cancel'),
+      onPositiveClick: async () => {
+        importing.value = true;
+        try {
+          const response = await http.post<{ status?: boolean; error?: string }>(
+            './api/apps/import',
+            document,
+            {
+              validateStatus: () => true,
+            },
+          );
+          if (response.status !== 200 || !response.data?.status)
+            throw new Error(response.data?.error || t2('library.import_failed', 'Import failed.'));
+          selectedKey.value = null;
+          coverFailed.value = new Set();
+          await reload();
+          message.success(
+            t2('library.import_done', 'Applications imported. File protection remains enabled.'),
+          );
+        } catch (error) {
+          message.error(
+            error instanceof Error ? error.message : t2('library.import_failed', 'Import failed.'),
+          );
+        } finally {
+          importing.value = false;
+        }
+      },
+    });
+  } catch (error) {
+    message.error(
+      error instanceof Error ? error.message : t2('library.import_failed', 'Import failed.'),
+    );
+  }
+}
+
 onMounted(async () => {
   await auth.waitForAuthentication();
   if (!host.running) void host.start();
@@ -278,6 +339,21 @@ onMounted(async () => {
         @click="forceSync"
       >
         <NavIcon name="sync" :size="14" />{{ t2('library.force_sync', 'Force sync') }}
+      </NButton>
+      <input
+        ref="importInput"
+        type="file"
+        accept=".json,application/json"
+        class="hidden"
+        @change="importFile"
+      />
+      <NButton
+        size="small"
+        :loading="importing"
+        :disabled="importing"
+        @click="importInput?.click()"
+      >
+        {{ t2('library.import_title', 'Import apps.json') }}
       </NButton>
       <NButton size="small" type="primary" @click="openAdd"
         ><NavIcon name="plus" :size="14" />{{ t2('_common.add', 'Add') }}</NButton

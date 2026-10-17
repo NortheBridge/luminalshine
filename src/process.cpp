@@ -2313,33 +2313,38 @@ namespace proc {
     return std::make_tuple(id_no_index, id_with_index);
   }
 
-  std::optional<proc::proc_t> parse(const std::string &file_name) {
+  static std::optional<proc::proc_t> parse_document(const std::string &file_name, const std::string *uploaded_content) {
     pt::ptree tree;
     nlohmann::json json_tree;
     std::string file_content;
 
     try {
-      // Reject tampered apps.json before any consumer reads its contents.
-      // Quarantine moves the suspect file out of the way so the next
-      // refresh_client_apps_cache call can seed defaults via the Web UI.
-      const auto verify_result = integrity::verify(std::filesystem::path(file_name));
-      if (verify_result == integrity::verify_status::mismatch) {
-        const auto archive = integrity::quarantine(std::filesystem::path(file_name));
-        BOOST_LOG(error) << "proc::parse: integrity check failed for "sv << file_name
-                         << "; quarantined to "sv << archive.string()
-                         << "; refusing to load."sv;
-        return std::nullopt;
-      }
-
-      {
-        std::ifstream in(file_name, std::ios::binary);
-        if (!in) {
-          BOOST_LOG(error) << "Unable to open apps file: "sv << file_name;
+      if (uploaded_content) {
+        file_content = *uploaded_content;
+      } else {
+        // Reject tampered apps.json before any consumer reads its contents.
+        // Quarantine moves the suspect file out of the way so the next
+        // refresh_client_apps_cache call can seed defaults via the Web UI.
+        const auto verify_result = integrity::verify(std::filesystem::path(file_name));
+        if (verify_result == integrity::verify_status::mismatch) {
+          const auto archive = integrity::quarantine(std::filesystem::path(file_name));
+          BOOST_LOG(error) << "proc::parse: integrity check failed for "sv << file_name
+                           << "; quarantined to "sv << archive.string()
+                           << "; refusing to load."sv;
           return std::nullopt;
         }
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        file_content = ss.str();
+
+        {
+          std::ifstream in(file_name, std::ios::binary);
+          if (!in) {
+            BOOST_LOG(error) << "Unable to open apps file: "sv << file_name;
+            return std::nullopt;
+          }
+          std::ostringstream ss;
+          ss << in.rdbuf();
+          file_content = ss.str();
+        }
+
       }
 
       try {
@@ -2388,7 +2393,7 @@ namespace proc {
       }
       if (migrated_smooth_motion) {
         file_content = json_tree.dump(4);
-        if (integrity::write_signed(std::filesystem::path(file_name), file_content)) {
+        if (uploaded_content || integrity::write_signed(std::filesystem::path(file_name), file_content)) {
           BOOST_LOG(info) << "Migrated legacy NVIDIA Smooth Motion application settings to game-controlled frame generation."sv;
         } else {
           BOOST_LOG(warning) << "Could not persist the Smooth Motion application-settings migration; using migrated values for this run."sv;
@@ -2675,6 +2680,14 @@ namespace proc {
     }
 
     return std::nullopt;
+  }
+
+  std::optional<proc::proc_t> parse(const std::string &file_name) {
+    return parse_document(file_name, nullptr);
+  }
+
+  bool validate_apps_content(const std::string &contents) {
+    return parse_document({}, &contents).has_value();
   }
 
   std::vector<ctx_t> parse_auto_apps(

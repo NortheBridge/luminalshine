@@ -262,6 +262,8 @@ namespace proc {
    *         .exe path (URIs, scripts, empty commands).
    */
   std::string extract_command_exe_name(std::string_view cmd);
+  // Parse uploaded contents without writing files or changing the active app list.
+  bool validate_apps_content(const std::string &contents);
   void refresh(const std::string &file_name);
   std::optional<proc::proc_t> parse(const std::string &file_name);
 

@@ -21,6 +21,17 @@ sunshine ~/sunshine_config.conf
 The default location of the `apps.json` is the same as the configuration file. You can use a custom
 location by modifying the configuration file.
 
+To restore or transfer an `apps.json` in LuminalShine, open **Library → Import apps.json**
+in the Web UI, select the JSON file (up to 5 MiB), and confirm **Replace and import**.
+This replaces the configured applications and their environment variables; separately
+auto-synced catalogues are unaffected. Only import files you trust, since application
+and preparation commands can execute on the host. Referenced programs and cover images
+are not transferred and their paths must be valid on this host.
+
+The authenticated import validates the document and saves it through LuminalShine's
+signed configuration writer. Protection of `%ProgramData%\LuminalShine` remains enabled;
+copying an edited file directly into the protected directory is not an import.
+
 **Default Config Directory**
 
 | OS      | Location                                        |

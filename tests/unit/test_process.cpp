@@ -11,6 +11,34 @@
 
 // local imports
 #include <src/process.h>
+#include <src/apps_import.h>
+
+TEST(AppsImportTest, PreservesFieldsAndDefaultsEnvironment) {
+  auto document = nlohmann::json::parse(R"({"apps":[{"name":"Desktop","uuid":"existing","future-option":true}]})");
+  confighttp::validate_apps_import(document);
+  EXPECT_TRUE(document["env"].is_object());
+  EXPECT_EQ(document["apps"][0]["uuid"], "existing");
+  EXPECT_EQ(document["apps"][0]["future-option"], true);
+  EXPECT_TRUE(proc::validate_apps_content(document.dump()));
+}
+
+TEST(AppsImportTest, RejectsMalformedStructures) {
+  for (const auto *input : {
+         R"([])", R"({"apps":{}})", R"({"apps":[{}]})",
+         R"({"apps":[],"env":{"PATH":[]}})",
+         R"({"apps":[{"name":"Bad","cmd":[]}]})",
+         R"({"apps":[{"name":"Bad","prep-cmd":["command"]}]})",
+         R"({"apps":[{"name":"Bad","detached":[{}]}]})"}) {
+    auto document = nlohmann::json::parse(input);
+    EXPECT_THROW(confighttp::validate_apps_import(document), std::invalid_argument);
+  }
+}
+
+TEST(AppsImportTest, LoaderRejectsInvalidEnvironmentExpansion) {
+  EXPECT_FALSE(proc::validate_apps_content(R"({"apps":[],"env":{"BROKEN":"$(missing"}})"));
+  EXPECT_FALSE(proc::validate_apps_content("not JSON"));
+  EXPECT_TRUE(proc::validate_apps_content(R"({"apps":[],"env":{}})"));
+}
 
 namespace fs = std::filesystem;
 

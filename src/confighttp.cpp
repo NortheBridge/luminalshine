@@ -46,6 +46,7 @@
 #include "http_auth.h"
 #include "httpcommon.h"
 #include "integrity.h"
+#include "apps_import.h"
 #include "platform/common.h"
 #ifdef _WIN32
   #include "src/platform/windows/image_convert.h"
@@ -1610,6 +1611,39 @@ namespace confighttp {
       return;
     }
     response->write(success_ok, in, headers);
+  }
+
+  // Authenticated whole-document import through the normal signed save path.
+  void importApps(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+    constexpr size_t max_import_size = 5 * 1024 * 1024;
+    if (request->content.size() > max_import_size) {
+      bad_request(response, request, "apps.json must be no larger than 5 MiB.");
+      return;
+    }
+    try {
+      auto document = nlohmann::json::parse(request->content.string());
+      validate_apps_import(document);
+      for (auto &app : document["apps"]) {
+        if (!app.contains("uuid") || app["uuid"].get<std::string>().empty()) {
+          app["uuid"] = uuid_util::uuid_t::generate().string();
+        }
+      }
+      if (!proc::validate_apps_content(document.dump())) {
+        bad_request(response, request, "apps.json could not be loaded. Existing applications were not changed.");
+        return;
+      }
+      if (!refresh_client_apps_cache(document)) {
+        nlohmann::json error = {{"status", false}, {"error", "Failed to save imported applications."}};
+        response->write(SimpleWeb::StatusCode::server_error_internal_server_error, error.dump(), {{"Content-Type", "application/json"}});
+        return;
+      }
+      send_response(response, nlohmann::json {{"status", true}});
+    } catch (const std::exception &e) {
+      bad_request(response, request, e.what());
+    }
   }
 
   /**
@@ -4548,6 +4582,7 @@ namespace confighttp {
     register_api_route("^/api/apps$", "GET", getApps);
     register_api_route("^/api/logs$", "GET", getLogs);
     register_api_route("^/api/apps$", "POST", saveApp);
+    register_api_route("^/api/apps/import$", "POST", importApps);
     register_api_route("^/api/config$", "GET", getConfig);
     register_api_route("^/api/config$", "POST", saveConfig);
     // Partial updates for config settings; merges with existing file and
