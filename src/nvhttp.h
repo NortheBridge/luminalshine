@@ -90,6 +90,17 @@ namespace nvhttp {
     }
   };
 
+  /**
+   * @brief Default GET handler of both GameStream servers, for paths without a route.
+   * @details Sends a single `200 OK` response whose XML body carries `status_code="404"`,
+   *          which is what Moonlight clients parse, then closes the connection.
+   *          Explicitly instantiated for `SimpleWeb::HTTP`.
+   * @param response The response to write.
+   * @param request The request without a matching route.
+   */
+  template<class T>
+  void not_found(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request);
+
   enum class PAIR_PHASE {
     NONE,  ///< Sunshine is not in a pairing phase
     GETSERVERCERT,  ///< Sunshine is in the get server certificate phase

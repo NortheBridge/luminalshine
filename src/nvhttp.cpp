@@ -2134,13 +2134,10 @@ namespace nvhttp {
 
     pt::write_xml(data, tree);
     response->write(data.str());
-
-    *response
-      << "HTTP/1.1 404 NOT FOUND\r\n"
-      << data.str();
-
     response->close_connection_after_response = true;
   }
+
+  template void not_found<SimpleWeb::HTTP>(resp_http_t response, req_http_t request);
 
   template<class T>
   void pair(std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
