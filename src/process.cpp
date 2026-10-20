@@ -782,6 +782,7 @@ namespace proc {
   // Custom move operations to allow global proc replacement if ever needed
   proc_t::proc_t(proc_t &&other) noexcept:
       _app_id(other._app_id),
+      _app_id_published(other._app_id),
       _env(std::move(other._env)),
       _apps(std::move(other._apps)),
       _app(std::move(other._app)),
@@ -811,7 +812,7 @@ namespace proc {
     other._lossless_profile_applied = false;
 #endif
     other._completed_prep_cmds = 0;
-    other._app_id = -1;
+    other.set_app_id(-1);
   }
 
   proc_t &proc_t::operator=(proc_t &&other) noexcept {
@@ -820,7 +821,7 @@ namespace proc {
 #ifdef _WIN32
       stop_lossless_scaling_support();
 #endif
-      _app_id = other._app_id;
+      set_app_id(other._app_id);
       _env = std::move(other._env);
       _apps = std::move(other._apps);
       _app = std::move(other._app);
@@ -844,7 +845,7 @@ namespace proc {
       other._lossless_profile_applied = false;
 #endif
       other._completed_prep_cmds = 0;
-      other._app_id = -1;
+      other.set_app_id(-1);
     }
     return *this;
   }
@@ -1109,7 +1110,7 @@ namespace proc {
       return 404;
     }
 
-    _app_id = app_id;
+    set_app_id(app_id);
     _app = *iter;
     _active_client_uuid = launch_session ? launch_session->client_uuid : std::string();
     launch_session->gen1_framegen_fix = _app.gen1_framegen_fix;
@@ -1789,6 +1790,18 @@ namespace proc {
     return 0;
   }
 
+  int proc_t::running_nowait() {
+    std::unique_lock lifecycle_lock(_lifecycle_mutex, std::try_to_lock);
+    if (lifecycle_lock.owns_lock()) {
+      // Recursive mutex: running() takes it again on this thread.
+      return running();
+    }
+
+    // execute() (or terminate()) is in progress. It writes the id early, so a
+    // launch that is still starting its app already reads as busy.
+    return std::max(0, _app_id_published.load(std::memory_order_relaxed));
+  }
+
   void proc_t::terminate(bool skip_display_revert) {
     std::lock_guard lifecycle_lock(_lifecycle_mutex);
     std::error_code ec;
@@ -1945,7 +1958,7 @@ namespace proc {
 
     _active_client_uuid.clear();
     _app_launch_time = {};
-    _app_id = -1;
+    set_app_id(-1);
 
     // Clear any per-app runtime config overrides now that the app is terminating.
     // If we can safely hot-apply immediately, restore global config now; otherwise defer.

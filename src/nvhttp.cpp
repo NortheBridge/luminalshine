@@ -58,6 +58,7 @@
 #endif
 #include "process.h"
 #include "rtsp.h"
+#include "serial_executor.h"
 #include "stream.h"
 #include "system_tray.h"
 #include "update.h"
@@ -919,6 +920,12 @@ namespace nvhttp {
   constexpr std::size_t kMaxPendingPairings = 32;
   constexpr std::size_t kMaxPairingOutcomes = 64;
 
+  // Guards client_root, which is reached from the HTTPS and HTTP io threads
+  // (pairing, TLS verification), the launch worker (client lookup) and the
+  // confighttp thread (device settings). A leaf lock: never held across
+  // save_state(), load_state() or any other lock acquisition, so it cannot
+  // take part in a lock cycle. Mutators release it before saving.
+  std::mutex client_root_mutex;
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
@@ -976,7 +983,11 @@ namespace nvhttp {
     }
 
     root_node.put("uniqueid", http::unique_id);
-    client_t &client = client_root;
+    client_t client;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      client = client_root;
+    }
 
     pt::ptree named_cert_nodes;
     for (auto &named_cert : client.named_devices) {
@@ -1050,7 +1061,7 @@ namespace nvhttp {
 #endif
       {
         pt::ptree last_seen_nodes;
-        for (const auto &named_cert : client_root.named_devices) {
+        for (const auto &named_cert : client.named_devices) {
           if (!named_cert.last_seen.has_value()) {
             continue;
           }
@@ -1203,11 +1214,11 @@ namespace nvhttp {
       cert_chain.add(crypto::x509(named_cert.cert));
     }
 
+    std::lock_guard client_lock {client_root_mutex};
     client_root = client;
   }
 
   std::string add_authorized_client(const std::string &name, std::string &&cert) {
-    client_t &client = client_root;
     named_cert_t named_cert;
     named_cert.name = name;
     named_cert.cert = std::move(cert);
@@ -1221,7 +1232,10 @@ namespace nvhttp {
     named_cert.prefer_10bit_sdr.reset();
     named_cert.last_seen.reset();
     named_cert.config_overrides.clear();
-    client.named_devices.emplace_back(named_cert);
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      client_root.named_devices.emplace_back(named_cert);
+    }
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
       save_state();
@@ -1290,8 +1304,8 @@ namespace nvhttp {
     // temporary that freed the certificate out from under us.
     auto client_cert_signature = crypto::signature(client_cert.get());
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
+    std::lock_guard client_lock {client_root_mutex};
+    for (auto &named_cert : client_root.named_devices) {
       auto stored_x509 = crypto::x509(named_cert.cert);
       if (stored_x509) {
         auto stored_signature = crypto::signature(stored_x509.get());
@@ -1330,18 +1344,23 @@ namespace nvhttp {
     return get_client_uuid_from_peer_cert(it->second, client_name_out);
   }
 
-  named_cert_t *get_named_cert_by_uuid(const std::string &uuid) {
+  /**
+   * @brief A copy of the paired client's settings, or nothing for an unknown or empty uuid.
+   * @note A copy, not a pointer into client_root: pairing on the io thread may grow
+   *       the vector while the launch worker is still reading the settings.
+   */
+  std::optional<named_cert_t> get_named_cert_by_uuid(const std::string &uuid) {
     if (uuid.empty()) {
-      return nullptr;
+      return std::nullopt;
     }
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
+    std::lock_guard client_lock {client_root_mutex};
+    for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
-        return &named_cert;
+        return named_cert;
       }
     }
-    return nullptr;
+    return std::nullopt;
   }
 
   std::optional<config::video_t::virtual_display_mode_e> parse_virtual_display_mode_override(const std::string &value) {
@@ -1460,7 +1479,8 @@ namespace nvhttp {
     }
 
     launch_session->host_audio = host_audio;
-    named_cert_t *client_settings = get_named_cert_by_uuid(launch_session->client_uuid);
+    const auto client_settings_copy = get_named_cert_by_uuid(launch_session->client_uuid);
+    const named_cert_t *client_settings = client_settings_copy ? &*client_settings_copy : nullptr;
     auto parse_mode_string = [&](const std::string &mode_str) -> bool {
       std::stringstream mode(mode_str);
       int x = 0;
@@ -2538,36 +2558,44 @@ namespace nvhttp {
       tree.put("root.LocalIP", net::addr_to_normalized_string(local_endpoint.address()));
     }
 
-    tree.put("root.MaxLumaPixelsHEVC", video::active_hevc_mode > 1 ? "1869449984" : "0");
+    // A launch on another thread may be re-probing the encoders: read each
+    // value once so this response is at least consistent with itself.
+    const int hevc_mode = video::active_hevc_mode;
+    const int av1_mode = video::active_av1_mode;
+    const bool yuv444_h264 = video::last_encoder_probe_supported_yuv444_for_codec[0];
+    const bool yuv444_hevc = video::last_encoder_probe_supported_yuv444_for_codec[1];
+    const bool yuv444_av1 = video::last_encoder_probe_supported_yuv444_for_codec[2];
+
+    tree.put("root.MaxLumaPixelsHEVC", hevc_mode > 1 ? "1869449984" : "0");
 
     // YUV 4:4:4 modes are only advertised when the encoder probe confirmed
     // the GPU can encode them AND the user hasn't disabled 4:4:4 streaming.
     const bool allow_yuv444 = config::video.yuv444_streaming;
     uint32_t codec_mode_flags = SCM_H264;
-    if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[0]) {
+    if (allow_yuv444 && yuv444_h264) {
       codec_mode_flags |= SCM_H264_HIGH8_444;
     }
-    if (video::active_hevc_mode >= 2) {
+    if (hevc_mode >= 2) {
       codec_mode_flags |= SCM_HEVC;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[1]) {
+      if (allow_yuv444 && yuv444_hevc) {
         codec_mode_flags |= SCM_HEVC_REXT8_444;
       }
     }
-    if (video::active_hevc_mode >= 3) {
+    if (hevc_mode >= 3) {
       codec_mode_flags |= SCM_HEVC_MAIN10;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[1]) {
+      if (allow_yuv444 && yuv444_hevc) {
         codec_mode_flags |= SCM_HEVC_REXT10_444;
       }
     }
-    if (video::active_av1_mode >= 2) {
+    if (av1_mode >= 2) {
       codec_mode_flags |= SCM_AV1_MAIN8;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[2]) {
+      if (allow_yuv444 && yuv444_av1) {
         codec_mode_flags |= SCM_AV1_HIGH8_444;
       }
     }
-    if (video::active_av1_mode >= 3) {
+    if (av1_mode >= 3) {
       codec_mode_flags |= SCM_AV1_MAIN10;
-      if (allow_yuv444 && video::last_encoder_probe_supported_yuv444_for_codec[2]) {
+      if (allow_yuv444 && yuv444_av1) {
         codec_mode_flags |= SCM_AV1_HIGH10_444;
       }
     }
@@ -2576,7 +2604,9 @@ namespace nvhttp {
     }
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
 
-    auto current_appid = proc::proc.running();
+    // Not running(): that waits for the lifecycle lock a launch holds while it
+    // starts the app, and this handler runs on the io thread.
+    auto current_appid = proc::proc.running_nowait();
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
     tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
@@ -2595,7 +2625,11 @@ namespace nvhttp {
 
   nlohmann::json get_all_clients() {
     nlohmann::json named_cert_nodes = nlohmann::json::array();
-    client_t &client = client_root;
+    client_t client;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      client = client_root;
+    }
     std::list<std::string> connected_uuids = rtsp_stream::get_all_session_client_uuids();
     for (auto &named_cert : client.named_devices) {
       nlohmann::json named_cert_node;
@@ -2650,21 +2684,24 @@ namespace nvhttp {
       return;
     }
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
-      if (named_cert.uuid != uuid) {
-        continue;
-      }
+    bool updated = false;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert.uuid != uuid) {
+          continue;
+        }
 
-      const auto now = now_seconds();
-      if (named_cert.last_seen.has_value() && *named_cert.last_seen == now) {
-        return;
+        const auto now = now_seconds();
+        if (!named_cert.last_seen.has_value() || *named_cert.last_seen != now) {
+          named_cert.last_seen = now;
+          updated = true;
+        }
+        break;
       }
-      named_cert.last_seen = now;
-      if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
-        save_state();
-      }
-      return;
+    }
+    if (updated && !config::sunshine.flags[config::flag::FRESH_STATE]) {
+      save_state();
     }
   }
 
@@ -2919,7 +2956,7 @@ namespace nvhttp {
         // No "uniqueid" fallback here either — see make_launch_session. An empty
         // uuid simply finds no named_cert, which is the correct outcome for an
         // unidentified client; get_named_cert_by_uuid early-returns on empty.
-        if (auto *client_settings = get_named_cert_by_uuid(client_uuid)) {
+        if (const auto client_settings = get_named_cert_by_uuid(client_uuid)) {
           for (const auto &[k, v] : client_settings->config_overrides) {
             overrides.insert_or_assign(k, v);
           }
@@ -3609,6 +3646,51 @@ namespace nvhttp {
     conf_intern.servercert = cert;
   }
 
+  namespace {
+    /**
+     * @brief Run a slow HTTPS handler on the launch worker instead of the io thread.
+     * @details The HTTPS server has a single io thread that also performs every TLS handshake,
+     *          so a handler that blocks it (/launch spends about 14 s preparing the display and
+     *          starting the app) leaves all other clients without an answer. The handler runs
+     *          on @p worker and writes the response from there: Simple-Web-Server queues those
+     *          writes on the connection's strand, as it does for the pairing responses that are
+     *          held until the PIN arrives. One worker keeps these handlers serialised with each
+     *          other, in arrival order, as they were on the io thread.
+     * @param worker The launch worker.
+     * @param name The route name, for the log.
+     * @param response The response, written by @p handler.
+     * @param request The request.
+     * @param handler Called as `handler(response, request)`.
+     */
+    template<class Handler>
+    void run_on_launch_worker(util::serial_executor_t &worker, std::string_view name, resp_https_t response, req_https_t request, Handler handler) {
+      const bool queued = worker.post([name, response, request, handler = std::move(handler)]() {
+        // Tasks must not throw; Simple-Web-Server used to swallow handler exceptions on the io thread.
+        try {
+          handler(response, request);
+        } catch (const std::exception &err) {
+          BOOST_LOG(error) << "/"sv << name << " handler terminated by exception: "sv << err.what();
+        } catch (...) {
+          BOOST_LOG(error) << "/"sv << name << " handler terminated by an unknown exception."sv;
+        }
+      });
+      if (queued) {
+        return;
+      }
+
+      // The worker only stops while the servers shut down. Queued requests are
+      // dropped silently then (their connections are closed); this one arrived
+      // in the gap between the two, so give it the usual XML error.
+      pt::ptree tree;
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "The host is shutting down.");
+      std::ostringstream data;
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    }
+  }  // namespace
+
   void start() {
     platf::set_thread_name("nvhttp");
     auto shutdown_event = mail::man->event<bool>(mail::shutdown);
@@ -3635,6 +3717,17 @@ namespace nvhttp {
 
     https_server_t https_server {config::nvhttp.cert, config::nvhttp.pkey};
     http_server_t http_server;
+
+    // /launch, /resume and /cancel run here, not on the HTTPS io thread, so that
+    // a launch that takes seconds does not stop every other request (including
+    // the TLS handshakes) from being served. host_audio is only touched by
+    // launch and resume, which both run on this one worker, so it needs no
+    // lock. Declared after the servers: it is stopped explicitly below and, on
+    // an early exit, destroyed (joined) before the servers whose responses its
+    // queued tasks hold.
+    util::serial_executor_t launch_worker {[]() {
+      platf::set_thread_name("nvhttp::launch");
+    }};
 
     // Verify certificates after establishing connection
     https_server.verify = [add_cert](SSL *ssl, const boost::asio::ip::tcp::endpoint &peer_endpoint) {
@@ -3733,13 +3826,22 @@ namespace nvhttp {
     };
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
-    https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
-      launch(host_audio, resp, req);
+    https_server.resource["^/launch$"]["GET"] = [&host_audio, &launch_worker](resp_https_t resp, req_https_t req) {
+      run_on_launch_worker(launch_worker, "launch"sv, std::move(resp), std::move(req), [&host_audio](resp_https_t response, req_https_t request) {
+        launch(host_audio, std::move(response), std::move(request));
+      });
     };
-    https_server.resource["^/resume$"]["GET"] = [&host_audio](auto resp, auto req) {
-      resume(host_audio, resp, req);
+    https_server.resource["^/resume$"]["GET"] = [&host_audio, &launch_worker](resp_https_t resp, req_https_t req) {
+      run_on_launch_worker(launch_worker, "resume"sv, std::move(resp), std::move(req), [&host_audio](resp_https_t response, req_https_t request) {
+        resume(host_audio, std::move(response), std::move(request));
+      });
     };
-    https_server.resource["^/cancel$"]["GET"] = cancel;
+    // Queued behind any launch/resume in progress, as it was when all three ran
+    // on the io thread: cancelling while a launch holds the display lease would
+    // otherwise wait for it and then give up ("superseded") without cleaning up.
+    https_server.resource["^/cancel$"]["GET"] = [&launch_worker](resp_https_t resp, req_https_t req) {
+      run_on_launch_worker(launch_worker, "cancel"sv, std::move(resp), std::move(req), cancel);
+    };
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);
@@ -3796,13 +3898,20 @@ namespace nvhttp {
     https_server.stop();
     http_server.stop();
 
+    // Drop the launch/resume/cancel requests still queued (their connections
+    // were just closed, so there is nobody to answer) and wait for the one in
+    // flight, so that no handler outlives the servers.
+    launch_worker.stop();
+
     ssl.join();
     tcp.join();
   }
 
   void erase_all_clients() {
-    client_t client;
-    client_root = client;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      client_root = client_t {};
+    }
     cert_chain.clear();
     save_state();
   }
@@ -3891,7 +4000,10 @@ namespace nvhttp {
 
       // Wipe the in-memory state so subsequent reads don't reinstate the
       // archived pairings into the freshly-written file.
-      client_root = client_t {};
+      {
+        std::lock_guard client_lock {client_root_mutex};
+        client_root = client_t {};
+      }
       cert_chain.clear();
       http::unique_id = uuid_util::uuid_t::generate().string();
     }
@@ -3940,30 +4052,32 @@ namespace nvhttp {
     const auto trimmed_vd_mode = boost::algorithm::trim_copy(virtual_display_mode);
     const auto trimmed_vd_layout = boost::algorithm::trim_copy(virtual_display_layout);
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
-      if (named_cert.uuid != uuid) {
-        continue;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      const auto named_cert = std::find_if(client_root.named_devices.begin(), client_root.named_devices.end(), [&](const auto &candidate) {
+        return candidate.uuid == uuid;
+      });
+      if (named_cert == client_root.named_devices.end()) {
+        return false;
       }
 
-      named_cert.name = trimmed_name;
-      named_cert.display_mode = trimmed_display_mode;
-      named_cert.always_use_virtual_display = always_use_virtual_display;
-      named_cert.output_name_override = always_use_virtual_display ? "" : trimmed_output_override;
-      named_cert.virtual_display_mode_override = trimmed_vd_mode;
-      named_cert.virtual_display_layout_override = trimmed_vd_layout;
-      named_cert.prefer_10bit_sdr = prefer_10bit_sdr;
+      named_cert->name = trimmed_name;
+      named_cert->display_mode = trimmed_display_mode;
+      named_cert->always_use_virtual_display = always_use_virtual_display;
+      named_cert->output_name_override = always_use_virtual_display ? "" : trimmed_output_override;
+      named_cert->virtual_display_mode_override = trimmed_vd_mode;
+      named_cert->virtual_display_layout_override = trimmed_vd_layout;
+      named_cert->prefer_10bit_sdr = prefer_10bit_sdr;
       if (config_overrides) {
-        named_cert.config_overrides = std::move(*config_overrides);
+        named_cert->config_overrides = std::move(*config_overrides);
       }
       if (hdr_profile.has_value()) {
-        named_cert.hdr_profile = boost::algorithm::trim_copy(*hdr_profile);
+        named_cert->hdr_profile = boost::algorithm::trim_copy(*hdr_profile);
       }
-      save_state();
-      return true;
     }
 
-    return false;
+    save_state();
+    return true;
   }
 
   bool set_client_hdr_profile(const std::string &uuid, const std::string &hdr_profile) {
@@ -3973,18 +4087,20 @@ namespace nvhttp {
 
     const auto trimmed_hdr_profile = boost::algorithm::trim_copy(hdr_profile);
 
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
-      if (named_cert.uuid != uuid) {
-        continue;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      const auto named_cert = std::find_if(client_root.named_devices.begin(), client_root.named_devices.end(), [&](const auto &candidate) {
+        return candidate.uuid == uuid;
+      });
+      if (named_cert == client_root.named_devices.end()) {
+        return false;
       }
 
-      named_cert.hdr_profile = trimmed_hdr_profile;
-      save_state();
-      return true;
+      named_cert->hdr_profile = trimmed_hdr_profile;
     }
 
-    return false;
+    save_state();
+    return true;
   }
 
   bool disconnect_client(const std::string &uuid) {
@@ -3992,8 +4108,8 @@ namespace nvhttp {
   }
 
   std::optional<bool> get_client_prefer_10bit_sdr_override(const std::string &uuid) {
-    client_t &client = client_root;
-    for (auto &named_cert : client.named_devices) {
+    std::lock_guard client_lock {client_root_mutex};
+    for (const auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
         return named_cert.prefer_10bit_sdr;
       }
@@ -4005,13 +4121,16 @@ namespace nvhttp {
 
   bool unpair_client(const std::string_view uuid) {
     bool removed = false;
-    client_t &client = client_root;
-    for (auto it = client.named_devices.begin(); it != client.named_devices.end();) {
-      if ((*it).uuid == uuid) {
-        it = client.named_devices.erase(it);
-        removed = true;
-      } else {
-        ++it;
+    {
+      std::lock_guard client_lock {client_root_mutex};
+      auto &devices = client_root.named_devices;
+      for (auto it = devices.begin(); it != devices.end();) {
+        if ((*it).uuid == uuid) {
+          it = devices.erase(it);
+          removed = true;
+        } else {
+          ++it;
+        }
       }
     }
 

@@ -1463,11 +1463,27 @@ namespace video {
   };
 
   static encoder_t *chosen_encoder;
-  int active_hevc_mode;
-  int active_av1_mode;
+  std::atomic<int> active_hevc_mode {0};
+  std::atomic<int> active_av1_mode {0};
   bool last_encoder_probe_supported_ref_frames_invalidation = false;
-  std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};
+  std::array<std::atomic<bool>, 3> last_encoder_probe_supported_yuv444_for_codec {};
   std::array<bool, 3> last_encoder_probe_supported_codec = {};
+
+  // std::array cannot copy or assign the atomic yuv444 flags as a whole.
+  static std::array<bool, 3> load_yuv444_flags() {
+    std::array<bool, 3> flags {};
+    for (std::size_t i = 0; i < flags.size(); ++i) {
+      flags[i] = last_encoder_probe_supported_yuv444_for_codec[i].load();
+    }
+    return flags;
+  }
+
+  static void store_yuv444_flags(const std::array<bool, 3> &flags) {
+    for (std::size_t i = 0; i < flags.size(); ++i) {
+      last_encoder_probe_supported_yuv444_for_codec[i].store(flags[i]);
+    }
+  }
+
   std::atomic<bool> encoder_probe_attempted {false};
   std::mutex encoder_probe_mutex;
 
@@ -4403,10 +4419,10 @@ namespace video {
     }
     encoder_probe_attempted.store(true, std::memory_order_release);
 
-    const auto previous_active_hevc_mode = active_hevc_mode;
-    const auto previous_active_av1_mode = active_av1_mode;
+    const int previous_active_hevc_mode = active_hevc_mode;
+    const int previous_active_av1_mode = active_av1_mode;
     const auto previous_last_ref_frames_invalidation = last_encoder_probe_supported_ref_frames_invalidation;
-    const auto previous_last_yuv444_for_codec = last_encoder_probe_supported_yuv444_for_codec;
+    const auto previous_last_yuv444_for_codec = load_yuv444_flags();
     const auto previous_last_supported_codec = last_encoder_probe_supported_codec;
     auto previous_encoder = chosen_encoder;
 
@@ -4414,7 +4430,7 @@ namespace video {
       active_hevc_mode = previous_active_hevc_mode;
       active_av1_mode = previous_active_av1_mode;
       last_encoder_probe_supported_ref_frames_invalidation = previous_last_ref_frames_invalidation;
-      last_encoder_probe_supported_yuv444_for_codec = previous_last_yuv444_for_codec;
+      store_yuv444_flags(previous_last_yuv444_for_codec);
       last_encoder_probe_supported_codec = previous_last_supported_codec;
     });
 
@@ -4426,7 +4442,7 @@ namespace video {
     active_hevc_mode = config::video.hevc_mode;
     active_av1_mode = config::video.av1_mode;
     last_encoder_probe_supported_ref_frames_invalidation = false;
-    last_encoder_probe_supported_yuv444_for_codec = {};
+    store_yuv444_flags({});
     last_encoder_probe_supported_codec = {};
 
     // Clear any cached display from previous probes to ensure fresh start

@@ -2739,9 +2739,9 @@ namespace confighttp {
       node["pyrowave_compiled"] = false;
 #endif
       node["pyrowave_advertised"] = config::pyrowave.enabled && pyrowave::available();
-      node["h264_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[0];
-      node["hevc_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[1];
-      node["av1_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[2];
+      node["h264_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[0].load();
+      node["hevc_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[1].load();
+      node["av1_yuv444"] = video::last_encoder_probe_supported_yuv444_for_codec[2].load();
       node["ref_frames_invalidation"] = video::last_encoder_probe_supported_ref_frames_invalidation;
       output_tree["encoder_probe"] = std::move(node);
     } catch (...) {}

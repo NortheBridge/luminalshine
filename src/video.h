@@ -4,6 +4,10 @@
  */
 #pragma once
 
+// standard includes
+#include <array>
+#include <atomic>
+
 // local includes
 #include "input.h"
 #include "platform/common.h"
@@ -404,10 +408,12 @@ namespace video {
 
   using hdr_info_t = std::unique_ptr<hdr_info_raw_t>;
 
-  extern int active_hevc_mode;
-  extern int active_av1_mode;
+  // Atomic because the GameStream serverinfo handlers read the first three while
+  // probe_encoders() rewrites them during a launch.
+  extern std::atomic<int> active_hevc_mode;
+  extern std::atomic<int> active_av1_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
-  extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
+  extern std::array<std::atomic<bool>, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
   // Mirrors of the encoder.h264/hevc/av1[encoder_t::PASSED] flags taken at
   // probe completion. Used by /api/metadata to populate the About page's
   // "Encoders Available" row without forcing the dashboard to start an
