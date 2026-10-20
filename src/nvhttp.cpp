@@ -2487,6 +2487,10 @@ namespace nvhttp {
     return submit_pin(std::move(pin), std::move(name)).accepted();
   }
 
+  void put_luminalshine_version(pt::ptree &tree) {
+    tree.put("root.LuminalShineVersion", PROJECT_VERSION);
+  }
+
   template<class T>
   void serverinfo(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
     print_req<T>(request);
@@ -2579,6 +2583,11 @@ namespace nvhttp {
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
     tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
+
+    // Only report the LuminalShine release to paired clients over HTTPS.
+    if constexpr (std::is_same_v<SunshineHTTPS, T>) {
+      put_luminalshine_version(tree);
+    }
 
     std::ostringstream data;
 
