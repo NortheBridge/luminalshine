@@ -2,18 +2,14 @@
 hide-toc: false
 ---
 
-# LuminalShine
+# LuminalShine documentation
 
-**Game streaming, rebuilt for modern Windows.**
+[LuminalShine](https://github.com/NortheBridge/luminalshine) · [Download](https://github.com/NortheBridge/luminalshine/releases/latest) · [Release notes](changelog.md)
 
-LuminalShine is a self-hosted, low-latency game streaming host for
-Windows 11 — a hardened, NortheBridge-maintained descendant of
-[Sunshine](https://github.com/LizardByte/Sunshine), focused
-exclusively on getting the most out of current Windows builds
-(including the Insider Preview Canary and Dev channels). Pair it
-with any [Moonlight](https://moonlight-stream.org/) client, or
-stream straight to a browser via the built-in WebRTC client at
-`/webrtc`.
+LuminalShine runs on your Windows gaming PC. Play from a
+[Moonlight](https://moonlight-stream.org/) client or stream straight to a browser
+with the built-in WebRTC client. These guides cover your first stream,
+configuration, troubleshooting, and the capture and encoding pipeline.
 
 **New here?** Follow the [Quick Start](quick_start.md) to install LuminalShine,
 pair your client, and start your first stream.

@@ -83,7 +83,7 @@ html_favicon = "_static/luminalshine-logo.png"
 html_static_path = ["_static"]
 templates_path = ["_templates"]
 html_css_files = ["luminalshine.css"]
-html_js_files = ["breadcrumbs.js"]
+html_js_files = ["navigation.js"]
 
 # Shared dark palette; structural styling lives in _static/luminalshine.css.
 _PALETTE = {
@@ -113,11 +113,8 @@ _MONO_STACK = (
     'Consolas, "Liberation Mono", monospace'
 )
 
-# Dark syntax highlighting in BOTH modes. Combined with identical
-# light/dark CSS variables below, this pins the site to the charcoal
-# appearance regardless of the visitor's OS preference (Furo would
-# otherwise swap in its own dark Pygments sheet).
-pygments_style = "monokai"
+# Follow the reader's color scheme, as the reference site does.
+pygments_style = "friendly"
 pygments_dark_style = "monokai"
 
 _furo_vars = {

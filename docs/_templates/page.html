@@ -1,20 +1,32 @@
-{% extends "furo/page.html" %}
-
+{% extends "base.html" %}
 {% block body %}
+{% include "partials/icons.html" %}
+<a class="ls-skip" href="#furo-main-content">Skip to content</a>
 <header class="ls-header">
   <div class="ls-header-inner">
-    <a class="ls-wordmark" href="{{ pathto('index') }}">
-      <img src="{{ pathto('_static/luminalshine-logo.png', 1) }}" alt="" width="28" height="28">
-      <span>LuminalShine</span>
-    </a>
+    <a class="ls-wordmark" href="{{ pathto('index') }}"><span class="ls-mark">L</span>LuminalShine</a>
     <nav class="ls-header-nav" aria-label="Documentation shortcuts">
-      <a href="{{ pathto('index') }}">Docs</a>
-      <a href="{{ pathto('quick_start') }}">Quick start</a>
-      <a href="{{ pathto('configuration') }}">Configuration</a>
-      <a href="{{ pathto('changelog') }}">Release notes</a>
+      <a href="{{ pathto('index') }}"{% if pagename == 'index' %} aria-current="page"{% endif %}>Docs</a>
+      <a href="{{ pathto('performance_tuning') }}"{% if pagename == 'performance_tuning' %} aria-current="page"{% endif %}>Performance</a>
+      <a href="{{ pathto('configuration') }}"{% if pagename == 'configuration' %} aria-current="page"{% endif %}>Configuration</a>
+      <a href="{{ pathto('changelog') }}"{% if pagename == 'changelog' %} aria-current="page"{% endif %}>Release notes</a>
     </nav>
+    <button class="ls-menu" aria-label="Open documentation navigation" aria-controls="ls-navigation" aria-expanded="false" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
     <a class="ls-download" href="https://github.com/NortheBridge/luminalshine/releases/latest">Download</a>
   </div>
 </header>
-{{ super() }}
+<dialog class="ls-drawer" id="ls-navigation" aria-labelledby="ls-navigation-title">
+  <div class="ls-drawer-heading"><strong id="ls-navigation-title">Documentation</strong><button class="ls-close" aria-label="Close documentation navigation">×</button></div>
+  {% include "sidebar/search.html" %}
+  <nav aria-label="All documentation">{% include "sidebar/navigation.html" %}</nav>
+</dialog>
+<main class="ls-doc" role="main">
+  {% if pagename != master_doc and toc and not furo_hide_toc %}
+  <details class="ls-toc"><summary>On this page</summary>{{ toc }}</details>
+  {% endif %}
+  <article class="ls-prose" id="furo-main-content" tabindex="-1">{% block content %}{{ body }}{% endblock %}</article>
+  {% if sourcename %}<p class="ls-source"><a href="https://github.com/NortheBridge/luminalshine/blob/main/docs/{{ pagename }}{{ page_source_suffix }}">View this page on GitHub</a></p>{% endif %}
+  <noscript><nav aria-label="All documentation">{{ toctree(maxdepth=2, includehidden=True) }}</nav></noscript>
+</main>
+<footer class="ls-footer"><div class="ls-footer-inner"><span>LuminalShine · GPL-3.0</span><span><a href="https://github.com/NortheBridge/luminalshine">GitHub</a> · <a href="https://github.com/NortheBridge/luminalshine/releases">Releases</a> · <a href="https://github.com/NortheBridge/luminalshine/issues">Issues</a> · <a href="{{ pathto('legal') }}">Legal</a></span></div></footer>
 {% endblock %}
