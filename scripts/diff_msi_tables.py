@@ -67,6 +67,10 @@ SEQUENCE_TABLES = frozenset({
 _WEB_CHUNK_PREFIX_RE = re.compile(r"(CM_[A-Z]{2}_)[0-9a-f]{7}_")
 _WEB_HASH_FILE_RE = re.compile(r"_[0-9a-f]{8}(?=\.(?:js|css)\b)")
 _COMPONENT_GUID_RE = re.compile(r"ComponentId=\{[0-9A-Fa-f-]+\}")
+_WEB_TRUNCATED_VUE_HASH_RE = re.compile(
+    r"(CM_[CF]H_[0-9a-f]{7}_[^|=]*_vue_type_script_setup_true_lang_)"
+    r"[0-9a-f]{1,8}(\.\.\.)(?=\||$)"
+)
 
 # Tables that carry harvested web-asset rows.
 _WEB_ASSET_TABLES = frozenset({"Component", "FeatureComponents"})
@@ -75,7 +79,14 @@ _WEB_ASSET_TABLES = frozenset({"Component", "FeatureComponents"})
 def _normalize_web_asset_row(row: str) -> str:
     if "assets.assets.web." not in row and not _WEB_CHUNK_PREFIX_RE.search(row):
         return row
-    normalized = _WEB_CHUNK_PREFIX_RE.sub(r"\1#_", row)
+    normalized = row
+    # Harvested IDs retain only 52 basename characters. Long Vue chunk IDs
+    # therefore end in a partial Vite hash plus literal ellipsis, without .js.
+    # Restrict this case to the web directory/assets feature and known Vue suffix.
+    if ("Directory_=CM_DP_assets.assets.web.assets|" in row or
+            row.startswith("Feature_=CM_C_assets|")):
+        normalized = _WEB_TRUNCATED_VUE_HASH_RE.sub(r"\1#\2", normalized)
+    normalized = _WEB_CHUNK_PREFIX_RE.sub(r"\1#_", normalized)
     normalized = _WEB_HASH_FILE_RE.sub("_#", normalized)
     if normalized != row:
         # Only strip the auto GUID when a hash token was actually present;
@@ -344,6 +355,39 @@ def _run_selftest() -> int:
         any("newthing.png" in m for m in msgs),
     )
 
+    for basename, old_hash, new_hash in (
+        ("InspectorPanel", "d", "1"),
+        ("LinkButton", "3d142", "e9d2c"),
+    ):
+        old_id = f"CM_CH_1234567_{basename}.vue_vue_type_script_setup_true_lang_{old_hash}..."
+        new_id = f"CM_CH_abcdef0_{basename}.vue_vue_type_script_setup_true_lang_{new_hash}..."
+        before = (
+            "## TABLE: Component\n"
+            f"Component={old_id}|ComponentId={{AAAAAAAA-1111-1111-1111-111111111111}}|Directory_=CM_DP_assets.assets.web.assets|Attributes=256|Condition=|KeyPath={old_id.replace('CM_CH_', 'CM_FH_')}\n"
+            "## TABLE: FeatureComponents\n"
+            f"Feature_=CM_C_assets|Component_={old_id}\n"
+        )
+        after = before.replace(old_id, new_id).replace(
+            old_id.replace("CM_CH_", "CM_FH_"), new_id.replace("CM_CH_", "CM_FH_")
+        ).replace("AAAAAAAA-1111-1111-1111-111111111111", "BBBBBBBB-2222-2222-2222-222222222222")
+        expect(f"{basename} partial hash must normalize", diff_dumps(before, after) == [])
+        for old, new in (
+            (basename, "DifferentView"),
+            ("Directory_=CM_DP_assets.assets.web.assets", "Directory_=INSTALL_ROOT"),
+            ("Attributes=256", "Attributes=0"),
+            ("Condition=|", "Condition=CHANGED|"),
+            ("Feature_=CM_C_assets", "Feature_=CM_C_application"),
+        ):
+            expect(f"{basename} {old} drift must fail", bool(diff_dumps(before, after.replace(old, new))))
+        nonweb_before = before.replace("CM_DP_assets.assets.web.assets", "INSTALL_ROOT").replace("CM_C_assets", "CM_C_application")
+        nonweb_after = after.replace("CM_DP_assets.assets.web.assets", "INSTALL_ROOT").replace("CM_C_assets", "CM_C_application")
+        expect("nonweb partial hashes must differ", bool(diff_dumps(nonweb_before, nonweb_after)))
+
+    stable = "## TABLE: Component\nComponent=Stable|ComponentId={AAAAAAAA-1111-1111-1111-111111111111}|Directory_=CM_DP_assets.assets.web.assets|KeyPath=locale.json\n"
+    expect("stable web GUID drift must fail", bool(diff_dumps(stable, stable.replace("AAAAAAAA", "BBBBBBBB"))))
+    runtime = "## TABLE: Component\nComponent=CM_CP_application.libatomic_1.dll|ComponentId={B6FF8303-CFF4-51F7-B6B5-8B6E0A25D370}|Directory_=INSTALL_ROOT|KeyPath=CM_FP_application.libatomic_1.dll\n"
+    expect("missing libatomic must fail", bool(diff_dumps(runtime, "## TABLE: Component\n")))
+
     # 3. Service rename -> flagged.
     msgs = diff_dumps(_SELFTEST_GOLDEN, _SELFTEST_CANDIDATE_BAD_SERVICE)
     expect(
@@ -367,7 +411,7 @@ def _run_selftest() -> int:
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print("diff_msi_tables self-test: OK (7 cases)")
+    print("diff_msi_tables self-test: OK")
     return 0
 
 
