@@ -1,16 +1,4 @@
-"""Sphinx configuration for LuminalShine.
-
-Tunes the Furo theme to a **Microsoft Learn Dark Mode** layout with
-the LuminalShine sunshine palette. Where the prior light theme used
-royal-blue "Aurora Blue" for links and accents, this dark variant
-uses the sunburst gradient from sunshine.png: deep red-orange
-(#ff3d00) → mid-orange (#ff7a1a) → sun-gold (#ffb020). Sun-gold is
-the primary hyperlink and focus color — high-contrast on the
-near-black page background and unambiguously "brand."
-
-The sidebar shows the LuminalShine logo image with the site title
-"LuminalShine" rendered below it in the Segoe UI font stack.
-"""
+"""LuminalShine documentation: charcoal surfaces and sunshine-yellow accents."""
 
 from __future__ import annotations
 
@@ -93,32 +81,27 @@ html_title = "LuminalShine"
 html_logo = "_static/luminalshine-logo.png"
 html_favicon = "_static/luminalshine-logo.png"
 html_static_path = ["_static"]
+templates_path = ["_templates"]
 html_css_files = ["luminalshine.css"]
 html_js_files = ["breadcrumbs.js"]
 
-# Microsoft Learn Dark palette with LuminalShine sunshine branding.
-# The warm brand triple (red → orange → gold) replaces every spot that
-# used blue/purple in the previous light theme. Sun-gold is the primary
-# link/focus color; on the near-black page background it lands around
-# a 12:1 contrast ratio (WCAG AAA).
+# Shared dark palette; structural styling lives in _static/luminalshine.css.
 _PALETTE = {
     # Dark surfaces
-    "page_bg": "#111111",          # near-black page background
-    "surface": "#1a1a1a",          # sidebar / TOC rail / code
-    "surface_alt": "#242424",      # hover / softer surface
-    "text": "#e6e6e6",             # primary body text
-    "text_secondary": "#b8b8b8",
-    "text_muted": "#8b8b8b",
-    "border": "#2f2f2f",
-    # Sunshine brand triple (extracted from sunshine.png)
-    "brand_red": "#ff3d00",        # outer flare / gradient start
-    "brand_orange": "#ff7a1a",     # mid-tone / warnings
+    "page_bg": "#0f1113",          # near-black page background
+    "surface": "#171a1f",          # sidebar / TOC rail / code
+    "surface_alt": "#20242b",      # hover / softer surface
+    "text": "#e8eaed",             # primary body text
+    "text_secondary": "#b7bdc6",
+    "text_muted": "#949ca8",
+    "border": "#2b3038",
+    # LuminalShine web UI brand colors
     "brand_gold": "#ffb020",       # PRIMARY — links, focus, brand
     "brand_soft": "#ffc857",       # hover / soft accent
     "accent_soft": "rgba(255, 176, 32, 0.10)",  # selected nav bg tint
 }
 
-# Segoe UI first to match the Microsoft Learn reading experience; system
+# Segoe UI keeps the Windows product identity; system
 # fallbacks keep it native on non-Windows visitors.
 _FONT_STACK = (
     '"Segoe UI Variable Text", "Segoe UI", -apple-system, '
@@ -131,8 +114,8 @@ _MONO_STACK = (
 )
 
 # Dark syntax highlighting in BOTH modes. Combined with identical
-# light/dark CSS variables below, this pins the site to the Learn
-# Dark look regardless of the visitor's OS preference (Furo would
+# light/dark CSS variables below, this pins the site to the charcoal
+# appearance regardless of the visitor's OS preference (Furo would
 # otherwise swap in its own dark Pygments sheet).
 pygments_style = "monokai"
 pygments_dark_style = "monokai"
@@ -167,7 +150,7 @@ _furo_vars = {
 }
 
 html_theme_options = {
-    # Force the Learn Dark look in both modes — brand-gold accents are
+    # Use the same charcoal palette in both modes — yellow accents are
     # tuned for the near-black background and the theme toggle is
     # hidden in luminalshine.css.
     "light_css_variables": _furo_vars,

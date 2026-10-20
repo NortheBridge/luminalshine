@@ -15,40 +15,28 @@ with any [Moonlight](https://moonlight-stream.org/) client, or
 stream straight to a browser via the built-in WebRTC client at
 `/webrtc`.
 
-::::{grid} 1 1 2 2
-:gutter: 3
-:padding: 0
+**New here?** Follow the [Quick Start](quick_start.md) to install LuminalShine,
+pair your client, and start your first stream.
 
-:::{grid-item-card} 🚀 Quick Start
-:link: quick_start
-:link-type: doc
+## Start streaming
 
-The 10-minute happy path: install, pair a client, start streaming.
-:::
+| I want to… | Start here |
+| --- | --- |
+| Get my first stream running | [Quick Start](quick_start.md) — install, pair, and play. |
+| Check my host and client | [System Requirements](system_requirements.md) — hardware, encoders, and supported clients. |
+| Configure my stream | [Configuration](configuration.md) — video, audio, input, and network settings. |
+| Tune performance | [Performance Tuning](performance_tuning.md) — encoder and GPU guidance. |
+| Fix a problem | [Troubleshooting](troubleshooting.md) — help with setup and streaming. |
 
-:::{grid-item-card} 📖 Introduction
-:link: introduction
-:link-type: doc
+## Understand and build LuminalShine
 
-What LuminalShine is, why it exists, and how it relates to
-Sunshine + Vibeshine.
-:::
-
-:::{grid-item-card} 💻 System Requirements
-:link: system_requirements
-:link-type: doc
-
-Host PC requirements, supported encoders, and what clients work.
-:::
-
-:::{grid-item-card} 🏛️ Architecture
-:link: architecture
-:link-type: doc
-
-What's running on your PC: capture, encode, transport, input replay.
-:::
-
-::::
+| Guide | What it covers |
+| --- | --- |
+| [Introduction](introduction.md) | The project and its relationship to Sunshine and Vibeshine. |
+| [Architecture](architecture.md) | Capture, encoding, transport, and input. |
+| [Building](building.md) | Toolchains and building from source. |
+| [API](api.md) | Integrating with the host. |
+| [Changelog](changelog.md) | Changes in each release. |
 
 ```{toctree}
 :caption: Foundations
@@ -65,6 +53,7 @@ concepts
 ```{toctree}
 :caption: Install and Configure
 :maxdepth: 2
+:hidden:
 
 getting_started
 building
@@ -74,6 +63,7 @@ configuration
 ```{toctree}
 :caption: Guides
 :maxdepth: 2
+:hidden:
 
 guides
 app_examples
@@ -85,6 +75,7 @@ gamestream_migration
 ```{toctree}
 :caption: Reference
 :maxdepth: 2
+:hidden:
 
 api
 api/cpp
@@ -95,6 +86,7 @@ awesome_sunshine
 ```{toctree}
 :caption: Project
 :maxdepth: 1
+:hidden:
 
 contributing
 changelog

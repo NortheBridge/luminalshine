@@ -1,0 +1,20 @@
+{% extends "furo/page.html" %}
+
+{% block body %}
+<header class="ls-header">
+  <div class="ls-header-inner">
+    <a class="ls-wordmark" href="{{ pathto('index') }}">
+      <img src="{{ pathto('_static/luminalshine-logo.png', 1) }}" alt="" width="28" height="28">
+      <span>LuminalShine</span>
+    </a>
+    <nav class="ls-header-nav" aria-label="Documentation shortcuts">
+      <a href="{{ pathto('index') }}">Docs</a>
+      <a href="{{ pathto('quick_start') }}">Quick start</a>
+      <a href="{{ pathto('configuration') }}">Configuration</a>
+      <a href="{{ pathto('changelog') }}">Release notes</a>
+    </nav>
+    <a class="ls-download" href="https://github.com/NortheBridge/luminalshine/releases/latest">Download</a>
+  </div>
+</header>
+{{ super() }}
+{% endblock %}

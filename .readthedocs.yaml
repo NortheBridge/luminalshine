@@ -4,9 +4,7 @@
 # https://docs.readthedocs.io/en/stable/config-file/v2.html
 #
 # Builds the LuminalShine Sphinx documentation with the Furo theme,
-# tuned to the NortheBridge "aurora" palette — a near-black background
-# (#04060f / #070b1f) with cyan + royal-blue accents (#1ec8ff, #4a7dff)
-# matching https://gitdocs.northebridge.com/luminalshine.
+# styled with charcoal surfaces and LuminalShine yellow accents.
 #
 # Backwards-compat with the previous Doxygen-only build is preserved by
 # running Doxygen in pre_build (producing the standalone HTML API
