@@ -209,6 +209,8 @@ jobs:
             "mingw-w64-${TOOLCHAIN}-curl-winssl"
             "mingw-w64-${TOOLCHAIN}-graphviz"
             "mingw-w64-${TOOLCHAIN}-glslang"
+            # GCC now treats libatomic as optional; retain the shipped runtime component.
+            "mingw-w64-${TOOLCHAIN}-libatomic"
             "mingw-w64-${TOOLCHAIN}-lld"
             "mingw-w64-${TOOLCHAIN}-miniupnpc"
             "mingw-w64-${TOOLCHAIN}-nlohmann-json"
