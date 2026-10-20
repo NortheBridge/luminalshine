@@ -1,5 +1,9 @@
-{% extends "base.html" %}
+{# EPUB uses Sphinx's book theme, which has no Furo base or sidebar partials. #}
+{% extends "!page.html" if builder == "epub" else "base.html" %}
 {% block body %}
+{% if builder == "epub" %}
+{{ super() }}
+{% else %}
 {% include "partials/icons.html" %}
 <a class="ls-skip" href="#furo-main-content">Skip to content</a>
 <header class="ls-header">
@@ -29,4 +33,5 @@
   <noscript><nav aria-label="All documentation">{{ toctree(maxdepth=2, includehidden=True) }}</nav></noscript>
 </main>
 <footer class="ls-footer"><div class="ls-footer-inner"><span>LuminalShine · GPL-3.0</span><span><a href="https://github.com/NortheBridge/luminalshine">GitHub</a> · <a href="https://github.com/NortheBridge/luminalshine/releases">Releases</a> · <a href="https://github.com/NortheBridge/luminalshine/issues">Issues</a> · <a href="{{ pathto('legal') }}">Legal</a></span></div></footer>
+{% endif %}
 {% endblock %}
