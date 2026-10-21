@@ -1,0 +1,33 @@
+name: Import GitHub Releases into Featurebase
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: featurebase-release-import
+  cancel-in-progress: false
+
+jobs:
+  import-releases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Import historical GitHub Releases as Featurebase drafts
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FEATUREBASE_API_KEY: ${{ secrets.FEATUREBASE_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/github_to_featurebase.py --history
+      - name: Import just-published GitHub Release as a Featurebase draft
+        if: github.event_name == 'release'
+        env:
+          FEATUREBASE_API_KEY: ${{ secrets.FEATUREBASE_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/github_to_featurebase.py --publish
