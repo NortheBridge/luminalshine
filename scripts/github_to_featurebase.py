@@ -10,11 +10,16 @@ Examples:
 Environment: FEATUREBASE_API_KEY and GITHUB_REPOSITORY=OWNER/REPO.
 For private GitHub repositories, also set GITHUB_TOKEN (Actions supplies it).
 
-Existing Featurebase updates are matched only by the original GitHub release URL
-included in their body. Unmatched Featurebase updates are never modified.
+Existing Featurebase updates are matched by their own dedicated
+"Original GitHub release" citation, not every release link mentioned in
+the body. Unmatched Featurebase updates are never modified.
 """
 
 import argparse
+from collections import defaultdict
+from html import unescape
+from html.parser import HTMLParser
+import re
 from datetime import datetime, timezone
 import json
 import os
@@ -106,10 +111,84 @@ def github_timestamp(release):
     return stamp.isoformat(timespec="seconds").replace("+00:00", "Z") if stamp else None
 
 
-def text_of(entry):
-    return "\n".join(
-        filter(None, (entry.get("markdownContent"), entry.get("content")))
-    )
+# The importer always appends this *dedicated* source link to each Update.
+# A simple `release_url in entry_content` check is unsafe: release notes often
+# link to earlier releases, causing false matches and skipped date repairs.
+SOURCE_LABEL = "original github release"
+MARKDOWN_SOURCE_LINK = re.compile(
+    r"\[\s*original\s+github\s+release\s*\]\(\s*(<[^>]+>|https?://[^\s)]+)",
+    flags=re.IGNORECASE,
+)
+
+
+class SourceAnchorParser(HTMLParser):
+    """Extract only HTML anchors labelled 'Original GitHub release'."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.active_href = None
+        self.active_label = []
+        self.urls = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            self.active_href = dict(attrs).get("href")
+            self.active_label = []
+
+    def handle_data(self, data):
+        if self.active_href:
+            self.active_label.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a":
+            label = " ".join("".join(self.active_label).lower().split())
+            if self.active_href and label == SOURCE_LABEL:
+                self.urls.append(self.active_href)
+            self.active_href = None
+            self.active_label = []
+
+
+def release_key(url):
+    """Return a canonical (owner, repo, release-tag) key for a GitHub URL."""
+    parts = urllib.parse.urlsplit(unescape(url.strip().strip("<>")))
+    if parts.scheme not in ("https", "http") or (parts.hostname or "").lower() not in (
+        "github.com", "www.github.com",
+    ):
+        return None
+    path = urllib.parse.unquote(parts.path).strip("/").split("/")
+    if len(path) != 5 or path[2:4] != ["releases", "tag"]:
+        return None
+    return (path[0].lower(), path[1].lower(), path[4])
+
+
+def source_release_keys(entry):
+    """Identify this Update's OWN GitHub release (never links in its notes)."""
+    keys = set()
+    md = entry.get("markdownContent") or ""
+    for match in MARKDOWN_SOURCE_LINK.finditer(md):
+        key = release_key(match.group(1))
+        if key:
+            keys.add(key)
+
+    html = entry.get("content") or ""
+    if html:
+        parser = SourceAnchorParser()
+        parser.feed(html)
+        parser.close()
+        for url in parser.urls:
+            key = release_key(url)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def index_featurebase_entries(entries):
+    """Index changelogs by their exact dedicated source-release citation."""
+    by_release = defaultdict(list)
+    for entry in entries:
+        for key in source_release_keys(entry):
+            by_release[key].append(entry)
+    return by_release
 
 
 def change_date(api_key, featurebase_id, timestamp):
@@ -141,17 +220,22 @@ def check_returned_timestamp(data, expected, title):
 def sync_dates(releases, entries, api_key, *, apply):
     """Match by original release URL, then audit or correct published dates."""
     matched = corrections = already_correct = missing = ambiguous = 0
+    by_release = index_featurebase_entries(entries)
     for release in releases:
         timestamp = github_timestamp(release)
         if release.get("draft") or not timestamp:
             continue
         url = release["html_url"]
-        candidates = [entry for entry in entries if url in text_of(entry)]
+        candidates = by_release.get(release_key(url), [])
         if not candidates:
+            print(f"UNMATCHED (no Original GitHub release citation): {url}")
             missing += 1
             continue
         if len(candidates) != 1:
-            print(f"Skipping ambiguous match ({len(candidates)} posts): {url}")
+            details = ", ".join(
+                f"{e.get('title', 'Untitled')!r} [{e.get('id')}]" for e in candidates
+            )
+            print(f"SKIPPING duplicate source citation ({len(candidates)} posts): {url}: {details}")
             ambiguous += 1
             continue
         entry = candidates[0]
@@ -178,7 +262,7 @@ def sync_dates(releases, entries, api_key, *, apply):
 
 
 def import_releases(releases, entries, api_key, *, publish):
-    existing_texts = [text_of(entry) for entry in entries]
+    existing_keys = set(index_featurebase_entries(entries))
     created = skipped = 0
     for release in releases:
         timestamp = github_timestamp(release)
@@ -186,7 +270,7 @@ def import_releases(releases, entries, api_key, *, publish):
             skipped += 1
             continue
         url = release["html_url"]
-        if any(url in content for content in existing_texts):
+        if release_key(url) in existing_keys:
             print(f"Skipping already imported: {url}")
             skipped += 1
             continue
@@ -214,7 +298,7 @@ def import_releases(releases, entries, api_key, *, publish):
         check_returned_timestamp(result, timestamp, title)
         print(f"Created draft: {title} (Featurebase ID: {result['id']})")
         created += 1
-        existing_texts.append(markdown)
+        existing_keys.add(release_key(url))
 
         if publish:
             published = call_json(
