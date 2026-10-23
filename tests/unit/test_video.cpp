@@ -4,7 +4,12 @@
  */
 #include "../tests_common.h"
 
+#include <algorithm>
+#include <array>
+#include <bitset>
+#include <cstdint>
 #include <cstdlib>
+#include <string_view>
 #include <src/video.h>
 #ifdef _WIN32
   #include "src/platform/windows/misc.h"
@@ -97,3 +102,61 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(9498, AVRational {4749, 50})  // from my LG 27GN950
   )
 );
+
+namespace {
+  // The parent exports its probe result and an isolated video worker imports
+  // it. A codec that failed probing must carry no capability bits, or the
+  // import sees a 4:4:4/HDR bit on an unsupported codec and refuses every
+  // session, whatever codec the client asked for (issue #209).
+  struct EncoderSnapshotTest: testing::Test {
+    std::array<std::bitset<video::encoder_t::MAX_FLAGS>, 3> saved_capabilities {
+      video::software.h264.capabilities,
+      video::software.hevc.capabilities,
+      video::software.av1.capabilities,
+    };
+    int saved_hevc_mode = video::active_hevc_mode;
+    int saved_av1_mode = video::active_av1_mode;
+
+    void TearDown() override {
+      video::software.h264.capabilities = saved_capabilities[0];
+      video::software.hevc.capabilities = saved_capabilities[1];
+      video::software.av1.capabilities = saved_capabilities[2];
+      video::active_hevc_mode = saved_hevc_mode;
+      video::active_av1_mode = saved_av1_mode;
+    }
+
+    // H.264 and HEVC passed with 4:4:4; AV1 failed its validation.
+    static video::encoder_probe_snapshot_t av1_failed(std::uint32_t av1_capabilities) {
+      constexpr auto passed = std::uint32_t {1} << video::encoder_t::PASSED;
+      constexpr auto yuv444 = std::uint32_t {1} << video::encoder_t::YUV444;
+      video::encoder_probe_snapshot_t snapshot {};
+      const std::string_view name = video::software.name;
+      std::copy(name.begin(), name.end(), snapshot.encoder_name.begin());
+      snapshot.active_hevc_mode = 2;
+      snapshot.active_av1_mode = 1;
+      snapshot.codec_capabilities = {passed | yuv444, passed | yuv444, av1_capabilities};
+      snapshot.yuv444_for_codec = {1, 1, 0};
+      snapshot.supported_codec = {1, 1, 0};
+      return snapshot;
+    }
+  };
+}  // namespace
+
+TEST_F(EncoderSnapshotTest, RejectsStaleBitsOnAFailedCodec) {
+  constexpr auto all_but_passed = ((std::uint32_t {1} << video::encoder_t::MAX_FLAGS) - 1) &
+                                  ~(std::uint32_t {1} << video::encoder_t::PASSED);
+  EXPECT_FALSE(video::import_encoder_probe_snapshot(av1_failed(all_but_passed)));
+}
+
+TEST_F(EncoderSnapshotTest, AFailedCodecWithNoBitsRoundTrips) {
+  const auto sent = av1_failed(0);
+  ASSERT_TRUE(video::import_encoder_probe_snapshot(sent));
+
+  video::encoder_probe_snapshot_t received {};
+  ASSERT_TRUE(video::export_encoder_probe_snapshot(received));
+  EXPECT_EQ(sent.encoder_name, received.encoder_name);
+  EXPECT_EQ(sent.codec_capabilities, received.codec_capabilities);
+  EXPECT_EQ(sent.yuv444_for_codec, received.yuv444_for_codec);
+  EXPECT_EQ(sent.supported_codec, received.supported_codec);
+  EXPECT_EQ(sent.active_av1_mode, received.active_av1_mode);
+}
