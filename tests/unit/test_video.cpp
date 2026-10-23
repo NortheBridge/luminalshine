@@ -9,8 +9,8 @@
 #include <bitset>
 #include <cstdint>
 #include <cstdlib>
-#include <string_view>
 #include <src/video.h>
+#include <string_view>
 #ifdef _WIN32
   #include "src/platform/windows/misc.h"
 #endif
