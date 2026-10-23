@@ -4162,6 +4162,8 @@ namespace video {
         config.videoFormat = video_format;
 
         if (!flag_map[encoder_t::PASSED]) {
+          // A codec that failed validation must not keep the bits set before probing.
+          flag_map.capabilities.reset();
           return;
         }
 
