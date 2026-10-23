@@ -288,7 +288,9 @@ namespace video {
 
     std::string build_probe_cache_key() {
       std::ostringstream oss;
-      // Cache probe results strictly by detected GPU identity.
+      // Cache probe results by detected GPU identity and the codec modes the probe
+      // honours, so a changed hevc_mode or av1_mode probes again without a restart.
+      oss << "hevc" << config::video.hevc_mode << "|av1" << config::video.av1_mode << '|';
       oss << "gpu|";
 #ifdef _WIN32
       auto gpus = platf::enumerate_gpus();
