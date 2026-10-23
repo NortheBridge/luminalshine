@@ -1522,20 +1522,24 @@ namespace video {
 
   bool import_encoder_probe_snapshot(const encoder_probe_snapshot_t &snapshot) {
     if (snapshot.version != encoder_probe_snapshot_t::wire_version) {
+      BOOST_LOG(error) << "Encoder snapshot rejected: wire version " << snapshot.version << '.';
       return false;
     }
     if (snapshot.active_hevc_mode < 0 || snapshot.active_hevc_mode > 3 ||
         snapshot.active_av1_mode < 0 || snapshot.active_av1_mode > 3) {
+      BOOST_LOG(error) << "Encoder snapshot rejected: codec mode out of range.";
       return false;
     }
     const auto valid_wire_bool = [](std::uint8_t value) { return value <= 1; };
     if (!valid_wire_bool(snapshot.ref_frames_invalidation) ||
         !std::all_of(snapshot.yuv444_for_codec.begin(), snapshot.yuv444_for_codec.end(), valid_wire_bool) ||
         !std::all_of(snapshot.supported_codec.begin(), snapshot.supported_codec.end(), valid_wire_bool)) {
+      BOOST_LOG(error) << "Encoder snapshot rejected: a flag is not 0 or 1.";
       return false;
     }
     const auto terminator = std::find(snapshot.encoder_name.begin(), snapshot.encoder_name.end(), '\0');
     if (terminator == snapshot.encoder_name.end()) {
+      BOOST_LOG(error) << "Encoder snapshot rejected: unterminated encoder name.";
       return false;
     }
     const std::string_view encoder_name(snapshot.encoder_name.data(),
@@ -1544,6 +1548,7 @@ namespace video {
       return encoder && encoder->name == encoder_name;
     });
     if (selected == encoders.end()) {
+      BOOST_LOG(error) << "Encoder snapshot rejected: unknown encoder [" << encoder_name << "].";
       return false;
     }
 
@@ -1551,6 +1556,7 @@ namespace video {
     const auto allowed_capabilities = (std::uint32_t {1} << encoder_t::MAX_FLAGS) - 1;
     if (std::any_of(snapshot.codec_capabilities.begin(), snapshot.codec_capabilities.end(),
                     [&](std::uint32_t value) { return (value & ~allowed_capabilities) != 0; })) {
+      BOOST_LOG(error) << "Encoder snapshot rejected: unknown capability bits.";
       return false;
     }
     const auto passed_mask = std::uint32_t {1} << encoder_t::PASSED;
@@ -1558,6 +1564,9 @@ namespace video {
     for (std::size_t i = 0; i < snapshot.codec_capabilities.size(); ++i) {
       if ((snapshot.supported_codec[i] != 0) != ((snapshot.codec_capabilities[i] & passed_mask) != 0) ||
           (snapshot.yuv444_for_codec[i] != 0) != ((snapshot.codec_capabilities[i] & yuv444_mask) != 0)) {
+        BOOST_LOG(error) << "Encoder snapshot rejected: codec " << i << " has supported="
+                         << int {snapshot.supported_codec[i]} << " yuv444=" << int {snapshot.yuv444_for_codec[i]}
+                         << " but capabilities=0x" << std::hex << snapshot.codec_capabilities[i] << std::dec << '.';
         return false;
       }
     }
