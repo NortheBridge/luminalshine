@@ -585,6 +585,8 @@ namespace platf::video_worker {
     std::memcpy(&start, payload.data(), sizeof(start));
 
     if (start.magic != kProtocolMagic || start.protocol_version != kProtocolVersion) {
+      BOOST_LOG(error) << "Video worker: rejected a start message with an unknown protocol version.";
+      logging::log_flush();
       (void) send(pipe, message_e::startup_error);
       return 18;
     }
@@ -592,6 +594,8 @@ namespace platf::video_worker {
     if (start.direct_vgd > 1 || start.safe_capture > 1 || (start.direct_vgd && start.safe_capture) ||
         std::any_of(std::begin(start.reserved), std::end(start.reserved),
                                             [](std::uint8_t value) { return value != 0; })) {
+      BOOST_LOG(error) << "Video worker: rejected invalid capture flags in the start message.";
+      logging::log_flush();
       (void) send(pipe, message_e::startup_error);
       return 19;
     }
@@ -603,6 +607,8 @@ namespace platf::video_worker {
           (start.vgd_transport_flags & ~VDISPLAY::vgd::kAllowedRingTransportFlags) != 0 ||
           display_end == std::end(start.vgd_display_name) ||
           display_end == std::begin(start.vgd_display_name)) {
+        BOOST_LOG(error) << "Video worker: rejected an invalid LuminalVGD ring target in the start message.";
+        logging::log_flush();
         (void) send(pipe, message_e::startup_error);
         return 20;
       }
@@ -627,6 +633,8 @@ namespace platf::video_worker {
         start.config.pyrowave_adaptive_fec < 0 || start.config.pyrowave_adaptive_fec > 1 ||
         start.config.pyrowave_adaptive_bitrate < 0 || start.config.pyrowave_adaptive_bitrate > 1 ||
         (start.pyrowave_profiles & ~std::uint8_t {0x0F}) != 0) {
+      BOOST_LOG(error) << "Video worker: rejected a stream configuration out of range.";
+      logging::log_flush();
       (void) send(pipe, message_e::startup_error);
       return 16;
     }
@@ -637,6 +645,7 @@ namespace platf::video_worker {
     if (pyro ? !empty_encoder_snapshot(start.encoder) :
                !video::import_encoder_probe_snapshot(start.encoder)) {
       BOOST_LOG(error) << "Video worker: rejected an inconsistent encoder capability snapshot.";
+      logging::log_flush();
       (void) send(pipe, message_e::startup_error);
       return 12;
     }
@@ -657,6 +666,7 @@ namespace platf::video_worker {
        (!start.config.chromaSamplingType || (start.encoder.codec_capabilities[codec] & yuv444_mask)));
     if (!supported) {
       BOOST_LOG(error) << "Video worker: requested stream format is inconsistent with the validated encoder snapshot.";
+      logging::log_flush();
       (void) send(pipe, message_e::startup_error);
       return 17;
     }
