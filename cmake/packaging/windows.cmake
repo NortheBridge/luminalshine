@@ -101,7 +101,8 @@ else()
             "  Set MINGW_PREFIX in the environment (msys2 shells do this automatically).")
 endif()
 
-# ViGEmBus installer is no longer bundled or managed by the installer
+# VHF replaces the application dependency; existing shared ViGEmBus installations are preserved.
+include(${CMAKE_MODULE_PATH}/packaging/windows_virtual_gamepad.cmake)
 
 # Adding tools
 install(TARGETS dxgi-info RUNTIME DESTINATION "tools" COMPONENT dxgi)
@@ -300,3 +301,7 @@ set(CPACK_COMPONENT_FIREWALL_GROUP "Scripts")
 
 # include specific packaging (WiX only)
 include(${CMAKE_MODULE_PATH}/packaging/windows_wix.cmake)
+
+# Preserve the SDK author's redistribution notice in every binary package.
+install(FILES "${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/LICENSE"
+        DESTINATION "licenses" RENAME "libvirtualgamepad-MIT.txt" COMPONENT application)

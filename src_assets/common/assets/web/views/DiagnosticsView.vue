@@ -224,9 +224,9 @@ const vgdStatus = computed(() => {
   return { text: t2('diagnostics.degraded', 'degraded'), kind: 'mc-tag-danger' };
 });
 const gamepadBus = computed(() => {
-  if (host.vigemInstalled == null) return t2('diagnostics.not_probed', 'not probed');
-  if (!host.vigemInstalled) return t2('diagnostics.not_installed', 'not installed');
-  return `ViGEmBus${host.vigemVersion ? ` ${host.vigemVersion}` : ''}`;
+  if (host.virtualGamepadInstalled == null) return t2('diagnostics.not_probed', 'not probed');
+  if (!host.virtualGamepadInstalled) return t2('diagnostics.not_installed', 'not installed');
+  return `libvirtualgamepad${host.virtualGamepadVersion ? ` ${host.virtualGamepadVersion}` : ''}`;
 });
 const buildLine = computed(() => {
   const md = metadata.value;

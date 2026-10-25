@@ -1752,8 +1752,7 @@ namespace input {
   }
 
   bool probe_gamepads() {
-    auto input = static_cast<platf::input_t *>(platf_input.get());
-    const auto gamepads = platf::supported_gamepads(input);
+    const auto gamepads = platf::supported_gamepads(&platf_input);
     for (auto &gamepad : gamepads) {
       if (gamepad.is_enabled && gamepad.name != "auto") {
         return false;

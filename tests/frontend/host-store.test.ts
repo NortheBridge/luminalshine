@@ -106,8 +106,8 @@ describe('host store', () => {
     mockGet((url) => {
       if (url.includes('/api/health/tdr')) return { status: 200, data: { count: 0 } };
       if (url.includes('/api/health/crashdump')) return { status: 200, data: { available: false } };
-      if (url.includes('/api/health/vigem'))
-        return { status: 200, data: { installed: true, version: '1.22' } };
+      if (url.includes('/api/health/gamepad'))
+        return { status: 200, data: { installed: true, version: '5' } };
       if (url.includes('/api/display/golden_status')) {
         return { status: 200, data: { exists: true, needs_layout_upgrade: true } };
       }
@@ -132,6 +132,11 @@ describe('host store', () => {
 
     const byId = Object.fromEntries(host.healthChecks.map((c) => [c.id, c]));
     expect(byId['tdr']).toMatchObject({ state: 'ok', detail: '0 TDR since start' });
+    expect(byId['gamepad']).toMatchObject({ state: 'ok', detail: 'libvirtualgamepad 5' });
+    expect(host.virtualGamepadInstalled).toBe(true);
+    expect(http.get).toHaveBeenCalledWith('/api/health/gamepad', {
+      validateStatus: expect.any(Function),
+    });
     expect(byId['crashdump']).toMatchObject({ state: 'ok', detail: 'none' });
     expect(byId['golden']).toMatchObject({ state: 'warn' });
     expect(byId['playnite']).toMatchObject({ state: 'warn', detail: 'update 1.4.2 → 1.4.3' });
@@ -139,6 +144,26 @@ describe('host store', () => {
     expect(host.fatalLines).toHaveLength(1);
     expect(host.attentionCount).toBe(3);
     expect(host.incidentSummary).toBe('0 TDR · 0 crash dumps');
+  });
+
+  it('shows an unavailable driver and clears status when the probe fails', async () => {
+    const config = useConfigStore();
+    config.metadata = { platform: 'windows' };
+    mockGet((url) =>
+      url === '/api/health/gamepad'
+        ? { status: 200, data: { installed: false } }
+        : { status: 404, data: null },
+    );
+    const host = useHostStore();
+    await host.refreshHealth();
+    expect(host.healthChecks.find((c) => c.id === 'gamepad')).toMatchObject({
+      state: 'warn',
+      detail: 'Virtual gamepad driver unavailable',
+    });
+    mockGet(() => ({ status: 503, data: null }));
+    await host.refreshHealth();
+    expect(host.virtualGamepadInstalled).toBeNull();
+    expect(host.healthChecks.find((c) => c.id === 'gamepad')?.state).toBe('unknown');
   });
 
   it('skips the admin-only probes for a stats-only session', async () => {

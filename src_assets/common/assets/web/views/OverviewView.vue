@@ -412,11 +412,11 @@ async function onPlayniteReinstallDone(res: { ok: boolean; error?: string }) {
   await refreshPlayniteAndApps();
 }
 
-const showVigemBanner = computed(
+const showVirtualGamepadBanner = computed(
   () =>
     isWindows.value &&
     (config.value as Record<string, unknown>)?.['controller'] === 'enabled' &&
-    host.vigemInstalled === false,
+    host.virtualGamepadInstalled === false,
 );
 const showGoldenBanner = computed(
   () =>
@@ -430,7 +430,7 @@ const hasAttention = computed(
     playniteUpdateAvailable.value ||
     showPlayniteMissingPluginBanner.value ||
     host.crashDumpVisible ||
-    showVigemBanner.value ||
+    showVirtualGamepadBanner.value ||
     showGoldenBanner.value ||
     host.fatalLines.length > 0 ||
     update.stableBuildAvailable.value ||
@@ -730,24 +730,24 @@ onBeforeUnmount(() => {
           </div>
         </NAlert>
 
-        <NAlert v-if="showVigemBanner" type="warning" :show-icon="true">
+        <NAlert v-if="showVirtualGamepadBanner" type="warning" :show-icon="true">
           <div class="flex w-full flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div class="min-w-0">
               <p class="m-0 text-sm font-medium">
                 {{
-                  t2('config.vigem_missing_title', 'Virtual Gamepad Driver (ViGEm) not installed')
+                  t2('config.virtual_gamepad_missing_title', 'Virtual gamepad driver unavailable')
                 }}
               </p>
               <p class="m-0 text-xs opacity-80">
                 {{
                   t2(
-                    'config.vigem_missing_desc',
-                    'LuminalShine requires the ViGEmBus driver to emulate controllers on Windows. It is no longer bundled. Please download and install it manually:',
+                    'config.virtual_gamepad_missing_desc',
+                    'LuminalShine could not connect to a compatible virtual gamepad driver. Install a trusted, signed libvirtualgamepad package. The upstream release archive is unsigned; follow the setup guidance before installing.',
                   )
                 }}
-                <span v-if="host.vigemVersion" class="ml-2 opacity-60"
-                  >({{ t2('config.vigem_detected_version', 'Detected') }}:
-                  {{ host.vigemVersion }})</span
+                <span v-if="host.virtualGamepadVersion" class="ml-2 opacity-60"
+                  >({{ t2('config.virtual_gamepad_detected_version', 'Detected') }}:
+                  {{ host.virtualGamepadVersion }})</span
                 >
               </p>
             </div>
@@ -756,10 +756,10 @@ onBeforeUnmount(() => {
                 tag="a"
                 type="primary"
                 size="small"
-                href="https://github.com/nefarius/ViGEmBus/releases/latest"
+                href="https://github.com/Nonary/libvirtualgamepad"
                 target="_blank"
                 rel="noopener noreferrer"
-                >{{ t2('config.vigem_install', 'Download ViGEmBus') }}</NButton
+                >{{ t2('config.virtual_gamepad_install', 'Driver setup guidance') }}</NButton
               >
             </div>
           </div>

@@ -349,52 +349,20 @@ editing the `conf` file in a text editor. Use the examples as reference.
 
 ### gamepad
 
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            The type of gamepad to emulate on the host.
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            gamepad = auto
-            @endcode</td>
-    </tr>
-    <tr>
-        <td rowspan="6">Choices</td>
-        <td>ds4</td>
-        <td>DualShock 4 controller (PS4)
-            @note{This option applies to Windows only.}</td>
-    </tr>
-    <tr>
-        <td>ds5</td>
-        <td>DualShock 5 controller (PS5)
-            @note{This option applies to FreeBSD and Linux only.}</td>
-    </tr>
-    <tr>
-        <td>switch</td>
-        <td>Switch Pro controller
-            @note{This option applies to FreeBSD and Linux only.}</td>
-    </tr>
-    <tr>
-        <td>x360</td>
-        <td>Xbox 360 controller
-            @note{This option applies to Windows only.}</td>
-    </tr>
-    <tr>
-        <td>xone</td>
-        <td>Xbox One controller
-            @note{This option applies to FreeBSD and Linux only.}</td>
-    </tr>
-</table>
+Select the virtual controller presented by the Windows VHF driver. Default: `auto`.
+
+| Value | Controller |
+| --- | --- |
+| `auto` | Client PlayStation type or enabled motion/touch preferences select DS4; Xbox selects Xbox Series; Nintendo selects Switch Pro. |
+| `xbox_series` | Xbox Series (XInput) |
+| `xbox_one` | Xbox One (XInput) |
+| `ds4` | DualShock 4, with touchpad and motion |
+| `dualsense` | DualSense, with touchpad, motion, and adaptive trigger feedback |
+| `switch_pro` | Nintendo Switch Pro |
+| `x360` | Legacy configuration alias for Xbox Series; the new driver does not emulate Xbox 360. |
+
+Example: `gamepad = auto`. See [driver setup](virtual-gamepad-driver.md).
+DualSense PCM audio haptics are not included in this migration.
 
 ### ds4_back_as_touchpad_click
 

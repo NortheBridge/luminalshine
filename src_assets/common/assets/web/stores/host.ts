@@ -14,7 +14,7 @@ import { isCrashDumpEligible, sanitizeCrashDumpStatus } from '@/utils/crashDump'
  * Three cadences:
  *  - fast   (5 s):  /api/sessions          — live session + monitor reachability
  *  - medium (20 s): /api/clients/list      — paired / connected clients
- *  - slow   (60 s): health probes          — TDR, crash dump, ViGEm, golden
+ *  - slow   (60 s): health probes          — TDR, crash dump, virtual gamepad, golden
  *                                            snapshot, Playnite extension
  * The startup log tail is fetched once (it is the whole log file) and again
  * only on demand.
@@ -150,8 +150,8 @@ export const useHostStore = defineStore('host', () => {
 
   const tdr = ref<TdrStatus | null>(null);
   const crashDump = ref<CrashDumpStatus | null>(null);
-  const vigemInstalled = ref<boolean | null>(null);
-  const vigemVersion = ref('');
+  const virtualGamepadInstalled = ref<boolean | null>(null);
+  const virtualGamepadVersion = ref('');
   const golden = ref<GoldenStatus | null>(null);
   const playnite = ref<PlayniteStatus | null>(null);
   const healthLoaded = ref(false);
@@ -221,20 +221,20 @@ export const useHostStore = defineStore('host', () => {
 
       if (controllerEnabled.value) {
         checks.push({
-          id: 'vigem',
+          id: 'gamepad',
           label: 'Gamepad bus',
           state:
-            vigemInstalled.value === false
+            virtualGamepadInstalled.value === false
               ? 'warn'
-              : vigemInstalled.value == null
+              : virtualGamepadInstalled.value == null
                 ? 'unknown'
                 : 'ok',
           detail:
-            vigemInstalled.value === false
-              ? 'ViGEmBus not installed'
-              : vigemInstalled.value == null
+            virtualGamepadInstalled.value === false
+              ? 'Virtual gamepad driver unavailable'
+              : virtualGamepadInstalled.value == null
                 ? 'not probed'
-                : `ViGEmBus ${vigemVersion.value || 'installed'}`,
+                : `libvirtualgamepad ${virtualGamepadVersion.value || 'installed'}`,
         });
       }
 
@@ -381,22 +381,22 @@ export const useHostStore = defineStore('host', () => {
     }
   }
 
-  async function refreshVigem(): Promise<void> {
+  async function refreshVirtualGamepad(): Promise<void> {
     if (!controllerEnabled.value) {
-      vigemInstalled.value = null;
+      virtualGamepadInstalled.value = null;
       return;
     }
     try {
-      const r = await http.get('/api/health/vigem', { validateStatus: () => true });
+      const r = await http.get('/api/health/gamepad', { validateStatus: () => true });
       const body = r.data as { installed?: boolean; version?: string } | undefined;
       if (r.status === 200 && body) {
-        vigemInstalled.value = !!body.installed;
-        vigemVersion.value = body.version || '';
+        virtualGamepadInstalled.value = !!body.installed;
+        virtualGamepadVersion.value = body.version || '';
       } else {
-        vigemInstalled.value = null;
+        virtualGamepadInstalled.value = null;
       }
     } catch {
-      vigemInstalled.value = null;
+      virtualGamepadInstalled.value = null;
     }
   }
 
@@ -424,7 +424,7 @@ export const useHostStore = defineStore('host', () => {
       await Promise.all([
         refreshTdr(),
         refreshCrashDump(),
-        refreshVigem(),
+        refreshVirtualGamepad(),
         refreshGolden(),
         refreshPlaynite(),
       ]);
@@ -496,8 +496,8 @@ export const useHostStore = defineStore('host', () => {
     clientsLoaded,
     tdr,
     crashDump,
-    vigemInstalled,
-    vigemVersion,
+    virtualGamepadInstalled,
+    virtualGamepadVersion,
     golden,
     playnite,
     healthLoaded,

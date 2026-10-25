@@ -49,6 +49,8 @@
 #include <Shlwapi.h>
 
 // local includes
+#include <libvirtualgamepad/client.h>
+#include "vhf_gamepad_policy.h"
 #include "dir_acl.h"
 #include "misc.h"
 #include "nvprefs/nvprefs_interface.h"
@@ -493,25 +495,17 @@ namespace platf {
     return "00:00:00:00:00:00"s;
   }
 
-  bool is_vigem_installed(std::string *version_out) {
-    // Check for ViGEmBus.sys presence in System32\\drivers
-    WCHAR sys_dir[MAX_PATH] = {0};
-    UINT n = GetSystemDirectoryW(sys_dir, _countof(sys_dir));
-    if (n == 0 || n >= _countof(sys_dir)) {
-      return false;
+  bool is_virtual_gamepad_available(std::string *version_out) {
+    if (version_out) {
+      version_out->clear();
     }
-    std::filesystem::path driver_path = std::filesystem::path {sys_dir} / L"drivers" / L"ViGEmBus.sys";
-    if (!std::filesystem::exists(driver_path)) {
+    lvg::client client;
+    if (client.connect() != ERROR_SUCCESS ||
+        !vhf_gamepad::select_automatic_profile(client.available_profiles())) {
       return false;
     }
     if (version_out) {
-      // Best-effort: report file size as a pseudo-version hint to avoid extra link deps
-      try {
-        auto sz = std::filesystem::file_size(driver_path);
-        *version_out = std::to_string(sz);
-      } catch (...) {
-        version_out->clear();
-      }
+      *version_out = "protocol " + std::to_string(lvg::k_protocol_version);
     }
     return true;
   }

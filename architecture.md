@@ -39,6 +39,8 @@ At runtime, Sunshine is fundamentally a set of long-lived service threads (HTTP 
 
 - `src/platform/**`: OS-specific code (Windows, Linux, macOS) for capture, audio, virtual display, display helper, etc.
   - Windows-specific display management used by WebRTC: `src/platform/windows/display_helper_integration.*`, `src/platform/windows/virtual_display.*`.
+  - Windows controller injection: `src/platform/windows/vhf_gamepad.*` uses the pinned Nonary `libvirtualgamepad` UMDF/VHF protocol client, replacing ViGEm. A connection owns its virtual controllers; recovery recreates only those slots and restores held input/battery state. DS4 maintenance preserves report cadence and recovers stalled gyro streams.
+  - `tools/luminalshine_xbox_bt_helper.cpp` is a separate opt-in service. It detects real Bluetooth Xbox arrivals and briefly allocates a free VHF Xbox controller to trigger XInput enumeration. A shared allocation mutex coordinates the nudge with streaming allocation/recovery. See `docs/virtual-gamepad-driver.md` for signed driver packaging.
 
 ### Web UI (Vue + TS)
 

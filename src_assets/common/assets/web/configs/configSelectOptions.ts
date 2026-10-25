@@ -198,11 +198,15 @@ export function getConfigSelectOptions(
         switch: 'config.gamepad_switch',
         x360: 'config.gamepad_x360',
         xone: 'config.gamepad_xone',
+        xbox_series: 'config.gamepad_xbox_series',
+        xbox_one: 'config.gamepad_xbox_one',
+        dualsense: 'config.gamepad_dualsense',
+        switch_pro: 'config.gamepad_switch_pro',
       };
       const prioritizedByPlatform: Record<string, string[]> = {
         freebsd: ['switch', 'xone'],
         linux: ['ds5', 'xone', 'switch', 'x360'],
-        windows: ['x360', 'ds4'],
+        windows: ['xbox_series', 'xbox_one', 'ds4', 'dualsense', 'switch_pro'],
       };
       const fallbackOrder = ['x360', 'ds5', 'ds4'];
 
@@ -213,7 +217,10 @@ export function getConfigSelectOptions(
 
       const addOption = (value: string | undefined) => {
         if (!value || seen.has(value)) return;
-        const labelKey = labelMap[value] || `config.gamepad_${value}`;
+        const labelKey =
+          platform === 'windows' && value === 'x360'
+            ? 'config.gamepad_x360_legacy'
+            : labelMap[value] || `config.gamepad_${value}`;
         options.push({ label: translateOr(t, labelKey, value), value });
         seen.add(value);
       };

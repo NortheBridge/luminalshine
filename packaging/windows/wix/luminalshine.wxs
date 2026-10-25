@@ -352,6 +352,11 @@
       <Custom Action="SetRunInstallerMigrations" After="MigrateConfig" Condition="NOT REMOVE" />
       <Custom Action="RunInstallerMigrations" After="SetRunInstallerMigrations" Condition="NOT REMOVE" />
 
+      <?if $(var.VhfGamepadBundled) = 1 ?>
+      <Custom Action="SetInstallVhfGamepad" After="RunInstallerMigrations" Condition="NOT REMOVE AND INSTALL_VHF_GAMEPAD = &quot;1&quot; AND&amp;CM_C_application=3" />
+      <Custom Action="InstallVhfGamepad" After="SetInstallVhfGamepad" Condition="NOT REMOVE AND INSTALL_VHF_GAMEPAD = &quot;1&quot; AND&amp;CM_C_application=3" />
+      <?endif?>
+
       <!-- Uninstall before file removal -->
       <Custom Action="SetRestoreNvPrefsUndo" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
       <Custom Action="RestoreNvPrefsUndo" After="SetRestoreNvPrefsUndo" Condition="REMOVE=&quot;ALL&quot;" />

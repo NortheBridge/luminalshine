@@ -3374,10 +3374,10 @@ namespace stream {
         system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
         update::on_stream_started();
   #if defined(_WIN32)
-        // If ViGEm is not installed, notify the user that gamepad input won't work
+        // If the VHF gamepad driver is unavailable, notify the user that gamepad input won't work
         try {
-          if (!platf::is_vigem_installed(nullptr)) {
-            system_tray::update_tray_vigem_missing();
+          if (!platf::is_virtual_gamepad_available(nullptr)) {
+            system_tray::update_tray_gamepad_missing();
           }
         } catch (...) {
           // best-effort: ignore any unexpected errors while checking

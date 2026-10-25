@@ -4,19 +4,17 @@
  *
  * Independent Windows service (separate from LuminalShineService) that
  * watches for Bluetooth Xbox Series X/S controller arrival events and
- * briefly plugs a ViGEmBus virtual X360 pad to force Steam's XInput
+ * briefly plugs a libvirtualgamepad virtual Xbox Series pad to force Steam's XInput
  * hotplug path to re-enumerate. Steam can otherwise take a substantial
  * period to notice a real BT controller has come back, even though
  * Windows and the Xbox Accessories app see it immediately.
  *
  * Runs in Session 0 as LocalSystem. HID device-interface arrivals fire
  * system-wide and reach a service via SERVICE_CONTROL_DEVICEEVENT with
- * DEVICE_NOTIFY_SERVICE_HANDLE registration. ViGEmBus is a kernel-mode
- * driver, so virtual pads attached from Session 0 are visible to all
+ * DEVICE_NOTIFY_SERVICE_HANDLE registration. The UMDF source publishes through Windows VHF, so virtual pads attached from Session 0 are visible to all
  * user-session XInput consumers (including Steam).
  *
- * Crash-isolated from LuminalShineService and with no IPC between the
- * two: a Steam-hotplug regression in this helper cannot affect the
+ * Crash-isolated from LuminalShineService and coordinated with the host through a short-lived allocation mutex: a Steam-hotplug regression in this helper cannot affect the
  * streaming host. Disabled by default; users opt in by setting
  * `enabled: true` in luminalshine_xboxcontroller_state.json.
  */
@@ -56,7 +54,11 @@
 #include <thread>
 #include <vector>
 
-#include <ViGEm/Client.h>
+#include <libvirtualgamepad/client.h>
+#include <SetupAPI.h>
+#include <cfgmgr32.h>
+#include "xbox_bt_helper_policy.h"
+#include "../src/platform/windows/gamepad_allocation.h"
 #include <nlohmann/json.hpp>
 
 // GUID_DEVINTERFACE_HID, defined inline so the helper compiles cleanly on
@@ -96,6 +98,7 @@ namespace {
   SERVICE_STATUS_HANDLE g_service_status_handle = nullptr;
   SERVICE_STATUS        g_service_status        = {};
   HANDLE                g_stop_event            = nullptr;
+  HANDLE                g_nudge_event           = nullptr;
   HANDLE                g_watcher_exit_event    = nullptr;
   HDEVNOTIFY            g_device_notify         = nullptr;
   FILE                 *g_log_file              = nullptr;
@@ -340,69 +343,111 @@ namespace {
     return false;
   }
 
-  // --------------------------------------------------------- ViGEm nudge
+  // Only real Bluetooth ancestors qualify. VHF Xbox identities intentionally
+  // share the real controller VID/PID; matching those alone recursively nudges
+  // on our own (or the streaming host's) virtual controller arrival.
+  bool is_bluetooth_controller(const std::wstring &path) {
+    HDEVINFO devices = SetupDiCreateDeviceInfoList(nullptr, nullptr);
+    if (devices == INVALID_HANDLE_VALUE) {
+      return false;
+    }
+    SP_DEVICE_INTERFACE_DATA iface {};
+    iface.cbSize = sizeof(iface);
+    SP_DEVINFO_DATA device {};
+    device.cbSize = sizeof(device);
+    bool bluetooth = false;
+    if (SetupDiOpenDeviceInterfaceW(devices, path.c_str(), 0, &iface)) {
+      DWORD required = 0;
+      SetupDiGetDeviceInterfaceDetailW(devices, &iface, nullptr, 0, &required, nullptr);
+      std::vector<unsigned char> detail_storage(required);
+      if (required >= sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W)) {
+        auto *detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(detail_storage.data());
+        detail->cbSize = sizeof(*detail);
+        if (SetupDiGetDeviceInterfaceDetailW(devices, &iface, detail, required, nullptr, &device)) {
+          DEVINST current = device.DevInst;
+          for (unsigned depth = 0; depth < 32; ++depth) {
+            wchar_t id[MAX_DEVICE_ID_LEN] {};
+            if (CM_Get_Device_IDW(current, id, MAX_DEVICE_ID_LEN, 0) != CR_SUCCESS) {
+              break;
+            }
+            std::wstring upper(id);
+            for (auto &c : upper) {
+              c = static_cast<wchar_t>(std::towupper(c));
+            }
+            if (xbox_bt_helper::is_bluetooth_instance(upper)) {
+              bluetooth = true;
+              break;
+            }
+            DEVINST parent;
+            if (CM_Get_Parent(&parent, current, 0) != CR_SUCCESS) {
+              break;
+            }
+            current = parent;
+          }
+        }
+      }
+    }
+    SetupDiDestroyDeviceInfoList(devices);
+    return bluetooth;
+  }
 
-  // Plugs a virtual X360 pad, waits nudge_duration_ms, unplugs. Steam's
-  // XInput hotplug path scans all real slots whenever any XInput device
-  // appears; the virtual pad's appearance is enough to trigger that scan,
-  // which then picks up the real Bluetooth controller. Runs on a detached
-  // thread because the SCM control handler must return promptly.
+  // Serializes device allocation with the host while this short-lived pad
+  // exists. The helper runs as SYSTEM. Existing stream slots are never
+  // removed or overwritten; the driver also enforces ownership per handle.
   void perform_nudge() {
     unsigned hold_ms;
-    bool     log_each;
+    bool log_each;
     {
       std::lock_guard<std::mutex> guard(g_config_mtx);
-      hold_ms  = g_config.nudge_duration_ms;
+      if (!g_config.enabled) {
+        return;
+      }
+      hold_ms = xbox_bt_helper::bounded_hold_ms(g_config.nudge_duration_ms);
       log_each = g_config.log_each_nudge;
     }
-
-    PVIGEM_CLIENT client = vigem_alloc();
-    if (!client) {
-      log_err("nudge: vigem_alloc returned null");
+    platf::gamepad_allocation::guard allocation {0};
+    if (!allocation || WaitForSingleObject(g_stop_event, 0) == WAIT_OBJECT_0) {
       return;
     }
-
-    VIGEM_ERROR status = vigem_connect(client);
-    if (!VIGEM_SUCCESS(status)) {
-      log_warn("nudge: vigem_connect failed (" + hex8(static_cast<uint32_t>(status))
-               + "); ViGEmBus is likely not installed.");
-      vigem_free(client);
+    lvg::client client;
+    DWORD status = client.connect();
+    if (status != ERROR_SUCCESS) {
+      log_warn("nudge: libvirtualgamepad connection failed (" + hex8(status) + ")");
       return;
     }
-
-    PVIGEM_TARGET target = vigem_target_x360_alloc();
-    if (!target) {
-      log_err("nudge: vigem_target_x360_alloc returned null");
-      vigem_disconnect(client);
-      vigem_free(client);
+    const auto profiles = client.available_profiles();
+    const auto profile = (profiles & lvg::profile_bit(lvg::profile::xbox_series))
+                           ? lvg::profile::xbox_series : lvg::profile::xbox_one;
+    if (!(profiles & lvg::profile_bit(profile))) {
+      log_warn("nudge: driver does not offer an XInput Xbox profile");
       return;
     }
-
-    status = vigem_target_add(client, target);
-    if (!VIGEM_SUCCESS(status)) {
-      log_warn("nudge: vigem_target_add failed (" + hex8(static_cast<uint32_t>(status)) + ")");
-      vigem_target_free(target);
-      vigem_disconnect(client);
-      vigem_free(client);
+    const auto slot = xbox_bt_helper::claim_free_slot(
+      client.maximum_controllers(), lvg::k_max_controllers,
+      [&](std::uint32_t id) { return client.create_controller(id, profile) == ERROR_SUCCESS; });
+    if (!slot) {
+      log_warn("nudge: no available virtual controller slot");
       return;
     }
-
     if (log_each) {
-      log_info("nudge: virtual X360 attached for " + std::to_string(hold_ms) + " ms");
+      log_info("nudge: virtual Xbox attached for " + std::to_string(hold_ms) + " ms");
     }
-
-    Sleep(hold_ms);
-
-    status = vigem_target_remove(client, target);
-    if (!VIGEM_SUCCESS(status)) {
-      log_warn("nudge: vigem_target_remove failed (" + hex8(static_cast<uint32_t>(status)) + ")");
+    // Stop wakes the worker immediately; the client destructor releases our
+    // controller even if explicit removal fails after a driver restart.
+    WaitForSingleObject(g_stop_event, hold_ms);
+    status = client.destroy_controller(*slot);
+    if (status != ERROR_SUCCESS) {
+      log_warn("nudge: controller removal failed (" + hex8(status) + ")");
     }
-    vigem_target_free(target);
-    vigem_disconnect(client);
-    vigem_free(client);
-
     if (log_each) {
       log_info("nudge: complete");
+    }
+  }
+
+  void nudge_worker() {
+    HANDLE waits[] {g_stop_event, g_nudge_event};
+    while (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
+      perform_nudge();
     }
   }
 
@@ -425,9 +470,7 @@ namespace {
       }
       g_last_nudge_ts = now;
     }
-    std::thread([] {
-      perform_nudge();
-    }).detach();
+    SetEvent(g_nudge_event);
   }
 
   // ----------------------------------------------------- config watcher
@@ -591,7 +634,7 @@ namespace {
             // through dbcc_size. Constructing from the pointer is safe.
             std::wstring path(di->dbcc_name);
             auto [vid, pid] = parse_vid_pid(path);
-            if (vid && pid && matches_configured_controller(vid, pid)) {
+            if (vid && pid && matches_configured_controller(vid, pid) && is_bluetooth_controller(path)) {
               log_info("device arrival: " + vid_pid_str(vid, pid) + " -- scheduling nudge");
               maybe_nudge_debounced();
             }
@@ -698,6 +741,17 @@ namespace {
                + ", patterns=" + std::to_string(g_config.match_vid_pid.size()) + ")");
     }
 
+    g_nudge_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!g_nudge_event) {
+      g_service_status.dwWin32ExitCode = GetLastError();
+      g_service_status.dwCurrentState = SERVICE_STOPPED;
+      SetServiceStatus(g_service_status_handle, &g_service_status);
+      CloseHandle(g_stop_event);
+      g_stop_event = nullptr;
+      close_log_file();
+      return;
+    }
+    std::thread nudger(nudge_worker);
     register_device_notifications();
 
     // Manual-reset event the watcher signals on exit, so ServiceMain can
@@ -713,6 +767,9 @@ namespace {
 
     log_info("LuminalShine Xbox Bluetooth Helper stopping");
     unregister_device_notifications();
+    nudger.join();
+    CloseHandle(g_nudge_event);
+    g_nudge_event = nullptr;
 
     // The watcher waits on g_stop_event inside its WaitForMultipleObjects,
     // so it's already been signaled to exit by the time we get here (the

@@ -20,7 +20,7 @@ list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-misleading-indentation)
 # Disable warnings for Windows ARM64
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64")
     list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-dll-attribute-on-redeclaration)  # Boost
-    list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-unknown-warning-option)  # ViGEmClient
+    list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-unknown-warning-option)
     list(APPEND SUNSHINE_COMPILE_OPTIONS -Wno-unused-variable)  # Boost
 endif()
 
@@ -45,8 +45,8 @@ file(GLOB NVPREFS_FILES CONFIGURE_DEPENDS
         "${CMAKE_SOURCE_DIR}/src/platform/windows/nvprefs/*.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/nvprefs/*.h")
 
-# vigem
-include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include")
+# VHF virtual gamepad protocol/client (pinned submodule).
+include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/include")
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/sudovda")
 
 # LuminalVGD — first-party virtual display driver. The C ABI staticlib is
@@ -92,11 +92,6 @@ set_target_properties(sunshine_rc_object PROPERTIES
     COMPILE_DEFINITIONS "PROJECT_ICON_PATH=${SUNSHINE_ICON_PATH};PROJECT_NAME=${PROJECT_NAME};PROJECT_VENDOR=${SUNSHINE_PUBLISHER_NAME};PROJECT_VERSION=${PROJECT_VERSION};PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR};PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR};PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH};RC_VERSION_MAJOR=${RC_VERSION_MAJOR};RC_VERSION_MINOR=${RC_VERSION_MINOR};RC_VERSION_BUILD=${RC_VERSION_BUILD};RC_VERSION_REVISION=${RC_VERSION_REVISION}"  # cmake-lint: disable=C0301
     INCLUDE_DIRECTORIES ""
 )
-
-# ViGEmBus version
-set(VIGEMBUS_PACKAGED_V "1.21.442")
-set(VIGEMBUS_PACKAGED_V_2 "${VIGEMBUS_PACKAGED_V}.0")
-list(APPEND SUNSHINE_DEFINITIONS VIGEMBUS_PACKAGED_VERSION="${VIGEMBUS_PACKAGED_V_2}")
 
 set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/publish.cpp"
@@ -185,11 +180,9 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/tools/playnite_launcher/lossless_scaling.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Client.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Common.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Util.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/km/BusShared.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/vhf_gamepad.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/vhf_gamepad_policy.cpp"
+        "${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/client/client.cpp"
         ${NVPREFS_FILES})
 
 set(OPENSSL_LIBRARIES

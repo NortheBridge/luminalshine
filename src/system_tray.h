@@ -81,8 +81,8 @@ namespace system_tray {
   void update_tray_require_pin();
 
   /**
-   * @brief Spawns a notification when ViGEm is missing.
+   * @brief Spawns a notification when the virtual gamepad driver is unavailable.
    * Clicking it opens the Web UI Dashboard for more information.
    */
-  void update_tray_vigem_missing();
+  void update_tray_gamepad_missing();
 }  // namespace system_tray

@@ -438,14 +438,14 @@ namespace system_tray {
     });
   }
 
-  void update_tray_vigem_missing() {
+  void update_tray_gamepad_missing() {
     run_on_tray_thread([]() {
       apply_tray_state(TRAY_ICON, PROJECT_NAME);
       apply_tray_state(
         TRAY_ICON,
         PROJECT_NAME,
         "Gamepad Input Unavailable",
-        "ViGEm is not installed. Click for setup info",
+        "Virtual gamepad driver is unavailable. Click for setup info",
         TRAY_ICON,
         []() {
           // Open Dashboard for more information

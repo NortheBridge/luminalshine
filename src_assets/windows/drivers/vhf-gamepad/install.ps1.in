@@ -1,0 +1,157 @@
+[CmdletBinding()]
+param(
+    [switch]$ValidateOnly,
+    [string]$PackageRoot = $PSScriptRoot
+)
+# The certificate pin is a packaging input, never an HTTP/MSI caller argument.
+# Only the verified production leaf may be enrolled in TrustedPublisher for
+# silent PnP installation. Root trust and Windows boot/signing policies stay unchanged.
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$expectedSigner = '@SUNSHINE_VHF_GAMEPAD_SIGNER_THUMBPRINT@'
+$expectedRevision = '7b000a2b060b4daeb0b5c6aa7b77ae1d81857e7a'
+$hardwareId = 'ROOT\VIBESHINEVIRTUALGAMEPAD'
+$infName = 'VibeshineVhfGamepad.inf'
+
+function Get-ComponentVersion([string]$Path) {
+    $inVersion = $false
+    $versions = @()
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        $line = ($line -split ';', 2)[0].Trim()
+        if ($line -match '^\[(.+)\]$') { $inVersion = $Matches[1] -ieq 'Version'; continue }
+        if ($inVersion -and $line -match '^DriverVer\s*=\s*[^,]+,\s*(\d+\.\d+\.\d+\.\d+)\s*$') {
+            $versions += [version]$Matches[1]
+        }
+    }
+    if ($versions.Count -ne 1) { throw 'Missing or ambiguous INF DriverVer; driver unchanged.' }
+    return $versions[0]
+}
+
+function New-VhfPublisherStore {
+    return [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
+}
+
+function Invoke-VhfDriverStaging([string]$InfPath) {
+    & "$env:SystemRoot\System32\pnputil.exe" /add-driver $InfPath | Out-Host
+    return $LASTEXITCODE
+}
+
+function Invoke-VhfDeviceSetup([string]$SetupPath, [string]$InfPath) {
+    & $SetupPath install --inf $InfPath | Out-Host
+    return $LASTEXITCODE
+}
+
+# Called only after package, administrator and installed-version checks. Keeping
+# the transaction separate allows tests to replace all Windows side effects.
+function Install-VhfWithVerifiedPublisher($CatalogSignature, [string]$InfPath, [string]$SetupPath) {
+    if ($CatalogSignature.Status -ne 'Valid' -or $null -eq $CatalogSignature.SignerCertificate -or
+        $CatalogSignature.SignerCertificate.Thumbprint -ine $expectedSigner) {
+        throw 'Refusing publisher enrollment without a Windows-valid pinned signature.'
+    }
+    $certificate = $CatalogSignature.SignerCertificate
+    $store = New-VhfPublisherStore
+    $added = $false
+    try {
+        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $existing = @($store.Certificates | Where-Object { $_.Thumbprint -ieq $expectedSigner })
+        if ($existing.Count -eq 0) {
+            $store.Add($certificate)
+            $added = $true
+            if (@($store.Certificates | Where-Object { $_.Thumbprint -ieq $expectedSigner }).Count -eq 0) {
+                throw 'Could not verify production publisher enrollment.'
+            }
+            Write-Host "Enrolled verified signer $expectedSigner in LocalMachine\TrustedPublisher for silent driver installation."
+        }
+        # Windows verifies CAT membership of INF/DLL before setup executes.
+        $stageCode = Invoke-VhfDriverStaging $InfPath
+        if ($stageCode -notin @(0, 3010)) { throw "Driver staging failed ($stageCode); existing driver retained." }
+        $setupCode = Invoke-VhfDeviceSetup $SetupPath $InfPath
+        if ($setupCode -notin @(0, 3010)) { throw "VHF setup failed ($setupCode)." }
+        return ($stageCode -eq 3010 -or $setupCode -eq 3010)
+    } catch {
+        $installFailure = $_
+        if ($added) {
+            try {
+                $store.Remove($certificate)
+                if (@($store.Certificates | Where-Object { $_.Thumbprint -ieq $expectedSigner }).Count -ne 0) {
+                    throw 'Certificate remains in the store.'
+                }
+            } catch {
+                Write-Warning "Rollback failed for newly added LocalMachine\TrustedPublisher certificate ${expectedSigner}: $_" -WarningAction Continue
+            }
+        }
+        throw $installFailure
+    } finally {
+        # Preserve the installation/rollback result even if store disposal fails.
+        try { $store.Close() }
+        catch { Write-Warning "Could not close TrustedPublisher store: $_" -WarningAction Continue }
+    }
+}
+
+try {
+    if ($expectedSigner -notmatch '^[0-9A-Fa-f]{40}$') { throw 'Driver signer has not been configured.' }
+    $manifest = Get-Content -LiteralPath (Join-Path $PackageRoot 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.schema_version -ne 1 -or $manifest.source_revision -cne $expectedRevision -or
+        $manifest.driver_ver -cne '10/16/2026,0.1.0.53' -or $manifest.protocol_version -ne 2 -or
+        $manifest.platform -cne 'x64' -or $manifest.signing.channel -cne 'msi-request-signing') {
+        throw 'Expected libvirtualgamepad v0.1.0-beta.9 x64 protocol-2 package.'
+    }
+    $payloads = @('driver/VibeshineVhfGamepad.inf', 'driver/VibeshineVhfGamepad.dll',
+        'driver/VibeshineVhfGamepad.cat', 'tools/VibeshineVhfGamepadDeviceSetup.exe')
+    if ((@($manifest.files | ForEach-Object { $_.path } | Sort-Object) -join "`n") -cne
+        (($payloads | Sort-Object) -join "`n")) { throw 'Unexpected package manifest layout.' }
+    $catalogSignature = $null
+    foreach ($relative in $payloads) {
+        $path = Join-Path $PackageRoot $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -eq 0) {
+            throw "Missing driver payload: $relative"
+        }
+        if ($relative -like '*.inf' -or $relative -like '*.dll') {
+            $entry = @($manifest.files | Where-Object { $_.path -ceq $relative })
+            if ($entry.Count -ne 1 -or $entry[0].sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+                (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $entry[0].sha256) {
+                throw "Driver payload hash mismatch: $relative"
+            }
+        } else {
+            # CAT/setup are signed downstream; their upstream unsigned hashes change.
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
+                $signature.SignerCertificate.Thumbprint -ine $expectedSigner) {
+                throw "Expected a valid signature by $expectedSigner on $relative. No trust changes made."
+            }
+            if ($relative -like '*.cat') { $catalogSignature = $signature }
+        }
+    }
+    $inf = Join-Path $PackageRoot "driver/$infName"
+    $targetVersion = Get-ComponentVersion $inf
+    if ($targetVersion -ne [version]'0.1.0.53' -or
+        -not (Select-String -LiteralPath $inf -SimpleMatch -Pattern $hardwareId -Quiet)) {
+        throw 'Unexpected driver version or hardware identity.'
+    }
+    if ($ValidateOnly) { Write-Output 'Signed VHF package validated.'; exit 0 }
+    if (-not [Environment]::Is64BitProcess) { throw 'Run this installer using 64-bit Windows PowerShell.' }
+    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator rights are required.' }
+    # Do not downgrade or restart a shared driver used by Vibepollo or another host.
+    # Inventory failures abort; unknown versions are never treated as missing.
+    $installed = @(Get-WindowsDriver -Online -All -ErrorAction Stop | Where-Object {
+        [IO.Path]::GetFileName([string]$_.OriginalFileName) -ieq $infName
+    })
+    $active = @(Get-CimInstance Win32_PnPSignedDriver -ErrorAction Stop | Where-Object {
+        ([string]$_.DeviceID).StartsWith($hardwareId, [StringComparison]::OrdinalIgnoreCase)
+    })
+    foreach ($entry in $installed) {
+        if ([string]$entry.Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Unknown staged driver version; driver unchanged.' }
+        if ([version]$entry.Version -gt $targetVersion) { Write-Output 'Newer shared VHF package retained. Repair it using its original installer if necessary.'; exit 0 }
+    }
+    foreach ($entry in $active) {
+        if ([string]$entry.DriverVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Unknown active driver version; driver unchanged.' }
+        if ([version]$entry.DriverVersion -ge $targetVersion) { Write-Output 'Equal/newer shared VHF driver retained.'; exit 0 }
+    }
+    $restartRequired = Install-VhfWithVerifiedPublisher $catalogSignature $inf (Join-Path $PackageRoot 'tools/VibeshineVhfGamepadDeviceSetup.exe')
+    if ($restartRequired) { Write-Warning 'Restart Windows to finish installing the virtual gamepad driver.' }
+    exit 0
+} catch {
+    Write-Error "VHF driver installation/validation failed: $_"
+    exit 1
+}

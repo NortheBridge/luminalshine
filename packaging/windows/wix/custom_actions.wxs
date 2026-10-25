@@ -318,7 +318,7 @@
   </Fragment>
 
   <!-- Xbox Bluetooth reconnect helper: an independent Windows service that
-       watches HID device-interface arrivals and briefly plugs a ViGEmBus
+       watches HID device-interface arrivals and briefly plugs a VHF Xbox
        virtual pad to force Steam's XInput hotplug path to re-enumerate when
        a Bluetooth Xbox controller comes back. Crash-isolated from
        LuminalShineService, no IPC between them. The helper itself is
@@ -393,6 +393,12 @@
          install proceed; the C++ runtime carries the same migration
          logic as a safety net on first launch. -->
     <CustomAction Id="RunInstallerMigrations" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <?if $(var.VhfGamepadBundled) = 1 ?>
+    <Property Id="INSTALL_VHF_GAMEPAD" Value="1" Secure="yes" />
+    <CustomAction Id="InstallVhfGamepad" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="SetInstallVhfGamepad" Property="InstallVhfGamepad"
+                  Value="&quot;[POWERSHELL_PATH]&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\vhf-gamepad\install.ps1&quot;" />
+    <?endif?>
     <CustomAction Id="InstallLuminalVgd" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Uninstall-time actions (deferred, elevated) -->

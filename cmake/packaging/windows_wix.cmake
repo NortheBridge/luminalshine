@@ -265,6 +265,7 @@ foreach(_ext ${LUMINALSHINE_WIX_EXTENSIONS})
 endforeach()
 
 set(_wix_dvars
+  "-d" "VhfGamepadBundled=${SUNSHINE_VHF_GAMEPAD_BUNDLED}"
   "-d" "ProductCode=${LUMINALSHINE_PRODUCT_CODE}"
   "-d" "ProductName=${CMAKE_PROJECT_NAME}"
   "-d" "ProductVersion=${LUMINALSHINE_MSI_VERSION}"

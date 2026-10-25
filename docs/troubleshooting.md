@@ -225,12 +225,11 @@ launchctl load -w /Library/LaunchAgents/org.freedesktop.dbus-session.plist
 ## Windows
 
 ### No gamepad detected
-You must install ViGEmBus to use virtual gamepads. You can install this from the troubleshooting tab of the web UI.
-
-Alternatively, you can manually install it from
-[ViGEmBus releases](https://github.com/nefarius/ViGEmBus/releases/latest). You must use version 1.17 or newer.
-
-After installation, it is recommended to restart your computer.
+Check the WebUI virtual gamepad driver status. LuminalShine now uses Nonary's
+`libvirtualgamepad` UMDF/VHF driver; installing ViGEmBus alone does not provide controller support.
+Follow [virtual gamepad driver setup](virtual-gamepad-driver.md) and install a compatible,
+trusted signed package. Restart Windows if requested. The Xbox Bluetooth Helper remains
+opt-in and also requires this driver. Its virtual controller is skipped when all slots are occupied.
 
 ### Permission denied
 Since Sunshine runs as a service on Windows, it may not have the same level of access that your regular user account

@@ -129,19 +129,6 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/src/rswrapper.c"
         DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}"
         PROPERTIES COMPILE_FLAGS "-ftree-vectorize -funroll-loops")
 
-# third-party/ViGEmClient
-set(VIGEM_COMPILE_FLAGS "")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unknown-pragmas ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-misleading-indentation ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-class-memaccess ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-function ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-variable ")
-set_source_files_properties("${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
-        DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}" "${CMAKE_SOURCE_DIR}/tools"
-        PROPERTIES
-        COMPILE_DEFINITIONS "UNICODE=1;ERROR_INVALID_DEVICE_OBJECT_PARAMETER=650"
-        COMPILE_FLAGS ${VIGEM_COMPILE_FLAGS})
-
 # src/nvhttp
 string(TOUPPER "x${CMAKE_BUILD_TYPE}" BUILD_TYPE)
 if("${BUILD_TYPE}" STREQUAL "XDEBUG")

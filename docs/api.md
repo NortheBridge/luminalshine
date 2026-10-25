@@ -135,11 +135,13 @@ The token grants access only to the specified paths and HTTP methods.
 
 All session metadata is stored hashed and persisted in the same state file as API tokens so Sunshine can validate cookies across service restarts.
 
-## GET /api/vigembus/status
-@copydoc confighttp::getViGEmBusStatus()
+## GET /api/health/gamepad
+@copydoc confighttp::getGamepadHealth()
 
-## POST /api/vigembus/install
-@copydoc confighttp::installViGEmBus()
+Authenticated Windows-only protocol probe. Returns `installed: true` only when the
+VHF driver accepts a compatible connection and advertises usable profiles. `version`
+is the negotiated protocol hint, not a driver file version. The obsolete ViGEm status
+and installer endpoints have been removed; use the signed package installer instead.
 
 <div class="section_buttons">
 

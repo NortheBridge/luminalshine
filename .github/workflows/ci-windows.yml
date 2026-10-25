@@ -312,6 +312,14 @@ jobs:
           echo "python-path=${python_path}"
           echo "python-path=${python_path}" >> "${GITHUB_OUTPUT}"
 
+      - name: Test VHF signed-package validation
+        shell: pwsh
+        run: |
+          ./packaging/windows/test_vhf_package_validation.ps1
+          ./packaging/windows/test_vhf_publisher_enrollment.ps1
+          python scripts/test_vhf_msi_compat.py
+          if ($LASTEXITCODE -ne 0) { throw "VHF MSI migration contract failed." }
+
       - name: Install WiX 7 toolchain
         shell: pwsh
         # WiX 7 ships as a .NET tool pinned in .config/dotnet-tools.json.
@@ -476,7 +484,15 @@ jobs:
           & $java -version
           Write-Host "CodeSignTool v$version ready at $($jar.FullName)"
 
-      - name: Sign built executables
+      - name: Fetch pinned VHF gamepad package
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'luminalshine-vhf-package'
+          ./scripts/fetch_vhf_gamepad.ps1 -OutDir $package
+          "VHF_PACKAGE_ROOT=$package" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Sign built executables and VHF catalog
         if: env.SIGN_ARTIFACTS == 'true'
         shell: pwsh
         env:
@@ -501,9 +517,14 @@ jobs:
           # excluded because they are advisory-only and never shipped.
           # CPack's _CPack_Packages staging directory doesn't exist yet at
           # this point in the pipeline, so we don't need to filter for it.
-          $targets = Get-ChildItem -Path 'build' -Filter '*.exe' -Recurse -File |
-                       Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike 'test_*' }
+          $targets = @(Get-ChildItem -Path 'build' -Filter '*.exe' -Recurse -File |
+                       Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike 'test_*' })
           if (-not $targets) { throw 'No executables found under build/ to sign.' }
+          # The CAT attests to the unchanged INF/DLL. Never sign the driver DLL:
+          # modifying it would invalidate its catalog membership.
+          if (-not $env:VHF_PACKAGE_ROOT) { throw 'Verified VHF package is missing.' }
+          $targets += Get-Item (Join-Path $env:VHF_PACKAGE_ROOT 'driver/VibeshineVhfGamepad.cat')
+          $targets += Get-Item (Join-Path $env:VHF_PACKAGE_ROOT 'tools/VibeshineVhfGamepadDeviceSetup.exe')
           # CodeSignTool resolves conf\code_sign_tool.properties (SSL.com OAuth
           # endpoints + CLIENT_ID) relative to the current directory. Input
           # paths below are absolute, so the location change doesn't affect them.
@@ -537,6 +558,49 @@ jobs:
             Pop-Location
           }
 
+      - name: Record signed file hashes before packaging
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path 'build' -Filter '*.exe' -Recurse -File |
+            Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike 'test_*' })
+          $files += Get-Item (Join-Path $env:VHF_PACKAGE_ROOT 'driver/VibeshineVhfGamepad.cat')
+          $files += Get-Item (Join-Path $env:VHF_PACKAGE_ROOT 'tools/VibeshineVhfGamepadDeviceSetup.exe')
+          $records = @($files | ForEach-Object { @{ path = $_.FullName; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } })
+          $records | ConvertTo-Json | Set-Content (Join-Path $env:RUNNER_TEMP 'luminalshine-signed-files.json')
+
+      - name: Bind VHF package to LuminalShine release signer
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $hostSignature = Get-AuthenticodeSignature -LiteralPath 'build/luminalshine.exe'
+          if ($hostSignature.Status -ne 'Valid' -or $null -eq $hostSignature.SignerCertificate) {
+            throw 'LuminalShine must have a valid release signature before selecting the VHF signer.'
+          }
+          $thumbprint = $hostSignature.SignerCertificate.Thumbprint
+          foreach ($relative in 'driver/VibeshineVhfGamepad.cat', 'tools/VibeshineVhfGamepadDeviceSetup.exe') {
+            $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $env:VHF_PACKAGE_ROOT $relative)
+            if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
+                $signature.SignerCertificate.Thumbprint -ine $thumbprint) {
+              throw "VHF payload $relative was not signed by the same certificate as LuminalShine."
+            }
+          }
+          "VHF_SIGNER_THUMBPRINT=$thumbprint" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Enable signed VHF package for release packaging
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: msys2 {0}
+        env:
+          # Preserve the exact compile definitions from the initial configure;
+          # changing version context here would relink the signed binaries.
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          BUILD_VERSION: ${{ inputs.release_version }}
+          COMMIT: ${{ inputs.release_commit }}
+        run: |
+          cmake -S . -B build \
+            -DSUNSHINE_VHF_GAMEPAD_SIGNED_PACKAGE_DIR="$(cygpath -u "$VHF_PACKAGE_ROOT")" \
+            -DSUNSHINE_VHF_GAMEPAD_SIGNER_THUMBPRINT="$VHF_SIGNER_THUMBPRINT"
+
       - name: Package Windows (MSI and portable ZIP)
         shell: msys2 {0}
         # The MSI is produced by the hand-authored luminalshine_msi
@@ -552,6 +616,17 @@ jobs:
           ninja -C build luminalshine_msi
           cd build
           cpack -G ZIP
+
+      - name: Verify packaging preserved signed payloads
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $records = Get-Content (Join-Path $env:RUNNER_TEMP 'luminalshine-signed-files.json') -Raw | ConvertFrom-Json
+          foreach ($record in $records) {
+            if ((Get-FileHash -LiteralPath $record.path -Algorithm SHA256).Hash -ine $record.sha256) {
+              throw "Packaging changed a signed payload: $($record.path). Refusing to publish a rebuilt or modified executable."
+            }
+          }
 
       - name: MSI upgrade-compatibility check
         if: inputs.nightly != true

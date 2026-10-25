@@ -1,0 +1,338 @@
+// Adapted from Nonary/Vibepollo, commit 0878df8bb65df4e8a68fc7e63044340768c71937 (GPL-3.0).
+/**
+ * @file src/platform/windows/vhf_gamepad_policy.h
+ * @brief Declarations for translating normalized gamepad state into the VHF driver protocol.
+ */
+#pragma once
+
+// standard includes
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <optional>
+#include <string_view>
+#include <utility>
+
+// lib includes
+#include <libvirtualgamepad/protocol.h>
+
+namespace platf {
+
+  /**
+   * @brief The controller the VHF driver should present.
+   */
+  enum class vhf_profile_e {
+    automatic,  ///< Best available console profile, preferring Xbox Series on the XInput path.
+    xbox_series,
+    xbox_one,
+    dualshock4,
+    dualsense,
+    switch_pro
+  };
+
+}  // namespace platf
+
+namespace platf::vhf_gamepad {
+
+  /**
+   * @brief Chooses the VHF controller profile from the setting and client metadata.
+   * @details Explicit profile selections take precedence. Client-reported PlayStation, Xbox,
+   *          and Nintendo types win over motion/touchpad preferences, which apply to other pads.
+   * @param configured_gamepad The selected gamepad setting.
+   * @param client_type The client-reported controller type.
+   * @param client_capabilities The client-reported capability flags.
+   * @param motion_as_ds4 Whether motion sensors should select a PlayStation profile.
+   * @param touchpad_as_ds4 Whether a touchpad should select a PlayStation profile.
+   * @return The requested profile; `automatic` prefers the driver's Xbox Series XInput profile.
+   */
+  [[nodiscard]] vhf_profile_e select_desired_profile(
+    std::string_view configured_gamepad,
+    std::uint8_t client_type,
+    std::uint16_t client_capabilities,
+    bool motion_as_ds4,
+    bool touchpad_as_ds4
+  ) noexcept;
+
+  /**
+   * @brief Reports whether controller selection can create a touchpad-capable profile.
+   * @details Capabilities are advertised before controller arrival. Automatic modes can still
+   *          select DualShock 4 for a PlayStation client when both selection heuristics are off.
+   * @param configured_gamepad The selected gamepad setting.
+   * @param composite_dualsense Whether the application forces a composite DualSense.
+   * @return Whether the client should be allowed to send controller touch events.
+   */
+  [[nodiscard]] bool supports_controller_touch(
+    std::string_view configured_gamepad,
+    bool composite_dualsense
+  ) noexcept;
+
+  /**
+   * @brief Vibepollo's normalized controller state, copied field-for-field out of `gamepad_state_t`.
+   * @details Keeping this struct free of platform headers lets the translation be tested on its own.
+   */
+  struct normalized_state_t {
+    std::uint32_t button_flags {};
+    std::uint8_t left_trigger {};
+    std::uint8_t right_trigger {};
+    std::int16_t left_x {};
+    std::int16_t left_y {};
+    std::int16_t right_x {};
+    std::int16_t right_y {};
+  };
+
+  /**
+   * @brief One adaptive trigger's effect program.
+   */
+  struct trigger_effect_t {
+    std::uint8_t mode {};
+    std::array<std::uint8_t, 10> parameters {};
+
+    bool operator==(const trigger_effect_t &other) const noexcept {
+      return mode == other.mode && parameters == other.parameters;
+    }
+  };
+
+  /**
+   * @brief A decoded rumble feedback report from the driver.
+   * @details `has_rgb` is false for force-feedback events. A DirectInput effect says nothing
+   *          about a light, so forwarding its zeroed colour channels would switch off the LED on
+   *          the client's real controller.
+   */
+  struct rumble_rgb_t {
+    std::uint16_t low_frequency {};
+    std::uint16_t high_frequency {};
+    std::uint8_t red {};
+    std::uint8_t green {};
+    std::uint8_t blue {};
+    bool has_rgb {};
+
+    // Xbox controllers have impulse triggers. The driver sends all four
+    // actuators in one event because it keeps a single pending feedback slot,
+    // so splitting them would let coalescing drop one.
+    std::uint16_t left_trigger {};
+    std::uint16_t right_trigger {};
+    bool has_triggers {};
+
+    // DualSense adaptive trigger programs, forwarded to the client verbatim.
+    trigger_effect_t left_effect {};
+    trigger_effect_t right_effect {};
+    std::uint8_t trigger_event_flags {};
+    bool has_trigger_effects {};
+
+    bool operator==(const rumble_rgb_t &other) const noexcept {
+      return low_frequency == other.low_frequency &&
+             high_frequency == other.high_frequency &&
+             red == other.red && green == other.green && blue == other.blue &&
+             has_rgb == other.has_rgb &&
+             left_trigger == other.left_trigger &&
+             right_trigger == other.right_trigger &&
+             has_triggers == other.has_triggers &&
+             left_effect == other.left_effect &&
+             right_effect == other.right_effect &&
+             trigger_event_flags == other.trigger_event_flags &&
+             has_trigger_effects == other.has_trigger_effects;
+    }
+  };
+
+  /**
+   * @brief Outcome for the ordinary rumble part of one decoded VHF feedback event.
+   */
+  enum class rumble_poll_outcome_e {
+    raise_attempted,
+    deduplicated,
+    unavailable
+  };
+
+  /**
+   * @brief Observation at the VHF poll/decode/ordinary-rumble queue boundary.
+   * @details The record contains no raw driver payload or persistent device/client identifier.
+   *          Driver slots and client-relative indexes can be reused; the exact motor values expose
+   *          feedback activity. `raise_attempted` covers the first decoded sample (including zero
+   *          motors) or changed ordinary rumble. A stopped queue may silently reject that attempt,
+   *          so it does not mean the message was inserted, serialized, sent, received, or actuated.
+   */
+  struct rumble_poll_observation_t {
+    std::uint32_t driver_slot {};
+    std::uint32_t event_type {};
+    std::uint32_t payload_size {};
+    std::uint16_t client_relative_index {};
+    std::uint16_t low_frequency {};
+    std::uint16_t high_frequency {};
+    rumble_poll_outcome_e outcome {rumble_poll_outcome_e::unavailable};
+  };
+
+  /**
+   * @brief Per-slot counts folded into a rate-limited debug summary.
+   * @details There is one immediate summary, then no more than one summary every five seconds
+   *          while decoded reports continue. Counters describe decoded poll observations, not
+   *          messages delivered to the client.
+   */
+  struct rumble_poll_summary_t {
+    std::uint32_t driver_slot {};
+    std::uint32_t decoded_events {};
+    std::uint32_t raise_attempts {};
+    std::uint32_t deduplicated_events {};
+    std::uint32_t unavailable_events {};
+    std::uint32_t poll_errors {};
+    std::uint32_t latest_poll_error_status {};
+    rumble_poll_observation_t latest {};
+    std::chrono::steady_clock::time_point window_started_at {};
+    bool has_latest_observation {};
+    bool window_started {};
+  };
+
+  inline constexpr auto rumble_poll_summary_interval = std::chrono::seconds {5};
+
+  /**
+   * @brief Adds one decoded event and reports when a per-slot summary should be emitted.
+   * @details This only updates counters and a steady-clock window. The caller logs at debug
+   *          severity when this returns true, avoiding per-event string formatting and sink work.
+   */
+  [[nodiscard]] bool record_rumble_poll_summary(
+    rumble_poll_summary_t &summary,
+    const rumble_poll_observation_t &observation,
+    std::chrono::steady_clock::time_point now
+  ) noexcept;
+
+  /** @brief Adds one failed driver poll and reports when the per-slot summary should be emitted. */
+  [[nodiscard]] bool record_rumble_poll_error(
+    rumble_poll_summary_t &summary,
+    std::uint32_t driver_slot,
+    std::uint32_t status,
+    std::chrono::steady_clock::time_point now
+  ) noexcept;
+
+  /** @brief Clears counters after the current summary has been considered for logging. */
+  void clear_rumble_poll_summary(rumble_poll_summary_t &summary) noexcept;
+
+  /**
+   * @brief Builds the ordinary-rumble observation and determines whether the feedback changes.
+   * @details This is shared with the VHF feedback loop so the portable policy test exercises the
+   *          same ordinary-rumble queue decision. The first decoded sample attempts a queue call
+   *          even when both motors are zero, preserving the backend's existing initial state
+   *          behavior. A non-null queue may already be stopped, so the helper reports an attempt,
+   *          not successful insertion.
+   */
+  [[nodiscard]] rumble_poll_observation_t observe_rumble_poll(
+    const lvg::feedback_event &event,
+    std::uint32_t driver_slot,
+    std::uint16_t client_relative_index,
+    const rumble_rgb_t &feedback,
+    bool queue_present,
+    bool have_previous,
+    const rumble_rgb_t &previous
+  ) noexcept;
+
+  /**
+   * @brief Attempts the ordinary-rumble queue call recorded by an observation.
+   * @details This shared dispatch helper keeps the VHF feedback path and portable policy test on
+   *          the same outcome gate. The queue's `raise` API is void and may silently drop the
+   *          message after shutdown, so `true` only means the queue call was made.
+   * @param observation The ordinary-rumble decision and decoded values.
+   * @param queue The client feedback queue; a null queue prevents the call.
+   * @param make_rumble Creates the platform's gamepad rumble message.
+   * @return Whether `queue->raise(...)` was attempted.
+   */
+  template<class Queue, class MakeRumble>
+  [[nodiscard]] bool dispatch_rumble_poll(
+    const rumble_poll_observation_t &observation,
+    Queue &queue,
+    MakeRumble &&make_rumble
+  ) {
+    if (observation.outcome != rumble_poll_outcome_e::raise_attempted || !queue) {
+      return false;
+    }
+
+    queue->raise(std::forward<MakeRumble>(make_rumble)(
+      observation.client_relative_index,
+      observation.low_frequency,
+      observation.high_frequency
+    ));
+    return true;
+  }
+
+  /**
+   * @brief Every button the protocol can carry.
+   * @details Bits outside this mask are dropped instead of being sent as unspecified wire state.
+   */
+  inline constexpr std::uint32_t supported_button_mask =
+    lvg::button_mask::dpad_up | lvg::button_mask::dpad_down |
+    lvg::button_mask::dpad_left | lvg::button_mask::dpad_right |
+    lvg::button_mask::start | lvg::button_mask::back |
+    lvg::button_mask::left_stick | lvg::button_mask::right_stick |
+    lvg::button_mask::left_shoulder | lvg::button_mask::right_shoulder |
+    lvg::button_mask::home |
+    lvg::button_mask::south | lvg::button_mask::east |
+    lvg::button_mask::west | lvg::button_mask::north |
+    lvg::button_mask::paddle_1 | lvg::button_mask::paddle_2 |
+    lvg::button_mask::paddle_3 | lvg::button_mask::paddle_4 |
+    lvg::button_mask::touchpad | lvg::button_mask::misc;
+
+  /**
+   * @brief Selects the preferred public console profile from a driver mask.
+   * @details The generic protocol enum values remain reserved, but they have no accepted public
+   *          USB PID and must never become an automatic fallback.
+   * @param available_profiles The mask returned by the VHF driver.
+   * @return The selected console profile, or no value when none is available.
+   */
+  [[nodiscard]] std::optional<lvg::profile> select_automatic_profile(
+    lvg::profile_mask_t available_profiles
+  ) noexcept;
+
+  /**
+   * @brief Builds a protocol input report for a controller.
+   * @param controller_id The driver-side controller slot.
+   * @param state The normalized controller state.
+   * @return A fully populated request the client can submit as-is.
+   */
+  [[nodiscard]] lvg::input_state_request make_input_state(
+    std::uint32_t controller_id,
+    const normalized_state_t &state
+  ) noexcept;
+
+  /**
+   * @brief Decodes a driver feedback event into rumble and RGB values.
+   * @details Accepts both the rumble/RGB report a vendor output report produces and the
+   *          rumble-only report a DirectInput force-feedback effect produces.
+   * @param event The event returned by the driver.
+   * @param feedback Receives the decoded values when the event carries rumble.
+   * @return `true` when `feedback` was populated.
+   */
+  [[nodiscard]] bool decode_rumble_rgb(const lvg::feedback_event &event, rumble_rgb_t &feedback) noexcept;
+
+  /**
+   * @brief Converts a client touch event type into the protocol's.
+   * @param event_type The client event type.
+   * @return The protocol value, or the cancel-all value for anything unmapped.
+   */
+  [[nodiscard]] std::uint8_t to_protocol_touch_event(std::uint8_t event_type) noexcept;
+
+  /**
+   * @brief Converts a client motion type into the protocol's.
+   * @param motion_type The client motion type.
+   * @return The protocol value, or 0 when the type has no mapping.
+   */
+  [[nodiscard]] std::uint8_t to_protocol_motion_kind(std::uint8_t motion_type) noexcept;
+
+  /**
+   * @brief Converts a client battery state into the protocol's.
+   * @param state The client battery state.
+   * @return The protocol value.
+   */
+  [[nodiscard]] std::uint8_t to_protocol_battery_state(std::uint8_t state) noexcept;
+
+  /**
+   * @brief Normalizes a 0..1 touch coordinate to the protocol's 0..65535.
+   * @param value The client value.
+   * @return The normalized value, clamped.
+   */
+  [[nodiscard]] std::uint16_t to_normalized_touch(float value) noexcept;
+
+  /**
+   * @brief Converts a motion sample to the protocol's signed milli-units.
+   * @param value Acceleration in m/s^2 or angular velocity in degrees/second.
+   * @return The value scaled by 1000 and clamped to the protocol's range.
+   */
+  [[nodiscard]] std::int32_t to_milli_units(float value) noexcept;
+
+}  // namespace platf::vhf_gamepad

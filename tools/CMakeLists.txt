@@ -149,22 +149,20 @@ target_compile_options(sunshine_display_helper PRIVATE ${SUNSHINE_COMPILE_OPTION
 # cannot affect streaming. Disabled by default; opt-in via
 # %ProgramData%\LuminalShine\config\luminalshine_xboxcontroller_state.json.
 #
-# Pulls in ViGEmClient.cpp directly (the same source the main sunshine
-# binary compiles) -- the third-party suppressions for that file are
-# declared at root scope in cmake/targets/common.cmake and the tools
-# subdirectory is included in that DIRECTORY list so the flags propagate.
+# Compile the same pinned VHF protocol client as the streaming host.
 add_executable(luminalshine_xbox_bt_helper
         luminalshine_xbox_bt_helper.cpp
-        ${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp)
+        ${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/client/client.cpp)
 set_target_properties(luminalshine_xbox_bt_helper PROPERTIES CXX_STANDARD 23
         OUTPUT_NAME luminalshine_xbox_bt_helper)
 target_include_directories(luminalshine_xbox_bt_helper PRIVATE
-        ${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include)
+        ${CMAKE_SOURCE_DIR}/third-party/libvirtualgamepad/include)
 target_link_libraries(luminalshine_xbox_bt_helper
         ${CMAKE_THREAD_LIBS_INIT}
         nlohmann_json::nlohmann_json
         advapi32
         setupapi
+        cfgmgr32
         shell32
         ole32
         ${PLATFORM_LIBRARIES})

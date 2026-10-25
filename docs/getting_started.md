@@ -457,11 +457,10 @@ Sunshine can only access microphones on macOS due to system limitations. To stre
 > Gamepads are not currently supported.
 
 ### Windows
-In order for virtual gamepads to work, you must install ViGEmBus. You can do this from the troubleshooting tab
-in the web UI, as long as you are running Sunshine as a service or as an administrator. After installation, it is
-recommended to restart your computer.
-
-![ViGEmBus Installation](images/vigembus-installer.png)
+Virtual controllers require Nonary's compatible `libvirtualgamepad` UMDF/VHF driver.
+See [virtual gamepad driver setup](virtual-gamepad-driver.md) for signed-package installation,
+existing Vibepollo driver compatibility, and packaging requirements. The WebUI reports
+whether LuminalShine can connect to the driver. Restart Windows if the installer requests it.
 
 ## Usage
 

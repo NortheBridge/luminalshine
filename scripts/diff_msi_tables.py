@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 import sys
 from collections import OrderedDict
+from vhf_msi_compat import strip_reviewed_vhf_additions
 
 # Property names whose Value changes on every build / release and must be
 # ignored when comparing the Property table. UpgradeCode is deliberately
@@ -202,6 +203,10 @@ def diff_dumps(golden_text: str, candidate_text: str) -> "list[str]":
     candidate = parse_dump(candidate_text)
 
     messages: "list[str]" = []
+    try:
+        candidate = strip_reviewed_vhf_additions(golden, candidate)
+    except (ValueError, IndexError) as error:
+        return [f"VHF migration contract: {error}"]
 
     all_tables = list(OrderedDict.fromkeys(list(golden.keys()) + list(candidate.keys())))
     for table in all_tables:
