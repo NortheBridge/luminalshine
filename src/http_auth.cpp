@@ -1340,6 +1340,12 @@ namespace confighttp {
       if (base_path.rfind("/api/auth/", 0) == 0) {
         return true;
       }
+      // Changelog acknowledgements affect only the current session's user;
+      // they expose no configuration and cannot install or execute an update.
+      if ((method == "GET" && base_path == "/api/changelog/state") ||
+          (method == "POST" && base_path == "/api/changelog/ack")) {
+        return true;
+      }
       if (method != "GET") {
         return false;
       }

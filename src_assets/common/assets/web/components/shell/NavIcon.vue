@@ -9,6 +9,7 @@ import { computed } from 'vue';
 type Shape = { tag: 'path' | 'rect' | 'circle'; attrs: Record<string, string> };
 
 const ICONS: Record<string, Shape[]> = {
+  changelog: [{ tag: 'path', attrs: { d: 'M6 3h12v18H6zM9 7h6M9 11h6M9 15h4' } }],
   overview: [
     { tag: 'rect', attrs: { x: '3.5', y: '3.5', width: '17', height: '17', rx: '2.5' } },
     { tag: 'path', attrs: { d: 'M3.5 9.5h17M9.5 9.5v11' } },

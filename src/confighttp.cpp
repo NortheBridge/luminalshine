@@ -39,6 +39,7 @@
 
 // local includes
 #include "config.h"
+#include "changelog_state.h"
 #include "confighttp.h"
 #include "crypto.h"
 #include "file_handler.h"
@@ -504,6 +505,83 @@ namespace confighttp {
       return false;
     }
     return true;
+  }
+
+  namespace {
+    std::optional<std::string> changelog_user(resp_https_t response, req_https_t request) {
+      if (!authenticate(response, request)) return std::nullopt;
+      std::string token;
+      // Match check_auth's header precedence: a Bearer token must not inherit
+      // another user's cookie identity. This UI preference requires a session.
+      if (const auto auth = request->header.find("authorization"); auth != request->header.end()) {
+        if (auth->second.rfind("Session ", 0) == 0) token = auth->second.substr(8);
+      } else {
+        token = extract_session_token_from_cookie(request->header);
+      }
+      auto username = session_token_manager.get_username_for_token(token);
+      if (!username) send_unauthorized(response, request);
+      return username;
+    }
+
+    fs::path changelog_path() {
+      const auto &path = statefile::luminalshine_state_path();
+      if (path.empty()) throw std::runtime_error("Changelog state path is unavailable");
+      return path + ".changelog.json";
+    }
+
+    void send_changelog_state(resp_https_t response, const changelog::UserState &state) {
+      const nlohmann::json body {
+        {"seen_installed_versions", state.seen_installed_versions},
+        {"dismissed_update_version", state.dismissed_update_version},
+        {"installed_version", changelog::normalize_version(PROJECT_VERSION)},
+        {"notify_pre_releases", config::sunshine.notify_pre_releases}
+      };
+      response->write(success_ok, body.dump(), {{"Content-Type", "application/json"}, {"Cache-Control", "no-store"}});
+    }
+
+    void changelog_unavailable(resp_https_t response, const std::exception &e) {
+      BOOST_LOG(warning) << "Changelog acknowledgement state unavailable: " << e.what();
+      response->write(server_error_service_unavailable, R"({"error":"Changelog state unavailable"})",
+                      {{"Content-Type", "application/json"}, {"Cache-Control", "no-store"}});
+    }
+  }  // namespace
+
+  void getChangelogState(resp_https_t response, req_https_t request) {
+    const auto username = changelog_user(response, request);
+    if (!username) return;
+    try {
+      send_changelog_state(response, changelog::load(changelog_path(), *username));
+    } catch (const std::exception &e) {
+      changelog_unavailable(response, e);
+    }
+  }
+
+  void acknowledgeChangelog(resp_https_t response, req_https_t request) {
+    const auto username = changelog_user(response, request);
+    if (!username || !check_content_type(response, request, "application/json")) return;
+    if (request->content.size() > 1024) {
+      bad_request(response, request, "Changelog acknowledgement is too large");
+      return;
+    }
+    std::string kind, version;
+    try {
+      const auto body = nlohmann::json::parse(request->content.string());
+      kind = body.at("kind").get<std::string>();
+      version = changelog::normalize_version(body.at("version").get<std::string>());
+      if ((kind != "installed" && kind != "update") || !changelog::valid_version(version) ||
+          (kind == "installed" && version != changelog::normalize_version(PROJECT_VERSION))) {
+        bad_request(response, request, "Invalid changelog acknowledgement");
+        return;
+      }
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Expected changelog kind and version");
+      return;
+    }
+    try {
+      send_changelog_state(response, changelog::acknowledge(changelog_path(), *username, version, kind == "installed"));
+    } catch (const std::exception &e) {
+      changelog_unavailable(response, e);
+    }
   }
 
   /**
@@ -4679,6 +4757,8 @@ namespace confighttp {
     register_api_route("^/api/auth/refresh$", "POST", refreshSession);
     register_api_route("^/api/auth/logout$", "POST", logoutUser);
     register_api_route("^/api/auth/status$", "GET", authStatus);
+    register_api_route("^/api/changelog/state$", "GET", getChangelogState);
+    register_api_route("^/api/changelog/ack$", "POST", acknowledgeChangelog);
     register_api_route("^/api/auth/sessions$", "GET", listSessions);
     register_api_route("^/api/auth/sessions/([A-Fa-f0-9]+)$", "DELETE", revokeSession);
     server.config.reuse_address = true;

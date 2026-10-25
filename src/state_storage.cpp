@@ -1,4 +1,7 @@
 #include "state_storage.h"
+#include "changelog_state.h"
+
+#include <stdexcept>
 
 #include "config.h"
 #include "logging.h"
@@ -459,3 +462,129 @@ namespace statefile {
   }
 
 }  // namespace statefile
+
+namespace changelog {
+  namespace {
+    namespace pt = boost::property_tree;
+    constexpr std::size_t max_users = 64;
+    constexpr std::size_t max_seen_versions = 256;
+    constexpr std::uintmax_t max_state_bytes = 2 * 1024 * 1024;
+
+    // Account names are case-insensitive in the login path. Treat them as data,
+    // never as property-tree paths or filesystem names (names may contain dots).
+    std::string user_key(std::string username) {
+      if (username.empty() || username.size() > 256) {
+        throw std::invalid_argument("Invalid changelog user");
+      }
+      for (auto &c : username) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+      }
+      return username;
+    }
+
+    pt::ptree read_state(const std::filesystem::path &path) {
+      if (path.empty()) throw std::runtime_error("Changelog state path is unavailable");
+      pt::ptree tree;
+      for (const auto &candidate : {path, std::filesystem::path(path.string() + ".bak")}) {
+        if (std::filesystem::exists(candidate) && std::filesystem::file_size(candidate) > max_state_bytes) {
+          throw std::runtime_error("Changelog state exceeds size limit");
+        }
+      }
+      if (!statefile::load_or_recover(path, tree)) {
+        if (std::filesystem::exists(path) || std::filesystem::exists(path.string() + ".bak")) {
+          throw std::runtime_error("Changelog state could not be recovered");
+        }
+        return {};
+      }
+      if (const auto users = tree.get_child_optional("users"); users && users->size() > max_users) {
+        throw std::runtime_error("Changelog state exceeds user limit");
+      }
+      return tree;
+    }
+
+    UserState decode(const pt::ptree &entry) {
+      UserState state;
+      state.dismissed_update_version = entry.get<std::string>("dismissed_update_version", "");
+      if (!state.dismissed_update_version.empty() && !valid_version(state.dismissed_update_version)) {
+        throw std::runtime_error("Invalid saved changelog version");
+      }
+      if (const auto seen = entry.get_child_optional("seen_installed_versions")) {
+        if (seen->size() > max_seen_versions) throw std::runtime_error("Too many saved changelog versions");
+        for (const auto &item : *seen) {
+          const auto version = item.second.get_value<std::string>();
+          if (!valid_version(version)) throw std::runtime_error("Invalid saved changelog version");
+          state.seen_installed_versions.push_back(version);
+        }
+      }
+      return state;
+    }
+  }  // namespace
+
+  std::string normalize_version(std::string_view version) {
+    if (!version.empty() && (version.front() == 'v' || version.front() == 'V')) version.remove_prefix(1);
+    return std::string(version);
+  }
+
+  bool valid_version(std::string_view version) {
+    if (version.empty() || version.size() > 96 || version.front() < '0' || version.front() > '9') return false;
+    return std::all_of(version.begin(), version.end(), [](unsigned char c) {
+      return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+             (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == '+';
+    });
+  }
+
+  UserState load(const std::filesystem::path &path, const std::string &username) {
+    const auto key = user_key(username);
+    std::scoped_lock lock(statefile::state_mutex());
+    const auto tree = read_state(path);
+    if (const auto users = tree.get_child_optional("users")) {
+      for (const auto &entry : *users) {
+        if (entry.second.get<std::string>("username", "") == key) return decode(entry.second);
+      }
+    }
+    return {};
+  }
+
+  UserState acknowledge(const std::filesystem::path &path, const std::string &username,
+                        const std::string &version, bool installed) {
+    if (!valid_version(version)) throw std::invalid_argument("Invalid changelog version");
+    const auto key = user_key(username);
+    std::scoped_lock lock(statefile::state_mutex());
+    auto tree = read_state(path);
+    if (!tree.get_child_optional("users")) tree.add_child("users", pt::ptree {});
+    auto &users = tree.get_child("users");
+    pt::ptree *entry = nullptr;
+    for (auto &candidate : users) {
+      if (candidate.second.get<std::string>("username", "") == key) {
+        entry = &candidate.second;
+        break;
+      }
+    }
+    if (!entry) {
+      if (users.size() >= max_users) throw std::runtime_error("Changelog user limit reached");
+      pt::ptree user;
+      user.put("username", key);
+      users.push_back({"", user});
+      entry = &users.back().second;
+    }
+    auto state = decode(*entry);
+    if (installed) {
+      if (std::find(state.seen_installed_versions.begin(), state.seen_installed_versions.end(), version) != state.seen_installed_versions.end()) return state;
+      state.seen_installed_versions.push_back(version);
+      if (state.seen_installed_versions.size() > max_seen_versions) state.seen_installed_versions.erase(state.seen_installed_versions.begin());
+    } else {
+      if (state.dismissed_update_version == version) return state;
+      state.dismissed_update_version = version;
+    }
+    pt::ptree seen;
+    for (const auto &v : state.seen_installed_versions) {
+      pt::ptree value;
+      value.put_value(v);
+      seen.push_back({"", value});
+    }
+    entry->put_child("seen_installed_versions", seen);
+    entry->put("dismissed_update_version", state.dismissed_update_version);
+    if (!statefile::atomic_write_json(path, tree)) throw std::runtime_error("Could not save changelog state");
+    return state;
+  }
+}  // namespace changelog

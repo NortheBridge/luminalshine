@@ -1183,6 +1183,20 @@
     "fair": "Fair",
     "poor": "Poor"
   },
+  "changelog": {
+    "ack_failed": "Could not save your acknowledgement on this host. The changelog may appear again.",
+    "cached": "Showing saved release notes while offline.",
+    "close": "Close",
+    "download": "Download update",
+    "featurebase": "View on Featurebase",
+    "github": "View on GitHub",
+    "installed": "Installed version",
+    "retry": "Retry",
+    "title": "Changelog",
+    "unavailable": "Release notes are unavailable right now. You can try again or open the GitHub releases page.",
+    "update_available": "New Update Available!",
+    "version": "Release version"
+  },
   "clients": {
     "col_device": "Device",
     "col_display": "Display",

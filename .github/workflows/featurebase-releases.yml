@@ -17,6 +17,7 @@ on:
           - preview-date-sync
           - apply-date-sync
           - import-history
+          - export-feed
 
 permissions:
   contents: read
@@ -27,6 +28,7 @@ concurrency:
 
 jobs:
   import-releases:
+    if: github.event_name != 'workflow_dispatch' || inputs.operation != 'export-feed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,3 +59,45 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/github_to_featurebase.py
         # Append --publish to automatically publish the imported Update (without email).
+
+
+  publish-feed:
+    needs: import-releases
+    # A failed import must not hide public GitHub notes. A date preview remains read-only.
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'workflow_dispatch' || inputs.operation != 'preview-date-sync')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Export publicly visible notes
+        env:
+          FEATUREBASE_API_KEY: ${{ secrets.FEATUREBASE_API_KEY }}
+        run: python3 scripts/github_to_featurebase.py --export-feed "$RUNNER_TEMP/changelog.json"
+      - name: Publish the dedicated changelog data branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          feed_dir="$RUNNER_TEMP/luminalshine-changelog-feed"
+          remote_ref=$(git ls-remote origin refs/heads/changelog-feed)
+          if [ -n "$remote_ref" ]; then
+            git fetch origin refs/heads/changelog-feed
+            git worktree add --detach "$feed_dir" FETCH_HEAD
+          else
+            git worktree add --detach "$feed_dir" HEAD
+            git -C "$feed_dir" switch --orphan changelog-feed
+          fi
+          cp "$RUNNER_TEMP/changelog.json" "$feed_dir/changelog.json"
+          git -C "$feed_dir" add -- changelog.json
+          if git -C "$feed_dir" diff --cached --quiet; then
+            echo "Public changelog feed is unchanged."
+            exit 0
+          fi
+          git -C "$feed_dir" -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'Refresh public LuminalShine changelog feed'
+          git -C "$feed_dir" push origin HEAD:refs/heads/changelog-feed

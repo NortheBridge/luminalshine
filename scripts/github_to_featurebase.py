@@ -6,6 +6,7 @@ Examples:
   python3 scripts/github_to_featurebase.py --sync-dates                # dry run
   python3 scripts/github_to_featurebase.py --sync-dates --apply-dates  # update dates
   python3 scripts/github_to_featurebase.py --publish                   # release event
+  python3 scripts/github_to_featurebase.py --export-feed changelog.json # public WebUI feed
 
 Environment: FEATUREBASE_API_KEY and GITHUB_REPOSITORY=OWNER/REPO.
 For private GitHub repositories, also set GITHUB_TOKEN (Actions supplies it).
@@ -22,6 +23,7 @@ from html.parser import HTMLParser
 import re
 from datetime import datetime, timezone
 import json
+import xml.etree.ElementTree as ET
 import os
 from pathlib import Path
 import sys
@@ -317,6 +319,123 @@ def import_releases(releases, entries, api_key, *, publish):
     print(f"Done. Created: {created}; skipped: {skipped}.")
 
 
+class PublicFeaturebaseRedirect(urllib.request.HTTPRedirectHandler):
+    """An anonymous request must stay on Featurebase's public hosted domains."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not featurebase_origin(newurl):
+            raise RuntimeError("Featurebase RSS redirected outside its public hosted domains")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def featurebase_origin(url):
+    """Discover only public hosted origins; never turn API content into arbitrary requests."""
+    if not isinstance(url, str):
+        return None
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.hostname or ""
+    if (parsed.scheme != "https" or parsed.username or parsed.password
+            or parsed.netloc != host or not host.endswith(".featurebase.app")
+            or not re.fullmatch(r"[a-z0-9-]+\.featurebase\.app", host)):
+        return None
+    return "https://" + host
+
+
+def public_featurebase_entries(origin):
+    """Read only anonymously visible RSS content, never privileged API bodies.
+
+    The RSS URL is advertised by Featurebase's public Updates page. Descriptions
+    are Markdown. Its history can be shorter than GitHub's; older entries use
+    GitHub notes. No token or cookie is attached, including on redirects.
+    """
+    request = urllib.request.Request(
+        origin + "/api/v1/changelog/feed.rss",
+        headers={"Accept": "application/rss+xml", "User-Agent": "luminalshine-changelog-feed"},
+    )
+    opener = urllib.request.build_opener(PublicFeaturebaseRedirect())
+    with opener.open(request, timeout=30) as response:
+        raw = response.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise RuntimeError("Featurebase RSS exceeds the feed size limit")
+    root = ET.fromstring(raw)
+    if root.tag != "rss":
+        raise ValueError("Featurebase did not return an RSS feed")
+    return [
+        {"title": item.findtext("title", ""),
+         "markdown": item.findtext("description", ""),
+         "url": item.findtext("link", "")}
+        for item in root.findall("channel/item")
+        if featurebase_origin(item.findtext("link", ""))
+    ]
+
+
+def matches_release(markdown, url):
+    # Reuse the upstream dedicated-source matcher: incidental links to older
+    # releases must not attach another release's Featurebase notes.
+    key = release_key(url)
+    return key is not None and key in source_release_keys({
+        "markdownContent": markdown, "content": markdown,
+    })
+
+
+def build_public_feed(releases, public_entries):
+    """Project public sources onto an explicit schema; no private API fields."""
+    output = []
+    for release in releases:
+        timestamp = github_timestamp(release)
+        if release.get("draft") or not timestamp:
+            continue
+        url = release["html_url"]
+        matches = [entry for entry in public_entries if matches_release(entry["markdown"], url)]
+        # Ambiguous Featurebase mappings fall back instead of choosing arbitrary content.
+        entry = matches[0] if len(matches) == 1 else None
+        output.append({
+            "version": release["tag_name"],
+            "title": (entry["title"] if entry else release.get("name")) or release["tag_name"],
+            "markdown": (entry["markdown"] if entry else release.get("body")) or "Release notes not provided.",
+            "featurebase_url": entry["url"] if entry else "",
+            "github_url": url,
+            "published_at": timestamp,
+            "prerelease": release.get("prerelease") is True,
+        })
+    output.sort(key=lambda entry: entry["published_at"], reverse=True)
+    return {"schema": 1, "releases": output}
+
+
+def export_public_feed(repo, api_key, destination):
+    # Intentionally anonymous: a private repository or draft cannot accidentally
+    # become a public data branch through the Actions token.
+    releases = list(github_releases(repo, None))
+    public_entries = []
+    origins = set()
+    if api_key:
+        # Privileged data is used ONLY to discover a hosted public origin. Never
+        # export API titles/content, even for live posts: workspace, category and
+        # segment visibility can still make them private.
+        try:
+            for entry in featurebase_changelogs(api_key):
+                origin = featurebase_origin(entry.get("url"))
+                organization = entry.get("organization", "")
+                if not origin and isinstance(organization, str):
+                    origin = featurebase_origin(f"https://{organization}.featurebase.app")
+                if origin:
+                    origins.add(origin)
+        except (RuntimeError, OSError, ValueError, KeyError):
+            print("WARNING: Featurebase discovery unavailable; using GitHub notes.", file=sys.stderr)
+    for origin in sorted(origins):
+        try:
+            public_entries.extend(public_featurebase_entries(origin))
+        except (RuntimeError, OSError, ValueError, ET.ParseError):
+            print("WARNING: Public Featurebase RSS unavailable; using GitHub notes.", file=sys.stderr)
+    # An organization can advertise both a hosted and alias origin.
+    public_entries = list({entry["url"]: entry for entry in public_entries}.values())
+    feed = build_public_feed(releases, public_entries)
+    target = Path(destination)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(feed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Exported {len(feed['releases'])} public releases to {target}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Import GitHub Releases and synchronize their Featurebase publish dates"
@@ -331,7 +450,10 @@ def main():
         "--apply-dates", action="store_true",
         help="Apply --sync-dates corrections; touches dates only, not content",
     )
+    parser.add_argument("--export-feed", metavar="PATH", help="Export public version-indexed WebUI notes without importing or publishing")
     args = parser.parse_args()
+    if args.export_feed and (args.history or args.publish or args.sync_dates or args.apply_dates):
+        parser.error("--export-feed cannot be combined with import or date operations")
     if args.apply_dates and not args.sync_dates:
         parser.error("--apply-dates requires --sync-dates")
     if args.sync_dates and (args.history or args.publish):
@@ -340,6 +462,11 @@ def main():
     api_key = os.environ.get("FEATUREBASE_API_KEY")
     repo = os.environ.get("GITHUB_REPOSITORY")
     github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if args.export_feed:
+        if not repo:
+            parser.error("GITHUB_REPOSITORY must be set")
+        export_public_feed(repo, api_key, args.export_feed)
+        return
     if not api_key or not repo:
         parser.error("FEATUREBASE_API_KEY and GITHUB_REPOSITORY must be set")
 

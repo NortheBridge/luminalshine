@@ -31,6 +31,21 @@
                 </RouterLink>
                 <div class="flex-1"></div>
                 <button
+                  v-if="auth.isAuthenticated"
+                  type="button"
+                  class="rail-btn relative"
+                  :title="t2('changelog.title', 'Changelog')"
+                  :aria-label="t2('changelog.title', 'Changelog')"
+                  @click="changelog.open()"
+                >
+                  <NavIcon name="changelog" :size="20" />
+                  <span
+                    v-if="changelog.available"
+                    class="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary"
+                    :aria-label="t2('changelog.update_available', 'New Update Available!')"
+                  ></span>
+                </button>
+                <button
                   type="button"
                   class="rail-btn"
                   :title="t2('navbar.logout', 'Log out')"
@@ -44,6 +59,15 @@
               <div class="flex min-w-0 flex-1 flex-col">
                 <!-- Host strip (desktop) -->
                 <HostStrip />
+                <button
+                  v-if="auth.isAuthenticated && changelog.available"
+                  type="button"
+                  class="border-b border-line bg-chrome px-4 py-2 text-left text-sm text-primary"
+                  @click="changelog.open(true)"
+                >
+                  {{ t2('changelog.update_available', 'New Update Available!') }} ·
+                  {{ changelog.available.version }}
+                </button>
 
                 <!-- Compact header (mobile) -->
                 <header
@@ -124,6 +148,7 @@
               </div>
               <LoginModal />
               <OfflineOverlay />
+              <ChangelogModal v-if="auth.isAuthenticated" />
               <transition name="fade-fast">
                 <div v-if="loggedOut" class="fixed inset-0 z-[120] flex flex-col">
                   <div class="absolute inset-0 bg-dark/90"></div>
@@ -182,6 +207,8 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router';
 import { useT2 } from '@/composables/useT2';
 import SavingStatus from '@/components/SavingStatus.vue';
 import LoginModal from '@/components/LoginModal.vue';
+import ChangelogModal from '@/components/ChangelogModal.vue';
+import { useChangelogStore } from '@/stores/changelog';
 import OfflineOverlay from '@/components/OfflineOverlay.vue';
 import HostStrip from '@/components/shell/HostStrip.vue';
 import NavIcon from '@/components/shell/NavIcon.vue';
@@ -198,6 +225,30 @@ const t2 = useT2();
 
 const auth = useAuthStore();
 const host = useHostStore();
+const changelog = useChangelogStore();
+watch(
+  () => auth.ready && auth.isAuthenticated,
+  (signedIn) => {
+    if (signedIn) void changelog.refresh();
+    else changelog.reset();
+  },
+  { immediate: true },
+);
+function refreshChangelog(): void {
+  if (auth.ready && auth.isAuthenticated && document.visibilityState === 'visible')
+    void changelog.refresh();
+}
+let changelogTimer = 0;
+onMounted(() => {
+  window.addEventListener('focus', refreshChangelog);
+  document.addEventListener('visibilitychange', refreshChangelog);
+  changelogTimer = window.setInterval(refreshChangelog, 15 * 60 * 1000);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshChangelog);
+  document.removeEventListener('visibilitychange', refreshChangelog);
+  window.clearInterval(changelogTimer);
+});
 const { open: inspectorOpen } = useInspector();
 // Narrow-screen drawer for the inspector; closes on navigation.
 const drawerOpen = ref(false);
@@ -255,10 +306,15 @@ const pageTitle = computed(() => {
 const mobileMenuOptions = computed(() => [
   ...navItems.value.map((i) => ({ label: i.label, key: i.path })),
   { type: 'divider' as const, key: 'divider' },
+  { label: t2('changelog.title', 'Changelog'), key: '__changelog' },
   { label: t2('navbar.logout', 'Log out'), key: '__logout' },
 ]);
 
 function onMobileSelect(key: string | number): void {
+  if (key === '__changelog') {
+    void changelog.open();
+    return;
+  }
   if (key === '__logout') {
     void logout();
     return;
