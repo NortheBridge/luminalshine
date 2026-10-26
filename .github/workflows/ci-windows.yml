@@ -418,6 +418,13 @@ jobs:
           CXXFLAGS: "-fms-extensions"
           LDFLAGS: "-fuse-ld=lld"
         run: |
+          # Keep compile definitions stable when signed VHF packaging reconfigures
+          # CMake later. CI version selection skips Git discovery, otherwise
+          # PROJECT_RELEASE_DATE falls back to a new wall-clock timestamp.
+          release_date="$(git show -s --format=%cI HEAD)"
+          test -n "$release_date"
+          export RELEASE_DATE="$release_date"
+          echo "RELEASE_DATE=$RELEASE_DATE" >> "$GITHUB_ENV"
           mkdir -p build
           cmake \
             -B build \
