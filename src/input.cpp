@@ -14,6 +14,7 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <list>
+#include <memory>
 #include <thread>
 #include <unordered_map>
 
@@ -1752,7 +1753,7 @@ namespace input {
   }
 
   bool probe_gamepads() {
-    const auto gamepads = platf::supported_gamepads(&platf_input);
+    const auto gamepads = platf::supported_gamepads(std::addressof(platf_input));
     for (auto &gamepad : gamepads) {
       if (gamepad.is_enabled && gamepad.name != "auto") {
         return false;
