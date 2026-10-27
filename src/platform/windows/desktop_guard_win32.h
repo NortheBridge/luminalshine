@@ -14,6 +14,12 @@ namespace platf::desktop_guard {
   inline constexpr DWORD cover_extended_style = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
 
   inline DWORD wait_for_work(HANDLE wake_event, DWORD timeout = INFINITE) {
+    // MWMO_INPUTAVAILABLE can report queued input ahead of a signaled event.
+    // Give configuration/shutdown priority even under continuous window events.
+    const DWORD signal = WaitForSingleObject(wake_event, 0);
+    if (signal != WAIT_TIMEOUT) {
+      return signal;
+    }
     // USER32 calls may mark queued messages as observed without removing them.
     // They must still wake the worker, including the initial window sweep.
     return MsgWaitForMultipleObjectsEx(1, &wake_event, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
