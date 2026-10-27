@@ -106,7 +106,7 @@ namespace {
   }
 
   TEST_F(DesktopGuardWin32, HoveringCoverHidesCursor) {
-    const HCURSOR previous = SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+    const HCURSOR previous = SetCursor(LoadCursor(nullptr, IDC_ARROW));
     EXPECT_EQ(SendMessageW(window, WM_SETCURSOR, reinterpret_cast<WPARAM>(window), MAKELPARAM(HTCLIENT, WM_MOUSEMOVE)), TRUE);
     EXPECT_EQ(GetCursor(), nullptr);
     SetCursor(previous);
