@@ -36,6 +36,7 @@
 
 // third-party (libdisplaydevice)
   #include "src/logging.h"
+  #include "src/platform/windows/desktop_guard_win32.h"
   #include "src/platform/windows/display_helper_wedge_escalation.h"
   #include "src/platform/windows/exact_device_window_router_policy.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
@@ -2454,6 +2455,7 @@ namespace {
 
     static constexpr UINT kRouteWindowMessage = WM_APP + 0x219;
     static constexpr UINT_PTR kResolveTimer = 0x51A7;
+    static constexpr UINT_PTR kMaintainTimer = 0x51A8;
     static constexpr unsigned int kMaxResolveAttempts = 20;
 
     struct Configuration {
@@ -2726,7 +2728,7 @@ namespace {
       const auto instance = GetModuleHandleW(nullptr);
       for (const auto &rect : rects) {
         const HWND hwnd = CreateWindowExW(
-          WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+          platf::desktop_guard::cover_extended_style,
           window_class_name_,
           L"LuminalShine OLED-safe recovery anchor",
           WS_POPUP,
@@ -2747,6 +2749,12 @@ namespace {
     }
 
     void show_cover_windows() {
+      // A suspended generation must not expose a cover after its teardown
+      // acknowledgement. All cover HWNDs belong to this worker thread.
+      std::scoped_lock action_lock(route_action_mutex_);
+      if (!published_token_is_current(active_token())) {
+        return;
+      }
       for (const HWND hwnd : cover_windows_) {
         if (hwnd) {
           SetWindowPos(
@@ -2756,7 +2764,7 @@ namespace {
             0,
             0,
             0,
-            SWP_ASYNCWINDOWPOS | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
           );
         }
       }
@@ -2819,7 +2827,10 @@ namespace {
         return;
       }
       if (pending_windows_.enqueue(reinterpret_cast<std::uintptr_t>(hwnd), active_token())) {
-        PostMessageW(control_window_.load(std::memory_order_acquire), kRouteWindowMessage, reinterpret_cast<WPARAM>(hwnd), 0);
+        if (!PostMessageW(control_window_.load(std::memory_order_acquire), kRouteWindowMessage, reinterpret_cast<WPARAM>(hwnd), 0)) {
+          // Leave failed posts retryable by the next reconciliation sweep.
+          (void) pending_windows_.take_if_current(reinterpret_cast<std::uintptr_t>(hwnd), active_token());
+        }
       }
     }
 
@@ -2828,7 +2839,8 @@ namespace {
       // The initial sweep cannot drain its posted messages until EnumWindows
       // returns. Filter here so hidden/shell/tool windows cannot exhaust the
       // bounded queue ahead of real applications.
-      if (!self->excluded_window(hwnd)) {
+      if (!self->excluded_window(hwnd) && self->target_ &&
+          MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != self->target_->monitor) {
         self->queue_window(hwnd);
       }
       return TRUE;
@@ -2920,6 +2932,28 @@ namespace {
       }
     }
 
+    void maintain_desktop() {
+      const auto token = active_token();
+      if (!target_ || !published_token_is_current(token)) {
+        return;
+      }
+      MONITORINFOEXW info {};
+      info.cbSize = sizeof(info);
+      if (!GetMonitorInfoW(target_->monitor, &info) || _wcsicmp(info.szDevice, target_->display_name.c_str()) != 0) {
+        schedule_target_refresh();
+        return;
+      }
+      // Restore the bounded reconciliation from 26.09.1 while retaining exact
+      // target selection. WinEvents are hints: windows can appear before they
+      // are movable, asynchronous moves can fail, and the queue can fill.
+      if (routing_gate_.load(std::memory_order_acquire)) {
+        EnumWindows(&queue_initial_window, reinterpret_cast<LPARAM>(this));
+      }
+      if (active_config_.cover_other_displays) {
+        show_cover_windows();
+      }
+    }
+
     void schedule_target_refresh() {
       topology_generation_.fetch_add(1, std::memory_order_acq_rel);
       uninstall_hooks();
@@ -2927,6 +2961,7 @@ namespace {
       destroy_cover_windows();
       resolve_attempts_ = 0;
       if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+        KillTimer(hwnd, kMaintainTimer);
         SetTimer(hwnd, kResolveTimer, 500, nullptr);
       }
     }
@@ -3004,6 +3039,9 @@ namespace {
         target_.reset();
         return;
       }
+      if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+        SetTimer(hwnd, kMaintainTimer, 500, nullptr);
+      }
       if (hooks_installed && routing_gate_.load(std::memory_order_acquire)) {
         // Hook first, then sweep: a window created between the two is queued by
         // the hook and coalesced with the enumeration result.
@@ -3023,6 +3061,10 @@ namespace {
       }
       if (next.generation == active_config_.generation) {
         return;
+      }
+      if (const HWND hwnd = control_window_.load(std::memory_order_acquire)) {
+        KillTimer(hwnd, kMaintainTimer);
+        KillTimer(hwnd, kResolveTimer);
       }
       active_config_ = std::move(next);
       logged_processes_.clear();
@@ -3064,14 +3106,20 @@ namespace {
         EndPaint(hwnd, &ps);
         return 0;
       }
-      if (msg == WM_NCHITTEST) {
-        return HTTRANSPARENT;
+      if (self && hwnd != self->control_window_.load(std::memory_order_acquire)) {
+        if (const auto result = platf::desktop_guard::cover_input_result(msg)) {
+          return *result;
+        }
       }
       if (!self) {
         return DefWindowProcW(hwnd, msg, wparam, lparam);
       }
       if (msg == kRouteWindowMessage) {
         self->route_window(reinterpret_cast<HWND>(wparam));
+        return 0;
+      }
+      if (msg == WM_TIMER && wparam == kMaintainTimer) {
+        self->maintain_desktop();
         return 0;
       }
       if (msg == WM_TIMER && wparam == kResolveTimer) {
@@ -3128,7 +3176,7 @@ namespace {
       const HDEVNOTIFY device_notification = RegisterDeviceNotificationW(control, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
 
       while (!st.stop_requested()) {
-        const DWORD wait = MsgWaitForMultipleObjects(1, &wake_event_, FALSE, INFINITE, QS_ALLINPUT);
+        const DWORD wait = platf::desktop_guard::wait_for_work(wake_event_);
         if (wait == WAIT_FAILED) {
           BOOST_LOG(error) << "Exact-device window router: worker wait failed (error=" << GetLastError() << ").";
           break;
@@ -3137,16 +3185,11 @@ namespace {
           ResetEvent(wake_event_);
           apply_published_configuration();
         }
-        if (wait == WAIT_OBJECT_0 + 1) {
-          MSG msg {};
-          while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
-              worker_.request_stop();
-              break;
-            }
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-          }
+        // Configuration work itself can queue window moves and WinEvents.
+        // Drain after either wake source, bounded so shutdown/configuration
+        // cannot be starved by a noisy application.
+        if (!platf::desktop_guard::drain_messages()) {
+          worker_.request_stop();
         }
       }
 
