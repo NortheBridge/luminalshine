@@ -77,9 +77,21 @@ namespace stream::session::teardown {
              timeout_action_e::controlled_restart;
   }
 
-  // Stub: the fixed deadline stream.cpp armed before the deadline was derived.
-  constexpr std::chrono::seconds display_cleanup_deadline(std::chrono::seconds) noexcept {
-    return std::chrono::seconds {30};
+  /**
+   * Slack on top of the display-cleanup budget. The budget sums explicit
+   * waits only; this covers poll-interval overshoot and the OS calls that
+   * carry no timeout of their own (display enumeration, driver IOCTLs).
+   */
+  constexpr std::chrono::seconds kDisplayCleanupMargin {10};
+
+  /**
+   * The display-cleanup watchdog deadline: the cleanup's worst-case budget plus
+   * a margin. A fixed deadline shorter than that budget fires while the
+   * cleanup's own recovery ladder is still running (issue #198), turning a
+   * recoverable display restore into a host restart.
+   */
+  constexpr std::chrono::seconds display_cleanup_deadline(std::chrono::seconds cleanup_budget) noexcept {
+    return cleanup_budget + kDisplayCleanupMargin;
   }
 
   constexpr bool watchdog_arm_is_current(
