@@ -77,6 +77,11 @@ namespace stream::session::teardown {
              timeout_action_e::controlled_restart;
   }
 
+  // Stub: the fixed deadline stream.cpp armed before the deadline was derived.
+  constexpr std::chrono::seconds display_cleanup_deadline(std::chrono::seconds) noexcept {
+    return std::chrono::seconds {30};
+  }
+
   constexpr bool watchdog_arm_is_current(
     std::uint64_t expected_epoch,
     std::uint64_t current_epoch,

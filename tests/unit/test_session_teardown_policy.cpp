@@ -5,6 +5,10 @@
 
 #include "src/session_teardown_policy.h"
 
+#ifdef _WIN32
+  #include "src/platform/windows/virtual_display_cleanup.h"
+#endif
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -47,6 +51,27 @@ namespace {
     EXPECT_STREQ(stream::session::teardown::phase_name(phase_e::frame_limiter_cleanup), "frame-limiter/NVCP cleanup");
     EXPECT_STREQ(stream::session::teardown::phase_name(phase_e::platform_cleanup), "platform cleanup");
   }
+
+  TEST(SessionTeardownPolicy, DisplayCleanupDeadlineOutlastsItsBudget) {
+    constexpr auto budget = std::chrono::seconds(60);
+    EXPECT_GT(stream::session::teardown::display_cleanup_deadline(budget).count(), budget.count());
+  }
+
+#ifdef _WIN32
+  TEST(SessionTeardownPolicy, DisplayCleanupDeadlineOutlastsTheCleanupWorstCase) {
+    const auto worst_case = platf::virtual_display_cleanup::worst_case_duration();
+    EXPECT_GT(stream::session::teardown::display_cleanup_deadline(worst_case).count(), worst_case.count());
+  }
+
+  TEST(SessionTeardownPolicy, DisplayCleanupDeadlineCoversTheHelperRestartPath) {
+    namespace cleanup = platf::virtual_display_cleanup;
+    // First REVERT wait, helper restart, second REVERT wait: the path that
+    // timed out on 26.09.1 before the recovery ladder could run.
+    const auto restart_path = cleanup::kRevertCompletionTimeout + cleanup::kHelperRestartBound + cleanup::kRevertCompletionTimeout;
+    const auto deadline = stream::session::teardown::display_cleanup_deadline(cleanup::worst_case_duration());
+    EXPECT_GT(std::chrono::duration_cast<std::chrono::milliseconds>(deadline).count(), std::chrono::duration_cast<std::chrono::milliseconds>(restart_path).count());
+  }
+#endif
 
   TEST(SessionTeardownPolicy, IndependentWatchdogFiresWithoutATaskPool) {
     std::mutex mutex;
