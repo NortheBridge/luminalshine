@@ -21,11 +21,16 @@ namespace stream::session {
     ping_timeout,  ///< No control traffic arrived within the ping timeout.
     control_decrypt_failure,  ///< A control message failed GCM tag verification.
     bad_encrypted_type,  ///< An encrypted control message wrapped another encrypted message.
-    video_thread_exit,  ///< The session's video thread returned.
-    audio_thread_exit,  ///< The session's audio thread returned.
+    /// The session's video thread returned. Its exit guard stops the session whatever ended
+    /// the thread, so this also covers a failed initial UDP ping and a shutdown raised without
+    /// stop() by the control thread's termination broadcast; the logs around it name the cause.
+    video_thread_exit,
+    /// The session's audio thread returned; covers the same causes as video_thread_exit.
+    audio_thread_exit,
     app_exited_before_peer,  ///< The app terminated before the client's control peer connected.
     admission_retired,  ///< RTSP admission was retired (cancel or expiry) while the session started.
-    rtsp_clear_all,  ///< The RTSP server cleared every session (shutdown or accept failure).
+    rtsp_clear_all,  ///< The RTSP server cleared all sessions on its own teardown or failure; the logged call site says which.
+    rtsp_broadcast_shutdown,  ///< The RTSP handler cleared all sessions because the broadcast is shutting down.
     rtsp_reap,  ///< The RTSP server reaped an already stopping session.
     client_disconnect_request,  ///< A disconnect of one client's sessions was requested (Web UI).
     explicit_cancel,  ///< An explicit /cancel stopped every session.
@@ -54,6 +59,8 @@ namespace stream::session {
         return "admission_retired";
       case stop_reason_e::rtsp_clear_all:
         return "rtsp_clear_all";
+      case stop_reason_e::rtsp_broadcast_shutdown:
+        return "rtsp_broadcast_shutdown";
       case stop_reason_e::rtsp_reap:
         return "rtsp_reap";
       case stop_reason_e::client_disconnect_request:

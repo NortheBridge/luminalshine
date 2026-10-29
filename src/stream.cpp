@@ -819,7 +819,7 @@ namespace stream {
 
     // Slow path - process new session
     TUPLE_2D(peer_port, peer_addr, platf::from_sockaddr_ex((sockaddr *) &peer->address.address));
-    const auto peer_endpoint = peer_addr + ':' + std::to_string(peer_port);
+    const auto peer_endpoint = (peer_addr.find(':') == std::string::npos ? peer_addr : '[' + peer_addr + ']') + ':' + std::to_string(peer_port);
     auto lg = _sessions.lock();
     for (auto pos = std::begin(*_sessions); pos != std::end(*_sessions); ++pos) {
       auto session_p = *pos;
@@ -915,14 +915,12 @@ namespace stream {
         return;
       }
 
-      // The deadline is about to be pushed out, so derive how long the control
-      // stream was silent from the value it held until now. Before the first
-      // packet this is the time since the session was allocated.
+      // The deadline is about to be pushed out. Keep the one the previous control event
+      // left so DISCONNECT can report how long the control stream had been silent. It is
+      // only meaningful from the first event on: session::start() sets the initial deadline
+      // (with an extra 18 s for strict-first-frame clients), so CONNECT does not report it.
       const auto event_time = std::chrono::steady_clock::now();
-      const auto since_last_packet_ms = std::max<std::chrono::milliseconds::rep>(
-        0,
-        std::chrono::duration_cast<std::chrono::milliseconds>(event_time - (session->pingTimeout - config::stream.ping_timeout)).count()
-      );
+      const auto previous_ping_deadline = session->pingTimeout;
       session->pingTimeout = event_time + config::stream.ping_timeout;
 
       switch (event.type) {
@@ -946,15 +944,20 @@ namespace stream {
           }
           break;
         case ENET_EVENT_TYPE_CONNECT:
-          BOOST_LOG(info) << "CLIENT CONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session)
-                          << " since_last_packet_ms="sv << since_last_packet_ms;
+          BOOST_LOG(info) << "CLIENT CONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session);
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
-          BOOST_LOG(info) << "CLIENT DISCONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session)
-                          << " since_last_packet_ms="sv << since_last_packet_ms;
-          // No more clients to send video data to ^_^
-          if (session->state == session::state_e::RUNNING) {
-            session::stop(*session, session::stop_reason_e::enet_disconnect);
+          {
+            const auto since_last_packet_ms = std::max<std::chrono::milliseconds::rep>(
+              0,
+              std::chrono::duration_cast<std::chrono::milliseconds>(event_time - (previous_ping_deadline - config::stream.ping_timeout)).count()
+            );
+            BOOST_LOG(info) << "CLIENT DISCONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session)
+                            << " since_last_packet_ms="sv << since_last_packet_ms;
+            // No more clients to send video data to ^_^
+            if (session->state == session::state_e::RUNNING) {
+              session::stop(*session, session::stop_reason_e::enet_disconnect);
+            }
           }
           break;
         case ENET_EVENT_TYPE_NONE:
@@ -1525,8 +1528,13 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     constexpr auto pending_peer_termination_grace = std::chrono::seconds(1);
     std::optional<std::chrono::steady_clock::time_point> process_terminated_since;
+    // Last app state this loop observed, for the exit log below. proc::proc.running() is not a
+    // pure read (it takes the lifecycle mutex and can resume or terminate the app), so the exit
+    // path, which holds _sessions, must not call it again.
+    std::string_view app_state_at_last_poll = "unpolled"sv;
     while (!shutdown_event->peek() && !broadcast_shutdown_event->peek()) {
       const bool process_running = proc::proc.running() != 0;
+      app_state_at_last_poll = process_running ? "running"sv : "exited"sv;
       bool has_session_awaiting_peer = false;
 
       {
@@ -1659,11 +1667,11 @@ namespace stream {
     BOOST_LOG(info) << "Control thread exiting; terminating "sv << server->_sessions->size()
                     << " remaining session(s) (shutdown="sv << shutdown_event->peek()
                     << ", broadcast_shutdown="sv << broadcast_shutdown_event->peek()
-                    << ", app_running="sv << (proc::proc.running() != 0) << ')';
+                    << ", app="sv << app_state_at_last_poll << " at last poll)"sv;
     for (auto pos = std::begin(*server->_sessions); pos != std::end(*server->_sessions); ++pos) {
       auto session = *pos;
 
-      BOOST_LOG(info) << "Sending control termination 0x"sv << util::hex(reason).to_string_view()
+      BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(reason)
                       << " to peer="sv << (session->control.peer ? session->control.peer_address : "none"s)
                       << ' ' << session_label(*session);
 

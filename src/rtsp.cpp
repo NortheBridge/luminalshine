@@ -16,6 +16,7 @@ extern "C" {
 #include <cstdlib>
 #include <format>
 #include <set>
+#include <source_location>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -497,7 +498,7 @@ namespace rtsp_stream {
   class rtsp_server_t {
   public:
     ~rtsp_server_t() {
-      clear();
+      clear(true, stream::session::stop_reason_e::rtsp_clear_all);
     }
 
     int bind(net::af_e af, std::uint16_t port, boost::system::error_code &ec) {
@@ -553,7 +554,7 @@ namespace rtsp_stream {
         BOOST_LOG(error) << "Couldn't accept incoming connections: "sv << ec.message();
 
         // Stop server
-        clear();
+        clear(true, stream::session::stop_reason_e::rtsp_clear_all);
         return;
       }
 
@@ -760,11 +761,12 @@ namespace rtsp_stream {
      * @brief Clear launch sessions.
      * @param all If true, clear all sessions. Otherwise, only clear timed out and stopped sessions.
      * @param reason Why the sessions are being stopped; logged and passed to session::stop.
+     * @param loc The caller, logged with the reason so a stop is attributable to its real call site.
      * @examples
      * clear(false, stream::session::stop_reason_e::rtsp_reap);
      * @examples_end
      */
-    void clear(bool all = true, stream::session::stop_reason_e reason = stream::session::stop_reason_e::rtsp_clear_all) {
+    void clear(bool all, stream::session::stop_reason_e reason, std::source_location loc = std::source_location::current()) {
       // Collect sessions to stop/join first while holding the set lock,
       // but perform the potentially blocking join() outside of the lock to
       // avoid deadlocks (join() may indirectly query session_count()).
@@ -790,7 +792,7 @@ namespace rtsp_stream {
       }
 
       // Stop and join outside the lock
-      stop_and_join(to_cleanup, reason);
+      stop_and_join(to_cleanup, reason, loc);
     }
 
     /**
@@ -913,21 +915,27 @@ namespace rtsp_stream {
       acceptor.close();
       io_context.stop();
       (void) cancel_pending_launch();
-      clear();
+      clear(true, stream::session::stop_reason_e::rtsp_clear_all);
     }
 
   private:
     /**
      * @brief Stop and join sessions already removed from the tracked set.
+     * @param loc The caller; forwarded to session::stop so its log names the real call site.
      * @note Logs each session first, so a stop is attributable to its caller even
      *       when the session was already stopping and session::stop has nothing to say.
      */
-    static void stop_and_join(const std::vector<std::shared_ptr<stream::session_t>> &sessions, stream::session::stop_reason_e reason) {
+    static void stop_and_join(
+      const std::vector<std::shared_ptr<stream::session_t>> &sessions,
+      stream::session::stop_reason_e reason,
+      std::source_location loc = std::source_location::current()
+    ) {
       for (const auto &slot : sessions) {
         BOOST_LOG(info) << "RTSP stopping session "sv << stream::session::describe(stream::session::identity(*slot))
                         << " reason="sv << stream::session::stop_reason_name(reason)
+                        << " at "sv << stream::session::file_basename(loc.file_name()) << ':' << loc.line()
                         << " already_stopping="sv << (stream::session::state(*slot) == stream::session::state_e::STOPPING);
-        stream::session::stop(*slot, reason);
+        stream::session::stop(*slot, reason, loc);
         stream::session::join(*slot);
       }
     }
@@ -1938,14 +1946,14 @@ namespace rtsp_stream {
           server.iterate();
 
           if (broadcast_shutdown_event->peek()) {
-            server.clear();
+            server.clear(true, stream::session::stop_reason_e::rtsp_broadcast_shutdown);
           } else {
             // cleanup all stopped sessions
             server.clear(false, stream::session::stop_reason_e::rtsp_reap);
           }
         }
 
-        server.clear();
+        server.clear(true, stream::session::stop_reason_e::rtsp_clear_all);
       } catch (const std::exception &e) {
         BOOST_LOG(fatal) << "RTSP handler thread terminated by exception: "sv << e.what()
                          << "; shutting down."sv;
