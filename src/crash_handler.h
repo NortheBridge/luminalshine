@@ -8,8 +8,9 @@
  * required WER archaeology and admin access to the SYSTEM profile's
  * CrashDumps folder. This module makes every crash self-document:
  *   - an unhandled SEH exception logs a fatal line (code, faulting
- *     address, module, dump path) and writes a minidump to
- *     `<appdata>/crashdumps/` before letting WER proceed, and
+ *     address, module, dump path) and writes a stack-only minidump (thread
+ *     stacks and module lists, no heap) to `<appdata>/crashdumps/` before
+ *     letting WER proceed, and
  *   - std::terminate logs the active exception (if any) and re-raises it
  *     as a distinctive SEH exception so the same dump path applies.
  *
