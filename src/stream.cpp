@@ -2790,6 +2790,8 @@ namespace stream {
       config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
     );
     if (ping_error < 0) {
+      // recv_ping's own error line carries no session identity.
+      BOOST_LOG(info) << "Video thread ending: initial UDP ping failed for "sv << session_label(*session);
 #ifdef _WIN32
       session->shutdown_event->raise(true);
 #endif
@@ -2881,6 +2883,7 @@ namespace stream {
       config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
     );
     if (error < 0) {
+      BOOST_LOG(info) << "Audio thread ending: initial UDP ping failed for "sv << session_label(*session);
       return;
     }
 
