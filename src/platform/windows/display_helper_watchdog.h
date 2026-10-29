@@ -2,8 +2,26 @@
 
 #include <chrono>
 #include <functional>
+#include <thread>
 
 namespace display_helper_integration {
+  /**
+   * @brief Request stop on a watchdog thread and wait for it to exit.
+   *
+   * When called from the watchdog thread itself the thread is detached instead of joined.
+   */
+  inline void stop_watchdog_thread(std::jthread &thread) {
+    if (thread.joinable()) {
+      thread.request_stop();
+      if (thread.get_id() == std::this_thread::get_id()) {
+        // A session teardown or an app termination can run on the watchdog's own loop; joining itself throws EDEADLK.
+        thread.detach();
+        return;
+      }
+      thread.join();
+    }
+  }
+
   class DisplayHelperWatchdog {
   public:
     struct Hooks {
