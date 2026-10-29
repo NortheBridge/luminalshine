@@ -34,6 +34,7 @@
   // local includes
   #include "config_playnite.h"
   #include "confighttp.h"
+  #include "confighttp_crash_dumps.h"
   #include "logging.h"
   #include "src/platform/windows/ipc/misc_utils.h"
   #include "src/platform/windows/playnite_integration.h"
@@ -1208,13 +1209,6 @@ namespace confighttp {
     }
   }
 
-  struct CrashDumpInfo {
-    std::string process;
-    std::filesystem::path path;
-    std::filesystem::file_time_type write_time;
-    std::uint64_t size;
-  };
-
   struct ZipFileEntry {
     std::string name;
     std::filesystem::path path;
@@ -1636,7 +1630,12 @@ namespace confighttp {
     return true;
   }
 
-  static std::vector<CrashDumpInfo> find_recent_crash_dumps(std::chrono::hours max_age) {
+  std::vector<CrashDumpInfo> find_recent_crash_dumps(
+    [[maybe_unused]] const std::vector<std::filesystem::path> &crash_handler_dirs,
+    const std::vector<std::filesystem::path> &local_dump_dirs,
+    const std::vector<std::filesystem::path> &wer_report_dirs,
+    std::chrono::hours max_age
+  ) {
     std::unordered_map<std::string, CrashDumpInfo> best;
 
     auto consider = [&](CrashDumpInfo info) {
@@ -1652,7 +1651,7 @@ namespace confighttp {
       }
     };
 
-    for (const auto &root : crash_dump_roots()) {
+    for (const auto &root : local_dump_dirs) {
       std::error_code ec {};
       if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
         continue;
@@ -1696,7 +1695,7 @@ namespace confighttp {
       }
     }
 
-    for (const auto &root : wer_roots()) {
+    for (const auto &root : wer_report_dirs) {
       std::error_code ec {};
       if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
         continue;
@@ -1738,6 +1737,10 @@ namespace confighttp {
       return a.write_time > b.write_time;
     });
     return results;
+  }
+
+  static std::vector<CrashDumpInfo> find_recent_crash_dumps(std::chrono::hours max_age) {
+    return find_recent_crash_dumps({platf::appdata() / "crashdumps"}, crash_dump_roots(), wer_roots(), max_age);
   }
 
   static std::uint64_t estimate_zip_entry_size(std::size_t name_len, std::uint64_t data_size) {
