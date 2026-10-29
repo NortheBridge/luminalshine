@@ -36,6 +36,7 @@
   #include "src/platform/windows/display_helper_coordinator.h"
   #include "src/platform/windows/display_helper_policy.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
+  #include "src/platform/windows/display_helper_watchdog.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
@@ -1119,8 +1120,7 @@ namespace {
   }
 
   // Watchdog state for helper liveness during active streams
-  static std::atomic<bool> g_watchdog_running {false};
-  static std::jthread g_watchdog_thread;
+  static display_helper_integration::WatchdogThreadSlot g_watchdog_slot;
   static std::chrono::steady_clock::time_point g_last_vd_reenable {};
 
   constexpr auto kVirtualDisplayReenableCooldown = std::chrono::seconds(3);
@@ -1295,51 +1295,37 @@ namespace {
 
   static void watchdog_proc(std::stop_token st) {
     using namespace std::chrono_literals;
-    constexpr auto kActiveInterval = 5s;
-    constexpr auto kSuspendedInterval = 20s;
-    bool helper_ready = false;
 
+    display_helper_integration::DisplayHelperWatchdog::Hooks hooks;
+    hooks.feature_enabled = [] {
+      return dd_feature_enabled();
+    };
+    hooks.ensure_helper_started = [] {
+      return ensure_helper_started();
+    };
+    hooks.send_ping = [] {
+      return platf::display_helper_client::send_ping();
+    };
+    hooks.reset_connection = [] {
+      platf::display_helper_client::reset_connection();
+    };
+    // Never reap here: reaping runs session::join(), whose last-session teardown stops this watchdog.
+    hooks.session_count = [] {
+      return rtsp_stream::session_count_no_reap();
+    };
+    // proc.running() can still run terminate() on this thread once the app has exited, which also
+    // stops this watchdog; WatchdogThreadSlot::stop() detaches instead of self-joining in that case.
+    hooks.running_processes = [] {
+      return proc::proc.running();
+    };
+    hooks.active_interval = 5s;
+    hooks.suspended_interval = 20s;
+
+    display_helper_integration::DisplayHelperWatchdog watchdog(std::move(hooks));
     while (!st.stop_requested()) {
-      if (!dd_feature_enabled()) {
-        if (helper_ready) {
-          platf::display_helper_client::reset_connection();
-          helper_ready = false;
-        }
-        for (auto slept = 0ms; slept < kActiveInterval && !st.stop_requested(); slept += 100ms) {
-          std::this_thread::sleep_for(100ms);
-        }
-        continue;
-      }
-
-      if (!helper_ready) {
-        helper_ready = ensure_helper_started();
-        if (!helper_ready) {
-          for (auto slept = 0ms; slept < kActiveInterval && !st.stop_requested(); slept += 100ms) {
-            std::this_thread::sleep_for(100ms);
-          }
-          continue;
-        }
-        (void) platf::display_helper_client::send_ping();
-      }
-
-      const bool suspended = (rtsp_stream::session_count() == 0) && (proc::proc.running() > 0);
-      const auto interval = suspended ? kSuspendedInterval : kActiveInterval;
+      const auto interval = watchdog.tick();
       for (auto slept = 0ms; slept < interval && !st.stop_requested(); slept += 100ms) {
         std::this_thread::sleep_for(100ms);
-      }
-      if (st.stop_requested()) {
-        break;
-      }
-
-      if (!platf::display_helper_client::send_ping()) {
-        // Avoid logging ping failures to reduce log spam; proceed to reconnect
-        platf::display_helper_client::reset_connection();
-        helper_ready = ensure_helper_started();
-        if (!helper_ready) {
-          continue;
-        }
-        // Do not re-apply automatically on reconnect; just confirm IPC is reachable.
-        helper_ready = platf::display_helper_client::send_ping();
       }
     }
   }
@@ -2473,19 +2459,12 @@ namespace display_helper_integration {
   }
 
   void start_watchdog() {
-    if (g_watchdog_running.exchange(true, std::memory_order_acq_rel)) {
-      return;  // already running
-    }
-    g_watchdog_thread = std::jthread(watchdog_proc);
+    (void) g_watchdog_slot.start(watchdog_proc);  // no-op when already running
   }
 
   void stop_watchdog() {
-    if (!g_watchdog_running.exchange(false, std::memory_order_acq_rel)) {
+    if (!g_watchdog_slot.stop()) {
       return;  // not running
-    }
-    if (g_watchdog_thread.joinable()) {
-      g_watchdog_thread.request_stop();
-      g_watchdog_thread.join();
     }
     if (config::video.dd.config_revert_on_disconnect) {
       platf::display_helper_client::reset_connection();
