@@ -154,6 +154,31 @@ namespace rtsp_stream {
    */
   int session_count_no_reap();
 
+  /// One tracked streaming session, as reported by session_snapshot_no_reap().
+  struct session_snapshot_t {
+    std::string client_uuid;
+    std::string client_name;
+    bool stopping;
+  };
+
+  /**
+   * @brief Describe the tracked sessions without reaping STOPPING ones (diagnostics).
+   *
+   * Takes only the session-state lock, briefly. It never stops, joins or clears
+   * a session, so it is safe on the single RTSP handler and while display
+   * lifecycle ownership is held. Unlike get_all_session_client_uuids() it also
+   * lists sessions that are already STOPPING.
+   */
+  std::vector<session_snapshot_t> session_snapshot_no_reap();
+
+  /**
+   * @brief Client UUID of the pending launch that no control stream has claimed yet.
+   *
+   * Takes only the pending-launch mutex and never consumes the launch event.
+   * @return The UUID (possibly empty for an unidentified client), or nothing when no launch is pending.
+   */
+  std::optional<std::string> pending_launch_client_uuid();
+
   /**
    * @brief Terminates all running streaming sessions.
    */

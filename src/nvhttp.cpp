@@ -3571,6 +3571,35 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
+    // Attribute the cancel before it stops anything: who asked, which sessions are
+    // tracked (including ones already stopping), and who owns a pending launch.
+    // The snapshot and the pending-launch read are both non-reaping.
+    {
+      std::string requester_name;
+      const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
+      const auto tracked = rtsp_stream::session_snapshot_no_reap();
+      std::string pending_owner = "none";
+      if (const auto pending_uuid = rtsp_stream::pending_launch_client_uuid()) {
+        const auto pending_cert = get_named_cert_by_uuid(*pending_uuid);
+        pending_owner = std::format("client='{}' uuid={}", pending_cert ? pending_cert->name : std::string {}, stream::session::short_client_id(*pending_uuid));
+      }
+      BOOST_LOG(info) << std::format(
+        "Cancel requested by client='{}' uuid={}; tracked sessions: {}; pending launch owner: {}",
+        requester_name,
+        requester_uuid.empty() ? std::string_view {"unknown"} : stream::session::short_client_id(requester_uuid),
+        tracked.size(),
+        pending_owner
+      );
+      for (const auto &tracked_session : tracked) {
+        BOOST_LOG(info) << std::format(
+          "Cancel will stop tracked session: client='{}' uuid={} stopping={}",
+          tracked_session.client_name,
+          stream::session::short_client_id(tracked_session.client_uuid),
+          tracked_session.stopping
+        );
+      }
+    }
+
     const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
 #ifdef _WIN32
     platf::video_worker::cancel_prewarm();
