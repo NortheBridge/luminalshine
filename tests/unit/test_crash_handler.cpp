@@ -202,9 +202,9 @@ namespace {
       std::memcpy(&header, bytes.data(), sizeof(header));
       EXPECT_EQ(header.Signature, static_cast<ULONG32>(MINIDUMP_SIGNATURE));
 
-      // dbghelp ORs bits of its own above the requested type into Flags (for
-      // example 0x200000 on CPUs with AVX state), so compare only the type bits.
-      EXPECT_EQ(header.Flags & 0xFFFF, static_cast<ULONG64>(MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules));
+      // dbghelp ORs the AVX state bit (0x200000) into Flags on CPUs that have
+      // it. Ignore that one bit; everything else must be exactly the type.
+      EXPECT_EQ(header.Flags & ~static_cast<ULONG64>(MiniDumpWithAvxXStateContext), static_cast<ULONG64>(MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules));
 
       // Control: the frame holding the pointer was captured.
       const auto address = reinterpret_cast<std::uintptr_t>(marker.get());

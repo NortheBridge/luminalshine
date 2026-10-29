@@ -16,7 +16,6 @@
   #include <windows.h>
   #include <aclapi.h>
   #include <sddl.h>
-  #include <shlobj.h>
 // clang-format on
 
 namespace {
@@ -150,13 +149,7 @@ namespace {
     ASSERT_TRUE(read_dacl(child, before));
     ASSERT_NE(std::find(before.allowed_sids.begin(), before.allowed_sids.end(), kUsersSid), before.allowed_sids.end()) << "precondition: the existing file inherits access for Users";
 
-    SetLastError(ERROR_SUCCESS);
-    if (!platf::restrict_crash_dump_directory(dir)) {
-      if (GetLastError() == ERROR_ACCESS_DENIED && !IsUserAnAdmin()) {
-        GTEST_SKIP() << "changing the DACL needs an elevated process here";
-      }
-      FAIL() << "restrict_crash_dump_directory returned false";
-    }
+    ASSERT_TRUE(platf::restrict_crash_dump_directory(dir));
 
     DaclReport folder;
     ASSERT_TRUE(read_dacl(dir, folder));

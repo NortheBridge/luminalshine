@@ -99,10 +99,11 @@ namespace crash_handler {
    * @brief Tell whether @p path is a minidump this handler writes today.
    *
    * Reads the minidump header and accepts the file only if the signature
-   * matches and the header flags hold nothing beyond the stack-only dump
-   * types (plus the AVX state bit dbghelp adds on its own). Dumps from
-   * before the stack-only change, which also hold the memory behind stack
-   * pointers, fail the check, as do truncated files and anything unreadable.
+   * and version match and the header flags hold nothing beyond the
+   * stack-only dump types (plus the AVX state bit dbghelp adds on its own).
+   * Dumps from before the stack-only change, which also hold the memory
+   * behind stack pointers, fail the check, as do truncated files and
+   * anything unreadable.
    * Used by the crash bundle to decide which dumps may be exported.
    *
    * @param path File to check.

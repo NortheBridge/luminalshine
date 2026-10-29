@@ -120,6 +120,7 @@ namespace crash_handler {
     constexpr auto kDumpType = static_cast<MINIDUMP_TYPE>(
       MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules
     );
+    static_assert(kDumpType == (MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules), "The crash bundle only accepts dumps of exactly this type (see is_stack_only_dump), so widening it must be deliberate.");
 
     struct DumpCallbackState {
       bool include_message;
@@ -363,7 +364,9 @@ namespace crash_handler {
     if (!in.read(reinterpret_cast<char *>(&header), sizeof(header))) {
       return false;
     }
-    return header.Signature == static_cast<ULONG32>(MINIDUMP_SIGNATURE) && (header.Flags & ~kAllowedFlags) == 0;
+    return header.Signature == static_cast<ULONG32>(MINIDUMP_SIGNATURE) &&
+           (header.Version & 0xFFFF) == static_cast<ULONG32>(MINIDUMP_VERSION) &&
+           (header.Flags & ~kAllowedFlags) == 0;
   }
 
   void init() {
@@ -382,8 +385,9 @@ namespace crash_handler {
                            << ": " << ec.message() << ". Minidumps will be unavailable (WER still applies).";
         dump_dir.clear();
       } else if (!platf::restrict_crash_dump_directory(dump_dir)) {
-        // Dumps hold process memory; without the restriction anyone who can
-        // read the folder could read them, so write none.
+        // Dump files are readable only by SYSTEM and Administrators; if the
+        // folder cannot be restricted, crash-handler dumps are disabled for
+        // this run.
         BOOST_LOG(warning) << "Crash handler: could not restrict access to dump directory " << dump_dir.string()
                            << ". Minidumps will be unavailable (WER still applies).";
         dump_dir.clear();

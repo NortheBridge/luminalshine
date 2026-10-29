@@ -30,8 +30,8 @@ namespace platf {
       L"(A;OICI;FRFX;;;BU)"    // BUILTIN\Users read+execute, inherit
       L"S:(ML;OICI;NW;;;SI)";  // mandatory label, System IL, no-write-up
 
-    // Crash dumps hold process memory: SYSTEM and Administrators only, and no
-    // label. OI+CI so dumps already in the folder and future ones inherit it.
+    // Crash dump folder: SYSTEM and Administrators only, no label. OI+CI so
+    // dumps already in the folder and future ones inherit it.
     constexpr auto kCrashDumpDirSddl = L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 
     struct security_descriptor_guard {
