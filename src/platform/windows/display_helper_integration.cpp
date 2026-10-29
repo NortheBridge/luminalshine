@@ -36,6 +36,7 @@
   #include "src/platform/windows/display_helper_coordinator.h"
   #include "src/platform/windows/display_helper_policy.h"
   #include "src/platform/windows/display_helper_request_helpers.h"
+  #include "src/platform/windows/display_helper_watchdog.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/ipc/display_settings_client.h"
@@ -1322,7 +1323,10 @@ namespace {
         (void) platf::display_helper_client::send_ping();
       }
 
-      const bool suspended = (rtsp_stream::session_count() == 0) && (proc::proc.running() > 0);
+      // Never reap here: reaping runs session::join(), whose last-session teardown stops this watchdog.
+      // proc.running() can still run terminate() on this thread once the app has exited, which also
+      // stops this watchdog; stop_watchdog_thread() detaches instead of self-joining in that case.
+      const bool suspended = (rtsp_stream::session_count_no_reap() == 0) && (proc::proc.running() > 0);
       const auto interval = suspended ? kSuspendedInterval : kActiveInterval;
       for (auto slept = 0ms; slept < interval && !st.stop_requested(); slept += 100ms) {
         std::this_thread::sleep_for(100ms);
@@ -2483,10 +2487,7 @@ namespace display_helper_integration {
     if (!g_watchdog_running.exchange(false, std::memory_order_acq_rel)) {
       return;  // not running
     }
-    if (g_watchdog_thread.joinable()) {
-      g_watchdog_thread.request_stop();
-      g_watchdog_thread.join();
-    }
+    stop_watchdog_thread(g_watchdog_thread);
     if (config::video.dd.config_revert_on_disconnect) {
       platf::display_helper_client::reset_connection();
     }
