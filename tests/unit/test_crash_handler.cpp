@@ -236,5 +236,29 @@ namespace {
     EXPECT_FALSE(contains(bytes, {message.get(), kTextLength}));
   }
 
+  TEST_F(CrashHandlerMinidump, WrittenDumpIsRecognisedAsStackOnly) {
+    // Whatever flags dbghelp adds on this machine, the dump the handler
+    // writes must pass the check the crash bundle relies on.
+    ASSERT_TRUE(write_dump(kTerminateCode));
+    EXPECT_TRUE(crash_handler::is_stack_only_dump(dump_path));
+  }
+
+  TEST_F(CrashHandlerMinidump, DumpWithHeapMemoryIsNotStackOnly) {
+    const HANDLE file = CreateFileW(dump_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE);
+    const auto dump_type = static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+    const BOOL written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, dump_type, nullptr, nullptr, nullptr);
+    CloseHandle(file);
+    ASSERT_TRUE(written);
+
+    EXPECT_FALSE(crash_handler::is_stack_only_dump(dump_path));
+  }
+
+  TEST_F(CrashHandlerMinidump, MissingFileIsNotStackOnly) {
+    std::error_code ec;
+    fs::remove(dump_path, ec);
+    EXPECT_FALSE(crash_handler::is_stack_only_dump(dump_path));
+  }
+
 #endif  // _WIN32
 }  // namespace

@@ -14,6 +14,7 @@
 #include <cstring>
 #include <cwchar>
 #include <exception>
+#include <fstream>
 #include <iterator>
 #include <string>
 #include <system_error>
@@ -349,6 +350,20 @@ namespace crash_handler {
              nullptr,
              &callback
            ) != FALSE;
+  }
+
+  bool is_stack_only_dump(const std::filesystem::path &path) {
+    // dbghelp ORs the AVX state bit into the flags of dumps it writes on CPUs
+    // that have it. It only adds registers to the thread contexts, so it is
+    // allowed next to the requested types.
+    constexpr std::uint64_t kAllowedFlags = static_cast<std::uint64_t>(kDumpType) | MiniDumpWithAvxXStateContext;
+
+    MINIDUMP_HEADER header {};
+    std::ifstream in {path, std::ios::binary};
+    if (!in.read(reinterpret_cast<char *>(&header), sizeof(header))) {
+      return false;
+    }
+    return header.Signature == static_cast<ULONG32>(MINIDUMP_SIGNATURE) && (header.Flags & ~kAllowedFlags) == 0;
   }
 
   void init() {

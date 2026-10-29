@@ -35,6 +35,7 @@
   #include "config_playnite.h"
   #include "confighttp.h"
   #include "confighttp_crash_dumps.h"
+  #include "crash_handler.h"
   #include "logging.h"
   #include "src/platform/windows/ipc/misc_utils.h"
   #include "src/platform/windows/playnite_integration.h"
@@ -1228,26 +1229,32 @@ namespace confighttp {
     std::wstring prefix;
   };
 
-  // Crash-dump filename prefixes WER uses for our shipped binaries. Both
-  // the post-26.05.1 `luminalshine_*` names AND the legacy `sunshine_*`
-  // names are listed so a bundle generated immediately after upgrade
-  // still collects pre-rename dumps if Windows hasn't yet rolled the WER
-  // archive. The collection logic dedupes by file path so a host that
-  // never had the legacy install just sees the legacy entries match zero
-  // files.
-  static const std::array<CrashDumpTarget, 8> kCrashDumpTargets = {{
-    {"luminalshine.exe", L"luminalshine.exe."},
+  // Crash-dump filename prefixes WER and LocalDumps use for our helper
+  // binaries. Both the post-26.05.1 `luminalshine_*` names AND the legacy
+  // `sunshine_*` names are listed so a bundle generated immediately after
+  // upgrade still collects pre-rename dumps if Windows hasn't yet rolled
+  // the WER archive. The collection logic dedupes by file path so a host
+  // that never had the legacy install just sees the legacy entries match
+  // zero files.
+  //
+  // The host process (luminalshine.exe, legacy sunshine.exe) is deliberately
+  // not listed: its dumps come from the crash handler folder, and the WER
+  // and LocalDumps dumps of it, which can hold the whole process memory,
+  // are not bundled.
+  static const std::array<CrashDumpTarget, 6> kCrashDumpTargets = {{
     {"luminalshine_display_helper.exe", L"luminalshine_display_helper.exe."},
     {"luminalshine_wgc_capture.exe", L"luminalshine_wgc_capture.exe."},
     {"luminalshine-playnite-launcher.exe", L"luminalshine-playnite-launcher.exe."},
     // Legacy names retained for backward-compat crash bundling.
-    {"sunshine.exe", L"sunshine.exe."},
     {"sunshine_display_helper.exe", L"sunshine_display_helper.exe."},
     {"sunshine_wgc_capture.exe", L"sunshine_wgc_capture.exe."},
     {"playnite-launcher.exe", L"playnite-launcher.exe."},
   }};
 
-  constexpr std::uint64_t kMinCrashDumpSunshineBytes = 10ull * 1024ull * 1024ull;
+  // The host process's dumps are written by the crash handler as
+  // `luminalshine-<date>-<time>-<pid>.dmp`.
+  constexpr std::wstring_view kCrashHandlerDumpPrefix = L"luminalshine-";
+
   constexpr std::uint64_t kCrashBundleMaxBytes = 30ull * 1024ull * 1024ull;
 
   static std::wstring to_lower_wstring(std::wstring value) {
@@ -1457,13 +1464,6 @@ namespace confighttp {
     return nullptr;
   }
 
-  static bool is_sunshine_process(const std::string &process_lower) {
-    // Match both the new and legacy main-host executable names so a crash
-    // dump generated against the pre-26.05.1 binary is still recognized
-    // as the primary process when the bundle is assembled after upgrade.
-    return process_lower == "luminalshine.exe" || process_lower == "sunshine.exe";
-  }
-
   static bool read_text_file_best_effort(const std::filesystem::path &p, std::string &out_utf8) {
     std::string raw;
     if (!read_file_if_exists(p, raw)) {
@@ -1623,15 +1623,8 @@ namespace confighttp {
     return sys_time + max_age >= now;
   }
 
-  static bool should_accept_dump(const CrashDumpInfo &info) {
-    if (is_sunshine_process(info.process)) {
-      return info.size >= kMinCrashDumpSunshineBytes;
-    }
-    return true;
-  }
-
   std::vector<CrashDumpInfo> find_recent_crash_dumps(
-    [[maybe_unused]] const std::vector<std::filesystem::path> &crash_handler_dirs,
+    const std::vector<std::filesystem::path> &crash_handler_dirs,
     const std::vector<std::filesystem::path> &local_dump_dirs,
     const std::vector<std::filesystem::path> &wer_report_dirs,
     std::chrono::hours max_age
@@ -1642,14 +1635,53 @@ namespace confighttp {
       if (!is_recent_dump(info.write_time, max_age)) {
         return;
       }
-      if (!should_accept_dump(info)) {
-        return;
-      }
       auto it = best.find(info.process);
       if (it == best.end() || info.write_time > it->second.write_time) {
         best[info.process] = std::move(info);
       }
     };
+
+    // Host process: only the crash handler's own stack-only dumps. WER and
+    // LocalDumps dumps of luminalshine.exe are not bundled (see
+    // kCrashDumpTargets), and older crash handler dumps that also hold heap
+    // memory fail the header check.
+    for (const auto &root : crash_handler_dirs) {
+      std::error_code ec {};
+      if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
+        continue;
+      }
+      for (const auto &entry : std::filesystem::directory_iterator(root, ec)) {
+        if (ec) {
+          break;
+        }
+        if (!entry.is_regular_file(ec)) {
+          continue;
+        }
+        const std::wstring lower = to_lower_wstring(entry.path().filename().wstring());
+        if (lower.rfind(kCrashHandlerDumpPrefix, 0) != 0 || to_lower_wstring(entry.path().extension().wstring()) != L".dmp") {
+          continue;
+        }
+        if (!crash_handler::is_stack_only_dump(entry.path())) {
+          continue;
+        }
+        auto write_time = entry.last_write_time(ec);
+        if (ec) {
+          ec.clear();
+          continue;
+        }
+        std::error_code size_ec {};
+        auto file_size_raw = std::filesystem::file_size(entry.path(), size_ec);
+        if (size_ec) {
+          continue;
+        }
+        CrashDumpInfo info;
+        info.process = "luminalshine.exe";
+        info.path = entry.path();
+        info.write_time = write_time;
+        info.size = static_cast<std::uint64_t>(file_size_raw);
+        consider(std::move(info));
+      }
+    }
 
     for (const auto &root : local_dump_dirs) {
       std::error_code ec {};
