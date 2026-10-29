@@ -23,6 +23,11 @@
 #include <cstddef>
 #include <filesystem>
 
+#ifdef _WIN32
+// Forward declaration so this header does not pull in <windows.h>.
+struct _EXCEPTION_POINTERS;
+#endif
+
 namespace crash_handler {
 
   /**
@@ -60,5 +65,34 @@ namespace crash_handler {
    * @return Number of files removed.
    */
   std::size_t prune_dumps(const std::filesystem::path &dir, std::size_t keep = 5);
+
+#ifdef _WIN32
+
+  /**
+   * @brief Write a minidump of the current process to an open file.
+   *
+   * Called by the exception filter once it has created the dump file. Nothing
+   * runs after the dump call, so GetLastError() still describes a failed write
+   * when this returns false. Exposed here so the unit tests can exercise it
+   * directly, like prune_dumps.
+   *
+   * @param file Writable file HANDLE.
+   * @param exception_info Exception to record; it must belong to the calling thread.
+   * @return True when the dump was written.
+   */
+  bool write_minidump(void *file, _EXCEPTION_POINTERS *exception_info);
+
+  /**
+   * @brief Store the message of the std::terminate exception for the dump.
+   *
+   * Clears the whole static message buffer, then copies @p message in,
+   * truncated and NUL-terminated. Passing nullptr only clears it. Exposed here
+   * so the unit tests can exercise the dump writer with and without a message.
+   *
+   * @param message Message text, or nullptr to clear.
+   */
+  void note_terminate_message(const char *message) noexcept;
+
+#endif
 
 }  // namespace crash_handler

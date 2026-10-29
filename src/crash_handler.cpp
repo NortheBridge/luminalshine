@@ -168,23 +168,7 @@ namespace crash_handler {
       BOOL dump_written = FALSE;
       const HANDLE dump_file = CreateFileW(g_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
       if (dump_file != INVALID_HANDLE_VALUE) {
-        MINIDUMP_EXCEPTION_INFORMATION dump_exception {};
-        dump_exception.ThreadId = GetCurrentThreadId();
-        dump_exception.ExceptionPointers = exception_info;
-        dump_exception.ClientPointers = FALSE;
-
-        const auto dump_type = static_cast<MINIDUMP_TYPE>(
-          MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules
-        );
-        dump_written = MiniDumpWriteDump(
-          GetCurrentProcess(),
-          GetCurrentProcessId(),
-          dump_file,
-          dump_type,
-          &dump_exception,
-          nullptr,
-          nullptr
-        );
+        dump_written = write_minidump(dump_file, exception_info);
         if (!dump_written) {
           dump_error = GetLastError();
         }
@@ -223,8 +207,7 @@ namespace crash_handler {
         } catch (const std::exception &e) {
           // Copy into a static buffer: the caught object dies with this
           // catch block, and everything past here should avoid the heap.
-          std::strncpy(g_what_buffer, e.what(), sizeof(g_what_buffer) - 1);
-          g_what_buffer[sizeof(g_what_buffer) - 1] = '\0';
+          note_terminate_message(e.what());
           description = g_what_buffer;
         } catch (...) {
           description = "non-standard exception (no what() available)";
@@ -283,6 +266,35 @@ namespace crash_handler {
 
   void note_exit_started() noexcept {
     g_exit_started.store(true, std::memory_order_release);
+  }
+
+  void note_terminate_message(const char *message) noexcept {
+    std::memset(g_what_buffer, 0, sizeof(g_what_buffer));
+    if (message != nullptr) {
+      std::strncpy(g_what_buffer, message, sizeof(g_what_buffer) - 1);
+    }
+  }
+
+  bool write_minidump(void *file, _EXCEPTION_POINTERS *exception_info) {
+    MINIDUMP_EXCEPTION_INFORMATION dump_exception {};
+    dump_exception.ThreadId = GetCurrentThreadId();
+    dump_exception.ExceptionPointers = exception_info;
+    dump_exception.ClientPointers = FALSE;
+
+    const auto dump_type = static_cast<MINIDUMP_TYPE>(
+      MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules
+    );
+    // Nothing may run after this call: the exception filter reads
+    // GetLastError() when it fails.
+    return MiniDumpWriteDump(
+             GetCurrentProcess(),
+             GetCurrentProcessId(),
+             static_cast<HANDLE>(file),
+             dump_type,
+             &dump_exception,
+             nullptr,
+             nullptr
+           ) != FALSE;
   }
 
   void init() {
