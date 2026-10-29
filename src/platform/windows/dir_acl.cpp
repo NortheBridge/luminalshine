@@ -113,4 +113,9 @@ namespace platf {
     return ok;
   }
 
+  bool restrict_crash_dump_directory(const std::filesystem::path &) {
+    // Not implemented yet.
+    return false;
+  }
+
 }  // namespace platf
