@@ -3130,7 +3130,11 @@ namespace stream {
         // fired while the cleanup's REVERT wait and recovery ladder (helper
         // restart, database restore, physical fallback) were still running, so
         // the host restarted instead of recovering in-process (issue #198).
-        advance_phase(phase_e::display_cleanup, teardown::display_cleanup_deadline(platf::virtual_display_cleanup::worst_case_duration()));
+        // Only the final branch below calls run(), and it restores the display
+        // only when revert_display_config is set; every other branch removes at
+        // most the virtual display and keeps the 30 s floor.
+        const bool display_restore_runs = revert_display_config && !webrtc_active;
+        advance_phase(phase_e::display_cleanup, teardown::display_cleanup_deadline(platf::virtual_display_cleanup::worst_case_duration(display_restore_runs)));
         if (webrtc_active) {
           BOOST_LOG(debug) << "Display cleanup: WebRTC session is still active; skipping RTSP-triggered teardown.";
         } else if (delay_virtual_display_cleanup_due_to_pause) {
