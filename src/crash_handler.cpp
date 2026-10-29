@@ -27,6 +27,7 @@
 // clang-format on
 
   #include "platform/common.h"
+  #include "platform/windows/dir_acl.h"
 #endif
 
 namespace crash_handler {
@@ -364,6 +365,12 @@ namespace crash_handler {
       if (ec) {
         BOOST_LOG(warning) << "Crash handler: could not create dump directory " << dump_dir.string()
                            << ": " << ec.message() << ". Minidumps will be unavailable (WER still applies).";
+        dump_dir.clear();
+      } else if (!platf::restrict_crash_dump_directory(dump_dir)) {
+        // Dumps hold process memory; without the restriction anyone who can
+        // read the folder could read them, so write none.
+        BOOST_LOG(warning) << "Crash handler: could not restrict access to dump directory " << dump_dir.string()
+                           << ". Minidumps will be unavailable (WER still applies).";
         dump_dir.clear();
       }
     } catch (const std::exception &e) {

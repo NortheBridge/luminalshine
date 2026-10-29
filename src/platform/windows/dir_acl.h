@@ -1,7 +1,8 @@
 /**
  * @file src/platform/windows/dir_acl.h
  * @brief Restrictive DACL + Mandatory Integrity Control hardening for the
- *        config directory under %ProgramData%\LuminalShine\.
+ *        config directory under %ProgramData%\LuminalShine\, and the DACL
+ *        restriction for the crash dump folder.
  */
 #pragma once
 

@@ -37,9 +37,10 @@ namespace crash_handler {
    * Call once, early in main(), after logging is initialised — the
    * handlers emit through BOOST_LOG(fatal) so a crash before logging is
    * up would only reach WER anyway. Creates `<appdata>/crashdumps/`,
-   * prunes it to the newest dumps, prebuilds the dump directory path
-   * into a static buffer (so the exception filter itself avoids heap
-   * allocation), then installs SetUnhandledExceptionFilter and
+   * restricts it to SYSTEM and Administrators (if that fails, no minidumps
+   * are written), prunes it to the newest dumps, prebuilds the dump
+   * directory path into a static buffer (so the exception filter itself
+   * avoids heap allocation), then installs SetUnhandledExceptionFilter and
    * std::set_terminate.
    */
   void init();
