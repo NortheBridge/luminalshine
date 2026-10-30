@@ -18,17 +18,21 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace platf::video_worker::ring_consumers {
 
   /**
-   * How long a worker waits for a retiring holder to release its ring.
+   * How long a worker waits for a retiring holder of another client to release its ring.
    *
-   * Holder teardown is bounded by the parent: the worker is asked to shut down
-   * and given 2 s, then terminated and given 0.5 s more, and then the pipe
-   * reader is joined. The budget sits above that worst case so a quick
-   * reconnect of the same client still lands on the ring instead of WGC.
+   * Holder teardown is bounded by the parent. In steady state the worker is
+   * asked to shut down and given 2 s, then terminated and given 0.5 s more,
+   * and then the pipe reader is joined. A worker that failed at startup is
+   * terminated and given 3 s, then the display health is probed. The budget
+   * sits above both. A reconnect of the holder's own client does not wait: it
+   * takes the ring over at once.
    */
   constexpr std::chrono::milliseconds release_wait_budget {5000};
 
@@ -57,7 +61,8 @@ namespace platf::video_worker::ring_consumers {
 
     ring_lease_t(ring_lease_t &&other) noexcept:
         registry_ {std::exchange(other.registry_, nullptr)},
-        session_id_ {other.session_id_} {
+        session_id_ {other.session_id_},
+        token_ {other.token_} {
     }
 
     ring_lease_t &operator=(ring_lease_t &&other) noexcept {
@@ -65,6 +70,7 @@ namespace platf::video_worker::ring_consumers {
         reset();
         registry_ = std::exchange(other.registry_, nullptr);
         session_id_ = other.session_id_;
+        token_ = other.token_;
       }
       return *this;
     }
@@ -83,13 +89,15 @@ namespace platf::video_worker::ring_consumers {
   private:
     friend class registry_t;
 
-    ring_lease_t(registry_t *registry, std::uint64_t session_id) noexcept:
+    ring_lease_t(registry_t *registry, std::uint64_t session_id, std::uint64_t token) noexcept:
         registry_ {registry},
-        session_id_ {session_id} {
+        session_id_ {session_id},
+        token_ {token} {
     }
 
     registry_t *registry_ = nullptr;
     std::uint64_t session_id_ = 0;
+    std::uint64_t token_ = 0;  ///< Identifies this holder, so a superseded lease cannot release its successor.
   };
 
   /**
@@ -109,7 +117,11 @@ namespace platf::video_worker::ring_consumers {
     /**
      * Decide, atomically, whether the caller may consume the ring of @p session_id.
      *
-     * - No holder: claim, and the caller's lease is recorded with @p retiring.
+     * - No holder: claim, and the caller is recorded as the holder.
+     * - Holder of the same, identified client: claim. The caller takes the ring
+     *   over, because a client that reconnects after dropping without a clean
+     *   disconnect leaves a session that is not retiring until it times out.
+     *   The superseded lease's release then leaves the new holder in place.
      * - Holder that is retiring and @p waited is under release_wait_budget:
      *   wait_for_release. The caller polls again with its updated @p waited.
      * - Otherwise: use_safe_capture.
@@ -121,15 +133,24 @@ namespace platf::video_worker::ring_consumers {
      *        never reports retiring.
      * @param waited How long the caller has already waited. Passed in so the
      *        policy needs no clock.
+     * @param client_id The streaming client's identity. Empty when unknown; an
+     *        unknown client never takes a ring over and is never taken over.
      */
-    acquire_result_t try_acquire(std::uint64_t session_id, std::function<bool()> retiring, std::chrono::milliseconds waited) {
+    acquire_result_t try_acquire(
+      std::uint64_t session_id,
+      std::function<bool()> retiring,
+      std::chrono::milliseconds waited,
+      std::string_view client_id = {}
+    ) {
       std::lock_guard lock {mutex_};
       const auto holder = holders_.find(session_id);
-      if (holder == holders_.end()) {
-        holders_.emplace(session_id, std::move(retiring));
-        return {decision_e::claim, ring_lease_t {this, session_id}};
+      const bool same_client = holder != holders_.end() && !client_id.empty() && holder->second.client_id == client_id;
+      if (holder == holders_.end() || same_client) {
+        const auto token = ++last_token_;
+        holders_.insert_or_assign(session_id, holder_t {std::string {client_id}, std::move(retiring), token});
+        return {decision_e::claim, ring_lease_t {this, session_id, token}};
       }
-      const bool holder_retiring = holder->second && holder->second();
+      const bool holder_retiring = holder->second.retiring && holder->second.retiring();
       if (holder_retiring && waited < release_wait_budget) {
         return {decision_e::wait_for_release, {}};
       }
@@ -144,18 +165,28 @@ namespace platf::video_worker::ring_consumers {
   private:
     friend class ring_lease_t;
 
-    void release(std::uint64_t session_id) noexcept {
+    struct holder_t {
+      std::string client_id;
+      std::function<bool()> retiring;
+      std::uint64_t token;
+    };
+
+    void release(std::uint64_t session_id, std::uint64_t token) noexcept {
       std::lock_guard lock {mutex_};
-      holders_.erase(session_id);
+      const auto holder = holders_.find(session_id);
+      if (holder != holders_.end() && holder->second.token == token) {
+        holders_.erase(holder);
+      }
     }
 
     mutable std::mutex mutex_;
-    std::map<std::uint64_t, std::function<bool()>> holders_;
+    std::map<std::uint64_t, holder_t> holders_;
+    std::uint64_t last_token_ = 0;
   };
 
   inline void ring_lease_t::reset() noexcept {
     if (registry_ != nullptr) {
-      std::exchange(registry_, nullptr)->release(session_id_);
+      std::exchange(registry_, nullptr)->release(session_id_, token_);
     }
   }
 
