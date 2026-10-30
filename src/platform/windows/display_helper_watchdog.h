@@ -52,6 +52,16 @@ namespace display_helper_integration {
      * @return true when a thread was running and this call stopped it.
      */
     bool stop() {
+      return stop([] {
+      });
+    }
+
+    /**
+     * @brief Stop the running thread, if any, then run cleanup under the slot lock.
+     * @return true when a thread was running and this call stopped it.
+     */
+    template<typename Cleanup>
+    bool stop(Cleanup &&cleanup) {
       std::jthread thread;
       {
         std::lock_guard lock(mutex_);
@@ -61,6 +71,8 @@ namespace display_helper_integration {
         thread = std::move(thread_);
       }
       stop_watchdog_thread(thread);
+      std::lock_guard lock(mutex_);
+      std::forward<Cleanup>(cleanup)();
       return true;
     }
 
