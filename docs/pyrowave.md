@@ -63,8 +63,8 @@ capture source fails setup rather than falsely labelling SDR pixels as HDR.
 `pyrowave_bitrate_mbps` is a ceiling, not a fixed rate. The client's bitrate
 request is reduced for base FEC, audio and packet overhead, as for the other
 codecs, and the session targets the lower of that value and the host setting.
-A client request below 1 Mbps targets 1 Mbps; a client that requests no
-bitrate gets the host setting. The host logs the decision once per session as
+When that adjusted value is below 1 Mbps, the target is 1 Mbps; a client that
+requests no bitrate gets the host setting. The host logs the decision once per session as
 `PyroWave bitrate: client=… host=… target=…`.
 
 The target describes compressed video, not total link traffic. FEC/audio/header
