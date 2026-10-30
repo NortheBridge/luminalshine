@@ -42,6 +42,7 @@
 #include "display_helper_integration.h"
 #include "file_handler.h"
 #include "globals.h"
+#include "host_capabilities.h"
 #include "httpcommon.h"
 #include "logging.h"
 #include "network.h"
@@ -2506,6 +2507,15 @@ namespace nvhttp {
 
   void put_luminalshine_version(pt::ptree &tree) {
     tree.put("root.LuminalShineVersion", PROJECT_VERSION);
+    tree.put("root.LuminalShineApiLevel", host_capabilities::api_level);
+
+    // Same condition as the PyroWave bits in ServerCodecModeSupport; both are
+    // snapshots, so this never probes Vulkan on the io thread.
+    const host_capabilities::flags_t flags {
+      .pyrowave = config::pyrowave.enabled && pyrowave::available(),
+    };
+    // Always present, empty when the host reports no capability.
+    tree.put("root.LuminalShineCapabilities", host_capabilities::wire_list(flags));
   }
 
   template<class T>
@@ -2611,7 +2621,8 @@ namespace nvhttp {
     tree.put("root.currentgame", current_appid);
     tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
 
-    // Only report the LuminalShine release to paired clients over HTTPS.
+    // Only report the LuminalShine release, API level and capabilities to
+    // paired clients over HTTPS.
     if constexpr (std::is_same_v<SunshineHTTPS, T>) {
       put_luminalshine_version(tree);
     }
