@@ -164,6 +164,23 @@ namespace {
     EXPECT_TRUE(reconnect.lease);
   }
 
+  TEST(VgdRingConsumers, SameClientWaitsForItsRetiringSessionThenTakesOver) {
+    registry_t registry;
+    bool retiring = false;
+    auto old_session = registry.try_acquire(ring_a, [&] { return retiring; }, 0ms, "client-a");
+    ASSERT_EQ(old_session.decision, decision_e::claim);
+
+    // A clean quit and relaunch: the old worker is still being reaped. Waiting for
+    // it avoids splitting the first frames between the dying and the new worker.
+    retiring = true;
+    EXPECT_EQ(registry.try_acquire(ring_a, [] { return false; }, 100ms, "client-a").decision, decision_e::wait_for_release);
+
+    // If the old worker outlives the budget, the reconnect still takes the ring over.
+    auto reconnect = registry.try_acquire(ring_a, [] { return false; }, release_wait_budget, "client-a");
+    EXPECT_EQ(reconnect.decision, decision_e::claim);
+    EXPECT_TRUE(reconnect.lease);
+  }
+
   TEST(VgdRingConsumers, SupersededLeaseDoesNotReleaseTheNewHolder) {
     registry_t registry;
     auto stale = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-a");
