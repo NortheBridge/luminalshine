@@ -8,7 +8,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <set>
+#include <map>
+#include <optional>
 
 namespace stream::control_termination {
 
@@ -70,11 +71,20 @@ namespace stream::control_termination {
    * detached slot means the slot was reset without one and reused: the stale entry is retired
    * and the event handled normally.
    */
-  template<class Peer>
+  template<class Peer, class TimePoint>
   class detached_peers_t {
   public:
-    void add(Peer peer) {
-      _peers.insert(peer);
+    void add(Peer peer, TimePoint since) {
+      _peers.insert_or_assign(peer, since);
+    }
+
+    /// When @p peer was detached, if it still is.
+    std::optional<TimePoint> detached_since(Peer peer) const {
+      auto it = _peers.find(peer);
+      if (it == _peers.end()) {
+        return std::nullopt;
+      }
+      return it->second;
     }
 
     /// Whether the event belongs to a detached peer and must be dropped.
@@ -96,7 +106,7 @@ namespace stream::control_termination {
     }
 
   private:
-    std::set<Peer> _peers;
+    std::map<Peer, TimePoint> _peers;
   };
 
 }  // namespace stream::control_termination

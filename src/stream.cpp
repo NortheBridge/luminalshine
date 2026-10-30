@@ -410,7 +410,7 @@ namespace stream {
 
     // Peers of erased sessions still in a graceful disconnect. Only the control broadcast
     // thread touches it (iterate and its stopping-session cleanup), so it needs no lock.
-    control_termination::detached_peers_t<net::peer_t> _detached_peers;
+    control_termination::detached_peers_t<net::peer_t, std::chrono::steady_clock::time_point> _detached_peers;
 
     ENetAddress _addr;
     net::host_t _host;
@@ -919,9 +919,15 @@ namespace stream {
       const auto peer_event = event.type == ENET_EVENT_TYPE_CONNECT ? control_termination::peer_event_e::connect :
                               event.type == ENET_EVENT_TYPE_RECEIVE ? control_termination::peer_event_e::receive :
                                                                       control_termination::peer_event_e::disconnect;
+      const auto detached_since = _detached_peers.detached_since(event.peer);
       if (_detached_peers.consume(event.peer, peer_event)) {
         if (event.type == ENET_EVENT_TYPE_RECEIVE) {
           enet_packet_destroy(event.packet);
+        } else {
+          // About one RTT means the client acked the termination; seconds mean an ENet timeout.
+          BOOST_LOG(debug) << "Detached control peer closed: peer=["sv << platf::from_sockaddr((sockaddr *) &event.peer->address.address)
+                           << "] after "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - *detached_since).count()
+                           << " ms"sv;
         }
         return;
       }
@@ -1618,8 +1624,11 @@ namespace stream {
               // A host-initiated stop (/cancel, a Web UI disconnect, RTSP teardown) tells a
               // still-connected client it ended on purpose; otherwise the client reports the
               // disconnect as an error. The client's ENet drops undispatched packets when a
-              // DISCONNECT arrives, so the disconnect waits until the termination is acked. The
-              // peer stays detached until ENet reports its DISCONNECT; teardown does not wait.
+              // DISCONNECT arrives, so enet_peer_disconnect_later asks ENet to send it only after
+              // the termination is acked; the peer stays detached until ENet reports its DISCONNECT.
+              // Teardown does not wait: when the last session ends, the host can be destroyed
+              // before the ack, leaving only the flushed datagram. Like the shutdown loop this is
+              // best effort, and still strictly better than enet_peer_disconnect_now.
               const auto reason = session->stop_reason.load(std::memory_order_acquire);
               const bool peer_connected = owns_peer && session->control.peer->state == ENET_PEER_STATE_CONNECTED;
               bool termination_queued = false;
@@ -1633,7 +1642,7 @@ namespace stream {
               if (termination_queued) {
                 BOOST_LOG(info) << "Disconnecting control peer of stopping session once the termination is acked: peer="sv
                                 << session->control.peer_address << ' ' << session_label(*session);
-                server->_detached_peers.add(session->control.peer);
+                server->_detached_peers.add(session->control.peer, std::chrono::steady_clock::now());
                 enet_peer_disconnect_later(session->control.peer, 0);
                 server->flush();
               } else {

@@ -6,6 +6,7 @@
 #include "src/control_termination_policy.h"
 
 #include <gtest/gtest.h>
+#include <optional>
 #include <set>
 
 namespace {
@@ -79,8 +80,8 @@ namespace {
   using stream::control_termination::peer_event_e;
 
   TEST(ControlTerminationDetachedPeers, UnknownPeerPassesThrough) {
-    detached_peers_t<int> detached;
-    detached.add(1);
+    detached_peers_t<int, int> detached;
+    detached.add(1, 10);
 
     EXPECT_FALSE(detached.consume(2, peer_event_e::connect));
     EXPECT_FALSE(detached.consume(2, peer_event_e::receive));
@@ -89,32 +90,42 @@ namespace {
   }
 
   TEST(ControlTerminationDetachedPeers, ReceiveIsConsumedAndKeepsPeer) {
-    detached_peers_t<int> detached;
-    detached.add(1);
+    detached_peers_t<int, int> detached;
+    detached.add(1, 10);
 
     EXPECT_TRUE(detached.consume(1, peer_event_e::receive));
     EXPECT_EQ(detached.size(), 1u);
   }
 
   TEST(ControlTerminationDetachedPeers, DisconnectIsConsumedAndRetiresPeer) {
-    detached_peers_t<int> detached;
-    detached.add(1);
+    detached_peers_t<int, int> detached;
+    detached.add(1, 10);
 
     EXPECT_TRUE(detached.consume(1, peer_event_e::disconnect));
     EXPECT_EQ(detached.size(), 0u);
   }
 
   TEST(ControlTerminationDetachedPeers, ConnectOnDetachedSlotPassesThroughAndRetiresPeer) {
-    detached_peers_t<int> detached;
-    detached.add(1);
+    detached_peers_t<int, int> detached;
+    detached.add(1, 10);
 
     EXPECT_FALSE(detached.consume(1, peer_event_e::connect));
     EXPECT_EQ(detached.size(), 0u);
   }
 
+  TEST(ControlTerminationDetachedPeers, DetachedSinceReportsDetachTimeUntilRetired) {
+    detached_peers_t<int, int> detached;
+    detached.add(1, 10);
+
+    EXPECT_EQ(detached.detached_since(1), 10);
+    EXPECT_EQ(detached.detached_since(2), std::nullopt);
+    ASSERT_TRUE(detached.consume(1, peer_event_e::disconnect));
+    EXPECT_EQ(detached.detached_since(1), std::nullopt);
+  }
+
   TEST(ControlTerminationDetachedPeers, ReusedSlotAfterDisconnectPassesThrough) {
-    detached_peers_t<int> detached;
-    detached.add(1);
+    detached_peers_t<int, int> detached;
+    detached.add(1, 10);
     ASSERT_TRUE(detached.consume(1, peer_event_e::disconnect));
 
     EXPECT_FALSE(detached.consume(1, peer_event_e::connect));
