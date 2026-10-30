@@ -17,6 +17,27 @@ namespace pyrowave {
   inline constexpr std::int64_t kMinClientBitrateKbps = 1'000;
 
   /**
+   * @brief Choose the client's video bitrate that caps a PyroWave session.
+   *
+   * A positive configuredBitrateKbps is the client's selection; its adjusted
+   * form has base FEC, audio and overhead removed, which PyroWave adds back on
+   * top of its compressed-video target. When that adjustment leaves nothing,
+   * the request still stands and selects the floor. Without a positive
+   * configured value, a positive maximumBitrateKbps is used as sent.
+   *
+   * @param raw_configured_kbps configuredBitrateKbps as the client sent it.
+   * @param adjusted_configured_kbps configuredBitrateKbps after the adjustment.
+   * @param maximum_kbps maximumBitrateKbps as the client sent it.
+   * @return The client's video bitrate in kbps, or 0 when the client sent none.
+   */
+  constexpr std::int64_t client_video_bitrate_kbps(std::int64_t raw_configured_kbps, std::int64_t adjusted_configured_kbps, std::int64_t maximum_kbps) {
+    if (raw_configured_kbps > 0) {
+      return adjusted_configured_kbps > 0 ? adjusted_configured_kbps : kMinClientBitrateKbps;
+    }
+    return maximum_kbps > 0 ? maximum_kbps : 0;
+  }
+
+  /**
    * @brief Choose a PyroWave session's compressed-video target.
    *
    * The host setting is the ceiling. A client that sends a positive bitrate

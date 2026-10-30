@@ -64,8 +64,9 @@ capture source fails setup rather than falsely labelling SDR pixels as HDR.
 request is reduced for base FEC, audio and packet overhead, as for the other
 codecs, and the session targets the lower of that value and the host setting.
 When that adjusted value is below 1 Mbps, the target is 1 Mbps; a client that
-requests no bitrate gets the host setting. The host logs the decision once per session as
-`PyroWave bitrate: client=… host=… target=…`.
+requests no bitrate gets the host setting. The host logs the decision once per
+session as `PyroWave bitrate: client_requested=… client_adjusted=… host=…
+target=…`.
 
 The target describes compressed video, not total link traffic. FEC/audio/header
 overhead requires additional capacity. Use a network with sufficient headroom.

@@ -1695,12 +1695,18 @@ namespace rtsp_stream {
       // The host setting is the ceiling; a client bitrate lowers it. Use the
       // video bitrate derived above: PyroWave adds the same base FEC and
       // headers on top of it, so the wire stays near what the client asked for.
-      // Prefer the unwrapped 64-bit configured value over the int-cast copy.
-      const std::int64_t client_bitrate_kbps = configuredBitrateKbps ? configuredBitrateKbps : config.monitor.bitrate;
+      // Re-read the raw fields as 64-bit values; both exist (defaulted or
+      // required above) and the int-cast copies may have wrapped.
+      const auto requested_configured_kbps = util::from_view(args.at("x-ml-video.configuredBitrateKbps"sv));
+      const auto requested_maximum_kbps = util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
+      const auto client_bitrate_kbps = pyrowave::client_video_bitrate_kbps(
+        requested_configured_kbps, configuredBitrateKbps, requested_maximum_kbps);
       const auto host_bitrate_kbps = static_cast<std::int64_t>(pyrowave::bitrate_kbps(config::pyrowave.bitrate_mbps));
       config.monitor.bitrate = static_cast<int>(
         pyrowave::session_bitrate_kbps(client_bitrate_kbps, host_bitrate_kbps, pyrowave::kMinClientBitrateKbps));
-      BOOST_LOG(info) << "PyroWave bitrate: client=" << client_bitrate_kbps << " Kbps host=" << host_bitrate_kbps
+      BOOST_LOG(info) << "PyroWave bitrate: client_requested="
+                      << (requested_configured_kbps > 0 ? requested_configured_kbps : requested_maximum_kbps)
+                      << " Kbps client_adjusted=" << client_bitrate_kbps << " Kbps host=" << host_bitrate_kbps
                       << " Kbps target=" << config.monitor.bitrate << " Kbps";
       config.monitor.pyrowave_packet_size = config.packetsize;
       config.monitor.pyrowave_quality_bias = config::pyrowave.quality_bias;

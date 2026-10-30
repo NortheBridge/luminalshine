@@ -598,7 +598,7 @@
     "prefer_10bit_sdr_desc": "Capture and encode SDR sessions in 10-bit when the client and encoder negotiated HEVC/AV1 Main10 support (HDR stays off). Warning: May cause crashes on client devices with older GPUs that don't support HEVC 10-bit decoding.",
     "prefer_10bit_sdr_follow_global": "Following the global 10-bit SDR setting.",
     "pyrowave_bitrate_mbps": "PyroWave bitrate (Mbps)",
-    "pyrowave_bitrate_mbps_desc": "Default: 700 Mbps of compressed video. 0 uses the 700 Mbps automatic default; maximum setting: 10,000 Mbps. FEC, audio and network headers add traffic. Modes exceeding the current client transport frame limit are rejected.",
+    "pyrowave_bitrate_mbps_desc": "Ceiling for compressed video. Default: 700 Mbps. 0 uses the 700 Mbps automatic default; maximum setting: 10,000 Mbps. When the client requests a lower bitrate, the client's request wins. FEC, audio and network headers add traffic. Modes exceeding the current client transport frame limit are rejected.",
     "pyrowave_enabled": "Enable experimental PyroWave",
     "pyrowave_enabled_desc": "Requires a PyroWave-enabled build and compatible Moonlight client. Probes SDR/HDR10 at 4:2:0 and 4:4:4 during startup; restart LuminalShine after enabling.",
     "pyrowave_quality_bias": "PyroWave quality bias",

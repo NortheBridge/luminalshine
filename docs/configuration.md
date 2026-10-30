@@ -2624,8 +2624,9 @@ PyroWave compressed video target in decimal Mbps. Default: `700`. Range:
 applies only to PyroWave and replaces the legacy `max_bitrate` setting there.
 It is the ceiling: when the client requests a bitrate, the session targets the
 lower of the two. The client's request is first reduced by the usual
-FEC/audio/overhead adjustment, and an adjusted value below 1 Mbps targets 1 Mbps. A client that requests no bitrate
-gets this target. Changes apply at the next session.
+FEC/audio/overhead adjustment, and an adjusted value below 1 Mbps targets
+1 Mbps. A client that requests no bitrate gets this target. Changes apply at
+the next session.
 FEC, audio, encryption and packet headers increase network traffic beyond this
 video target. The current transport cannot carry every bitrate/FPS combination;
 requests exceeding its frame budget are rejected before starting capture.
