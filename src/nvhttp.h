@@ -22,6 +22,7 @@
 
 // local includes
 #include "crypto.h"
+#include "pairing_retry_policy.h"
 #include "thread_safe.h"
 
 /**
@@ -260,6 +261,7 @@ namespace nvhttp {
       std::chrono::steady_clock::time_point now,
       PAIR_PHASE last_phase
     ) noexcept;
+    stored_phase_e stored_pairing_phase(PAIR_PHASE last_phase) noexcept;
     bool phase_one_retry_matches(
       std::string_view expected_address,
       std::string_view expected_certificate,

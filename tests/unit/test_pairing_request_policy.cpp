@@ -46,6 +46,20 @@ namespace {
     }
   }
 
+  TEST(PairingRequestPolicy, StoredPairingPhaseSeparatesAnUnansweredPhaseOneFromLaterPhases) {
+    using nvhttp::pairing_detail::stored_pairing_phase;
+    using nvhttp::pairing_detail::stored_phase_e;
+
+    // A same-salt retransmission is only idempotent while the stored phase is
+    // phase_one_submitted. Mapping GETSERVERCERT anywhere else would turn every
+    // retransmission into a replaced exchange.
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::NONE), stored_phase_e::awaiting_pin);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::GETSERVERCERT), stored_phase_e::phase_one_submitted);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::CLIENTCHALLENGE), stored_phase_e::later);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::SERVERCHALLENGERESP), stored_phase_e::later);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::CLIENTPAIRINGSECRET), stored_phase_e::later);
+  }
+
   TEST(PairingRequestPolicy, PendingPhaseOneRetryAllowsFreshSaltForSamePeerAndCertificate) {
     constexpr std::string_view address = "192.0.2.10";
     constexpr std::string_view certificate = "client-certificate";

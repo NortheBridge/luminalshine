@@ -1737,6 +1737,17 @@ namespace nvhttp {
       return now - updated_at >= session_ttl(last_phase != PAIR_PHASE::NONE);
     }
 
+    stored_phase_e stored_pairing_phase(const PAIR_PHASE last_phase) noexcept {
+      switch (last_phase) {
+        case PAIR_PHASE::NONE:
+          return stored_phase_e::awaiting_pin;
+        case PAIR_PHASE::GETSERVERCERT:
+          return stored_phase_e::phase_one_submitted;
+        default:
+          return stored_phase_e::later;
+      }
+    }
+
     bool phase_one_retry_matches(
       const std::string_view expected_address,
       const std::string_view expected_certificate,
@@ -1928,17 +1939,6 @@ namespace nvhttp {
 
     void finish_expired_pairing_responses(std::vector<pair_response_t> &responses) {
       finish_pairing_responses(responses, "Pairing request expired", 408);
-    }
-
-    pairing_detail::stored_phase_e stored_pairing_phase(const PAIR_PHASE last_phase) noexcept {
-      switch (last_phase) {
-        case PAIR_PHASE::NONE:
-          return pairing_detail::stored_phase_e::awaiting_pin;
-        case PAIR_PHASE::GETSERVERCERT:
-          return pairing_detail::stored_phase_e::phase_one_submitted;
-        default:
-          return pairing_detail::stored_phase_e::later;
-      }
     }
 
     pairing_request_t pairing_request_from_session(
@@ -2240,7 +2240,7 @@ namespace nvhttp {
           const auto &existing = sess_it->second;
           action = pairing_detail::phase_one_action({
             .has_session = true,
-            .stored_phase = stored_pairing_phase(existing.last_phase),
+            .stored_phase = pairing_detail::stored_pairing_phase(existing.last_phase),
             .stored_address = existing.client_address,
             .stored_certificate = existing.client.cert,
             .stored_salt = existing.async_insert_pin.salt,
