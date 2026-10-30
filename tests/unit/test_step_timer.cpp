@@ -5,9 +5,8 @@
 
 #include "src/step_timer.h"
 
-#include <gtest/gtest.h>
-
 #include <chrono>
+#include <gtest/gtest.h>
 
 namespace {
 
@@ -21,7 +20,6 @@ namespace {
     using rep = duration::rep;
     using period = duration::period;
     using time_point = std::chrono::time_point<fake_clock_t>;
-    static constexpr bool is_steady = true;
 
     static inline time_point current {};
 
