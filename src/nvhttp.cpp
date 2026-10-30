@@ -874,8 +874,7 @@ namespace nvhttp {
       }
 
       apply_virtual_display_request(request_virtual_display);
-      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty() &&
-          virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
+      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty() && virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
         config::set_runtime_output_name_override(launch_session->virtual_display_device_id);
         pending_output_override = launch_session->virtual_display_device_id;
       }
