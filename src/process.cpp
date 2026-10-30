@@ -1818,6 +1818,7 @@ namespace proc {
     _deferred_launch = false;
     _lossless_should_start_support = false;
     stop_lossless_scaling_support();
+    terminate_timer.record_since("lossless", step_started);
 #endif
     // For Playnite-managed apps, request a graceful stop via Playnite first
 #ifdef _WIN32
@@ -1845,10 +1846,14 @@ namespace proc {
         }
       } catch (...) {}
       // Stop the IPC client since the Playnite session is ending
+      step_started = terminate_timer.now();
       platf::playnite::stop_client_for_session();
+      terminate_timer.record_since("playnite_ipc", step_started);
     } else if (had_active_app && _app.playnite_fullscreen) {
       // For fullscreen mode, also stop the IPC client
+      step_started = terminate_timer.now();
       platf::playnite::stop_client_for_session();
+      terminate_timer.record_since("playnite_ipc", step_started);
     }
 #endif
     // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)

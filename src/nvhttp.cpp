@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 // lib includes
@@ -3566,12 +3567,14 @@ namespace nvhttp {
     revert_display_configuration = false;
   }
 
-  void cancel(resp_https_t response, req_https_t request) {
+  void cancel(resp_https_t response, req_https_t request, std::chrono::steady_clock::time_point queued_at) {
     print_req<SunshineHTTPS>(request);
 
     // Time each teardown step: the response is written only after all of them,
     // so the completion line below shows which step held the client's quit.
-    util::step_timer_t cancel_timer;
+    // The total starts when the request was queued behind /launch and /resume.
+    util::step_timer_t cancel_timer {queued_at};
+    cancel_timer.record_since("queue", queued_at);
     auto step_started = cancel_timer.now();
 
     // Keep browser admission closed across the entire destructive cancel
@@ -3650,8 +3653,11 @@ namespace nvhttp {
       }
     }
 
+    cancel_timer.record_since("setup", step_started);
+
     // One completion line on every path, written just before the response.
-    std::string_view cancel_outcome = "done";
+    // Stays "incomplete" if a step throws before the normal path finishes.
+    std::string_view cancel_outcome = "incomplete";
     auto cancel_summary_guard = util::fail_guard([&]() {
       try {
         BOOST_LOG(info) << std::format(
@@ -3726,7 +3732,6 @@ namespace nvhttp {
       rtsp_stream::session_count() == 0;
     if (preserve_deferred_launch) {
       BOOST_LOG(info) << "Cancel requested while app launch is deferred; preserving deferred app and virtual display state.";
-      cancel_outcome = "deferred_launch_preserved";
     }
 #else
     constexpr bool preserve_deferred_launch = false;
@@ -3767,6 +3772,7 @@ namespace nvhttp {
     } else {
       cancel_timer.skip("deferred_cleanup");
     }
+    cancel_outcome = preserve_deferred_launch ? "deferred_launch_preserved" : "done";
   }
 
   void appasset(resp_https_t response, req_https_t request) {
@@ -3801,14 +3807,23 @@ namespace nvhttp {
      * @param name The route name, for the log.
      * @param response The response, written by @p handler.
      * @param request The request.
-     * @param handler Called as `handler(response, request)`.
+     * @param handler Called as `handler(response, request, queued_at)` when it takes the time the
+     *                request was queued (to report its own queue wait), else as `handler(response, request)`.
      */
     template<class Handler>
     void run_on_launch_worker(util::serial_executor_t &worker, std::string_view name, resp_https_t response, req_https_t request, Handler handler) {
-      const bool queued = worker.post([name, response, request, handler = std::move(handler)]() {
+      const auto queued_at = std::chrono::steady_clock::now();
+      const bool queued = worker.post([name, response, request, queued_at, handler = std::move(handler)]() {
         // Tasks must not throw; Simple-Web-Server used to swallow handler exceptions on the io thread.
         try {
-          handler(response, request);
+          if constexpr (std::is_invocable_v<const Handler &, resp_https_t, req_https_t, std::chrono::steady_clock::time_point>) {
+            handler(response, request, queued_at);
+          } else {
+            BOOST_LOG(debug) << "/"sv << name << " waited "sv
+                             << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - queued_at).count()
+                             << " ms in the launch queue"sv;
+            handler(response, request);
+          }
         } catch (const std::exception &err) {
           BOOST_LOG(error) << "/"sv << name << " handler terminated by exception: "sv << err.what();
         } catch (...) {

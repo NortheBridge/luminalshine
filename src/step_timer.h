@@ -32,6 +32,13 @@ namespace util {
     }
 
     /**
+     * @brief Start the timer at @p started, so that elapsed() also counts time spent before construction.
+     */
+    explicit basic_step_timer_t(time_point started):
+        _started(started) {
+    }
+
+    /**
      * @brief Read the timer's clock, to mark the start of a step.
      */
     time_point now() const {
