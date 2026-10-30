@@ -40,6 +40,7 @@ extern "C" {
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
+#include "virtual_display_join_policy.h"
 #include "webrtc_stream.h"
 #include "pyrowave/backend.h"
 
@@ -1874,7 +1875,11 @@ namespace rtsp_stream {
     const int rtsp_fps = config.monitor.framerateX100 > 0 ?
                            static_cast<int>(std::lround(config.monitor.framerateX100 / 100.0)) :
                            config.monitor.framerate;
-    if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
+    if (!virtual_display_join::may_reconcile_mode(session.joined_existing_virtual_display)) {
+      // Recreating the display would drop the owner's stream onto a new mode.
+      BOOST_LOG(info) << "Joining client keeps the owner's display mode (device_id=" << session.virtual_display_device_id
+                      << "); skipping virtual display mode reconciliation.";
+    } else if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
       respond(sock, session, &option, 503, "Virtual display mode reconciliation failed", req->sequenceNumber, {});
       return;
     }

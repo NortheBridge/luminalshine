@@ -66,6 +66,7 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#include "virtual_display_join_policy.h"
 #include "pyrowave/backend.h"
 #include "webrtc_stream.h"
 
@@ -252,13 +253,17 @@ namespace nvhttp {
       bool allow_display_changes,
       std::optional<std::string> &pending_output_override
     ) {
-      // A new launch/resume owns virtual-display state from here on: any
-      // fallback monitor armed by an EARLIER failed launch must never fire
-      // into this session's stream. At FUNCTION entry (not inside
+      // A launch/resume with no session active owns virtual-display state from
+      // here on: any fallback monitor armed by an EARLIER failed launch must
+      // never fire into this session's stream. At FUNCTION entry (not inside
       // apply_virtual_display_request) so the resume early-returns —
       // reused display, revert-on-disconnect off — supersede too
-      // (re-verify finding: the /resume path bypassed the lambda).
-      VDISPLAY::supersede_fallback_monitors();
+      // (re-verify finding: the /resume path bypassed the lambda). While
+      // another session streams, a monitor armed for it is that owner's live
+      // state, and a joining client must not cancel it.
+      if (virtual_display_join::may_supersede_fallback_monitors(no_active_sessions)) {
+        VDISPLAY::supersede_fallback_monitors();
+      }
 
       std::optional<std::string> app_output_override;
       if (launch_session->output_name_override && !launch_session->output_name_override->empty()) {
@@ -272,6 +277,7 @@ namespace nvhttp {
       }
       launch_session->virtual_display_recreated_on_demand = false;
       launch_session->virtual_display_needs_resume_apply = false;
+      launch_session->joined_existing_virtual_display = false;
 
       bool config_requests_virtual = config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
       if (launch_session->virtual_display_mode_override) {
@@ -304,8 +310,11 @@ namespace nvhttp {
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
             launch_session->virtual_display_needs_resume_apply = true;
-            config::set_runtime_output_name_override(*existing_device);
-            pending_output_override = *existing_device;
+            launch_session->joined_existing_virtual_display = !no_active_sessions;
+            if (virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
+              config::set_runtime_output_name_override(*existing_device);
+              pending_output_override = *existing_device;
+            }
             BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
                             << *existing_device << ").";
             BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
@@ -316,7 +325,11 @@ namespace nvhttp {
                           << " recreating one on demand.";
           launch_session->virtual_display_recreated_on_demand = true;
         } else {
-          if (app_output_override) {
+          if (app_output_override && !virtual_display_join::may_change_output_override(!no_active_sessions)) {
+            // The streaming owner already set this app's override; a failed
+            // join must not be able to roll it back.
+            BOOST_LOG(info) << "Display helper: joining client keeps the owner's output override: " << *app_output_override;
+          } else if (app_output_override) {
             config::set_runtime_output_name_override(*app_output_override);
             pending_output_override = *app_output_override;
             BOOST_LOG(info) << "Display helper: preserving output override for resume: " << *app_output_override;
@@ -336,7 +349,9 @@ namespace nvhttp {
         }
       }
 
-      if (app_output_override) {
+      if (app_output_override && !virtual_display_join::may_change_output_override(!no_active_sessions)) {
+        BOOST_LOG(info) << "App-specific display override kept from the streaming owner: output_name=" << *app_output_override;
+      } else if (app_output_override) {
         config::set_runtime_output_name_override(*app_output_override);
         pending_output_override = *app_output_override;
         BOOST_LOG(info) << "App-specific display override requested: output_name=" << *app_output_override;
@@ -388,6 +403,7 @@ namespace nvhttp {
             launch_session->virtual_display_failed = false;
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            launch_session->joined_existing_virtual_display = true;
             BOOST_LOG(info) << "Virtual display already active (device_id=" << *existing_device
                             << "). Skipping additional creation because another session is running.";
           } else {
@@ -863,7 +879,7 @@ namespace nvhttp {
       }
 
       apply_virtual_display_request(request_virtual_display);
-      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty()) {
+      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty() && virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
         config::set_runtime_output_name_override(launch_session->virtual_display_device_id);
         pending_output_override = launch_session->virtual_display_device_id;
       }
