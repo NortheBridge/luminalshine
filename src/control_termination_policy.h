@@ -21,7 +21,9 @@ namespace stream::control_termination {
    *
    * Only stops the host made on purpose while the client still listens qualify. A stop the client
    * caused or can no longer hear sends nothing, and so does one whose cause is ambiguous: the
-   * video and audio thread exits also cover capture failures that must not look graceful.
+   * video and audio thread exits also cover capture failures, and rtsp_clear_all an RTSP accept
+   * failure, that must not look graceful. On host shutdown the control thread's exit loop
+   * already sends the graceful code to the sessions it still holds.
    */
   constexpr bool should_send_graceful_termination(session::stop_reason_e reason, bool peer_connected) noexcept {
     if (!peer_connected) {
@@ -32,7 +34,6 @@ namespace stream::control_termination {
     switch (reason) {
       case session::stop_reason_e::explicit_cancel:
       case session::stop_reason_e::client_disconnect_request:
-      case session::stop_reason_e::rtsp_clear_all:
       case session::stop_reason_e::rtsp_broadcast_shutdown:
         return true;
       case session::stop_reason_e::enet_disconnect:
@@ -42,6 +43,7 @@ namespace stream::control_termination {
       case session::stop_reason_e::bad_encrypted_type:
       case session::stop_reason_e::video_thread_exit:
       case session::stop_reason_e::audio_thread_exit:
+      case session::stop_reason_e::rtsp_clear_all:
       case session::stop_reason_e::app_exited_before_peer:
       case session::stop_reason_e::admission_retired:
       case session::stop_reason_e::rtsp_reap:

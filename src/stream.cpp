@@ -3024,9 +3024,12 @@ namespace stream {
     void stop(session_t &session, stop_reason_e reason, std::source_location loc) {
       while_starting_do_nothing(session.state);
       // Record the cause before publishing STOPPING, so a thread that sees STOPPING also sees
-      // why. With concurrent callers the first one's reason is kept.
-      auto unrecorded = stop_reason_e::count_;
-      session.stop_reason.compare_exchange_strong(unrecorded, reason);
+      // why. With concurrent callers the first one's reason is kept. Only a RUNNING session
+      // records one: a stop before start must not leave a stale reason for the real one.
+      if (session.state.load(std::memory_order_acquire) == state_e::RUNNING) {
+        auto unrecorded = stop_reason_e::count_;
+        session.stop_reason.compare_exchange_strong(unrecorded, reason);
+      }
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
       if (already_stopping) {
