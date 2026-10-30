@@ -6,14 +6,13 @@
 #include "src/control_termination_policy.h"
 
 #include <gtest/gtest.h>
-
 #include <set>
 
 namespace {
 
-  using stream::session::stop_reason_e;
   using stream::control_termination::graceful_termination_code;
   using stream::control_termination::should_send_graceful_termination;
+  using stream::session::stop_reason_e;
 
   /// Host-initiated stops of a client that is still connected and expects to be told.
   const std::set<stop_reason_e> host_initiated {

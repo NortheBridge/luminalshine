@@ -32,6 +32,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "control_termination_policy.h"
 #include "display_helper_integration.h"
 #include "globals.h"
 #include "input.h"
@@ -592,6 +593,8 @@ namespace stream {
     safe::signal_t controlEnd;
 
     std::atomic<session::state_e> state;
+    /// First cause passed to session::stop; count_ until then.
+    std::atomic<session::stop_reason_e> stop_reason {session::stop_reason_e::count_};
 
 #ifdef _WIN32
     struct {
@@ -1278,6 +1281,27 @@ namespace stream {
     return 0;
   }
 
+  /// Queues IDX_TERMINATION with @p reason to the session's control peer. The caller flushes.
+  static int send_control_termination(control_server_t *server, session_t *session, std::uint32_t reason) {
+    control_terminate_t plaintext;
+    plaintext.header.type = packetTypes[IDX_TERMINATION];
+    plaintext.header.payloadLength = sizeof(plaintext.ec);
+    plaintext.ec = util::endian::big<uint32_t>(reason);
+
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+      encrypted_payload;
+
+    auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    if (server->send(payload, session->control.peer)) {
+      TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
+      BOOST_LOG(warning) << "Couldn't send termination code to ["sv << addr << ':' << port << ']';
+
+      return -1;
+    }
+
+    return 0;
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
@@ -1570,6 +1594,20 @@ namespace stream {
                 server->_peer_to_session->erase(session->control.peer);
               }
 
+              // A host-initiated stop (/cancel, a Web UI disconnect, RTSP teardown) tells a
+              // still-connected client it ended on purpose; otherwise the client reports the
+              // disconnect as an error. enet_peer_disconnect_now drops queued packets, so flush first.
+              const auto reason = session->stop_reason.load(std::memory_order_acquire);
+              const bool peer_connected = session->control.peer->state == ENET_PEER_STATE_CONNECTED;
+              if (control_termination::should_send_graceful_termination(reason, peer_connected)) {
+                BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(control_termination::graceful_termination_code)
+                                << " before disconnect: reason="sv << session::stop_reason_name(reason)
+                                << " peer="sv << session->control.peer_address << ' ' << session_label(*session);
+                if (!send_control_termination(server, session, control_termination::graceful_termination_code)) {
+                  server->flush();
+                }
+              }
+
               BOOST_LOG(info) << "Disconnecting control peer of stopping session: peer="sv << session->control.peer_address
                               << ' ' << session_label(*session);
               enet_peer_disconnect_now(session->control.peer, 0);
@@ -1653,15 +1691,7 @@ namespace stream {
 
     // Let all remaining connections know the server is shutting down
     // reason: graceful termination
-    std::uint32_t reason = 0x80030023;
-
-    control_terminate_t plaintext;
-    plaintext.header.type = packetTypes[IDX_TERMINATION];
-    plaintext.header.payloadLength = sizeof(plaintext.ec);
-    plaintext.ec = util::endian::big<uint32_t>(reason);
-
-    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
-      encrypted_payload;
+    std::uint32_t reason = control_termination::graceful_termination_code;
 
     auto lg = server->_sessions.lock();
     BOOST_LOG(info) << "Control thread exiting; terminating "sv << server->_sessions->size()
@@ -1677,12 +1707,7 @@ namespace stream {
 
       // We may not have gotten far enough to have an ENet connection yet
       if (session->control.peer) {
-        auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
-
-        if (server->send(payload, session->control.peer)) {
-          TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
-          BOOST_LOG(warning) << "Couldn't send termination code to ["sv << addr << ':' << port << ']';
-        }
+        send_control_termination(server, session, reason);
       }
 
       session->shutdown_event->raise(true);
@@ -2998,6 +3023,10 @@ namespace stream {
 
     void stop(session_t &session, stop_reason_e reason, std::source_location loc) {
       while_starting_do_nothing(session.state);
+      // Record the cause before publishing STOPPING, so a thread that sees STOPPING also sees
+      // why. With concurrent callers the first one's reason is kept.
+      auto unrecorded = stop_reason_e::count_;
+      session.stop_reason.compare_exchange_strong(unrecorded, reason);
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
       if (already_stopping) {
