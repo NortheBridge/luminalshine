@@ -2770,6 +2770,9 @@ namespace stream {
     // without transferring worker handles between HTTPS and RTSP lifetimes.
     auto peer_ready = session->mail->event<bool>(mail::video_peer_ready);
     peer_ready->reset();
+    // Held for the thread's lifetime: the mailbox keeps only weak references.
+    auto client_uuid = session->mail->event<std::string>(mail::video_client_uuid);
+    client_uuid->raise(session->client_uuid);
     seh_video_capture_args_t cap_args {session->mail, session->config.monitor, session};
     std::atomic<unsigned long> capture_seh {0};
     std::thread capture_thread([&] {
