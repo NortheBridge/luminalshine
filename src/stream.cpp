@@ -408,6 +408,10 @@ namespace stream {
     // ENet peer to session mapping for sessions with a peer connected
     sync_util::sync_t<std::map<net::peer_t, session_t *>> _peer_to_session;
 
+    // Peers of erased sessions still in a graceful disconnect. Only the control broadcast
+    // thread touches it (iterate and its stopping-session cleanup), so it needs no lock.
+    control_termination::detached_peers_t<net::peer_t> _detached_peers;
+
     ENetAddress _addr;
     net::host_t _host;
   };
@@ -910,6 +914,18 @@ namespace stream {
     auto res = enet_host_service(_host.get(), &event, (enet_uint32) timeout.count());
 
     if (res > 0) {
+      // A detached peer's events must not reach session lookup, which could bind the peer to a
+      // new pending session from the same client or reject it with a disconnect.
+      const auto peer_event = event.type == ENET_EVENT_TYPE_CONNECT ? control_termination::peer_event_e::connect :
+                              event.type == ENET_EVENT_TYPE_RECEIVE ? control_termination::peer_event_e::receive :
+                                                                      control_termination::peer_event_e::disconnect;
+      if (_detached_peers.consume(event.peer, peer_event)) {
+        if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+          enet_packet_destroy(event.packet);
+        }
+        return;
+      }
+
       auto session = get_session(event.peer, event.data);
       if (!session) {
         BOOST_LOG(warning) << "Rejected connection from ["sv << platf::from_sockaddr((sockaddr *) &event.peer->address.address) << "]: it's not properly set up"sv;
@@ -1601,21 +1617,30 @@ namespace stream {
 
               // A host-initiated stop (/cancel, a Web UI disconnect, RTSP teardown) tells a
               // still-connected client it ended on purpose; otherwise the client reports the
-              // disconnect as an error. enet_peer_disconnect_now drops queued packets, so flush first.
+              // disconnect as an error. The client's ENet drops undispatched packets when a
+              // DISCONNECT arrives, so the disconnect waits until the termination is acked. The
+              // peer stays detached until ENet reports its DISCONNECT; teardown does not wait.
               const auto reason = session->stop_reason.load(std::memory_order_acquire);
               const bool peer_connected = owns_peer && session->control.peer->state == ENET_PEER_STATE_CONNECTED;
+              bool termination_queued = false;
               if (control_termination::should_send_graceful_termination(reason, peer_connected)) {
                 BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(control_termination::graceful_termination_code)
                                 << " before disconnect: reason="sv << session::stop_reason_name(reason)
                                 << " peer="sv << session->control.peer_address << ' ' << session_label(*session);
-                if (!send_control_termination(server, session, control_termination::graceful_termination_code)) {
-                  server->flush();
-                }
+                termination_queued = !send_control_termination(server, session, control_termination::graceful_termination_code);
               }
 
-              BOOST_LOG(info) << "Disconnecting control peer of stopping session: peer="sv << session->control.peer_address
-                              << ' ' << session_label(*session);
-              enet_peer_disconnect_now(session->control.peer, 0);
+              if (termination_queued) {
+                BOOST_LOG(info) << "Disconnecting control peer of stopping session once the termination is acked: peer="sv
+                                << session->control.peer_address << ' ' << session_label(*session);
+                server->_detached_peers.add(session->control.peer);
+                enet_peer_disconnect_later(session->control.peer, 0);
+                server->flush();
+              } else {
+                BOOST_LOG(info) << "Disconnecting control peer of stopping session: peer="sv << session->control.peer_address
+                                << ' ' << session_label(*session);
+                enet_peer_disconnect_now(session->control.peer, 0);
+              }
             }
 
             session->controlEnd.raise(true);

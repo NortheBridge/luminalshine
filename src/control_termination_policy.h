@@ -6,7 +6,9 @@
 
 #include "session_stop_reason.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <set>
 
 namespace stream::control_termination {
 
@@ -52,5 +54,49 @@ namespace stream::control_termination {
     }
     return false;
   }
+
+  /// Kind of a control host event, as far as detached_peers_t needs to tell them apart.
+  enum class peer_event_e {
+    connect,
+    receive,
+    disconnect,
+  };
+
+  /**
+   * @brief Control peers already detached from their session that are still finishing a
+   *        graceful disconnect, so their last events never reach session lookup.
+   *
+   * ENet ends every such peer with one DISCONNECT event, which retires it. A CONNECT on a
+   * detached slot means the slot was reset without one and reused: the stale entry is retired
+   * and the event handled normally.
+   */
+  template<class Peer>
+  class detached_peers_t {
+  public:
+    void add(Peer peer) {
+      _peers.insert(peer);
+    }
+
+    /// Whether the event belongs to a detached peer and must be dropped.
+    bool consume(Peer peer, peer_event_e event) {
+      auto it = _peers.find(peer);
+      if (it == _peers.end()) {
+        return false;
+      }
+      if (event == peer_event_e::receive) {
+        return true;
+      }
+
+      _peers.erase(it);
+      return event == peer_event_e::disconnect;
+    }
+
+    std::size_t size() const noexcept {
+      return _peers.size();
+    }
+
+  private:
+    std::set<Peer> _peers;
+  };
 
 }  // namespace stream::control_termination
