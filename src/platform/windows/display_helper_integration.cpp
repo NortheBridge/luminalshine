@@ -1313,10 +1313,12 @@ namespace {
     hooks.session_count = [] {
       return rtsp_stream::session_count_no_reap();
     };
-    // proc.running() can still run terminate() on this thread once the app has exited, which also
-    // stops this watchdog; WatchdogThreadSlot::stop() detaches instead of self-joining in that case.
+    // Never wait for the lifecycle lock: terminate() holds it while stop_watchdog() joins this thread.
+    // When the lock is free, running_nowait() is running(), which can still run terminate() on this
+    // thread once the app has exited and so stop this watchdog; WatchdogThreadSlot::stop() detaches
+    // instead of self-joining in that case.
     hooks.running_processes = [] {
-      return proc::proc.running();
+      return proc::proc.running_nowait();
     };
     hooks.active_interval = 5s;
     hooks.suspended_interval = 20s;
