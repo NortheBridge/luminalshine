@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -29,7 +30,8 @@ namespace display_helper_integration {
    *
    * The thread is moved out under the lock and stopped outside it, so a concurrent start() never
    * assigns over a thread that is still being stopped, and the stopping side never holds the lock
-   * while it joins.
+   * while it joins. Each start() opens a new generation; a stop() only cleans up the generation it
+   * stopped, so a stop whose join outlives a newer start() leaves that start's state alone.
    */
   class WatchdogThreadSlot {
   public:
@@ -44,6 +46,7 @@ namespace display_helper_integration {
         return false;
       }
       thread_ = std::jthread(std::forward<Fn>(fn));
+      ++generation_;
       return true;
     }
 
@@ -57,28 +60,36 @@ namespace display_helper_integration {
     }
 
     /**
-     * @brief Stop the running thread, if any, then run cleanup under the slot lock.
+     * @brief Stop the running thread, if any, then run cleanup unless start() ran in the meantime.
+     *
+     * The cleanup runs under the slot lock, so no start() can slip in between the generation check
+     * and the cleanup. It must not call start() or stop().
      * @return true when a thread was running and this call stopped it.
      */
     template<typename Cleanup>
     bool stop(Cleanup &&cleanup) {
       std::jthread thread;
+      std::uint64_t stopped_generation;
       {
         std::lock_guard lock(mutex_);
         if (!thread_.joinable()) {
           return false;
         }
         thread = std::move(thread_);
+        stopped_generation = generation_;
       }
       stop_watchdog_thread(thread);
       std::lock_guard lock(mutex_);
-      std::forward<Cleanup>(cleanup)();
+      if (generation_ == stopped_generation) {
+        std::forward<Cleanup>(cleanup)();
+      }
       return true;
     }
 
   private:
     std::mutex mutex_;
     std::jthread thread_;
+    std::uint64_t generation_ = 0;
   };
 
   class DisplayHelperWatchdog {

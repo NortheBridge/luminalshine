@@ -2465,13 +2465,13 @@ namespace display_helper_integration {
   }
 
   void stop_watchdog() {
-    if (!g_watchdog_slot.stop()) {
-      return;  // not running
-    }
-    if (config::video.dd.config_revert_on_disconnect) {
-      platf::display_helper_client::reset_connection();
-    }
-    clear_active_session();
+    // Skipped when a newer session called start_watchdog() while this stop was joining.
+    (void) g_watchdog_slot.stop([] {
+      if (config::video.dd.config_revert_on_disconnect) {
+        platf::display_helper_client::reset_connection();
+      }
+      clear_active_session();
+    });
   }
 }  // namespace display_helper_integration
 
