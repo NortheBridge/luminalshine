@@ -63,7 +63,9 @@ namespace display_helper_integration {
      * @brief Stop the running thread, if any, then run cleanup unless start() ran in the meantime.
      *
      * The cleanup runs under the slot lock, so no start() can slip in between the generation check
-     * and the cleanup. It must not call start() or stop().
+     * and the cleanup. It must not call start() or stop(). A concurrent start() waits for the
+     * cleanup, so a cleanup that blocks (a helper reset waiting behind a long send on the pipe)
+     * delays that start without deadlocking it.
      * @return true when a thread was running and this call stopped it.
      */
     template<typename Cleanup>

@@ -1,10 +1,12 @@
 /**
  * @file tests/unit/test_display_helper_watchdog_thread.cpp
- * @brief Regression tests for stopping the display helper watchdog thread (issue #212).
+ * @brief Regression tests for stopping the display helper watchdog thread (issues #212, #228, #229).
  *
  * A session teardown or an app termination can run on the watchdog's own loop, so stopping the
  * watchdog must not join the calling thread: that throws std::system_error (EDEADLK) and,
- * uncaught, crashes the host.
+ * uncaught, crashes the host. A stop whose join outlives a newer start must not clean up that
+ * start's state (#229). The #228 fix lives in the host's running hook, which these tests cannot
+ * reach; they keep the self-stop path it still relies on working.
  */
 #include "src/platform/windows/display_helper_watchdog.h"
 
