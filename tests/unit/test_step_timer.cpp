@@ -84,4 +84,17 @@ namespace {
     EXPECT_EQ(timer.elapsed(), 3251ms);  // From construction, timed steps or not.
   }
 
+  TEST(StepTimer, GivenStartCountsTimeBeforeConstructionInElapsed) {
+    fake_clock_t::current = fake_clock_t::time_point {} + 2h;
+    const auto queued_at = fake_clock_t::current;
+
+    fake_clock_t::current += 700ms;  // Waiting before the work began.
+    fake_timer_t timer {queued_at};
+    EXPECT_EQ(timer.record_since("queue", queued_at), 700ms);
+
+    fake_clock_t::current += 50ms;
+    EXPECT_EQ(timer.elapsed(), 750ms);
+    EXPECT_EQ(timer.format(), "queue=700ms");
+  }
+
 }  // namespace
