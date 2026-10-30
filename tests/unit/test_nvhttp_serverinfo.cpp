@@ -4,9 +4,11 @@
  */
 
 // standard includes
+#include <algorithm>
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <vector>
 
 // lib includes
 #include <boost/property_tree/ptree.hpp>
@@ -14,10 +16,8 @@
 
 // local includes
 #include "../tests_common.h"
-#include "src/config.h"
 #include "src/host_capabilities.h"
 #include "src/nvhttp.h"
-#include "src/pyrowave/backend.h"
 
 namespace {
   namespace pt = boost::property_tree;
@@ -36,31 +36,37 @@ namespace {
   }
 
   /**
-   * @brief Restore `config::pyrowave.enabled` when a test that changes it ends.
+   * @brief Split a `LuminalShineCapabilities` text the way a client would.
    */
-  struct pyrowave_enabled_guard_t {
-    bool saved = config::pyrowave.enabled;
-
-    ~pyrowave_enabled_guard_t() {
-      config::pyrowave.enabled = saved;
+  std::vector<std::string> split_capabilities(const std::string &wire) {
+    std::vector<std::string> result;
+    std::istringstream input(wire);
+    for (std::string name; std::getline(input, name, ',');) {
+      result.push_back(name);
     }
-  };
+    return result;
+  }
 
-  TEST(ServerInfoVersion, ReportsTheProjectVersion) {
+  bool has_capability(const std::string &wire, const std::string &name) {
+    const auto names = split_capabilities(wire);
+    return std::find(names.begin(), names.end(), name) != names.end();
+  }
+
+  TEST(ServerInfoLuminalShineFields, ReportsTheProjectVersion) {
     pt::ptree tree;
-    nvhttp::put_luminalshine_version(tree);
+    nvhttp::put_luminalshine_fields(tree, {});
 
     const auto version = write_and_read_xml(tree).get<std::string>("root.LuminalShineVersion");
     EXPECT_FALSE(version.empty());
     EXPECT_EQ(version, PROJECT_VERSION);
   }
 
-  TEST(ServerInfoVersion, AppendsAfterTheGameStreamEmulationFields) {
+  TEST(ServerInfoLuminalShineFields, AppendsAfterTheGameStreamEmulationFields) {
     pt::ptree tree;
     tree.put("root.<xmlattr>.status_code", 200);
     tree.put("root.appversion", nvhttp::VERSION);
     tree.put("root.GfeVersion", nvhttp::GFE_VERSION);
-    nvhttp::put_luminalshine_version(tree);
+    nvhttp::put_luminalshine_fields(tree, {});
 
     const auto parsed = write_and_read_xml(tree);
     EXPECT_EQ(parsed.get<std::string>("root.appversion"), nvhttp::VERSION);
@@ -78,38 +84,32 @@ namespace {
     EXPECT_EQ(field->first, "LuminalShineCapabilities");
   }
 
-  TEST(ServerInfoVersion, ReportsTheApiLevel) {
+  TEST(ServerInfoLuminalShineFields, ReportsTheApiLevel) {
     pt::ptree tree;
-    nvhttp::put_luminalshine_version(tree);
+    nvhttp::put_luminalshine_fields(tree, {});
 
     const auto api_level = write_and_read_xml(tree).get_optional<int>("root.LuminalShineApiLevel");
     ASSERT_TRUE(api_level.has_value());
     EXPECT_EQ(*api_level, host_capabilities::api_level);
-    EXPECT_GE(*api_level, 1);
   }
 
-  TEST(ServerInfoVersion, ReportsTheCapabilitiesOfThisHost) {
+  TEST(ServerInfoLuminalShineFields, ReportsPyrowaveWhenItIsAvailable) {
     pt::ptree tree;
-    nvhttp::put_luminalshine_version(tree);
+    nvhttp::put_luminalshine_fields(tree, {.pyrowave = true});
 
-    const host_capabilities::flags_t flags {
-      .pyrowave = config::pyrowave.enabled && pyrowave::available(),
-    };
     const auto capabilities = write_and_read_xml(tree).get_optional<std::string>("root.LuminalShineCapabilities");
     ASSERT_TRUE(capabilities.has_value());
-    EXPECT_EQ(*capabilities, host_capabilities::wire_list(flags));
+    EXPECT_TRUE(has_capability(*capabilities, "pyrowave")) << *capabilities;
   }
 
-  TEST(ServerInfoVersion, OmitsPyrowaveWhenItIsDisabled) {
-    pyrowave_enabled_guard_t guard;
-    config::pyrowave.enabled = false;
-
+  TEST(ServerInfoLuminalShineFields, OmitsPyrowaveWhenItIsUnavailable) {
     pt::ptree tree;
-    nvhttp::put_luminalshine_version(tree);
+    nvhttp::put_luminalshine_fields(tree, {.pyrowave = false});
 
-    // The element stays, empty, so a client reads "no capabilities" rather than a missing field.
+    // The element is written even when it lists nothing; clients detect support
+    // by LuminalShineApiLevel, since some XML readers drop an empty element.
     const auto capabilities = write_and_read_xml(tree).get_optional<std::string>("root.LuminalShineCapabilities");
     ASSERT_TRUE(capabilities.has_value());
-    EXPECT_EQ(*capabilities, "");
+    EXPECT_FALSE(has_capability(*capabilities, "pyrowave")) << *capabilities;
   }
 }  // namespace

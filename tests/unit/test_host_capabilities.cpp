@@ -63,8 +63,25 @@ namespace {
     }
   }
 
-  TEST(HostCapabilities, ApiLevelStartsAtOne) {
-    EXPECT_GE(host_capabilities::api_level, 1);
+  TEST(HostCapabilities, ApiLevelIsOne) {
+    // Update this together with the bump rule on host_capabilities::api_level.
+    EXPECT_EQ(host_capabilities::api_level, 1);
+  }
+
+  TEST(HostCapabilities, JoinOfNoNamesIsEmpty) {
+    EXPECT_EQ(host_capabilities::join_capabilities({}), "");
+  }
+
+  TEST(HostCapabilities, JoinOfOneNameIsThatName) {
+    const names_t capability_names {"a"};
+
+    EXPECT_EQ(host_capabilities::join_capabilities(capability_names), "a");
+  }
+
+  TEST(HostCapabilities, JoinSeparatesNamesWithABareComma) {
+    const names_t capability_names {"a", "b"};
+
+    EXPECT_EQ(host_capabilities::join_capabilities(capability_names), "a,b");
   }
 
   TEST(HostCapabilities, NoFlagsReportNoCapabilities) {

@@ -22,6 +22,7 @@
 
 // local includes
 #include "crypto.h"
+#include "host_capabilities.h"
 #include "thread_safe.h"
 
 /**
@@ -67,15 +68,19 @@ namespace nvhttp {
   void setup(const std::string &pkey, const std::string &cert);
 
   /**
-   * @brief Add the LuminalShine release version to a `/serverinfo` response tree.
-   * @details Puts `root.LuminalShineVersion` with `PROJECT_VERSION`. `appversion` and `GfeVersion`
-   *          carry GameStream emulation constants, so this element is how a client tells a
-   *          LuminalShine host, and its release, apart from Sunshine. `serverinfo` adds it only
-   *          on the HTTPS server, which answers paired clients only, so the release is not
-   *          exposed to unauthenticated peers on the HTTP port.
+   * @brief Add the LuminalShine fields to a `/serverinfo` response tree.
+   * @details Puts, in this order, `root.LuminalShineVersion` (`PROJECT_VERSION`),
+   *          `root.LuminalShineApiLevel` (`host_capabilities::api_level`) and
+   *          `root.LuminalShineCapabilities` (the names @p capabilities turns on, joined by `,`;
+   *          written even when empty). `appversion` and `GfeVersion` carry GameStream emulation
+   *          constants, so these elements are how a client tells a LuminalShine host, its release
+   *          and its features apart from Sunshine. `serverinfo` adds them only on the HTTPS
+   *          server, which answers paired clients only, so they are not exposed to
+   *          unauthenticated peers on the HTTP port.
    * @param tree The `/serverinfo` response tree.
+   * @param capabilities The runtime state that decides which capabilities are listed.
    */
-  void put_luminalshine_version(boost::property_tree::ptree &tree);
+  void put_luminalshine_fields(boost::property_tree::ptree &tree, const host_capabilities::flags_t &capabilities);
 
   class SunshineHTTPS: public SimpleWeb::HTTPS {
   public:

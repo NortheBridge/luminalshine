@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,7 +28,7 @@ namespace host_capabilities {
    * @brief Runtime state that decides which capabilities this host reports.
    */
   struct flags_t {
-    bool pyrowave = false;  ///< `config::pyrowave.enabled && pyrowave::available()`, as `ServerCodecModeSupport` uses.
+    bool pyrowave = false;  ///< `config::pyrowave.enabled && pyrowave::available()` (SDR 4:2:0 probed), as `ServerCodecModeSupport` uses.
   };
 
   /**
@@ -61,16 +62,23 @@ namespace host_capabilities {
   }
 
   /**
-   * @brief The `LuminalShineCapabilities` text: the names joined by `,`, empty when none.
+   * @brief Join capability names the way `LuminalShineCapabilities` carries them: `,` with no spaces.
    */
-  inline std::string wire_list(const flags_t &flags) {
+  inline std::string join_capabilities(std::span<const std::string_view> capability_names) {
     std::string result;
-    for (const auto name : names(flags)) {
+    for (const auto name : capability_names) {
       if (!result.empty()) {
         result += ',';
       }
       result += name;
     }
     return result;
+  }
+
+  /**
+   * @brief The `LuminalShineCapabilities` text for @p flags, empty when none.
+   */
+  inline std::string wire_list(const flags_t &flags) {
+    return join_capabilities(names(flags));
   }
 }  // namespace host_capabilities
