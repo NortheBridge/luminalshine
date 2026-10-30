@@ -144,17 +144,22 @@ namespace platf::video_worker::ring_consumers {
     ) {
       std::lock_guard lock {mutex_};
       const auto holder = holders_.find(session_id);
-      const bool same_client = holder != holders_.end() && !client_id.empty() && holder->second.client_id == client_id;
-      if (holder == holders_.end() || same_client) {
-        const auto token = ++last_token_;
-        holders_.insert_or_assign(session_id, holder_t {std::string {client_id}, std::move(retiring), token});
-        return {decision_e::claim, ring_lease_t {this, session_id, token}};
+      if (holder != holders_.end()) {
+        const bool holder_retiring = holder->second.retiring && holder->second.retiring();
+        if (holder_retiring && waited < release_wait_budget) {
+          return {decision_e::wait_for_release, {}};
+        }
+        const bool same_client = !client_id.empty() && holder->second.client_id == client_id;
+        if (!same_client) {
+          return {decision_e::use_safe_capture, {}};
+        }
       }
-      const bool holder_retiring = holder->second.retiring && holder->second.retiring();
-      if (holder_retiring && waited < release_wait_budget) {
-        return {decision_e::wait_for_release, {}};
-      }
-      return {decision_e::use_safe_capture, {}};
+      // A superseded holder whose session ends after its successor leaves no
+      // record while its worker still reads; a joiner in that window may claim.
+      // That needs both of one client's sessions to overlap a third client's join.
+      const auto token = ++last_token_;
+      holders_.insert_or_assign(session_id, holder_t {std::string {client_id}, std::move(retiring), token});
+      return {decision_e::claim, ring_lease_t {this, session_id, token}};
     }
 
     bool is_held(std::uint64_t session_id) const {
