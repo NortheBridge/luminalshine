@@ -151,6 +151,48 @@ namespace {
     EXPECT_FALSE(registry.is_held(ring_b));
   }
 
+  TEST(VgdRingConsumers, SameClientReconnectTakesOverALiveHolder) {
+    registry_t registry;
+    auto stale = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-a");
+    ASSERT_EQ(stale.decision, decision_e::claim);
+
+    // The client dropped without a clean disconnect and came back before its old
+    // session timed out. That session is not retiring yet, but the reconnect is the
+    // same client, so it owns the ring instead of starting on WGC.
+    auto reconnect = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-a");
+    EXPECT_EQ(reconnect.decision, decision_e::claim);
+    EXPECT_TRUE(reconnect.lease);
+  }
+
+  TEST(VgdRingConsumers, SupersededLeaseDoesNotReleaseTheNewHolder) {
+    registry_t registry;
+    auto stale = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-a");
+    auto reconnect = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-a");
+    ASSERT_EQ(reconnect.decision, decision_e::claim);
+
+    // The old session times out later; its release must leave the reconnect holding the ring.
+    stale.lease.reset();
+    EXPECT_TRUE(registry.is_held(ring_a));
+    auto joiner = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-b");
+    EXPECT_EQ(joiner.decision, decision_e::use_safe_capture);
+
+    reconnect.lease.reset();
+    EXPECT_FALSE(registry.is_held(ring_a));
+  }
+
+  TEST(VgdRingConsumers, OtherOrUnknownClientNeverTakesOver) {
+    registry_t registry;
+    auto holder = registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-a");
+    ASSERT_EQ(holder.decision, decision_e::claim);
+    EXPECT_EQ(registry.try_acquire(ring_a, [] { return false; }, 0ms, "client-b").decision, decision_e::use_safe_capture);
+    EXPECT_EQ(registry.try_acquire(ring_a, [] { return false; }, 0ms, "").decision, decision_e::use_safe_capture);
+
+    // An unidentified holder cannot be matched to a reconnect either.
+    auto anonymous = registry.try_acquire(ring_b, [] { return false; }, 0ms);
+    ASSERT_EQ(anonymous.decision, decision_e::claim);
+    EXPECT_EQ(registry.try_acquire(ring_b, [] { return false; }, 0ms).decision, decision_e::use_safe_capture);
+  }
+
   TEST(VgdRingConsumers, OnlyOneConcurrentWorkerClaimsTheRing) {
     registry_t registry;
     constexpr int workers = 16;
