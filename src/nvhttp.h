@@ -257,7 +257,8 @@ namespace nvhttp {
     bool valid_pin(std::string_view pin) noexcept;
     bool session_expired(
       std::chrono::steady_clock::time_point updated_at,
-      std::chrono::steady_clock::time_point now
+      std::chrono::steady_clock::time_point now,
+      PAIR_PHASE last_phase
     ) noexcept;
     bool phase_one_retry_matches(
       std::string_view expected_address,

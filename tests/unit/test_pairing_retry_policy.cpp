@@ -36,7 +36,7 @@ namespace {
   }
 
   TEST(PairingRetryPolicy, UnknownClientStartsANewSession) {
-    EXPECT_EQ(phase_one_action({.has_session = false}), phase_one_action_e::new_session);
+    EXPECT_EQ(phase_one_action(phase_one_request_t {}), phase_one_action_e::new_session);
   }
 
   TEST(PairingRetryPolicy, ClientAwaitingItsPinKeepsThePendingRetryPath) {

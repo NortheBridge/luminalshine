@@ -28,9 +28,22 @@ namespace {
 
   TEST(PairingRequestPolicy, SessionExpiryUsesTheFiveMinuteBoundary) {
     const auto updated_at = std::chrono::steady_clock::time_point {10min};
-    EXPECT_FALSE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min - 1ms));
-    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min));
-    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 6min));
+    constexpr auto awaiting_pin = nvhttp::PAIR_PHASE::NONE;
+    EXPECT_FALSE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min - 1ms, awaiting_pin));
+    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min, awaiting_pin));
+    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 6min, awaiting_pin));
+  }
+
+  TEST(PairingRequestPolicy, SessionExpiryAfterPinDeliveryUsesTheThirtySecondBoundary) {
+    const auto updated_at = std::chrono::steady_clock::time_point {10min};
+    for (const auto phase : {
+           nvhttp::PAIR_PHASE::GETSERVERCERT,
+           nvhttp::PAIR_PHASE::CLIENTCHALLENGE,
+           nvhttp::PAIR_PHASE::SERVERCHALLENGERESP,
+         }) {
+      EXPECT_FALSE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 30s - 1ms, phase));
+      EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 30s, phase));
+    }
   }
 
   TEST(PairingRequestPolicy, PendingPhaseOneRetryAllowsFreshSaltForSamePeerAndCertificate) {

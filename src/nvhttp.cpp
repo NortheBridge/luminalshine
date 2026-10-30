@@ -46,6 +46,7 @@
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "pairing_retry_policy.h"
 #include "platform/common.h"
 #include "state_storage.h"
 #ifdef _WIN32
@@ -915,7 +916,6 @@ namespace nvhttp {
 
   std::unordered_map<std::string, pairing_outcome_t> pairing_outcomes;
 
-  constexpr auto kPairingSessionTtl = std::chrono::minutes(5);
   constexpr auto kPairingOutcomeTtl = std::chrono::minutes(5);
   constexpr std::size_t kMaxPendingPairings = 32;
   constexpr std::size_t kMaxPairingOutcomes = 64;
@@ -1731,9 +1731,10 @@ namespace nvhttp {
 
     bool session_expired(
       const std::chrono::steady_clock::time_point updated_at,
-      const std::chrono::steady_clock::time_point now
+      const std::chrono::steady_clock::time_point now,
+      const PAIR_PHASE last_phase
     ) noexcept {
-      return now - updated_at >= kPairingSessionTtl;
+      return now - updated_at >= session_ttl(last_phase != PAIR_PHASE::NONE);
     }
 
     bool phase_one_retry_matches(
@@ -1898,7 +1899,7 @@ namespace nvhttp {
       prune_pairing_outcomes_locked(now);
       for (auto it = map_id_sess.begin(); it != map_id_sess.end();) {
         auto &sess = it->second;
-        if (pairing_detail::session_expired(sess.updated_at, now)) {
+        if (pairing_detail::session_expired(sess.updated_at, now, sess.last_phase)) {
           BOOST_LOG(info) << "Pairing request expired: id="sv << sess.pairing_id
                           << " peer="sv << sess.client_address;
           record_pairing_outcome_locked(sess, pairing_state_e::EXPIRED);
@@ -1927,6 +1928,17 @@ namespace nvhttp {
 
     void finish_expired_pairing_responses(std::vector<pair_response_t> &responses) {
       finish_pairing_responses(responses, "Pairing request expired", 408);
+    }
+
+    pairing_detail::stored_phase_e stored_pairing_phase(const PAIR_PHASE last_phase) noexcept {
+      switch (last_phase) {
+        case PAIR_PHASE::NONE:
+          return pairing_detail::stored_phase_e::awaiting_pin;
+        case PAIR_PHASE::GETSERVERCERT:
+          return pairing_detail::stored_phase_e::phase_one_submitted;
+        default:
+          return pairing_detail::stored_phase_e::later;
+      }
     }
 
     pairing_request_t pairing_request_from_session(
@@ -2223,31 +2235,48 @@ namespace nvhttp {
         const auto client_cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
         const auto salt = get_arg(args, "salt");
         auto sess_it = map_id_sess.find(uniqID);
+        auto action = pairing_detail::phase_one_action_e::new_session;
+        if (sess_it != map_id_sess.end()) {
+          const auto &existing = sess_it->second;
+          action = pairing_detail::phase_one_action({
+            .has_session = true,
+            .stored_phase = stored_pairing_phase(existing.last_phase),
+            .stored_address = existing.client_address,
+            .stored_certificate = existing.client.cert,
+            .stored_salt = existing.async_insert_pin.salt,
+            .received_address = incoming_address,
+            .received_certificate = client_cert,
+            .received_salt = salt,
+          });
+        }
 
-        if (sess_it != map_id_sess.end() && sess_it->second.last_phase != PAIR_PHASE::NONE) {
+        if (action == pairing_detail::phase_one_action_e::retransmit) {
           // A retransmission of the same phase-one request is safe to answer
-          // idempotently. Never replace an exchange after its PIN was applied.
-          if (sess_it->second.last_phase == PAIR_PHASE::GETSERVERCERT &&
-              pairing_detail::phase_one_retry_matches(
-                sess_it->second.client_address,
-                sess_it->second.client.cert,
-                sess_it->second.async_insert_pin.salt,
-                incoming_address,
-                client_cert,
-                salt,
-                sess_it->second.last_phase
-              )) {
-            ++sess_it->second.phase_one_generation;
-            sess_it->second.updated_at = now;
-            tree.put("root.paired", 1);
-            tree.put("root.plaincert", util::hex_vec(conf_intern.servercert, true));
-            tree.put("root.<xmlattr>.status_code", 200);
-          } else {
-            tree.put("root.paired", 0);
-            tree.put("root.<xmlattr>.status_code", 409);
-            tree.put("root.<xmlattr>.status_message", "Pairing exchange already in progress");
-          }
+          // idempotently.
+          ++sess_it->second.phase_one_generation;
+          sess_it->second.updated_at = now;
+          tree.put("root.paired", 1);
+          tree.put("root.plaincert", util::hex_vec(conf_intern.servercert, true));
+          tree.put("root.<xmlattr>.status_code", 200);
           return;
+        }
+        if (action == pairing_detail::phase_one_action_e::reject_in_progress) {
+          tree.put("root.paired", 0);
+          tree.put("root.<xmlattr>.status_code", 409);
+          tree.put("root.<xmlattr>.status_message", "Pairing exchange already in progress");
+          return;
+        }
+        if (action == pairing_detail::phase_one_action_e::replace) {
+          // The same peer and certificate started over after the PIN was
+          // applied, typically after a wrong PIN. End the stale exchange as
+          // failed and open a new one; never carry over its phase or keys.
+          auto &stale = sess_it->second;
+          BOOST_LOG(info) << "Pairing exchange replaced by retry: id="sv << stale.pairing_id
+                          << " peer="sv << stale.client_address;
+          record_pairing_outcome_locked(stale, pairing_state_e::FAILED);
+          superseded_response = std::move(stale.async_insert_pin.response);
+          map_id_sess.erase(sess_it);
+          sess_it = map_id_sess.end();
         }
 
         if (sess_it == map_id_sess.end()) {
