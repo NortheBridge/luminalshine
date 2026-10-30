@@ -37,6 +37,7 @@
 #include <Simple-Web-Server/server_http.hpp>
 
 // local includes
+#include "cancel_scope_policy.h"
 #include "config.h"
 #include "display_device.h"
 #include "display_helper_integration.h"
@@ -65,6 +66,7 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#include "virtual_display_join_policy.h"
 #include "pyrowave/backend.h"
 #include "webrtc_stream.h"
 
@@ -251,13 +253,17 @@ namespace nvhttp {
       bool allow_display_changes,
       std::optional<std::string> &pending_output_override
     ) {
-      // A new launch/resume owns virtual-display state from here on: any
-      // fallback monitor armed by an EARLIER failed launch must never fire
-      // into this session's stream. At FUNCTION entry (not inside
+      // A launch/resume with no session active owns virtual-display state from
+      // here on: any fallback monitor armed by an EARLIER failed launch must
+      // never fire into this session's stream. At FUNCTION entry (not inside
       // apply_virtual_display_request) so the resume early-returns —
       // reused display, revert-on-disconnect off — supersede too
-      // (re-verify finding: the /resume path bypassed the lambda).
-      VDISPLAY::supersede_fallback_monitors();
+      // (re-verify finding: the /resume path bypassed the lambda). While
+      // another session streams, a monitor armed for it is that owner's live
+      // state, and a joining client must not cancel it.
+      if (virtual_display_join::may_supersede_fallback_monitors(no_active_sessions)) {
+        VDISPLAY::supersede_fallback_monitors();
+      }
 
       std::optional<std::string> app_output_override;
       if (launch_session->output_name_override && !launch_session->output_name_override->empty()) {
@@ -271,6 +277,7 @@ namespace nvhttp {
       }
       launch_session->virtual_display_recreated_on_demand = false;
       launch_session->virtual_display_needs_resume_apply = false;
+      launch_session->joined_existing_virtual_display = false;
 
       bool config_requests_virtual = config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
       if (launch_session->virtual_display_mode_override) {
@@ -303,8 +310,11 @@ namespace nvhttp {
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
             launch_session->virtual_display_needs_resume_apply = true;
-            config::set_runtime_output_name_override(*existing_device);
-            pending_output_override = *existing_device;
+            launch_session->joined_existing_virtual_display = !no_active_sessions;
+            if (virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
+              config::set_runtime_output_name_override(*existing_device);
+              pending_output_override = *existing_device;
+            }
             BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
                             << *existing_device << ").";
             BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
@@ -315,7 +325,11 @@ namespace nvhttp {
                           << " recreating one on demand.";
           launch_session->virtual_display_recreated_on_demand = true;
         } else {
-          if (app_output_override) {
+          if (app_output_override && !virtual_display_join::may_change_output_override(!no_active_sessions)) {
+            // The streaming owner already set this app's override; a failed
+            // join must not be able to roll it back.
+            BOOST_LOG(info) << "Display helper: joining client keeps the owner's output override: " << *app_output_override;
+          } else if (app_output_override) {
             config::set_runtime_output_name_override(*app_output_override);
             pending_output_override = *app_output_override;
             BOOST_LOG(info) << "Display helper: preserving output override for resume: " << *app_output_override;
@@ -335,7 +349,9 @@ namespace nvhttp {
         }
       }
 
-      if (app_output_override) {
+      if (app_output_override && !virtual_display_join::may_change_output_override(!no_active_sessions)) {
+        BOOST_LOG(info) << "App-specific display override kept from the streaming owner: output_name=" << *app_output_override;
+      } else if (app_output_override) {
         config::set_runtime_output_name_override(*app_output_override);
         pending_output_override = *app_output_override;
         BOOST_LOG(info) << "App-specific display override requested: output_name=" << *app_output_override;
@@ -387,6 +403,7 @@ namespace nvhttp {
             launch_session->virtual_display_failed = false;
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            launch_session->joined_existing_virtual_display = true;
             BOOST_LOG(info) << "Virtual display already active (device_id=" << *existing_device
                             << "). Skipping additional creation because another session is running.";
           } else {
@@ -862,7 +879,7 @@ namespace nvhttp {
       }
 
       apply_virtual_display_request(request_virtual_display);
-      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty()) {
+      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty() && virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
         config::set_runtime_output_name_override(launch_session->virtual_display_device_id);
         pending_output_override = launch_session->virtual_display_device_id;
       }
@@ -3570,6 +3587,76 @@ namespace nvhttp {
 
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
+
+    // Attribute the cancel and decide how far it reaches before it stops anything:
+    // who asked, which sessions are tracked (including ones already stopping), and
+    // who owns a pending launch. The snapshot and the pending-launch read are both
+    // non-reaping. /launch, /resume and /cancel share one serial worker, so no new
+    // /launch or /resume can slip in between this decision and the stop below; a
+    // launch that was already pending can still be admitted by its ANNOUNCE.
+    std::string requester_name;
+    const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
+    const auto tracked = rtsp_stream::session_snapshot_no_reap();
+    const auto pending_uuid = rtsp_stream::pending_launch_client_uuid();
+    std::vector<cancel_scope::session_t> scope_sessions;
+    scope_sessions.reserve(tracked.size());
+    for (const auto &tracked_session : tracked) {
+      scope_sessions.push_back({tracked_session.client_uuid, tracked_session.stopping});
+    }
+    const std::optional<std::string_view> pending_owner_uuid =
+      pending_uuid ? std::optional<std::string_view> {*pending_uuid} : std::nullopt;
+    const bool webrtc_active = webrtc_stream::has_active_sessions();
+    const auto others = cancel_scope::other_clients(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
+    const auto scope = others > 0 ? cancel_scope::scope_e::requester_only : cancel_scope::scope_e::full;
+    {
+      std::string pending_owner = "none";
+      if (pending_uuid) {
+        const auto pending_cert = get_named_cert_by_uuid(*pending_uuid);
+        pending_owner = std::format("client='{}' uuid={}", pending_cert ? pending_cert->name : std::string {}, stream::session::short_client_id(*pending_uuid));
+      }
+      BOOST_LOG(info) << std::format(
+        "Cancel requested by client='{}' uuid={}; tracked sessions: {}; pending launch owner: {}",
+        requester_name,
+        requester_uuid.empty() ? std::string_view {"unknown"} : stream::session::short_client_id(requester_uuid),
+        tracked.size(),
+        pending_owner
+      );
+      if (scope == cancel_scope::scope_e::full) {
+        BOOST_LOG(info) << "Cancel scope: full";
+      } else {
+        BOOST_LOG(info) << std::format("Cancel scope: requester_only (other live sessions or launches: {})", others);
+        if (requester_uuid.empty()) {
+          BOOST_LOG(warning) << "Cancel requester could not be identified; ending no session while another client is live.";
+        }
+      }
+      for (const auto &tracked_session : tracked) {
+        const bool stops = scope == cancel_scope::scope_e::full ||
+                           (!requester_uuid.empty() && tracked_session.client_uuid == requester_uuid);
+        if (!stops) {
+          continue;
+        }
+        BOOST_LOG(info) << std::format(
+          "Cancel will stop tracked session: client='{}' uuid={} stopping={}",
+          tracked_session.client_name,
+          stream::session::short_client_id(tracked_session.client_uuid),
+          tracked_session.stopping
+        );
+      }
+    }
+
+    if (scope == cancel_scope::scope_e::requester_only) {
+      // Another client is still streaming this app: end only the requester's own
+      // sessions and pending launch. The app, the virtual display and the display
+      // configuration stay with the other client, and the last client's normal
+      // teardown remains the one that cleans them up.
+      const auto cancelled_own_launch = rtsp_stream::end_client_sessions(requester_uuid, stream::session::stop_reason_e::explicit_cancel);
+#ifdef _WIN32
+      if (cancelled_own_launch) {
+        platf::video_worker::cancel_prewarm();
+      }
+#endif
+      return;
+    }
 
     const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
 #ifdef _WIN32

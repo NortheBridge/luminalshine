@@ -83,6 +83,10 @@ namespace mail {
   // submitted. Reading an IDR from worker IPC is not delivery and must not
   // acknowledge recovery early.
   MAIL(video_idr_submitted);
+  // Carries the streaming client's uuid to the video pipeline, raised by the
+  // RTSP video thread before capture starts. The isolated worker uses it so a
+  // reconnect of the same client can take its LuminalVGD frame ring over.
+  MAIL(video_client_uuid);
 #undef MAIL
 
 }  // namespace mail
