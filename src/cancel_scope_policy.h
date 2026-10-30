@@ -28,7 +28,7 @@ namespace cancel_scope {
   };
 
   /**
-   * @brief Count the live clients, other than the requester, that a full cancel would end.
+   * @brief Count the live sessions, pending launch and browser session, not the requester's, that a full cancel would end.
    *
    * A client counts as "other" when it cannot be proven to be the requester:
    * a non-stopping session or a pending launch with an empty or different uuid,

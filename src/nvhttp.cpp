@@ -3575,8 +3575,9 @@ namespace nvhttp {
     // Attribute the cancel and decide how far it reaches before it stops anything:
     // who asked, which sessions are tracked (including ones already stopping), and
     // who owns a pending launch. The snapshot and the pending-launch read are both
-    // non-reaping. /launch, /resume and /cancel share one serial worker, so no
-    // other client can start or join between this decision and the stop below.
+    // non-reaping. /launch, /resume and /cancel share one serial worker, so no new
+    // /launch or /resume can slip in between this decision and the stop below; a
+    // launch that was already pending can still be admitted by its ANNOUNCE.
     std::string requester_name;
     const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
     const auto tracked = rtsp_stream::session_snapshot_no_reap();
@@ -3589,8 +3590,8 @@ namespace nvhttp {
     const std::optional<std::string_view> pending_owner_uuid =
       pending_uuid ? std::optional<std::string_view> {*pending_uuid} : std::nullopt;
     const bool webrtc_active = webrtc_stream::has_active_sessions();
-    const auto other_clients = cancel_scope::other_clients(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
-    const auto scope = cancel_scope::decide(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
+    const auto others = cancel_scope::other_clients(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
+    const auto scope = others > 0 ? cancel_scope::scope_e::requester_only : cancel_scope::scope_e::full;
     {
       std::string pending_owner = "none";
       if (pending_uuid) {
@@ -3607,7 +3608,10 @@ namespace nvhttp {
       if (scope == cancel_scope::scope_e::full) {
         BOOST_LOG(info) << "Cancel scope: full";
       } else {
-        BOOST_LOG(info) << std::format("Cancel scope: requester_only (other live clients: {})", other_clients);
+        BOOST_LOG(info) << std::format("Cancel scope: requester_only (other live sessions or launches: {})", others);
+        if (requester_uuid.empty()) {
+          BOOST_LOG(warning) << "Cancel requester could not be identified; ending no session while another client is live.";
+        }
       }
       for (const auto &tracked_session : tracked) {
         const bool stops = scope == cancel_scope::scope_e::full ||
