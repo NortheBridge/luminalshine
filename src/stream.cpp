@@ -1589,8 +1589,13 @@ namespace stream {
             pos = server->_sessions->erase(pos);
 
             if (session->control.peer) {
+              // ENet can hand a freed peer slot to a new connection, so a connected peer only
+              // counts if the slot still maps to this session.
+              bool owns_peer = false;
               {
                 auto ptslg = server->_peer_to_session.lock();
+                auto it = server->_peer_to_session->find(session->control.peer);
+                owns_peer = it != server->_peer_to_session->end() && it->second == session;
                 server->_peer_to_session->erase(session->control.peer);
               }
 
@@ -1598,7 +1603,7 @@ namespace stream {
               // still-connected client it ended on purpose; otherwise the client reports the
               // disconnect as an error. enet_peer_disconnect_now drops queued packets, so flush first.
               const auto reason = session->stop_reason.load(std::memory_order_acquire);
-              const bool peer_connected = session->control.peer->state == ENET_PEER_STATE_CONNECTED;
+              const bool peer_connected = owns_peer && session->control.peer->state == ENET_PEER_STATE_CONNECTED;
               if (control_termination::should_send_graceful_termination(reason, peer_connected)) {
                 BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(control_termination::graceful_termination_code)
                                 << " before disconnect: reason="sv << session::stop_reason_name(reason)
@@ -3026,6 +3031,9 @@ namespace stream {
       // Record the cause before publishing STOPPING, so a thread that sees STOPPING also sees
       // why. With concurrent callers the first one's reason is kept. Only a RUNNING session
       // records one: a stop before start must not leave a stale reason for the real one.
+      // If start stores RUNNING between this check and the state CAS below, the CAS still
+      // stops the session but no reason is recorded; that only skips the graceful
+      // termination message, which is the safe direction.
       if (session.state.load(std::memory_order_acquire) == state_e::RUNNING) {
         auto unrecorded = stop_reason_e::count_;
         session.stop_reason.compare_exchange_strong(unrecorded, reason);
@@ -3047,8 +3055,12 @@ namespace stream {
 
       // Written once per session, on the transition only: which session stopped, why,
       // and from where, so a client that ends up disconnected is never left unexplained.
+      // reason= is the recorded one the control thread acts on; with racing stops it can
+      // differ from this caller's, which is then logged too.
+      const auto recorded_reason = session.stop_reason.load(std::memory_order_acquire);
+      const auto caller_reason = recorded_reason != reason ? " caller_reason="s + stop_reason_name(reason) : ""s;
       BOOST_LOG(info) << "Session stop: "sv << describe(identity(session))
-                      << " reason="sv << stop_reason_name(reason)
+                      << " reason="sv << stop_reason_name(recorded_reason) << caller_reason
                       << " at "sv << file_basename(loc.file_name()) << ':' << loc.line()
                       << " (active sessions now "sv << remaining_active << ')';
 
