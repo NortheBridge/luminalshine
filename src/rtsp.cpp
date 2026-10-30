@@ -866,7 +866,10 @@ namespace rtsp_stream {
       return pending->client_uuid;
     }
 
-    bool disconnect_client(const std::string &client_uuid) {
+    bool disconnect_client(
+      const std::string &client_uuid,
+      stream::session::stop_reason_e reason = stream::session::stop_reason_e::client_disconnect_request
+    ) {
       if (client_uuid.empty()) {
         return false;
       }
@@ -887,12 +890,41 @@ namespace rtsp_stream {
         }
       }
 
-      stop_and_join(to_cleanup, stream::session::stop_reason_e::client_disconnect_request);
+      stop_and_join(to_cleanup, reason);
 
       if (!to_cleanup.empty()) {
         nvhttp::mark_client_last_seen(client_uuid);
       }
       return !to_cleanup.empty();
+    }
+
+    /**
+     * @brief Cancel a client's own pending launch and stop its tracked sessions.
+     * @note Pops the pending launch only when it belongs to @p client_uuid, by id,
+     *       so another client's launch is never discarded. No reap of other sessions.
+     */
+    std::shared_ptr<launch_session_t> end_client_sessions(
+      const std::string &client_uuid,
+      stream::session::stop_reason_e reason
+    ) {
+      if (client_uuid.empty()) {
+        return {};
+      }
+
+      std::optional<uint32_t> own_pending_id;
+      {
+        std::lock_guard lg {_launch_timer_mutex};
+        const auto pending = launch_event.view(0s);
+        if (pending && pending->client_uuid == client_uuid) {
+          own_pending_id = pending->id;
+        }
+      }
+      std::shared_ptr<launch_session_t> cancelled;
+      if (own_pending_id) {
+        cancelled = cancel_pending_launch(*own_pending_id);
+      }
+      (void) disconnect_client(client_uuid, reason);
+      return cancelled;
     }
 
     /**
@@ -1198,6 +1230,10 @@ namespace rtsp_stream {
   bool disconnect_client_sessions(const std::string &client_uuid) {
     server.clear(false, stream::session::stop_reason_e::rtsp_reap);
     return server.disconnect_client(client_uuid);
+  }
+
+  std::shared_ptr<launch_session_t> end_client_sessions(const std::string &client_uuid, stream::session::stop_reason_e reason) {
+    return server.end_client_sessions(client_uuid, reason);
   }
 
   int send(tcp::socket &sock, const std::string_view &sv) {

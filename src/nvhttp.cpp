@@ -37,6 +37,7 @@
 #include <Simple-Web-Server/server_http.hpp>
 
 // local includes
+#include "cancel_scope_policy.h"
 #include "config.h"
 #include "display_device.h"
 #include "display_helper_integration.h"
@@ -3571,15 +3572,29 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    // Attribute the cancel before it stops anything: who asked, which sessions are
-    // tracked (including ones already stopping), and who owns a pending launch.
-    // The snapshot and the pending-launch read are both non-reaping.
+    // Attribute the cancel and decide how far it reaches before it stops anything:
+    // who asked, which sessions are tracked (including ones already stopping), and
+    // who owns a pending launch. The snapshot and the pending-launch read are both
+    // non-reaping. /launch, /resume and /cancel share one serial worker, so no new
+    // /launch or /resume can slip in between this decision and the stop below; a
+    // launch that was already pending can still be admitted by its ANNOUNCE.
+    std::string requester_name;
+    const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
+    const auto tracked = rtsp_stream::session_snapshot_no_reap();
+    const auto pending_uuid = rtsp_stream::pending_launch_client_uuid();
+    std::vector<cancel_scope::session_t> scope_sessions;
+    scope_sessions.reserve(tracked.size());
+    for (const auto &tracked_session : tracked) {
+      scope_sessions.push_back({tracked_session.client_uuid, tracked_session.stopping});
+    }
+    const std::optional<std::string_view> pending_owner_uuid =
+      pending_uuid ? std::optional<std::string_view> {*pending_uuid} : std::nullopt;
+    const bool webrtc_active = webrtc_stream::has_active_sessions();
+    const auto others = cancel_scope::other_clients(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
+    const auto scope = others > 0 ? cancel_scope::scope_e::requester_only : cancel_scope::scope_e::full;
     {
-      std::string requester_name;
-      const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
-      const auto tracked = rtsp_stream::session_snapshot_no_reap();
       std::string pending_owner = "none";
-      if (const auto pending_uuid = rtsp_stream::pending_launch_client_uuid()) {
+      if (pending_uuid) {
         const auto pending_cert = get_named_cert_by_uuid(*pending_uuid);
         pending_owner = std::format("client='{}' uuid={}", pending_cert ? pending_cert->name : std::string {}, stream::session::short_client_id(*pending_uuid));
       }
@@ -3590,7 +3605,20 @@ namespace nvhttp {
         tracked.size(),
         pending_owner
       );
+      if (scope == cancel_scope::scope_e::full) {
+        BOOST_LOG(info) << "Cancel scope: full";
+      } else {
+        BOOST_LOG(info) << std::format("Cancel scope: requester_only (other live sessions or launches: {})", others);
+        if (requester_uuid.empty()) {
+          BOOST_LOG(warning) << "Cancel requester could not be identified; ending no session while another client is live.";
+        }
+      }
       for (const auto &tracked_session : tracked) {
+        const bool stops = scope == cancel_scope::scope_e::full ||
+                           (!requester_uuid.empty() && tracked_session.client_uuid == requester_uuid);
+        if (!stops) {
+          continue;
+        }
         BOOST_LOG(info) << std::format(
           "Cancel will stop tracked session: client='{}' uuid={} stopping={}",
           tracked_session.client_name,
@@ -3598,6 +3626,20 @@ namespace nvhttp {
           tracked_session.stopping
         );
       }
+    }
+
+    if (scope == cancel_scope::scope_e::requester_only) {
+      // Another client is still streaming this app: end only the requester's own
+      // sessions and pending launch. The app, the virtual display and the display
+      // configuration stay with the other client, and the last client's normal
+      // teardown remains the one that cleans them up.
+      const auto cancelled_own_launch = rtsp_stream::end_client_sessions(requester_uuid, stream::session::stop_reason_e::explicit_cancel);
+#ifdef _WIN32
+      if (cancelled_own_launch) {
+        platf::video_worker::cancel_prewarm();
+      }
+#endif
+      return;
     }
 
     const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
