@@ -15,6 +15,7 @@
 #include <future>
 #include <optional>
 #include <queue>
+#include <source_location>
 #include <thread>
 
 // lib includes
@@ -550,6 +551,9 @@ namespace stream {
       std::string expected_peer_address;  // Only used for legacy clients without ML_FF_SESSION_ID_V1
 
       net::peer_t peer;
+      // "addr:port" of the bound peer, saved at bind time for diagnostics:
+      // ENet has already reset the peer by the time its DISCONNECT is delivered.
+      std::string peer_address;
       std::uint32_t seq;
 
       platf::feedback_queue_t feedback_queue;
@@ -558,6 +562,11 @@ namespace stream {
     } control;
 
     std::uint32_t launch_session_id;
+
+    // Client that launched this session, captured in alloc() for diagnostics
+    // (stop and control-stream logs). Immutable afterwards, so readable from any thread.
+    std::string client_name;
+    std::string client_uuid;
 
     // Per-second streaming telemetry, flushed to the session monitor
     // sidecar from the video broadcast thread (~1 Hz). Counters are
@@ -591,6 +600,11 @@ namespace stream {
     } virtual_display;
 #endif
   };
+
+  /// "id=<n> client='<name>' uuid=<short>" for session log lines.
+  static std::string session_label(const session_t &session) {
+    return session::describe(session::identity(session));
+  }
 
   /**
    * First part of cipher must be struct of type control_encrypted_t
@@ -805,6 +819,7 @@ namespace stream {
 
     // Slow path - process new session
     TUPLE_2D(peer_port, peer_addr, platf::from_sockaddr_ex((sockaddr *) &peer->address.address));
+    const auto peer_endpoint = (peer_addr.find(':') == std::string::npos ? peer_addr : '[' + peer_addr + ']') + ':' + std::to_string(peer_port);
     auto lg = _sessions.lock();
     for (auto pos = std::begin(*_sessions); pos != std::end(*_sessions); ++pos) {
       auto session_p = *pos;
@@ -820,13 +835,15 @@ namespace stream {
         if (session_p->control.connect_data != connect_data) {
           continue;
         } else {
-          BOOST_LOG(debug) << "Initialized new control stream session by connect data match [v2]"sv;
+          BOOST_LOG(info) << "Initialized new control stream session by connect data match [v2]: peer="sv
+                          << peer_endpoint << ' ' << session_label(*session_p);
         }
       } else {
         if (session_p->control.expected_peer_address != peer_addr) {
           continue;
         } else {
-          BOOST_LOG(debug) << "Initialized new control stream session by IP address match [v1]"sv;
+          BOOST_LOG(info) << "Initialized new control stream session by IP address match [v1]: peer="sv
+                          << peer_endpoint << ' ' << session_label(*session_p);
         }
       }
 
@@ -834,6 +851,7 @@ namespace stream {
       rtsp_stream::launch_session_clear(session_p->launch_session_id);
 
       session_p->control.peer = peer;
+      session_p->control.peer_address = peer_endpoint;
 
       // Use the local address from the control connection as the source address
       // for other communications to the client. This is necessary to ensure
@@ -897,7 +915,13 @@ namespace stream {
         return;
       }
 
-      session->pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      // The deadline is about to be pushed out. Keep the one the previous control event
+      // left so DISCONNECT can report how long the control stream had been silent. It is
+      // only meaningful from the first event on: session::start() sets the initial deadline
+      // (with an extra 18 s for strict-first-frame clients), so CONNECT does not report it.
+      const auto event_time = std::chrono::steady_clock::now();
+      const auto previous_ping_deadline = session->pingTimeout;
+      session->pingTimeout = event_time + config::stream.ping_timeout;
 
       switch (event.type) {
         case ENET_EVENT_TYPE_RECEIVE:
@@ -920,13 +944,20 @@ namespace stream {
           }
           break;
         case ENET_EVENT_TYPE_CONNECT:
-          BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          BOOST_LOG(info) << "CLIENT CONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session);
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
-          BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
-          // No more clients to send video data to ^_^
-          if (session->state == session::state_e::RUNNING) {
-            session::stop(*session);
+          {
+            const auto since_last_packet_ms = std::max<std::chrono::milliseconds::rep>(
+              0,
+              std::chrono::duration_cast<std::chrono::milliseconds>(event_time - (previous_ping_deadline - config::stream.ping_timeout)).count()
+            );
+            BOOST_LOG(info) << "CLIENT DISCONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session)
+                            << " since_last_packet_ms="sv << since_last_packet_ms;
+            // No more clients to send video data to ^_^
+            if (session->state == session::state_e::RUNNING) {
+              session::stop(*session, session::stop_reason_e::enet_disconnect);
+            }
           }
           break;
         case ENET_EVENT_TYPE_NONE:
@@ -1280,7 +1311,7 @@ namespace stream {
         BOOST_LOG(info) << "Client requested termination with empty reason payload ("sv << payload.size() << " bytes)";
       }
 
-      session::stop(*session);
+      session::stop(*session, session::stop_reason_e::client_termination);
     };
 
     server->map(packetTypes[IDX_TERMINATION], handle_client_termination);
@@ -1409,7 +1440,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, session::stop_reason_e::control_decrypt_failure);
         return;
       }
 
@@ -1464,7 +1495,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, session::stop_reason_e::control_decrypt_failure);
         return;
       }
 
@@ -1473,7 +1504,7 @@ namespace stream {
 
       if (type == packetTypes[IDX_ENCRYPTED]) {
         BOOST_LOG(error) << "Bad packet type [IDX_ENCRYPTED] found"sv;
-        session::stop(*session);
+        session::stop(*session, session::stop_reason_e::bad_encrypted_type);
         return;
       }
 
@@ -1497,8 +1528,13 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     constexpr auto pending_peer_termination_grace = std::chrono::seconds(1);
     std::optional<std::chrono::steady_clock::time_point> process_terminated_since;
+    // Last app state this loop observed, for the exit log below. proc::proc.running() is not a
+    // pure read (it takes the lifecycle mutex and can resume or terminate the app), so the exit
+    // path, which holds _sessions, must not call it again.
+    std::string_view app_state_at_last_poll = "unpolled"sv;
     while (!shutdown_event->peek() && !broadcast_shutdown_event->peek()) {
       const bool process_running = proc::proc.running() != 0;
+      app_state_at_last_poll = process_running ? "running"sv : "exited"sv;
       bool has_session_awaiting_peer = false;
 
       {
@@ -1521,8 +1557,8 @@ namespace stream {
 
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
-            BOOST_LOG(info) << address << ": Ping Timeout"sv;
-            session::stop(*session);
+            BOOST_LOG(info) << address << ": Ping Timeout "sv << session_label(*session);
+            session::stop(*session, session::stop_reason_e::ping_timeout);
           }
 
           if (session->state.load(std::memory_order_acquire) == session::state_e::STOPPING) {
@@ -1534,6 +1570,8 @@ namespace stream {
                 server->_peer_to_session->erase(session->control.peer);
               }
 
+              BOOST_LOG(info) << "Disconnecting control peer of stopping session: peer="sv << session->control.peer_address
+                              << ' ' << session_label(*session);
               enet_peer_disconnect_now(session->control.peer, 0);
             }
 
@@ -1549,7 +1587,7 @@ namespace stream {
                 now - *process_terminated_since >= pending_peer_termination_grace) {
               BOOST_LOG(info) << "Stopping pending control session from ["sv << session->control.expected_peer_address
                               << "] because the app terminated before the peer connected."sv;
-              session::stop(*session);
+              session::stop(*session, session::stop_reason_e::app_exited_before_peer);
               ++pos;
               continue;
             }
@@ -1626,8 +1664,16 @@ namespace stream {
       encrypted_payload;
 
     auto lg = server->_sessions.lock();
+    BOOST_LOG(info) << "Control thread exiting; terminating "sv << server->_sessions->size()
+                    << " remaining session(s) (shutdown="sv << shutdown_event->peek()
+                    << ", broadcast_shutdown="sv << broadcast_shutdown_event->peek()
+                    << ", app="sv << app_state_at_last_poll << " at last poll)"sv;
     for (auto pos = std::begin(*server->_sessions); pos != std::end(*server->_sessions); ++pos) {
       auto session = *pos;
+
+      BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(reason)
+                      << " to peer="sv << (session->control.peer ? session->control.peer_address : "none"s)
+                      << ' ' << session_label(*session);
 
       // We may not have gotten far enough to have an ENet connection yet
       if (session->control.peer) {
@@ -2710,7 +2756,7 @@ namespace stream {
   void videoThread(session_t *session) {
     platf::set_thread_name("session::video");
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, session::stop_reason_e::video_thread_exit);
     });
 
     while_starting_do_nothing(session->state);
@@ -2724,6 +2770,9 @@ namespace stream {
     // without transferring worker handles between HTTPS and RTSP lifetimes.
     auto peer_ready = session->mail->event<bool>(mail::video_peer_ready);
     peer_ready->reset();
+    // Held for the thread's lifetime: the mailbox keeps only weak references.
+    auto client_uuid = session->mail->event<std::string>(mail::video_client_uuid);
+    client_uuid->raise(session->client_uuid);
     seh_video_capture_args_t cap_args {session->mail, session->config.monitor, session};
     std::atomic<unsigned long> capture_seh {0};
     std::thread capture_thread([&] {
@@ -2744,6 +2793,8 @@ namespace stream {
       config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
     );
     if (ping_error < 0) {
+      // recv_ping's own error line carries no session identity.
+      BOOST_LOG(info) << "Video thread ending: initial UDP ping failed for "sv << session_label(*session);
 #ifdef _WIN32
       session->shutdown_event->raise(true);
 #endif
@@ -2820,7 +2871,7 @@ namespace stream {
   void audioThread(session_t *session) {
     platf::set_thread_name("session::audio");
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, session::stop_reason_e::audio_thread_exit);
     });
 
     while_starting_do_nothing(session->state);
@@ -2835,6 +2886,7 @@ namespace stream {
       config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
     );
     if (error < 0) {
+      BOOST_LOG(info) << "Audio thread ending: initial UDP ping failed for "sv << session_label(*session);
       return;
     }
 
@@ -2852,6 +2904,10 @@ namespace stream {
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
+    }
+
+    identity_t identity(const session_t &session) {
+      return {session.launch_session_id, session.client_name, session.client_uuid};
     }
 
     bool strict_first_frame_client(std::string_view client_name) {
@@ -2940,7 +2996,7 @@ namespace stream {
       BOOST_LOG(info) << "Completed deferred process-global session cleanup after " << reason << '.';
     }
 
-    void stop(session_t &session) {
+    void stop(session_t &session, stop_reason_e reason, std::source_location loc) {
       while_starting_do_nothing(session.state);
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
@@ -2955,7 +3011,14 @@ namespace stream {
       // recovery monitor would happily recreate the just-removed virtual display and
       // dispatch APPLY against the dying capture pipeline. Crash analysis of the
       // 2026-04-28 21:21 bundle showed exactly this race.
-      active_sessions.fetch_sub(1, std::memory_order_acq_rel);
+      const auto remaining_active = active_sessions.fetch_sub(1, std::memory_order_acq_rel) - 1;
+
+      // Written once per session, on the transition only: which session stopped, why,
+      // and from where, so a client that ends up disconnected is never left unexplained.
+      BOOST_LOG(info) << "Session stop: "sv << describe(identity(session))
+                      << " reason="sv << stop_reason_name(reason)
+                      << " at "sv << file_basename(loc.file_name()) << ':' << loc.line()
+                      << " (active sessions now "sv << remaining_active << ')';
 
       // Mark the session as ended in the monitor service so the Web
       // UI's "Active" badge clears and the session JSON is finalised
@@ -3409,6 +3472,8 @@ namespace stream {
       // with the expiring event object.
       session->video_pipeline_ready_event = mail->event<bool>(mail::video_pipeline_ready);
       session->launch_session_id = launch_session.id;
+      session->client_name = launch_session.client_name;
+      session->client_uuid = launch_session.client_uuid;
       // Keep the pending launch_event's shared owner until the control stream
       // claims (or expires) it. session::start releases only its copy. Moving
       // here opened a window where a second HTTP launch could prepare a

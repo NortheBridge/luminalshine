@@ -27,6 +27,7 @@
 #include "src/platform/windows/display.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_backend.h"
+#include "src/platform/windows/vgd_ring_consumers.h"
 #include "src/platform/windows/virtual_display_vgd.h"
 
 using namespace std::literals;
@@ -917,6 +918,9 @@ namespace platf::video_worker {
       BOOST_LOG(error) << "Video worker: parent has no validated encoder snapshot; using in-process pipeline.";
       return false;
     }
+    // Declared before child_owner so the ring is released only after the
+    // worker that consumed it has been terminated and reaped.
+    ring_consumers::ring_lease_t ring_lease;
     if (direct_vgd && bounded_retry_active) {
       // The first isolated worker already failed after the parent had admitted
       // a direct ring. Repeating the identical direct start in a fresh child
@@ -937,12 +941,39 @@ namespace platf::video_worker {
                                 "starting isolated WGC safe-capture instead.";
           start.safe_capture = 1;
         } else {
-          start.direct_vgd = 1;
-          start.vgd_session_id = target->session_id;
-          start.vgd_ring_slots = target->ring_slots;
-          start.vgd_transport_flags = target->transport_flags;
-          start.vgd_generation = target->generation;
-          std::copy(display_name.begin(), display_name.end(), std::begin(start.vgd_display_name));
+          // The frame ring has a single consumer. A client joining a running
+          // app on the same virtual display must not open it, or the two
+          // workers split the frames. A retiring holder is waited for briefly,
+          // and a reconnect of the holder's own client takes the ring over.
+          const auto client_uuid = mail->event<std::string>(mail::video_client_uuid)->view(0ms);
+          const std::string client_id = client_uuid ? *client_uuid : std::string {};
+          const auto retiring = [shutdown] {
+            return shutdown->peek();
+          };
+          const auto wait_started = std::chrono::steady_clock::now();
+          auto claim = ring_consumers::global().try_acquire(target->session_id, retiring, 0ms, client_id);
+          while (claim.decision == ring_consumers::decision_e::wait_for_release && !shutdown->peek()) {
+            std::this_thread::sleep_for(ring_consumers::release_poll_interval);
+            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_started);
+            claim = ring_consumers::global().try_acquire(target->session_id, retiring, waited, client_id);
+          }
+          if (shutdown->peek()) {
+            // The session ended while it waited; nothing will consume video.
+            return true;
+          }
+          ring_lease = std::move(claim.lease);
+          if (!ring_lease) {
+            BOOST_LOG(info) << "Video worker: LuminalVGD ring of session 0x" << std::hex << target->session_id << std::dec
+                            << " is already consumed by another live session; starting isolated WGC safe-capture.";
+            start.safe_capture = 1;
+          } else {
+            start.direct_vgd = 1;
+            start.vgd_session_id = target->session_id;
+            start.vgd_ring_slots = target->ring_slots;
+            start.vgd_transport_flags = target->transport_flags;
+            start.vgd_generation = target->generation;
+            std::copy(display_name.begin(), display_name.end(), std::begin(start.vgd_display_name));
+          }
         }
       }
     }
@@ -972,9 +1003,17 @@ namespace platf::video_worker {
     }
     child_t &child = *child_owner;
     if (!send(child.pipe, message_e::start, &start, sizeof(start))) {
-      BOOST_LOG(error) << "Video worker: failed to send startup state; using in-process pipeline.";
       ::TerminateProcess(child.process, 0xE005);
       (void) ::WaitForSingleObject(child.process, 1000);
+      if (direct_vgd) {
+        // The in-process pipeline would open the LuminalVGD ring in this
+        // process without a lease, taking frames from whichever session owns
+        // it. End the session as the establish_child failure does.
+        BOOST_LOG(error) << "Video worker: failed to send startup state; ending the direct-VGD session.";
+        shutdown->raise(true);
+        return true;
+      }
+      BOOST_LOG(error) << "Video worker: failed to send startup state; using in-process pipeline.";
       return false;
     }
 
@@ -1112,6 +1151,9 @@ namespace platf::video_worker {
         BOOST_LOG(warning) << "Video worker: display health is good; keeping the client session alive for one bounded isolated-worker retry.";
         bounded_retry_active = true;
         const auto reset_retry = util::fail_guard([&] { bounded_retry_active = false; });
+        // The failed worker is reaped and the retry runs in safe-capture, so
+        // the ring must not stay held away from the next session.
+        ring_lease.reset();
         return platf::video_worker::capture(std::move(mail), config, channel_data);
       }
       if (direct_vgd) {

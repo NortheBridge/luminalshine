@@ -21,6 +21,7 @@
 // local includes
 #include "crypto.h"
 #include "session_lifecycle_coordinator.h"
+#include "session_stop_reason.h"
 #include "thread_safe.h"
 
 namespace rtsp_stream {
@@ -98,6 +99,8 @@ namespace rtsp_stream {
     std::optional<std::chrono::steady_clock::time_point> virtual_display_ready_since;
     bool virtual_display_recreated_on_demand = false;
     bool virtual_display_needs_resume_apply = false;
+    /// @brief True when this launch reuses a virtual display owned by another active session (a joiner).
+    bool joined_existing_virtual_display = false;
     std::optional<std::vector<std::vector<std::string>>> virtual_display_topology_snapshot;
 
     /// @brief Pre-virtual-display device refresh rates captured before VD creation.
@@ -154,6 +157,31 @@ namespace rtsp_stream {
    */
   int session_count_no_reap();
 
+  /// One tracked streaming session, as reported by session_snapshot_no_reap().
+  struct session_snapshot_t {
+    std::string client_uuid;
+    std::string client_name;
+    bool stopping;
+  };
+
+  /**
+   * @brief Describe the tracked sessions without reaping STOPPING ones (diagnostics).
+   *
+   * Takes only the session-state lock, briefly. It never stops, joins or clears
+   * a session, so it is safe on the single RTSP handler and while display
+   * lifecycle ownership is held. Unlike get_all_session_client_uuids() it also
+   * lists sessions that are already STOPPING.
+   */
+  std::vector<session_snapshot_t> session_snapshot_no_reap();
+
+  /**
+   * @brief Client UUID of the pending launch that no control stream has claimed yet.
+   *
+   * Takes only the pending-launch mutex and never consumes the launch event.
+   * @return The UUID (possibly empty for an unidentified client), or nothing when no launch is pending.
+   */
+  std::optional<std::string> pending_launch_client_uuid();
+
   /**
    * @brief Terminates all running streaming sessions.
    */
@@ -169,6 +197,20 @@ namespace rtsp_stream {
    * @return True if one or more sessions were stopped.
    */
   bool disconnect_client_sessions(const std::string &client_uuid);
+
+  /**
+   * @brief End only the sessions that belong to one client, leaving every other client streaming.
+   *
+   * Cancels the pending launch only when it belongs to @p client_uuid, then stops and joins
+   * that client's tracked sessions with @p reason. Unlike terminate_sessions() it does not
+   * touch other clients' sessions or their pending launch, and unlike
+   * disconnect_client_sessions() it does not reap other STOPPING sessions first.
+   * An empty @p client_uuid owns nothing, so it ends nothing.
+   * @param client_uuid The client whose sessions to end.
+   * @param reason Why the sessions are being stopped.
+   * @return The pending launch that was cancelled, or null when the client had none.
+   */
+  std::shared_ptr<launch_session_t> end_client_sessions(const std::string &client_uuid, stream::session::stop_reason_e reason);
 
   /**
    * @brief Runs the RTSP server loop.

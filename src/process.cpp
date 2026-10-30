@@ -63,6 +63,7 @@
   #include "platform/windows/virtual_display.h"
 #endif
 #include "rtsp.h"
+#include "step_timer.h"
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
@@ -1014,12 +1015,15 @@ namespace proc {
         if (platf::request_process_group_exit((std::uintptr_t) group.native_handle())) {
           // If the request was successful, wait for a little while for them to exit.
           BOOST_LOG(info) << "Successfully requested the app to exit. Waiting up to "sv << exit_timeout.count() << " seconds for it to close."sv;
+          const auto wait_started = std::chrono::steady_clock::now();
 
           // group::wait_for() and similar functions are broken and deprecated, so we use a simple polling loop
           while (platf::process_group_running((std::uintptr_t) group.native_handle()) && (--exit_timeout).count() >= 0) {
             std::this_thread::sleep_for(1s);
           }
 
+          const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_started);
+          BOOST_LOG(info) << "App exit wait: "sv << (exit_timeout.count() < 0 ? "timed out after "sv : "exited after "sv) << waited.count() << " ms"sv;
           if (exit_timeout.count() < 0) {
             BOOST_LOG(warning) << "App did not fully exit within the timeout. Terminating the app's remaining processes."sv;
           } else {
@@ -1806,11 +1810,15 @@ namespace proc {
     std::lock_guard lifecycle_lock(_lifecycle_mutex);
     std::error_code ec;
     const bool had_active_app = _app_id > 0;
+    // Time each teardown step; /cancel waits for all of them before it answers.
+    util::step_timer_t terminate_timer;
+    auto step_started = terminate_timer.now();
     placebo = false;
 #ifdef _WIN32
     _deferred_launch = false;
     _lossless_should_start_support = false;
     stop_lossless_scaling_support();
+    terminate_timer.record_since("lossless", step_started);
 #endif
     // For Playnite-managed apps, request a graceful stop via Playnite first
 #ifdef _WIN32
@@ -1828,22 +1836,30 @@ namespace proc {
       try {
         if (should_request_playnite_stop) {
           // Ask Playnite to stop the game; then wait up to exit-timeout to let it close.
+          step_started = terminate_timer.now();
           platf::playnite::stop_game(_app.playnite_id);
           while (remaining_timeout.count() > 0 && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
             std::this_thread::sleep_for(1s);
             remaining_timeout -= 1s;
           }
+          terminate_timer.record_since("playnite_stop", step_started);
         }
       } catch (...) {}
       // Stop the IPC client since the Playnite session is ending
+      step_started = terminate_timer.now();
       platf::playnite::stop_client_for_session();
+      terminate_timer.record_since("playnite_ipc", step_started);
     } else if (had_active_app && _app.playnite_fullscreen) {
       // For fullscreen mode, also stop the IPC client
+      step_started = terminate_timer.now();
       platf::playnite::stop_client_for_session();
+      terminate_timer.record_since("playnite_ipc", step_started);
     }
 #endif
     // Regardless, ensure process group is terminated (graceful then forceful with remaining timeout)
+    step_started = terminate_timer.now();
     terminate_process_group(_process, _process_group, remaining_timeout);
+    terminate_timer.record_since("app_exit", step_started);
     _process = bp::child();
     _process_group = bp::group();
 
@@ -1870,6 +1886,15 @@ namespace proc {
                                               find_working_directory(cmd.undo_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
+      // Covers every way out of this iteration: launch failure, timeout, wait failure and exit.
+      const auto undo_started = terminate_timer.now();
+      auto undo_timing_guard = util::fail_guard([&]() {
+        try {
+          const auto took = terminate_timer.record_since("undo", undo_started);
+          BOOST_LOG(info) << "Undo Cmd took "sv << took.count() << " ms: ["sv << cmd.undo_cmd << ']';
+        } catch (...) {
+        }
+      });
       auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
 
       if (ec) {
@@ -1913,6 +1938,7 @@ namespace proc {
 
 #ifdef _WIN32
     if (_virtual_display_active) {
+      step_started = terminate_timer.now();
       if (!other_streaming_session_active) {
         const auto cleanup = platf::virtual_display_cleanup::run("app_termination", false);
         if (!cleanup.virtual_displays_removed) {
@@ -1927,6 +1953,7 @@ namespace proc {
           BOOST_LOG(info) << "Virtual display removed.";
         }
       }
+      terminate_timer.record_since("display_cleanup", step_started);
       std::memset(&_virtual_display_guid, 0, sizeof(_virtual_display_guid));
       _virtual_display_active = false;
     }
@@ -1946,11 +1973,13 @@ namespace proc {
 #endif
     } else if (should_dispatch_revert && !other_streaming_session_active) {
 #ifdef _WIN32
+      step_started = terminate_timer.now();
       const bool reverted = display_helper_integration::revert();
       if (reverted && rtsp_stream::session_count() == 0) {
         BOOST_LOG(debug) << "Display helper: stopping watchdog after app termination.";
         display_helper_integration::stop_watchdog();
       }
+      terminate_timer.record_since("display_revert", step_started);
 #endif
     } else if (should_dispatch_revert && other_streaming_session_active) {
       BOOST_LOG(info) << "Deferring display revert after app termination because another streaming session is still active.";
@@ -1963,12 +1992,16 @@ namespace proc {
     // Clear any per-app runtime config overrides now that the app is terminating.
     // If we can safely hot-apply immediately, restore global config now; otherwise defer.
     if (has_run) {
+      step_started = terminate_timer.now();
       config::clear_runtime_config_overrides();
       if (rtsp_stream::session_count() == 0 && !webrtc_stream::has_active_sessions()) {
         config::apply_config_now();
       } else {
         config::mark_deferred_reload();
       }
+      terminate_timer.record_since("config", step_started);
+
+      BOOST_LOG(info) << "App termination completed in "sv << terminate_timer.elapsed().count() << " ms ("sv << terminate_timer.format() << ')';
     }
   }
 
