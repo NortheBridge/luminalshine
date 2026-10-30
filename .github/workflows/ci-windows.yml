@@ -906,7 +906,7 @@ jobs:
         working-directory: build/tests
         run: >-
           ./test_sunshine.exe --gtest_color=yes
-          --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*:ExactDeviceWindowRouter.*:DesktopGuardWin32.*'
+          --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*:ExactDeviceWindowRouter.*:DesktopGuardWin32.*:DisplayHelperWatchdog.*:DisplayHelperWatchdogThread.*'
 
       - name: Config consistency gate
         # Unlike the advisory run above, the config-consistency suite reads
