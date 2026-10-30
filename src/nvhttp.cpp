@@ -60,6 +60,7 @@
 #include "process.h"
 #include "rtsp.h"
 #include "serial_executor.h"
+#include "step_timer.h"
 #include "stream.h"
 #include "system_tray.h"
 #include "update.h"
@@ -3568,6 +3569,11 @@ namespace nvhttp {
   void cancel(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
+    // Time each teardown step: the response is written only after all of them,
+    // so the completion line below shows which step held the client's quit.
+    util::step_timer_t cancel_timer;
+    auto step_started = cancel_timer.now();
+
     // Keep browser admission closed across the entire destructive cancel
     // transaction, including the interval after a pending Moonlight launch is
     // popped and before its display/application state is restored.
@@ -3644,36 +3650,67 @@ namespace nvhttp {
       }
     }
 
+    // One completion line on every path, written just before the response.
+    std::string_view cancel_outcome = "done";
+    auto cancel_summary_guard = util::fail_guard([&]() {
+      try {
+        BOOST_LOG(info) << std::format(
+          "Cancel completed in {} ms (requester='{}' scope={} outcome={} {})",
+          cancel_timer.elapsed().count(),
+          requester_name,
+          scope == cancel_scope::scope_e::full ? "full" : "requester_only",
+          cancel_outcome,
+          cancel_timer.format()
+        );
+      } catch (...) {
+      }
+    });
+
     if (scope == cancel_scope::scope_e::requester_only) {
       // Another client is still streaming this app: end only the requester's own
       // sessions and pending launch. The app, the virtual display and the display
       // configuration stay with the other client, and the last client's normal
       // teardown remains the one that cleans them up.
+      cancel_outcome = "scoped";
+      step_started = cancel_timer.now();
       const auto cancelled_own_launch = rtsp_stream::end_client_sessions(requester_uuid, stream::session::stop_reason_e::explicit_cancel);
+      cancel_timer.record_since("sessions", step_started);
 #ifdef _WIN32
       if (cancelled_own_launch) {
+        step_started = cancel_timer.now();
         platf::video_worker::cancel_prewarm();
+        cancel_timer.record_since("prewarm", step_started);
+      } else {
+        cancel_timer.skip("prewarm");
       }
 #endif
       return;
     }
 
+    step_started = cancel_timer.now();
     const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
+    cancel_timer.record_since("sessions", step_started);
 #ifdef _WIN32
+    step_started = cancel_timer.now();
     platf::video_worker::cancel_prewarm();
+    cancel_timer.record_since("prewarm", step_started);
 #endif
 
     // A successor /launch may arrive after terminate_sessions() releases the
     // old session. Whichever path obtains lifecycle ownership first wins: do
     // not terminate its app or remove its freshly prepared VGD.
+    step_started = cancel_timer.now();
     auto cleanup_ownership = stream::lifecycle::coordinator().acquire_cleanup(8s);
+    cancel_timer.record_since("cleanup_wait", step_started);
     if (cleanup_ownership.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
       BOOST_LOG(info) << "Cancel cleanup superseded by a newer launch; leaving successor state untouched.";
+      cancel_outcome = "superseded";
       return;
     }
     if (stream::session::active_sessions.load(std::memory_order_acquire) != 0 ||
         rtsp_stream::launch_session_pending()) {
       BOOST_LOG(info) << "Cancel cleanup observed a successor session after ownership acquisition; skipping destructive cleanup.";
+      cancel_outcome = "successor";
       return;
     }
 
@@ -3689,13 +3726,18 @@ namespace nvhttp {
       rtsp_stream::session_count() == 0;
     if (preserve_deferred_launch) {
       BOOST_LOG(info) << "Cancel requested while app launch is deferred; preserving deferred app and virtual display state.";
+      cancel_outcome = "deferred_launch_preserved";
     }
 #else
     constexpr bool preserve_deferred_launch = false;
 #endif
 
     if (has_running_app && !preserve_deferred_launch) {
+      step_started = cancel_timer.now();
       proc::proc.terminate();
+      cancel_timer.record_since("app", step_started);
+    } else {
+      cancel_timer.skip("app");
     }
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
 
@@ -3703,15 +3745,27 @@ namespace nvhttp {
     if (!preserve_deferred_launch) {
       // RTSP session termination above is synchronous, so by the time we reach
       // this point the old session threads have already completed their joins.
+      step_started = cancel_timer.now();
       cleanup_virtual_display_if_idle();
+      cancel_timer.record_since("display", step_started);
+    } else {
+      cancel_timer.skip("display");
     }
 #endif
     if (clear_cancelled_desktop_overrides) {
+      step_started = cancel_timer.now();
       config::clear_runtime_config_overrides();
       config::apply_config_now();
+      cancel_timer.record_since("config", step_started);
+    } else {
+      cancel_timer.skip("config");
     }
     if (cleanup_ownership.deferred_cleanup_pending) {
+      step_started = cancel_timer.now();
       stream::session::complete_deferred_global_cleanup("explicit client cancel");
+      cancel_timer.record_since("deferred_cleanup", step_started);
+    } else {
+      cancel_timer.skip("deferred_cleanup");
     }
   }
 
