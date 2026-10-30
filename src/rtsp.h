@@ -21,6 +21,7 @@
 // local includes
 #include "crypto.h"
 #include "session_lifecycle_coordinator.h"
+#include "session_stop_reason.h"
 #include "thread_safe.h"
 
 namespace rtsp_stream {
@@ -194,6 +195,20 @@ namespace rtsp_stream {
    * @return True if one or more sessions were stopped.
    */
   bool disconnect_client_sessions(const std::string &client_uuid);
+
+  /**
+   * @brief End only the sessions that belong to one client, leaving every other client streaming.
+   *
+   * Cancels the pending launch only when it belongs to @p client_uuid, then stops and joins
+   * that client's tracked sessions with @p reason. Unlike terminate_sessions() it does not
+   * touch other clients' sessions or their pending launch, and unlike
+   * disconnect_client_sessions() it does not reap other STOPPING sessions first.
+   * An empty @p client_uuid owns nothing, so it ends nothing.
+   * @param client_uuid The client whose sessions to end.
+   * @param reason Why the sessions are being stopped.
+   * @return The pending launch that was cancelled, or null when the client had none.
+   */
+  std::shared_ptr<launch_session_t> end_client_sessions(const std::string &client_uuid, stream::session::stop_reason_e reason);
 
   /**
    * @brief Runs the RTSP server loop.
