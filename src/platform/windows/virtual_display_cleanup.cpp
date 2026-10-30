@@ -120,9 +120,9 @@ namespace platf::virtual_display_cleanup {
         // only after strict snapshot + layout verification; wait for that
         // transaction boundary before removing LuminalVGD.
         const bool restore_completed =
-          display_helper_integration::wait_for_revert_completion(std::chrono::seconds(30));
+          display_helper_integration::wait_for_revert_completion(kRevertCompletionTimeout);
         result.physical_display_verified = restore_completed &&
-                                           wait_for_physical_display(std::chrono::seconds(2));
+                                           wait_for_physical_display(kPhysicalDisplayAfterRevertTimeout);
       }
 
       if (!result.physical_display_verified) {
@@ -132,23 +132,23 @@ namespace platf::virtual_display_cleanup {
           result.helper_revert_dispatched =
             display_helper_integration::revert(prefer_golden_if_current_missing) || result.helper_revert_dispatched;
           const bool restore_completed =
-            display_helper_integration::wait_for_revert_completion(std::chrono::seconds(30));
+            display_helper_integration::wait_for_revert_completion(kRevertCompletionTimeout);
           result.physical_display_verified = restore_completed &&
-                                             wait_for_physical_display(std::chrono::seconds(2));
+                                             wait_for_physical_display(kPhysicalDisplayAfterRevertTimeout);
         }
       }
 
       if (!result.physical_display_verified) {
         result.database_restore_applied = restore_windows_display_database();
         if (result.database_restore_applied) {
-          result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(5));
+          result.physical_display_verified = wait_for_physical_display(kPhysicalDisplayRecoveryTimeout);
         }
       }
 
       if (!result.physical_display_verified) {
         result.physical_fallback_applied = display_helper_integration::ensure_physical_display_active();
         if (result.physical_fallback_applied) {
-          result.physical_display_verified = wait_for_physical_display(std::chrono::seconds(5));
+          result.physical_display_verified = wait_for_physical_display(kPhysicalDisplayRecoveryTimeout);
         }
       }
     } else {
@@ -158,7 +158,7 @@ namespace platf::virtual_display_cleanup {
     if (!enforce_db_restore || result.physical_display_verified || !had_active_virtual_display) {
       result.virtual_displays_removed = VDISPLAY::removeAllVirtualDisplays();
       if (result.virtual_displays_removed) {
-        (void) wait_for_virtual_display_teardown(std::chrono::seconds(5));
+        (void) wait_for_virtual_display_teardown(kVirtualDisplayTeardownTimeout);
       }
     } else {
       BOOST_LOG(error) << "Virtual display cleanup: retaining VGD because no physical display could be verified; refusing to leave Windows headless.";

@@ -3125,8 +3125,16 @@ namespace stream {
 #ifdef _WIN32
         // Worker teardown and staged physical-display restoration legitimately
         // take longer than a thread join. Give display cleanup its own deadline
-        // instead of sharing one opaque "post-join cleanup" phase.
-        advance_phase(phase_e::display_cleanup, 30s);
+        // instead of sharing one opaque "post-join cleanup" phase. The deadline
+        // is derived from the cleanup's bounded waits, not fixed: a fixed 30 s
+        // fired while the cleanup's REVERT wait and recovery ladder (helper
+        // restart, database restore, physical fallback) were still running, so
+        // the host restarted instead of recovering in-process (issue #198).
+        // Only the final branch below calls run(), and it restores the display
+        // only when revert_display_config is set; every other branch removes at
+        // most the virtual display and keeps the 30 s floor.
+        const bool display_restore_runs = revert_display_config && !webrtc_active;
+        advance_phase(phase_e::display_cleanup, teardown::display_cleanup_deadline(platf::virtual_display_cleanup::worst_case_duration(display_restore_runs)));
         if (webrtc_active) {
           BOOST_LOG(debug) << "Display cleanup: WebRTC session is still active; skipping RTSP-triggered teardown.";
         } else if (delay_virtual_display_cleanup_due_to_pause) {

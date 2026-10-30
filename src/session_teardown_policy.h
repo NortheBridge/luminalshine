@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -75,6 +76,35 @@ namespace stream::session::teardown {
     return phase <= phase_e::resetting_input ?
              timeout_action_e::fast_exit :
              timeout_action_e::controlled_restart;
+  }
+
+  /**
+   * Slack on top of the display-cleanup budget. The budget is the sum of the
+   * explicit timeouts on the cleanup's nominal longest path. It does not count
+   * pipe handshake waits or helper_mutex/pipe_mutex contention, nor the OS
+   * calls that carry no timeout of their own. The margin covers their ordinary
+   * latency; the watchdog this deadline arms is the backstop for the rest.
+   */
+  constexpr std::chrono::seconds kDisplayCleanupMargin {10};
+
+  /**
+   * Shortest display-cleanup deadline: the fixed deadline used before it was
+   * derived (issue #198). A cleanup that restores nothing has a small budget
+   * and keeps it.
+   */
+  constexpr std::chrono::seconds kDisplayCleanupMinDeadline {30};
+
+  /**
+   * The display-cleanup watchdog deadline: the cleanup's worst-case budget plus
+   * a margin, never below min_deadline. A fixed deadline shorter than a
+   * restoring cleanup's budget fires while its recovery ladder is still running
+   * (issue #198), turning a recoverable display restore into a host restart.
+   */
+  constexpr std::chrono::seconds display_cleanup_deadline(
+    std::chrono::seconds cleanup_budget,
+    std::chrono::seconds min_deadline = kDisplayCleanupMinDeadline
+  ) noexcept {
+    return std::max(cleanup_budget + kDisplayCleanupMargin, min_deadline);
   }
 
   constexpr bool watchdog_arm_is_current(
