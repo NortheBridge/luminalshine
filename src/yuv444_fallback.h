@@ -20,7 +20,9 @@ namespace video {
    * The fallback exists for hardware that advertises 4:4:4 and then refuses it —
    * a TV that cannot accept 4:4:4, an encoder that fails only on the 4:4:4 pixel
    * format. It writes config.chromaSamplingType = 0 on the SESSION-LIFETIME
-   * config and tells the client the effective chroma changed. Nothing ever puts
+   * config and raises mail::chroma_downgrade, which only updates the session
+   * stats (no message is sent to the client; it sees the change in the bitstream
+   * at the next IDR). Nothing ever puts
    * 4:4:4 back: before the display-recovery work the session died on the same
    * failure, so the downgrade only ever had to outlive a session that was ending
    * anyway, and the client renegotiated 4:4:4 on reconnect.
@@ -46,8 +48,8 @@ namespace video {
    *     thread, so the encoder can reach its failure a beat before the capture
    *     loop has sampled the ring and said "recovering" — rule 1 alone loses that
    *     race. But a 4:2:0 retry that fails too settles it after the fact: the
-   *     failure was never about chroma, so 4:4:4 goes back and the client is
-   *     never told anything. A retry that succeeds is exactly the hardware case
+   *     failure was never about chroma, so 4:4:4 goes back and no downgrade is
+   *     ever reported. A retry that succeeds is exactly the hardware case
    *     the fallback exists for, and it commits, as today.
    *
    * Not thread-safe: one per encoder build attempt, on that thread.
@@ -88,7 +90,8 @@ namespace video {
      * @param retry_succeeded Whether the caller's 4:2:0 retry produced a working
      *        encoder.
      * @return true when the downgrade STANDS — and only then must the caller
-     *         tell the client (mail::chroma_downgrade) and log it. False means
+     *         raise mail::chroma_downgrade (which updates the session stats;
+     *         nothing is sent to the client) and log it. False means
      *         4:4:4 has been restored and nothing happened as far as the rest of
      *         the system is concerned.
      */
