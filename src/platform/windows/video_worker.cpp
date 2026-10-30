@@ -943,17 +943,24 @@ namespace platf::video_worker {
         } else {
           // The frame ring has a single consumer. A client joining a running
           // app on the same virtual display must not open it, or the two
-          // workers split the frames. A retiring holder (the same client
-          // reconnecting) is waited for so the reconnect stays on the ring.
+          // workers split the frames. A reconnect of the holder's own client
+          // takes the ring over, and a retiring holder of another client is
+          // waited for briefly.
+          const auto client_uuid = mail->event<std::string>(mail::video_client_uuid)->view(0ms);
+          const std::string client_id = client_uuid ? *client_uuid : std::string {};
           const auto retiring = [shutdown] {
             return shutdown->peek();
           };
           const auto wait_started = std::chrono::steady_clock::now();
-          auto claim = ring_consumers::global().try_acquire(target->session_id, retiring, 0ms);
+          auto claim = ring_consumers::global().try_acquire(target->session_id, retiring, 0ms, client_id);
           while (claim.decision == ring_consumers::decision_e::wait_for_release && !shutdown->peek()) {
             std::this_thread::sleep_for(ring_consumers::release_poll_interval);
             const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_started);
-            claim = ring_consumers::global().try_acquire(target->session_id, retiring, waited);
+            claim = ring_consumers::global().try_acquire(target->session_id, retiring, waited, client_id);
+          }
+          if (shutdown->peek()) {
+            // The session ended while it waited; nothing will consume video.
+            return true;
           }
           ring_lease = std::move(claim.lease);
           if (!ring_lease) {
@@ -997,9 +1004,17 @@ namespace platf::video_worker {
     }
     child_t &child = *child_owner;
     if (!send(child.pipe, message_e::start, &start, sizeof(start))) {
-      BOOST_LOG(error) << "Video worker: failed to send startup state; using in-process pipeline.";
       ::TerminateProcess(child.process, 0xE005);
       (void) ::WaitForSingleObject(child.process, 1000);
+      if (direct_vgd) {
+        // The in-process pipeline would open the LuminalVGD ring in this
+        // process without a lease, taking frames from whichever session owns
+        // it. End the session as the establish_child failure does.
+        BOOST_LOG(error) << "Video worker: failed to send startup state; ending the direct-VGD session.";
+        shutdown->raise(true);
+        return true;
+      }
+      BOOST_LOG(error) << "Video worker: failed to send startup state; using in-process pipeline.";
       return false;
     }
 
