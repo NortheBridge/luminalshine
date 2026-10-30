@@ -33,7 +33,7 @@ namespace stream::session {
     rtsp_broadcast_shutdown,  ///< The RTSP handler cleared all sessions because the broadcast is shutting down.
     rtsp_reap,  ///< The RTSP server reaped an already stopping session.
     client_disconnect_request,  ///< A disconnect of one client's sessions was requested (Web UI).
-    explicit_cancel,  ///< An explicit /cancel stopped every session.
+    explicit_cancel,  ///< An explicit /cancel stopped the session (every session, or only the requester's while another client streams).
     count_,  ///< Number of reasons; not a valid reason.
   };
 
