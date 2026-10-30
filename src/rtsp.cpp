@@ -33,6 +33,7 @@ extern "C" {
 #include "network.h"
 #include "nvhttp.h"
 #include "process.h"
+#include "pyrowave_bitrate_policy.h"
 #include "requested_display_mode.h"
 #include "rtsp.h"
 #include "session_teardown_policy.h"
@@ -1691,7 +1692,16 @@ namespace rtsp_stream {
         respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
         return;
       }
-      config.monitor.bitrate = static_cast<int>(pyrowave::bitrate_kbps(config::pyrowave.bitrate_mbps));
+      // The host setting is the ceiling; a client bitrate lowers it. Use the
+      // video bitrate derived above: PyroWave adds the same base FEC and
+      // headers on top of it, so the wire stays near what the client asked for.
+      // Prefer the unwrapped 64-bit configured value over the int-cast copy.
+      const std::int64_t client_bitrate_kbps = configuredBitrateKbps ? configuredBitrateKbps : config.monitor.bitrate;
+      const auto host_bitrate_kbps = static_cast<std::int64_t>(pyrowave::bitrate_kbps(config::pyrowave.bitrate_mbps));
+      config.monitor.bitrate = static_cast<int>(
+        pyrowave::session_bitrate_kbps(client_bitrate_kbps, host_bitrate_kbps, pyrowave::kMinClientBitrateKbps));
+      BOOST_LOG(info) << "PyroWave bitrate: client=" << client_bitrate_kbps << " Kbps host=" << host_bitrate_kbps
+                      << " Kbps target=" << config.monitor.bitrate << " Kbps";
       config.monitor.pyrowave_packet_size = config.packetsize;
       config.monitor.pyrowave_quality_bias = config::pyrowave.quality_bias;
       config.monitor.pyrowave_refresh_interval = config::pyrowave.refresh_interval;
