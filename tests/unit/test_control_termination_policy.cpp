@@ -18,7 +18,6 @@ namespace {
   const std::set<stop_reason_e> host_initiated {
     stop_reason_e::explicit_cancel,
     stop_reason_e::client_disconnect_request,
-    stop_reason_e::rtsp_clear_all,
     stop_reason_e::rtsp_broadcast_shutdown,
   };
 
@@ -48,6 +47,7 @@ namespace {
     for (auto reason : {
            stop_reason_e::video_thread_exit,
            stop_reason_e::audio_thread_exit,
+           stop_reason_e::rtsp_clear_all,
            stop_reason_e::app_exited_before_peer,
            stop_reason_e::admission_retired,
            stop_reason_e::rtsp_reap,
