@@ -943,9 +943,8 @@ namespace platf::video_worker {
         } else {
           // The frame ring has a single consumer. A client joining a running
           // app on the same virtual display must not open it, or the two
-          // workers split the frames. A reconnect of the holder's own client
-          // takes the ring over, and a retiring holder of another client is
-          // waited for briefly.
+          // workers split the frames. A retiring holder is waited for briefly,
+          // and a reconnect of the holder's own client takes the ring over.
           const auto client_uuid = mail->event<std::string>(mail::video_client_uuid)->view(0ms);
           const std::string client_id = client_uuid ? *client_uuid : std::string {};
           const auto retiring = [shutdown] {
