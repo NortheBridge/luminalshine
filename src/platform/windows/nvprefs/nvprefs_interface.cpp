@@ -33,10 +33,15 @@ namespace nvprefs {
   }
 
   nvprefs_interface::~nvprefs_interface() {
-    if (owning_undo_file() && load()) {
-      restore_global_profile();
+    // The global instance is destroyed during static destruction, after
+    // main() has torn logging down, and restoring logs through Boost.Log,
+    // which can throw (std::terminate) or touch freed sinks. main() restores
+    // the global profile on every return path while logging is alive, so
+    // don't restore here: a remaining undo file is restored on the next start.
+    try {
+      unload();
+    } catch (...) {
     }
-    unload();
   }
 
   bool nvprefs_interface::load() {
