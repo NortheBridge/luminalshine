@@ -1,6 +1,7 @@
 # common target definitions
 # this file will also load platform specific macros
 
+include(${CMAKE_MODULE_PATH}/prep/server_metadata.cmake)
 add_executable(sunshine ${SUNSHINE_TARGET_FILES})
 foreach(dep ${SUNSHINE_TARGET_DEPENDENCIES})
     add_dependencies(sunshine ${dep})  # compile these before sunshine

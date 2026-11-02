@@ -79,6 +79,7 @@ jobs:
     with:
       release_commit: ${{ needs.release-setup.outputs.release_commit }}
       release_version: ${{ needs.release-setup.outputs.release_version }}
+      server_release: ${{ needs.release-setup.outputs.publish_release == 'true' && (needs.release-setup.outputs.prerelease == 'true' && '2' || '1') || '0' }}
     # Forward repository secrets to the reusable workflow. While the
     # SIGN_ARTIFACTS gate in ci-windows.yml is 'false' no secrets are
     # read; once flipped to 'true' the SSLCOM_* secrets configured on
