@@ -141,7 +141,9 @@ namespace rtsp_stream {
   bool launch_session_pending();
 
   /**
-   * @brief Get the number of active sessions.
+   * @brief Reap stopped sessions, then get the number of active sessions.
+   * @warning May synchronously run session teardown and join its workers.
+   * Use session_count_no_reap() from workers and observational callbacks.
    * @return Count of active sessions.
    */
   int session_count();
@@ -150,7 +152,9 @@ namespace rtsp_stream {
    * @brief Get the number of tracked sessions without reaping STOPPING ones.
    *
    * Unlike session_count(), this never calls session::join(). It is safe on
-   * the single RTSP handler and while display lifecycle ownership is held.
+   * the single RTSP handler, session-owned workers (including the display
+   * watchdog), and while display lifecycle ownership is held. STOPPING
+   * sessions remain counted until the RTSP service reaps them.
    */
   int session_count_no_reap();
 
