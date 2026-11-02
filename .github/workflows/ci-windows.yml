@@ -916,11 +916,14 @@ jobs:
         # These suites are deterministic and require no display adapter. Keep
         # them blocking even though the broader hardware-sensitive run above is
         # advisory: release builds must preserve legacy client admission while
-        # adding PyroWave's separately negotiated format.
+        # adding PyroWave's separately negotiated format. The pairing suites
+        # are in the gate too: they drive the pairing handler in-process over
+        # loopback and need no display adapter or external network.
         shell: msys2 {0}
         working-directory: build/tests
         run: >-
           ./test_sunshine.exe --gtest_color=yes
+          --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*:ExactDeviceWindowRouter.*:DesktopGuardWin32.*:PairingConcurrentClients.*:PairingRequestPolicy.*:*PairingTest.*'
           --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*:ExactDeviceWindowRouter.*:DesktopGuardWin32.*:CrashHandlerMinidump.*:CrashDumpDirAcl.*:CrashBundleDumpDiscovery.*'
 
       - name: Config consistency gate

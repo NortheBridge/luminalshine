@@ -899,15 +899,28 @@ namespace nvhttp {
     std::vector<named_cert_t> named_devices;
   };
 
-  // uniqueID, session
+  /**
+   * @brief Identifies one pending pairing exchange.
+   * @details Moonlight on Android and iOS sends the same uniqueid from every device, so the
+   *          uniqueid alone cannot tell two devices apart. An exchange belongs to a uniqueid
+   *          together with the address of the peer that started it.
+   */
+  struct pairing_key_t {
+    std::string unique_id;
+    std::string address;
+
+    auto operator<=>(const pairing_key_t &) const = default;
+  };
+
+  // (uniqueID, peer address), session
   //
   // Mutated from three threads: the HTTPS and HTTP nvhttp server threads
   // (both expose /pair on their own io_context) and the confighttp thread
   // (nvhttp::pin() when the user submits the PIN form). Every access must
-  // hold map_id_sess_mutex — concurrent emplace/erase/rehash against a
-  // lookup corrupts the heap.
+  // hold map_id_sess_mutex — concurrent emplace/erase against a lookup
+  // corrupts the heap.
   std::mutex map_id_sess_mutex;
-  std::unordered_map<std::string, pair_session_t> map_id_sess;
+  std::map<pairing_key_t, pair_session_t> map_id_sess;
 
   struct pairing_outcome_t {
     pairing_request_t request;
@@ -919,6 +932,9 @@ namespace nvhttp {
   constexpr auto kPairingSessionTtl = std::chrono::minutes(5);
   constexpr auto kPairingOutcomeTtl = std::chrono::minutes(5);
   constexpr std::size_t kMaxPendingPairings = 32;
+  // One peer address may hold at most this many pending exchanges, so a single
+  // peer cannot take up every slot of kMaxPendingPairings.
+  constexpr std::size_t kMaxPendingPairingsPerPeer = 2;
   constexpr std::size_t kMaxPairingOutcomes = 64;
 
   // Guards client_root, which is reached from the HTTPS and HTTP io threads
@@ -1948,7 +1964,7 @@ namespace nvhttp {
   }  // namespace
 
   void remove_session(const pair_session_t &sess) {
-    map_id_sess.erase(sess.client.uniqueID);
+    map_id_sess.erase(pairing_key_t {sess.client.uniqueID, sess.client_address});
   }
 
   void fail_pair(pair_session_t &sess, pt::ptree &tree, const std::string status_msg) {
@@ -2190,6 +2206,7 @@ namespace nvhttp {
     const auto uniqID = get_arg(args, "uniqueid");
     const auto incoming_peer = request->remote_endpoint();
     const auto incoming_address = net::addr_to_normalized_string(incoming_peer.address());
+    const pairing_key_t pending_key {uniqID, incoming_address};
     std::vector<pair_response_t> expired_responses;
     auto expired_response_guard = util::fail_guard([&]() {
       // This guard was created before sess_lock, so every response write runs
@@ -2223,7 +2240,7 @@ namespace nvhttp {
       if (it->second == "getservercert"sv) {
         const auto client_cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
         const auto salt = get_arg(args, "salt");
-        auto sess_it = map_id_sess.find(uniqID);
+        auto sess_it = map_id_sess.find(pending_key);
 
         if (sess_it != map_id_sess.end() && sess_it->second.last_phase != PAIR_PHASE::NONE) {
           // A retransmission of the same phase-one request is safe to answer
@@ -2259,13 +2276,23 @@ namespace nvhttp {
             return;
           }
 
+          const auto peer_pending = static_cast<std::size_t>(std::ranges::count_if(map_id_sess, [&](const auto &entry) {
+            return entry.second.client_address == incoming_address;
+          }));
+          if (peer_pending >= kMaxPendingPairingsPerPeer) {
+            tree.put("root.paired", 0);
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "Too many pending pairing requests from this peer");
+            return;
+          }
+
           pair_session_t sess;
           sess.client.uniqueID = uniqID;
           sess.pairing_id = uuid_util::uuid_t::generate().string();
           sess.created_at = now;
           sess.updated_at = now;
           sess.client_address = incoming_address;
-          sess_it = map_id_sess.emplace(uniqID, std::move(sess)).first;
+          sess_it = map_id_sess.emplace(pending_key, std::move(sess)).first;
         } else {
           // Same client retried while still waiting for its PIN. Keep the
           // opaque id stable, retire the abandoned held response, and refresh
@@ -2319,18 +2346,13 @@ namespace nvhttp {
       }
     }
 
-    auto sess_it = map_id_sess.find(uniqID);
+    // Only the peer that started an exchange can find it again: another
+    // peer with the same uniqueid has its own exchanges, or none.
+    auto sess_it = map_id_sess.find(pending_key);
     if (sess_it == std::end(map_id_sess)) {
       tree.put("root.<xmlattr>.status_code", 400);
       tree.put("root.<xmlattr>.status_message", "Invalid uniqueid");
 
-      return;
-    }
-
-    if (sess_it->second.client_address != incoming_address) {
-      tree.put("root.paired", 0);
-      tree.put("root.<xmlattr>.status_code", 403);
-      tree.put("root.<xmlattr>.status_message", "Pairing request peer mismatch");
       return;
     }
 
@@ -2361,6 +2383,8 @@ namespace nvhttp {
       tree.put("root.<xmlattr>.status_message", "Invalid pairing request");
     }
   }
+
+  template void pair<SimpleWeb::HTTP>(std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, resp_http_t response, req_http_t request);
 
   std::vector<pairing_request_t> get_pairing_requests() {
     const auto now = std::chrono::steady_clock::now();

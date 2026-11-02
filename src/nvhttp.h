@@ -100,6 +100,18 @@ namespace nvhttp {
   template<class T>
   void not_found(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request);
 
+  /**
+   * @brief GET /pair handler of both GameStream servers.
+   * @details Runs one phase of the pairing exchange selected by the query parameters. Phase one
+   *          holds its response until the PIN arrives through submit_pin(); the later phases answer
+   *          on the spot. Explicitly instantiated for `SimpleWeb::HTTP`.
+   * @param add_cert Receives the certificate of a client that completed pairing.
+   * @param response The response to write.
+   * @param request The /pair request.
+   */
+  template<class T>
+  void pair(std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request);
+
   enum class PAIR_PHASE {
     NONE,  ///< Sunshine is not in a pairing phase
     GETSERVERCERT,  ///< Sunshine is in the get server certificate phase
@@ -131,8 +143,10 @@ namespace nvhttp {
     } async_insert_pin;
 
     // Opaque host-generated identifier used by the authenticated Web UI to
-    // address this exact pending request.  The GameStream uniqueID remains the
-    // protocol map key and is deliberately not exposed through /api/pin.
+    // address this exact pending request.  Pending requests are keyed by the
+    // GameStream uniqueID together with the peer address, because several
+    // devices can share one uniqueID.  The uniqueID is deliberately not
+    // exposed through /api/pin.
     std::string pairing_id = {};
     std::string client_address = {};
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
