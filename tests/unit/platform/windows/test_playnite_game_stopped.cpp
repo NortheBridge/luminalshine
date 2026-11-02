@@ -29,8 +29,8 @@ namespace {
   using worker_event_e = single_flight_worker_t::event_e;
   using clock_type = std::chrono::steady_clock;
 
-  // Upper bound for every wait on another thread. A correct run never reaches it; a regression
-  // fails the test instead of hanging it.
+  // Upper bound for every wait on another thread. A correct run never reaches it; a regression that
+  // does not hold the worker lock across a join fails the test instead of hanging it.
   constexpr auto kWaitLimit = 10s;
 
   /**

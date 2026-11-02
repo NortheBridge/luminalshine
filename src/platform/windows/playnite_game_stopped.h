@@ -152,7 +152,7 @@ namespace platf::playnite {
     };
 
     /**
-     * @brief Called without the lock held, on the posting thread (drops, spawn failures) or on the worker
+     * @brief Called without the lock held, on the thread that called post() (drops, spawn failures) or on the worker
      *        thread (task failures). It must not call back into the worker; an exception it throws is ignored.
      */
     using event_fn = std::function<void(event_e, std::string_view)>;
