@@ -144,8 +144,10 @@ namespace nvhttp {
     } async_insert_pin;
 
     // Opaque host-generated identifier used by the authenticated Web UI to
-    // address this exact pending request.  The GameStream uniqueID remains the
-    // protocol map key and is deliberately not exposed through /api/pin.
+    // address this exact pending request.  Pending requests are keyed by the
+    // GameStream uniqueID together with the peer address, because several
+    // devices can share one uniqueID.  The uniqueID is deliberately not
+    // exposed through /api/pin.
     std::string pairing_id = {};
     std::string client_address = {};
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
