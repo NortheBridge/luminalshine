@@ -1322,7 +1322,9 @@ namespace {
         (void) platf::display_helper_client::send_ping();
       }
 
-      const bool suspended = (rtsp_stream::session_count() == 0) && (proc::proc.running() > 0);
+      // Counting must not reap sessions here: teardown stops this watchdog,
+      // so reaping on its own thread would make stop_watchdog() join itself.
+      const bool suspended = (rtsp_stream::session_count_no_reap() == 0) && (proc::proc.running() > 0);
       const auto interval = suspended ? kSuspendedInterval : kActiveInterval;
       for (auto slept = 0ms; slept < interval && !st.stop_requested(); slept += 100ms) {
         std::this_thread::sleep_for(100ms);
