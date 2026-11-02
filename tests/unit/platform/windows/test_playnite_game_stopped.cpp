@@ -121,16 +121,16 @@ namespace {
   TEST_F(PlayniteGameStopped, IgnoresWhenNoPlayniteAppOrOtherGame) {
     // No active app at all.
     guard.has_active_app = false;
-    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", clock_type::now(), clock_type::now()), game_stopped_action_e::ignored_no_playnite_app);
+    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", clock_type::now()), game_stopped_action_e::ignored_no_playnite_app);
 
     // An active app that is not Playnite-backed.
     guard.has_active_app = true;
     guard.uses_playnite = false;
-    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", clock_type::now(), clock_type::now()), game_stopped_action_e::ignored_no_playnite_app);
+    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", clock_type::now()), game_stopped_action_e::ignored_no_playnite_app);
 
     // A Playnite-backed app, but the stopped game is a different one.
     guard.uses_playnite = true;
-    EXPECT_EQ(run_game_stopped(make_deps(), "game-b", clock_type::now(), clock_type::now()), game_stopped_action_e::ignored_other_game);
+    EXPECT_EQ(run_game_stopped(make_deps(), "game-b", clock_type::now()), game_stopped_action_e::ignored_other_game);
 
     // allow_stop consumes tracker state, so it must not run for any of the above.
     EXPECT_EQ(allow_stop_calls, 0);
@@ -140,7 +140,7 @@ namespace {
   TEST_F(PlayniteGameStopped, IgnoresWithoutPriorStart) {
     allow_stop_result = false;
 
-    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", clock_type::now(), clock_type::now()), game_stopped_action_e::ignored_no_prior_start);
+    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", clock_type::now()), game_stopped_action_e::ignored_no_prior_start);
 
     EXPECT_EQ(allow_stop_calls, 1);
     EXPECT_EQ(allow_stop_id, "game-a");
@@ -148,15 +148,16 @@ namespace {
   }
 
   TEST_F(PlayniteGameStopped, GuardWindowMeasuredFromReceipt) {
-    // Received 1s after launch: inside the 2s window, even though the task only runs 5s after launch.
-    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", launch + 1s, launch + 5s), game_stopped_action_e::ignored_guard_window);
+    // Received 1s after launch: inside the 2s window.
+    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", launch + 1s), game_stopped_action_e::ignored_guard_window);
     EXPECT_EQ(terminate_calls, 0);
 
     // Received 3s after launch: outside the window.
-    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", launch + 3s, launch + 5s), game_stopped_action_e::terminated);
+    EXPECT_EQ(run_game_stopped(make_deps(), "game-a", launch + 3s), game_stopped_action_e::terminated);
     EXPECT_EQ(terminate_calls, 1);
 
-    // The same receipt time decides when the task runs later through the posted path.
+    // The posted task runs an hour after launch, but the message was received 1s after it:
+    // the receipt time decides, not the time the task runs.
     terminate_calls = 0;
     handle_game_stopped(make_deps(), "game-a", launch + 1s);
     run_posted();

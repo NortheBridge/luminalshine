@@ -17,6 +17,7 @@
 #include "src/platform/windows/image_convert.h"
 #include "src/platform/windows/ipc/misc_utils.h"
 #include "src/platform/windows/misc.h"
+#include "src/platform/windows/playnite_game_stopped.h"
 #include "src/platform/windows/playnite_ipc.h"
 #include "src/platform/windows/playnite_protocol.h"
 #include "src/platform/windows/playnite_sync.h"
@@ -233,7 +234,11 @@ namespace platf::playnite {
     }
 
     ~deinit_t_impl() override {
-      // Stop inactivity monitor thread first
+      // Join the stop worker first: it terminates the session, which stops the client and reads the
+      // members torn down below. Once closed, no new stop can start.
+      close_stop_worker();
+
+      // Stop inactivity monitor thread
       stop_inactivity_monitor();
 
       if (client_) {
@@ -451,6 +456,54 @@ namespace platf::playnite {
       }
     }
 
+    // Called on the IPC pipe thread for a gameStopped message. Terminating the session stops this
+    // client, which joins the pipe thread, so the task runs on a dedicated worker instead. At most one
+    // stop runs at a time; a gameStopped that arrives meanwhile is dropped.
+    void post_stop_task(std::function<void()> task) {
+      std::jthread finished;  // Previous worker; declared before the lock so it is joined after the lock is released
+      std::scoped_lock lk(stop_worker_mutex_);
+      if (stop_worker_closed_) {
+        BOOST_LOG(debug) << "Playnite: dropping gameStopped because the integration is shutting down";
+        return;
+      }
+      if (stop_in_flight_.exchange(true, std::memory_order_acq_rel)) {
+        BOOST_LOG(debug) << "Playnite: dropping gameStopped because a stop is already in progress";
+        return;
+      }
+      // The flag was clear, so the previous worker has finished its task and is only exiting.
+      finished = std::move(stop_worker_);
+      try {
+        stop_worker_ = std::jthread([this, task = std::move(task)]() mutable {
+          try {
+            task();
+          } catch (const std::exception &e) {
+            BOOST_LOG(error) << "Playnite: gameStopped handling failed: " << e.what();
+          } catch (...) {
+            BOOST_LOG(error) << "Playnite: gameStopped handling failed with an unknown error";
+          }
+          // Last use of `this`: the destructor joins this worker before any member is destroyed.
+          stop_in_flight_.store(false, std::memory_order_release);
+        });
+      } catch (const std::exception &e) {
+        stop_in_flight_.store(false, std::memory_order_release);
+        BOOST_LOG(error) << "Playnite: failed to start the gameStopped worker: " << e.what();
+      }
+    }
+
+    // Refuse new stops and wait for the running one. Joins outside the lock: the worker's terminate
+    // joins the IPC pipe thread, which may be waiting on stop_worker_mutex_ in post_stop_task.
+    void close_stop_worker() {
+      std::jthread worker;
+      {
+        std::scoped_lock lk(stop_worker_mutex_);
+        stop_worker_closed_ = true;
+        worker = std::move(stop_worker_);
+      }
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+
     static std::string sync_summary(const SyncStats &stats) {
       std::ostringstream os;
       os << "status=" << (stats.success ? (stats.changed ? "updated" : "unchanged") : "failed");
@@ -654,28 +707,55 @@ namespace platf::playnite {
           playnite_session_tracker().on_started(msg.status_game_id);
           platf::frame_limiter_streaming_refresh();
         } else if (msg.status_name == "gameStopped") {
-          auto guard = proc::proc.active_session_guard();
-          if (!guard.has_active_app || !guard.uses_playnite) {
-            BOOST_LOG(debug) << "Playnite: ignoring gameStopped because no active Playnite-backed app";
-            return;
-          }
-          if (!msg.status_game_id.empty() && !guard.playnite_id.empty() && msg.status_game_id != guard.playnite_id) {
-            BOOST_LOG(debug) << "Playnite: ignoring gameStopped for id='" << msg.status_game_id
-                             << "' (active Playnite id='" << guard.playnite_id << "')";
-            return;
-          }
-          if (!playnite_session_tracker().allow_stop(msg.status_game_id)) {
-            BOOST_LOG(debug) << "Playnite: ignoring gameStopped because no prior gameStarted for this session";
-            return;
-          }
-          auto now = std::chrono::steady_clock::now();
-          if (guard.launch_started_at.time_since_epoch().count() != 0 &&
-              now - guard.launch_started_at < std::chrono::seconds(2)) {
-            BOOST_LOG(debug) << "Playnite: ignoring gameStopped within session guard window";
-            return;
-          }
-          BOOST_LOG(debug) << "Playnite: received gameStopped; terminating active process";
-          proc::proc.terminate();
+          // This runs on the IPC pipe thread, so it only hands the message off: terminating the session
+          // stops this client and joins this very thread, and the lifecycle lock may be held by a quit
+          // that is waiting to join it. The deps use no instance state; only `post` touches `this`.
+          const auto received_at = std::chrono::steady_clock::now();
+          platf::playnite::game_stopped_deps_t deps;
+          deps.get_guard = []() {
+            const auto guard = proc::proc.active_session_guard();
+            return platf::playnite::game_stopped_guard_t {
+              guard.has_active_app,
+              guard.app_id,
+              guard.uses_playnite,
+              guard.playnite_id,
+              guard.client_uuid,
+              guard.launch_started_at,
+            };
+          };
+          deps.allow_stop = [](const std::string &id) {
+            return playnite_session_tracker().allow_stop(id);
+          };
+          deps.terminate_if_current = [](int app_id, std::chrono::steady_clock::time_point launch_started_at, std::string_view client_uuid) {
+            BOOST_LOG(debug) << "Playnite: received gameStopped; terminating active process";
+            return proc::proc.terminate_if_active_session(app_id, launch_started_at, client_uuid);
+          };
+          deps.post = [this](std::function<void()> task) {
+            post_stop_task(std::move(task));
+          };
+          deps.on_result = [game_id = msg.status_game_id](platf::playnite::game_stopped_action_e action) {
+            using action_e = platf::playnite::game_stopped_action_e;
+            switch (action) {
+              case action_e::ignored_no_playnite_app:
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped because no active Playnite-backed app";
+                break;
+              case action_e::ignored_other_game:
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped for id='" << game_id << "' (not the active Playnite id)";
+                break;
+              case action_e::ignored_no_prior_start:
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped because no prior gameStarted for this session";
+                break;
+              case action_e::ignored_guard_window:
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped within session guard window";
+                break;
+              case action_e::generation_changed:
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped because a newer launch replaced the session";
+                break;
+              case action_e::terminated:
+                break;  // Logged before the termination started, which can take a while.
+            }
+          };
+          platf::playnite::handle_game_stopped(std::move(deps), msg.status_game_id, received_at);
         }
       } else {
         // Truncate and log a preview of the raw message for diagnostics
@@ -801,6 +881,12 @@ namespace platf::playnite {
     std::thread inactivity_thread_;  // Background thread that checks for inactivity
     std::atomic<bool> inactivity_stop_flag_ {false};  // Signal to stop the inactivity thread
     std::condition_variable inactivity_cv_;  // For efficient sleeping with early wake-up
+
+    // Stop worker for gameStopped (see post_stop_task)
+    std::mutex stop_worker_mutex_;  // Guards stop_worker_ and stop_worker_closed_; never held across a join
+    std::jthread stop_worker_;  // Runs the termination off the IPC pipe thread
+    bool stop_worker_closed_ {false};  // Set by the destructor; a gameStopped arriving after it is dropped
+    std::atomic<bool> stop_in_flight_ {false};  // True from claiming a stop until the worker has finished it
   };
 
   std::unique_ptr<::platf::deinit_t> start() {
