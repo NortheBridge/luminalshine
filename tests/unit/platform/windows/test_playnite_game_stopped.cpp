@@ -2,22 +2,20 @@
  * @file tests/unit/platform/windows/test_playnite_game_stopped.cpp
  * @brief Test the Playnite `gameStopped` hand-off policy in src/platform/windows/playnite_game_stopped.h.
  */
-#include <gtest/gtest.h>
-
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
+#include <gtest/gtest.h>
 #include <mutex>
+#include <src/platform/windows/playnite_game_stopped.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
-
-#include <src/platform/windows/playnite_game_stopped.h>
 
 namespace {
 
@@ -349,7 +347,8 @@ namespace {
     // loop is a safe way to learn that close() is now in progress, without sleeping.
     const auto deadline = clock_type::now() + kWaitLimit;
     while (rec.count(worker_event_e::dropped_closed) == 0 && clock_type::now() < deadline) {
-      EXPECT_FALSE(rec.worker.post([]() {}));
+      EXPECT_FALSE(rec.worker.post([]() {
+      }));
       std::this_thread::yield();
     }
     ASSERT_GT(rec.count(worker_event_e::dropped_closed), 0u);

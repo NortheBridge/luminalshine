@@ -76,8 +76,7 @@ namespace platf::playnite {
       if (!deps.allow_stop(game_id)) {
         return game_stopped_action_e::ignored_no_prior_start;
       }
-      if (guard.launch_started_at.time_since_epoch().count() != 0 &&
-          received_at - guard.launch_started_at < kGameStoppedLaunchGuardWindow) {
+      if (guard.launch_started_at.time_since_epoch().count() != 0 && received_at - guard.launch_started_at < kGameStoppedLaunchGuardWindow) {
         return game_stopped_action_e::ignored_guard_window;
       }
       return deps.terminate_if_current(guard.app_id, guard.launch_started_at, guard.client_uuid) ?
