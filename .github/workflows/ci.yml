@@ -129,7 +129,7 @@ jobs:
           name: LuminalShine ${{ needs.release-setup.outputs.release_tag }}
           draft: true
           prerelease: ${{ needs.release-setup.outputs.prerelease }}
-          tag_name: LuminalShine ${{ needs.release-setup.outputs.release_tag }}
+          tag_name: ${{ needs.release-setup.outputs.release_tag }}
           # Pin the tag to the commit these binaries were actually built from.
           #
           # A draft release creates no tag ref — GitHub creates the tag when the
