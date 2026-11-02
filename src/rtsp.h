@@ -191,24 +191,15 @@ namespace rtsp_stream {
   std::optional<pending_launch_snapshot_t> pending_launch_snapshot();
 
   /**
-   * @brief Terminates all running streaming sessions, including any that start while it runs.
-   *
-   * A full /cancel uses terminate_observed_sessions() instead, so a client that
-   * connects after its decision is not stopped.
-   */
-  std::shared_ptr<launch_session_t> terminate_sessions();
-
-  /**
    * @brief Stop only the pending launch and sessions an earlier snapshot observed.
    *
    * Pops the pending launch only while it is still @p pending (by id), then stops and
    * joins the tracked sessions whose launch id is @p pending's or one of @p sessions'.
    * A session that became tracked after the snapshot has a different launch id and
-   * keeps streaming. The pending launch's own session is covered even when its ANNOUNCE
-   * admits it after this call's pop: that session carries the pending launch's id, and
-   * the pop waits for the admission. When another path (expiry, a stale-socket ANNOUNCE
-   * rejection) popped the launch first, nothing here waits, so a session inserted after
-   * the stop pass is not stopped.
+   * keeps streaming; none is expected, as a launch popped while unclaimed is retired
+   * and never starts one. The pending launch's own session is covered even when its
+   * ANNOUNCE is admitting it during this call's pop: the pop waits for the admission,
+   * and the session carries the pending launch's id.
    * @param pending The pending launch the decision observed, if any.
    * @param sessions The tracked sessions the decision observed.
    * @param reason Why the sessions are being stopped.
@@ -235,7 +226,7 @@ namespace rtsp_stream {
    * @brief End only the sessions that belong to one client, leaving every other client streaming.
    *
    * Cancels the pending launch only when it belongs to @p client_uuid, then stops and joins
-   * that client's tracked sessions with @p reason. Unlike terminate_sessions() it does not
+   * that client's tracked sessions with @p reason. Unlike terminate_observed_sessions() it does not
    * touch other clients' sessions or their pending launch, and unlike
    * disconnect_client_sessions() it does not reap other STOPPING sessions first.
    * An empty @p client_uuid owns nothing, so it ends nothing.

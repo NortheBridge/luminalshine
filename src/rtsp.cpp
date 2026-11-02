@@ -1261,12 +1261,6 @@ namespace rtsp_stream {
     return server.pending_launch_snapshot();
   }
 
-  std::shared_ptr<launch_session_t> terminate_sessions() {
-    auto pending = server.cancel_pending_launch();
-    server.clear(true, stream::session::stop_reason_e::explicit_cancel);
-    return pending;
-  }
-
   std::shared_ptr<launch_session_t> terminate_observed_sessions(
     const std::optional<pending_launch_snapshot_t> &pending,
     const std::vector<session_snapshot_t> &sessions,

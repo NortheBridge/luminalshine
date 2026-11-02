@@ -3602,12 +3602,13 @@ namespace nvhttp {
     // steps between the reads, so the decision would call a live joiner absent
     // and choose a full cancel. Pending first sees it in at least one of the two.
     //
-    // That ordering only keeps the decision honest; it does not keep the stop
-    // honest. A launch can be popped before its session is inserted (the expiry
-    // timer, or ANNOUNCE rejecting a stale duplicate socket), and its ANNOUNCE
-    // can then publish the session at any time, so a client can become visible
-    // after this decision. The full-scope stop below therefore acts only on the
-    // launch ids this snapshot observed and leaves anything newer streaming.
+    // That is the only window the decision had. A launch popped while unclaimed
+    // is retired, so its ANNOUNCE gets 410 and it never starts a session: the
+    // expiry timer, a stale-socket ANNOUNCE rejection and every ANNOUNCE run on
+    // the one RTSP thread, so none can pop a launch mid-admission, and /cancel
+    // waits on the admission mutex. The full-scope stop below still acts only on
+    // the launch ids this snapshot observed, as defence in depth: it never
+    // touches a session the decision did not see.
     std::string requester_name;
     const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
     const auto pending = rtsp_stream::pending_launch_snapshot();
@@ -3680,21 +3681,16 @@ namespace nvhttp {
     platf::video_worker::cancel_prewarm();
 #endif
 
-    // A successor can still become visible after the stop above. /launch,
-    // /resume and /cancel are serialized, so it is not a new request: it is a
-    // launch that another path popped (the expiry timer, or ANNOUNCE rejecting a
-    // stale duplicate socket) before this cancel could pop it, whether that was
-    // before or after the decision, while its own ANNOUNCE was still being
-    // admitted. If that ANNOUNCE inserts its session after the stop pass, the
-    // session keeps streaming, even when the decision had seen the launch.
-    // Whichever path obtains lifecycle ownership first wins: do not terminate
-    // its app or remove its freshly prepared VGD.
+    // Defence in depth: no client is expected to become visible after the stop
+    // above. /launch, /resume and /cancel are serialized, and a launch popped
+    // while unclaimed is retired, so it cannot start a session afterwards. Should
+    // one appear anyway, whichever path obtains lifecycle ownership first wins:
+    // do not terminate its app or remove its freshly prepared VGD.
     //
     // acquire_cleanup() never waits and reports superseded_by_launch while a
-    // launch lease is held, which covers that launch until its admission has
-    // finished. The check below covers the rest: a session that is tracked but
-    // not yet RUNNING (active_sessions counts only RUNNING ones), and a
-    // pending launch.
+    // launch lease is held. The check below covers the rest: a session that is
+    // tracked but not yet RUNNING (active_sessions counts only RUNNING ones), and
+    // a pending launch.
     auto cleanup_ownership = stream::lifecycle::coordinator().acquire_cleanup(8s);
     if (cleanup_ownership.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
       BOOST_LOG(info) << "Cancel cleanup superseded by a newer launch; leaving successor state untouched.";
