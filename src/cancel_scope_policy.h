@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -62,6 +63,24 @@ namespace cancel_scope {
       ++count;
     }
     return count;
+  }
+
+  /**
+   * @brief Whether a session's launch id was seen by the /cancel decision.
+   *
+   * RED stub: "stop everything". The fix replaces it with a membership test.
+   */
+  constexpr bool was_observed(std::uint32_t, std::span<const std::uint32_t>) noexcept {
+    return true;
+  }
+
+  /**
+   * @brief Whether the pending launch is the one a cancel meant to pop.
+   *
+   * RED stub: "stop everything". The fix replaces it with an identity check.
+   */
+  constexpr bool is_expected_launch(std::optional<std::uint32_t>, std::uint32_t) noexcept {
+    return true;
   }
 
   /**
