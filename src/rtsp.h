@@ -205,7 +205,10 @@ namespace rtsp_stream {
    * joins the tracked sessions whose launch id is @p pending's or one of @p sessions'.
    * A session that became tracked after the snapshot has a different launch id and
    * keeps streaming. The pending launch's own session is covered even when its ANNOUNCE
-   * admits it after the pop: that session carries the pending launch's id.
+   * admits it after this call's pop: that session carries the pending launch's id, and
+   * the pop waits for the admission. When another path (expiry, a stale-socket ANNOUNCE
+   * rejection) popped the launch first, nothing here waits, so a session inserted after
+   * the stop pass is not stopped.
    * @param pending The pending launch the decision observed, if any.
    * @param sessions The tracked sessions the decision observed.
    * @param reason Why the sessions are being stopped.

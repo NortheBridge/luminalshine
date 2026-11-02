@@ -3682,11 +3682,13 @@ namespace nvhttp {
 
     // A successor can still become visible after the stop above. /launch,
     // /resume and /cancel are serialized, so it is not a new request: it is a
-    // launch that was popped before the decision (by the expiry timer, or by
-    // ANNOUNCE rejecting a stale duplicate socket) while its own ANNOUNCE was
-    // still being admitted. The stop leaves it alone. Whichever path obtains
-    // lifecycle ownership first wins: do not terminate its app or remove its
-    // freshly prepared VGD.
+    // launch that another path popped (the expiry timer, or ANNOUNCE rejecting a
+    // stale duplicate socket) before this cancel could pop it, whether that was
+    // before or after the decision, while its own ANNOUNCE was still being
+    // admitted. If that ANNOUNCE inserts its session after the stop pass, the
+    // session keeps streaming, even when the decision had seen the launch.
+    // Whichever path obtains lifecycle ownership first wins: do not terminate
+    // its app or remove its freshly prepared VGD.
     //
     // acquire_cleanup() never waits and reports superseded_by_launch while a
     // launch lease is held, which covers that launch until its admission has
