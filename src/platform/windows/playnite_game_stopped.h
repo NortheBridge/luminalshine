@@ -113,4 +113,32 @@ namespace platf::playnite {
     });
   }
 
+  /**
+   * @brief Runs one task at a time on its own thread.
+   * @details STUB for the RED commit: accepts nothing.
+   */
+  class single_flight_worker_t {
+  public:
+    enum class event_e {
+      dropped_closed,
+      dropped_in_flight,
+      task_failed,
+      spawn_failed,
+    };
+
+    using event_fn = std::function<void(event_e, std::string_view)>;
+
+    explicit single_flight_worker_t(event_fn on_event = {}):
+        on_event_ {std::move(on_event)} {}
+
+    bool post(std::function<void()>) {
+      return false;
+    }
+
+    void close() {}
+
+  private:
+    event_fn on_event_;
+  };
+
 }  // namespace platf::playnite
