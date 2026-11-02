@@ -5,10 +5,15 @@
 #pragma once
 
 // standard includes
+#include <atomic>
 #include <chrono>
+#include <exception>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 namespace platf::playnite {
@@ -114,31 +119,119 @@ namespace platf::playnite {
   }
 
   /**
-   * @brief Runs one task at a time on its own thread.
-   * @details STUB for the RED commit: accepts nothing.
+   * @brief Runs at most one task at a time on a thread of its own.
+   * @details A task posted while another one is running is dropped, not queued, and so is every task
+   *          posted after close(). Neither the lock nor the caller's thread is ever held across a join:
+   *          post() joins the previous, already finished worker after releasing the lock, and close()
+   *          joins after releasing it too. A task that throws is reported and does not end the process.
+   *          A task may call post() (it is refused while the task runs) but must not call close() or
+   *          destroy the worker, which would join the task's own thread.
    */
   class single_flight_worker_t {
   public:
+    /**
+     * @brief What the worker reports through the optional event callback.
+     */
     enum class event_e {
-      dropped_closed,
-      dropped_in_flight,
-      task_failed,
-      spawn_failed,
+      dropped_closed,  ///< post() refused the task because close() was called.
+      dropped_in_flight,  ///< post() refused the task because another one is still running.
+      task_failed,  ///< A task threw; the detail is the message, or empty for a non-std exception.
+      spawn_failed,  ///< The worker thread could not be started; the detail is the error message.
     };
 
+    /**
+     * @brief Called without the lock held, on the posting thread (drops, spawn failures) or on the worker
+     *        thread (task failures). It must not call back into the worker; an exception it throws is ignored.
+     */
     using event_fn = std::function<void(event_e, std::string_view)>;
 
     explicit single_flight_worker_t(event_fn on_event = {}):
         on_event_ {std::move(on_event)} {}
 
-    bool post(std::function<void()>) {
+    single_flight_worker_t(const single_flight_worker_t &) = delete;
+    single_flight_worker_t &operator=(const single_flight_worker_t &) = delete;
+
+    ~single_flight_worker_t() {
+      close();
+    }
+
+    /**
+     * @brief Run `task` on the worker thread unless one is running or the worker is closed.
+     * @return true when the task was accepted.
+     */
+    bool post(std::function<void()> task) {
+      std::jthread finished;  // The previous worker; declared before the lock so it is joined after it.
+      std::optional<event_e> refused;
+      std::string detail;
+      {
+        std::scoped_lock lk(mutex_);
+        if (closed_) {
+          refused = event_e::dropped_closed;
+        } else if (in_flight_.exchange(true, std::memory_order_acq_rel)) {
+          refused = event_e::dropped_in_flight;
+        } else {
+          // The flag was clear, so the previous worker has finished its task and is only exiting.
+          finished = std::move(worker_);
+          try {
+            worker_ = std::jthread([this, task = std::move(task)]() mutable {
+              run(task);
+            });
+            return true;
+          } catch (const std::exception &e) {
+            in_flight_.store(false, std::memory_order_release);
+            refused = event_e::spawn_failed;
+            detail = e.what();
+          }
+        }
+      }
+      emit(*refused, detail);
       return false;
     }
 
-    void close() {}
+    /**
+     * @brief Refuse every later post and wait for the running task. Safe to call more than once.
+     */
+    void close() {
+      std::jthread worker;
+      {
+        std::scoped_lock lk(mutex_);
+        closed_ = true;
+        worker = std::move(worker_);
+      }
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
 
   private:
-    event_fn on_event_;
+    void run(std::function<void()> &task) {
+      try {
+        task();
+      } catch (const std::exception &e) {
+        emit(event_e::task_failed, e.what());
+      } catch (...) {
+        emit(event_e::task_failed, {});
+      }
+      // Last use of `this`: close() joins this thread before the worker can be destroyed.
+      in_flight_.store(false, std::memory_order_release);
+    }
+
+    void emit(event_e event, std::string_view detail) const noexcept {
+      if (!on_event_) {
+        return;
+      }
+      try {
+        on_event_(event, detail);
+      } catch (...) {
+        // A failing observer must not leave the worker marked busy or end the process.
+      }
+    }
+
+    const event_fn on_event_;
+    std::mutex mutex_;  ///< Guards worker_ and closed_; never held across a join.
+    std::jthread worker_;  ///< The thread running the current or most recent task.
+    bool closed_ {false};
+    std::atomic<bool> in_flight_ {false};  ///< True from accepting a task until it has finished.
   };
 
 }  // namespace platf::playnite
