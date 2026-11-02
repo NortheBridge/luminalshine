@@ -3,6 +3,28 @@ Sunshine binaries are built using [CMake](https://cmake.org) and requires `cmake
 
 ## Building Locally
 
+### Server discovery metadata
+
+Both HTTP and paired HTTPS `/serverinfo` responses append `ServerIdentity` (`LuminalShine`),
+`ServerRel`, `ServerBuild`, and `LuminalShineVersion`. Existing GameStream fields, including
+`appversion` and `GfeVersion`, keep their protocol values. HTTP metadata is public discovery
+information, not proof of identity; clients should verify the paired HTTPS connection.
+
+`ServerRel` is compiled into the binary: `0` means development/unknown, `1` stable, and `2`
+prerelease. Local and nightly builds default to `0`, regardless of their version string or
+Git tag. Release CI passes the same classification used to create its GitHub release;
+later edits to that release do not change an existing binary. Non-publishing CI builds use `0`.
+The CMake cache option (or environment override) is `SUNSHINE_SERVER_RELEASE`.
+
+`ServerBuild` is a UTC build timestamp (`YYYY-MM-DDTHH:MM:SSZ`), generated once per build
+invocation. It is not the commit date, executable modification time, or server
+startup time. CI captures one build-start timestamp and preserves it through signing and
+packaging using `SUNSHINE_SERVER_BUILD`. The same CMake cache option/environment override
+can pin the timestamp for a reproducible build; otherwise CMake honors `SOURCE_DATE_EPOCH`.
+Clear the override when reusing a release build directory for development.
+Without a pinned timestamp, invoking a local build refreshes the metadata and relinks the
+host even when no sources changed.
+
 ### Compiler
 It is recommended to use one of the following compilers:
 
