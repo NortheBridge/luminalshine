@@ -28,9 +28,36 @@ namespace {
 
   TEST(PairingRequestPolicy, SessionExpiryUsesTheFiveMinuteBoundary) {
     const auto updated_at = std::chrono::steady_clock::time_point {10min};
-    EXPECT_FALSE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min - 1ms));
-    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min));
-    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 6min));
+    constexpr auto awaiting_pin = nvhttp::PAIR_PHASE::NONE;
+    EXPECT_FALSE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min - 1ms, awaiting_pin));
+    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 5min, awaiting_pin));
+    EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 6min, awaiting_pin));
+  }
+
+  TEST(PairingRequestPolicy, SessionExpiryAfterPinDeliveryUsesTheThirtySecondBoundary) {
+    const auto updated_at = std::chrono::steady_clock::time_point {10min};
+    for (const auto phase : {
+           nvhttp::PAIR_PHASE::GETSERVERCERT,
+           nvhttp::PAIR_PHASE::CLIENTCHALLENGE,
+           nvhttp::PAIR_PHASE::SERVERCHALLENGERESP,
+         }) {
+      EXPECT_FALSE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 30s - 1ms, phase));
+      EXPECT_TRUE(nvhttp::pairing_detail::session_expired(updated_at, updated_at + 30s, phase));
+    }
+  }
+
+  TEST(PairingRequestPolicy, StoredPairingPhaseSeparatesAnUnansweredPhaseOneFromLaterPhases) {
+    using nvhttp::pairing_detail::stored_pairing_phase;
+    using nvhttp::pairing_detail::stored_phase_e;
+
+    // A same-salt retransmission is only idempotent while the stored phase is
+    // phase_one_submitted. Mapping GETSERVERCERT anywhere else would turn every
+    // retransmission into a replaced exchange.
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::NONE), stored_phase_e::awaiting_pin);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::GETSERVERCERT), stored_phase_e::phase_one_submitted);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::CLIENTCHALLENGE), stored_phase_e::later);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::SERVERCHALLENGERESP), stored_phase_e::later);
+    EXPECT_EQ(stored_pairing_phase(nvhttp::PAIR_PHASE::CLIENTPAIRINGSECRET), stored_phase_e::later);
   }
 
   TEST(PairingRequestPolicy, PendingPhaseOneRetryAllowsFreshSaltForSamePeerAndCertificate) {
