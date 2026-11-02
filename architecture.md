@@ -108,6 +108,22 @@ Known gap: the mirror image is not latched. A browser session that has passed th
 
 This is a key architectural constraint: **LuminalShine runs either RTSP/GameStream streaming or WebRTC streaming, never both by design.**
 
+### LuminalShine fields in `/serverinfo`
+
+`appversion` and `GfeVersion` in the GameStream `/serverinfo` answer are emulation constants, so a client cannot tell a LuminalShine host, or what it supports, from them. The HTTPS server, which answers paired clients only, appends three more elements (`nvhttp::put_luminalshine_fields` in `src/nvhttp.cpp`). The plain-HTTP answer carries none of them.
+
+```xml
+<LuminalShineVersion>26.10.1</LuminalShineVersion>
+<LuminalShineApiLevel>1</LuminalShineApiLevel>
+<LuminalShineCapabilities>pyrowave</LuminalShineCapabilities>
+```
+
+- `LuminalShineVersion`: the release (`PROJECT_VERSION`). Informational; do not parse it to detect features.
+- `LuminalShineApiLevel`: an integer, starting at 1, that goes up by one with every client-visible protocol change: a new field, request parameter, response element or capability name, a changed meaning or format of an existing one, or a removal. It never goes down. Clients compare it with `>=`. The rule lives next to the constant in `src/host_capabilities.h`. A client detects that the host supports these fields by `LuminalShineApiLevel` being present, not by `LuminalShineCapabilities`.
+- `LuminalShineCapabilities`: the features this host offers right now, as lowercase kebab-case names joined by `,` with no spaces. The host always writes the element, empty (`<LuminalShineCapabilities/>`) when there are none, but some pull-parser clients read an empty element as missing, so treat a missing element as an empty list. Entries follow runtime state, not just the build: `pyrowave` appears only when PyroWave is enabled and `pyrowave::available()` is true, which needs the baseline SDR 4:2:0 profile to have probed successfully. That is the same condition that adds the PyroWave bits to `ServerCodecModeSupport`. Only features a client can act on today are listed. The table and its order live in `src/host_capabilities.h`.
+
+A single comma-separated element, rather than repeated child elements, keeps the field readable by the simple by-tag-name lookups Moonlight-family clients use for `/serverinfo`.
+
 ---
 
 ## 4) Web UI + API server (confighttp)
