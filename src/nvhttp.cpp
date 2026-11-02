@@ -3594,10 +3594,17 @@ namespace nvhttp {
     // non-reaping. /launch, /resume and /cancel share one serial worker, so no new
     // /launch or /resume can slip in between this decision and the stop below; a
     // launch that was already pending can still be admitted by its ANNOUNCE.
+    //
+    // Read the pending launch BEFORE the sessions. The two reads take different
+    // locks, and a joining client moves from one to the other in this order:
+    // ANNOUNCE inserts its session, then its control-stream connect clears the
+    // pending launch. Sessions first could miss a client that completes both
+    // steps between the reads, so a full cancel would stop a session that just
+    // connected. Pending first always sees it in at least one of the two.
     std::string requester_name;
     const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
-    const auto tracked = rtsp_stream::session_snapshot_no_reap();
     const auto pending_uuid = rtsp_stream::pending_launch_client_uuid();
+    const auto tracked = rtsp_stream::session_snapshot_no_reap();
     std::vector<cancel_scope::session_t> scope_sessions;
     scope_sessions.reserve(tracked.size());
     for (const auto &tracked_session : tracked) {
