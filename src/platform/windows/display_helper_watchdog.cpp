@@ -11,20 +11,23 @@ namespace display_helper_integration {
       hooks_(std::move(hooks)) {}
 
   std::chrono::milliseconds DisplayHelperWatchdog::tick() {
-    const auto interval = (hooks_.session_count && hooks_.running_processes &&
-                           hooks_.session_count() == 0 && hooks_.running_processes() > 0) ?
-                            suspended_interval() :
-                            active_interval();
+    // Only a healthy helper waits the suspended interval. running_processes() can terminate the app
+    // (and stop this watchdog), so it is asked only once the session count says nothing is streaming.
+    const auto healthy_interval = [this]() {
+      const bool suspended = hooks_.session_count && hooks_.running_processes &&
+                             hooks_.session_count() == 0 && hooks_.running_processes() > 0;
+      return suspended ? hooks_.suspended_interval : hooks_.active_interval;
+    };
 
     if (hooks_.feature_enabled && !hooks_.feature_enabled()) {
       if (helper_ready_) {
-        BOOST_LOG(info) << "Display helper watchdog: feature disabled, releasing helper connection.";
+        BOOST_LOG(debug) << "Display helper watchdog: feature disabled, releasing helper connection.";
         if (hooks_.reset_connection) {
           hooks_.reset_connection();
         }
       }
       helper_ready_ = false;
-      return interval;
+      return hooks_.active_interval;
     }
 
     if (!helper_ready_) {
@@ -33,31 +36,35 @@ namespace display_helper_integration {
         if (hooks_.send_ping) {
           (void) hooks_.send_ping();
         }
-        return interval;
+        return healthy_interval();
       }
       helper_ready_ = false;
-      return interval;
+      return hooks_.active_interval;
     }
 
     if (hooks_.send_ping && !hooks_.send_ping()) {
-      BOOST_LOG(warning) << "Display helper watchdog: ping failed, helper may have crashed or become unresponsive.";
+      BOOST_LOG(debug) << "Display helper watchdog: ping failed, helper may have crashed or become unresponsive.";
       if (hooks_.reset_connection) {
         hooks_.reset_connection();
       }
       if (hooks_.ensure_helper_started && hooks_.ensure_helper_started()) {
         helper_ready_ = hooks_.send_ping ? hooks_.send_ping() : true;
         if (helper_ready_) {
-          BOOST_LOG(info) << "Display helper watchdog: successfully restarted helper after ping failure.";
+          BOOST_LOG(debug) << "Display helper watchdog: successfully restarted helper after ping failure.";
         } else {
-          BOOST_LOG(warning) << "Display helper watchdog: helper restarted but ping still failing.";
+          BOOST_LOG(debug) << "Display helper watchdog: helper restarted but ping still failing.";
         }
       } else {
-        BOOST_LOG(error) << "Display helper watchdog: failed to restart helper after ping failure.";
+        BOOST_LOG(debug) << "Display helper watchdog: failed to restart helper after ping failure.";
         helper_ready_ = false;
+      }
+      if (!helper_ready_) {
+        // Retry right away, which is how the host loop behaved before it used tick().
+        return 0ms;
       }
     }
 
-    return interval;
+    return healthy_interval();
   }
 
   void DisplayHelperWatchdog::reset() {
