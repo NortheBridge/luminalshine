@@ -7,6 +7,7 @@
 // standard includes
 #include <atomic>
 #include <optional>
+#include <source_location>
 #include <string>
 #include <utility>
 
@@ -16,6 +17,7 @@
 // local includes
 #include "audio.h"
 #include "crypto.h"
+#include "session_stop_reason.h"
 #include "thread_safe.h"
 #include "video.h"
 
@@ -86,8 +88,18 @@ namespace stream {
      */
     bool wait_video_pipeline_ready(session_t &session, std::chrono::milliseconds timeout);
 
-    void stop(session_t &session);
+    /**
+     * @brief Stop a session. Idempotent: only the RUNNING -> STOPPING transition acts.
+     * @param reason Why the session is being stopped; logged once, on the transition.
+     * @param loc The call site, captured by default and logged with the reason.
+     */
+    void stop(session_t &session, stop_reason_e reason, std::source_location loc = std::source_location::current());
     void join(session_t &session);
+
+    /// Client identity captured by alloc(), for diagnostics. Immutable after
+    /// alloc(), so it is safe to call from any thread without a lock.
+    identity_t identity(const session_t &session);
+
     /**
      * @brief Finish process-global cleanup yielded by an old session when the
      *        successor launch aborts before reaching RUNNING.

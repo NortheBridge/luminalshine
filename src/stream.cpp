@@ -15,6 +15,7 @@
 #include <future>
 #include <optional>
 #include <queue>
+#include <source_location>
 #include <thread>
 
 // lib includes
@@ -31,6 +32,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "control_termination_policy.h"
 #include "display_helper_integration.h"
 #include "globals.h"
 #include "input.h"
@@ -406,6 +408,10 @@ namespace stream {
     // ENet peer to session mapping for sessions with a peer connected
     sync_util::sync_t<std::map<net::peer_t, session_t *>> _peer_to_session;
 
+    // Peers of erased sessions still in a graceful disconnect. Only the control broadcast
+    // thread touches it (iterate and its stopping-session cleanup), so it needs no lock.
+    control_termination::detached_peers_t<net::peer_t, std::chrono::steady_clock::time_point> _detached_peers;
+
     ENetAddress _addr;
     net::host_t _host;
   };
@@ -550,6 +556,9 @@ namespace stream {
       std::string expected_peer_address;  // Only used for legacy clients without ML_FF_SESSION_ID_V1
 
       net::peer_t peer;
+      // "addr:port" of the bound peer, saved at bind time for diagnostics:
+      // ENet has already reset the peer by the time its DISCONNECT is delivered.
+      std::string peer_address;
       std::uint32_t seq;
 
       platf::feedback_queue_t feedback_queue;
@@ -558,6 +567,11 @@ namespace stream {
     } control;
 
     std::uint32_t launch_session_id;
+
+    // Client that launched this session, captured in alloc() for diagnostics
+    // (stop and control-stream logs). Immutable afterwards, so readable from any thread.
+    std::string client_name;
+    std::string client_uuid;
 
     // Per-second streaming telemetry, flushed to the session monitor
     // sidecar from the video broadcast thread (~1 Hz). Counters are
@@ -583,6 +597,8 @@ namespace stream {
     safe::signal_t controlEnd;
 
     std::atomic<session::state_e> state;
+    /// First cause passed to session::stop; count_ until then.
+    std::atomic<session::stop_reason_e> stop_reason {session::stop_reason_e::count_};
 
 #ifdef _WIN32
     struct {
@@ -591,6 +607,11 @@ namespace stream {
     } virtual_display;
 #endif
   };
+
+  /// "id=<n> client='<name>' uuid=<short>" for session log lines.
+  static std::string session_label(const session_t &session) {
+    return session::describe(session::identity(session));
+  }
 
   /**
    * First part of cipher must be struct of type control_encrypted_t
@@ -805,6 +826,7 @@ namespace stream {
 
     // Slow path - process new session
     TUPLE_2D(peer_port, peer_addr, platf::from_sockaddr_ex((sockaddr *) &peer->address.address));
+    const auto peer_endpoint = (peer_addr.find(':') == std::string::npos ? peer_addr : '[' + peer_addr + ']') + ':' + std::to_string(peer_port);
     auto lg = _sessions.lock();
     for (auto pos = std::begin(*_sessions); pos != std::end(*_sessions); ++pos) {
       auto session_p = *pos;
@@ -820,13 +842,15 @@ namespace stream {
         if (session_p->control.connect_data != connect_data) {
           continue;
         } else {
-          BOOST_LOG(debug) << "Initialized new control stream session by connect data match [v2]"sv;
+          BOOST_LOG(info) << "Initialized new control stream session by connect data match [v2]: peer="sv
+                          << peer_endpoint << ' ' << session_label(*session_p);
         }
       } else {
         if (session_p->control.expected_peer_address != peer_addr) {
           continue;
         } else {
-          BOOST_LOG(debug) << "Initialized new control stream session by IP address match [v1]"sv;
+          BOOST_LOG(info) << "Initialized new control stream session by IP address match [v1]: peer="sv
+                          << peer_endpoint << ' ' << session_label(*session_p);
         }
       }
 
@@ -834,6 +858,7 @@ namespace stream {
       rtsp_stream::launch_session_clear(session_p->launch_session_id);
 
       session_p->control.peer = peer;
+      session_p->control.peer_address = peer_endpoint;
 
       // Use the local address from the control connection as the source address
       // for other communications to the client. This is necessary to ensure
@@ -889,6 +914,24 @@ namespace stream {
     auto res = enet_host_service(_host.get(), &event, (enet_uint32) timeout.count());
 
     if (res > 0) {
+      // A detached peer's events must not reach session lookup, which could bind the peer to a
+      // new pending session from the same client or reject it with a disconnect.
+      const auto peer_event = event.type == ENET_EVENT_TYPE_CONNECT ? control_termination::peer_event_e::connect :
+                              event.type == ENET_EVENT_TYPE_RECEIVE ? control_termination::peer_event_e::receive :
+                                                                      control_termination::peer_event_e::disconnect;
+      const auto detached_since = _detached_peers.detached_since(event.peer);
+      if (_detached_peers.consume(event.peer, peer_event)) {
+        if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+          enet_packet_destroy(event.packet);
+        } else {
+          // About one RTT means the client acked the termination; seconds mean an ENet timeout.
+          BOOST_LOG(debug) << "Detached control peer closed: peer=["sv << platf::from_sockaddr((sockaddr *) &event.peer->address.address)
+                           << "] after "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - *detached_since).count()
+                           << " ms"sv;
+        }
+        return;
+      }
+
       auto session = get_session(event.peer, event.data);
       if (!session) {
         BOOST_LOG(warning) << "Rejected connection from ["sv << platf::from_sockaddr((sockaddr *) &event.peer->address.address) << "]: it's not properly set up"sv;
@@ -897,7 +940,13 @@ namespace stream {
         return;
       }
 
-      session->pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      // The deadline is about to be pushed out. Keep the one the previous control event
+      // left so DISCONNECT can report how long the control stream had been silent. It is
+      // only meaningful from the first event on: session::start() sets the initial deadline
+      // (with an extra 18 s for strict-first-frame clients), so CONNECT does not report it.
+      const auto event_time = std::chrono::steady_clock::now();
+      const auto previous_ping_deadline = session->pingTimeout;
+      session->pingTimeout = event_time + config::stream.ping_timeout;
 
       switch (event.type) {
         case ENET_EVENT_TYPE_RECEIVE:
@@ -920,13 +969,20 @@ namespace stream {
           }
           break;
         case ENET_EVENT_TYPE_CONNECT:
-          BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          BOOST_LOG(info) << "CLIENT CONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session);
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
-          BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
-          // No more clients to send video data to ^_^
-          if (session->state == session::state_e::RUNNING) {
-            session::stop(*session);
+          {
+            const auto since_last_packet_ms = std::max<std::chrono::milliseconds::rep>(
+              0,
+              std::chrono::duration_cast<std::chrono::milliseconds>(event_time - (previous_ping_deadline - config::stream.ping_timeout)).count()
+            );
+            BOOST_LOG(info) << "CLIENT DISCONNECTED: peer="sv << session->control.peer_address << ' ' << session_label(*session)
+                            << " since_last_packet_ms="sv << since_last_packet_ms;
+            // No more clients to send video data to ^_^
+            if (session->state == session::state_e::RUNNING) {
+              session::stop(*session, session::stop_reason_e::enet_disconnect);
+            }
           }
           break;
         case ENET_EVENT_TYPE_NONE:
@@ -1247,6 +1303,27 @@ namespace stream {
     return 0;
   }
 
+  /// Queues IDX_TERMINATION with @p reason to the session's control peer. The caller flushes.
+  static int send_control_termination(control_server_t *server, session_t *session, std::uint32_t reason) {
+    control_terminate_t plaintext;
+    plaintext.header.type = packetTypes[IDX_TERMINATION];
+    plaintext.header.payloadLength = sizeof(plaintext.ec);
+    plaintext.ec = util::endian::big<uint32_t>(reason);
+
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+      encrypted_payload;
+
+    auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    if (server->send(payload, session->control.peer)) {
+      TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
+      BOOST_LOG(warning) << "Couldn't send termination code to ["sv << addr << ':' << port << ']';
+
+      return -1;
+    }
+
+    return 0;
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
@@ -1280,7 +1357,7 @@ namespace stream {
         BOOST_LOG(info) << "Client requested termination with empty reason payload ("sv << payload.size() << " bytes)";
       }
 
-      session::stop(*session);
+      session::stop(*session, session::stop_reason_e::client_termination);
     };
 
     server->map(packetTypes[IDX_TERMINATION], handle_client_termination);
@@ -1409,7 +1486,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, session::stop_reason_e::control_decrypt_failure);
         return;
       }
 
@@ -1464,7 +1541,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, session::stop_reason_e::control_decrypt_failure);
         return;
       }
 
@@ -1473,7 +1550,7 @@ namespace stream {
 
       if (type == packetTypes[IDX_ENCRYPTED]) {
         BOOST_LOG(error) << "Bad packet type [IDX_ENCRYPTED] found"sv;
-        session::stop(*session);
+        session::stop(*session, session::stop_reason_e::bad_encrypted_type);
         return;
       }
 
@@ -1497,8 +1574,13 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     constexpr auto pending_peer_termination_grace = std::chrono::seconds(1);
     std::optional<std::chrono::steady_clock::time_point> process_terminated_since;
+    // Last app state this loop observed, for the exit log below. proc::proc.running() is not a
+    // pure read (it takes the lifecycle mutex and can resume or terminate the app), so the exit
+    // path, which holds _sessions, must not call it again.
+    std::string_view app_state_at_last_poll = "unpolled"sv;
     while (!shutdown_event->peek() && !broadcast_shutdown_event->peek()) {
       const bool process_running = proc::proc.running() != 0;
+      app_state_at_last_poll = process_running ? "running"sv : "exited"sv;
       bool has_session_awaiting_peer = false;
 
       {
@@ -1521,20 +1603,53 @@ namespace stream {
 
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
-            BOOST_LOG(info) << address << ": Ping Timeout"sv;
-            session::stop(*session);
+            BOOST_LOG(info) << address << ": Ping Timeout "sv << session_label(*session);
+            session::stop(*session, session::stop_reason_e::ping_timeout);
           }
 
           if (session->state.load(std::memory_order_acquire) == session::state_e::STOPPING) {
             pos = server->_sessions->erase(pos);
 
             if (session->control.peer) {
+              // ENet can hand a freed peer slot to a new connection, so a connected peer only
+              // counts if the slot still maps to this session.
+              bool owns_peer = false;
               {
                 auto ptslg = server->_peer_to_session.lock();
+                auto it = server->_peer_to_session->find(session->control.peer);
+                owns_peer = it != server->_peer_to_session->end() && it->second == session;
                 server->_peer_to_session->erase(session->control.peer);
               }
 
-              enet_peer_disconnect_now(session->control.peer, 0);
+              // A host-initiated stop (/cancel, a Web UI disconnect, RTSP teardown) tells a
+              // still-connected client it ended on purpose; otherwise the client reports the
+              // disconnect as an error. The client's ENet drops undispatched packets when a
+              // DISCONNECT arrives, so enet_peer_disconnect_later asks ENet to send it only after
+              // the termination is acked; the peer stays detached until ENet reports its DISCONNECT.
+              // Teardown does not wait: when the last session ends, the host can be destroyed
+              // before the ack, leaving only the flushed datagram. Like the shutdown loop this is
+              // best effort, and still strictly better than enet_peer_disconnect_now.
+              const auto reason = session->stop_reason.load(std::memory_order_acquire);
+              const bool peer_connected = owns_peer && session->control.peer->state == ENET_PEER_STATE_CONNECTED;
+              bool termination_queued = false;
+              if (control_termination::should_send_graceful_termination(reason, peer_connected)) {
+                BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(control_termination::graceful_termination_code)
+                                << " before disconnect: reason="sv << session::stop_reason_name(reason)
+                                << " peer="sv << session->control.peer_address << ' ' << session_label(*session);
+                termination_queued = !send_control_termination(server, session, control_termination::graceful_termination_code);
+              }
+
+              if (termination_queued) {
+                BOOST_LOG(info) << "Disconnecting control peer of stopping session once the termination is acked: peer="sv
+                                << session->control.peer_address << ' ' << session_label(*session);
+                server->_detached_peers.add(session->control.peer, std::chrono::steady_clock::now());
+                enet_peer_disconnect_later(session->control.peer, 0);
+                server->flush();
+              } else {
+                BOOST_LOG(info) << "Disconnecting control peer of stopping session: peer="sv << session->control.peer_address
+                                << ' ' << session_label(*session);
+                enet_peer_disconnect_now(session->control.peer, 0);
+              }
             }
 
             session->controlEnd.raise(true);
@@ -1549,7 +1664,7 @@ namespace stream {
                 now - *process_terminated_since >= pending_peer_termination_grace) {
               BOOST_LOG(info) << "Stopping pending control session from ["sv << session->control.expected_peer_address
                               << "] because the app terminated before the peer connected."sv;
-              session::stop(*session);
+              session::stop(*session, session::stop_reason_e::app_exited_before_peer);
               ++pos;
               continue;
             }
@@ -1615,28 +1730,23 @@ namespace stream {
 
     // Let all remaining connections know the server is shutting down
     // reason: graceful termination
-    std::uint32_t reason = 0x80030023;
-
-    control_terminate_t plaintext;
-    plaintext.header.type = packetTypes[IDX_TERMINATION];
-    plaintext.header.payloadLength = sizeof(plaintext.ec);
-    plaintext.ec = util::endian::big<uint32_t>(reason);
-
-    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
-      encrypted_payload;
+    std::uint32_t reason = control_termination::graceful_termination_code;
 
     auto lg = server->_sessions.lock();
+    BOOST_LOG(info) << "Control thread exiting; terminating "sv << server->_sessions->size()
+                    << " remaining session(s) (shutdown="sv << shutdown_event->peek()
+                    << ", broadcast_shutdown="sv << broadcast_shutdown_event->peek()
+                    << ", app="sv << app_state_at_last_poll << " at last poll)"sv;
     for (auto pos = std::begin(*server->_sessions); pos != std::end(*server->_sessions); ++pos) {
       auto session = *pos;
 
+      BOOST_LOG(info) << "Sending control termination "sv << util::log_hex(reason)
+                      << " to peer="sv << (session->control.peer ? session->control.peer_address : "none"s)
+                      << ' ' << session_label(*session);
+
       // We may not have gotten far enough to have an ENet connection yet
       if (session->control.peer) {
-        auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
-
-        if (server->send(payload, session->control.peer)) {
-          TUPLE_2D(port, addr, platf::from_sockaddr_ex((sockaddr *) &session->control.peer->address.address));
-          BOOST_LOG(warning) << "Couldn't send termination code to ["sv << addr << ':' << port << ']';
-        }
+        send_control_termination(server, session, reason);
       }
 
       session->shutdown_event->raise(true);
@@ -2710,7 +2820,7 @@ namespace stream {
   void videoThread(session_t *session) {
     platf::set_thread_name("session::video");
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, session::stop_reason_e::video_thread_exit);
     });
 
     while_starting_do_nothing(session->state);
@@ -2724,6 +2834,9 @@ namespace stream {
     // without transferring worker handles between HTTPS and RTSP lifetimes.
     auto peer_ready = session->mail->event<bool>(mail::video_peer_ready);
     peer_ready->reset();
+    // Held for the thread's lifetime: the mailbox keeps only weak references.
+    auto client_uuid = session->mail->event<std::string>(mail::video_client_uuid);
+    client_uuid->raise(session->client_uuid);
     seh_video_capture_args_t cap_args {session->mail, session->config.monitor, session};
     std::atomic<unsigned long> capture_seh {0};
     std::thread capture_thread([&] {
@@ -2744,6 +2857,8 @@ namespace stream {
       config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
     );
     if (ping_error < 0) {
+      // recv_ping's own error line carries no session identity.
+      BOOST_LOG(info) << "Video thread ending: initial UDP ping failed for "sv << session_label(*session);
 #ifdef _WIN32
       session->shutdown_event->raise(true);
 #endif
@@ -2820,7 +2935,7 @@ namespace stream {
   void audioThread(session_t *session) {
     platf::set_thread_name("session::audio");
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, session::stop_reason_e::audio_thread_exit);
     });
 
     while_starting_do_nothing(session->state);
@@ -2835,6 +2950,7 @@ namespace stream {
       config::stream.ping_timeout + (session->strict_client ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(0))
     );
     if (error < 0) {
+      BOOST_LOG(info) << "Audio thread ending: initial UDP ping failed for "sv << session_label(*session);
       return;
     }
 
@@ -2852,6 +2968,10 @@ namespace stream {
 
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
+    }
+
+    identity_t identity(const session_t &session) {
+      return {session.launch_session_id, session.client_name, session.client_uuid};
     }
 
     bool strict_first_frame_client(std::string_view client_name) {
@@ -2940,8 +3060,18 @@ namespace stream {
       BOOST_LOG(info) << "Completed deferred process-global session cleanup after " << reason << '.';
     }
 
-    void stop(session_t &session) {
+    void stop(session_t &session, stop_reason_e reason, std::source_location loc) {
       while_starting_do_nothing(session.state);
+      // Record the cause before publishing STOPPING, so a thread that sees STOPPING also sees
+      // why. With concurrent callers the first one's reason is kept. Only a RUNNING session
+      // records one: a stop before start must not leave a stale reason for the real one.
+      // If start stores RUNNING between this check and the state CAS below, the CAS still
+      // stops the session but no reason is recorded; that only skips the graceful
+      // termination message, which is the safe direction.
+      if (session.state.load(std::memory_order_acquire) == state_e::RUNNING) {
+        auto unrecorded = stop_reason_e::count_;
+        session.stop_reason.compare_exchange_strong(unrecorded, reason);
+      }
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
       if (already_stopping) {
@@ -2955,7 +3085,18 @@ namespace stream {
       // recovery monitor would happily recreate the just-removed virtual display and
       // dispatch APPLY against the dying capture pipeline. Crash analysis of the
       // 2026-04-28 21:21 bundle showed exactly this race.
-      active_sessions.fetch_sub(1, std::memory_order_acq_rel);
+      const auto remaining_active = active_sessions.fetch_sub(1, std::memory_order_acq_rel) - 1;
+
+      // Written once per session, on the transition only: which session stopped, why,
+      // and from where, so a client that ends up disconnected is never left unexplained.
+      // reason= is the recorded one the control thread acts on; with racing stops it can
+      // differ from this caller's, which is then logged too.
+      const auto recorded_reason = session.stop_reason.load(std::memory_order_acquire);
+      const auto caller_reason = recorded_reason != reason ? " caller_reason="s + stop_reason_name(reason) : ""s;
+      BOOST_LOG(info) << "Session stop: "sv << describe(identity(session))
+                      << " reason="sv << stop_reason_name(recorded_reason) << caller_reason
+                      << " at "sv << file_basename(loc.file_name()) << ':' << loc.line()
+                      << " (active sessions now "sv << remaining_active << ')';
 
       // Mark the session as ended in the monitor service so the Web
       // UI's "Active" badge clears and the session JSON is finalised
@@ -3409,6 +3550,8 @@ namespace stream {
       // with the expiring event object.
       session->video_pipeline_ready_event = mail->event<bool>(mail::video_pipeline_ready);
       session->launch_session_id = launch_session.id;
+      session->client_name = launch_session.client_name;
+      session->client_uuid = launch_session.client_uuid;
       // Keep the pending launch_event's shared owner until the control stream
       // claims (or expires) it. session::start releases only its copy. Moving
       // here opened a window where a second HTTP launch could prepare a
