@@ -688,14 +688,14 @@ namespace platf::playnite {
           deps.post = [this](std::function<void()> task) {
             stop_worker_.post(std::move(task));  // A refused post is logged by the worker's callback.
           };
-          deps.on_result = [game_id = msg.status_game_id](platf::playnite::game_stopped_action_e action) {
+          deps.on_result = [game_id = msg.status_game_id](platf::playnite::game_stopped_action_e action, const platf::playnite::game_stopped_guard_t &guard) {
             using action_e = platf::playnite::game_stopped_action_e;
             switch (action) {
               case action_e::ignored_no_playnite_app:
                 BOOST_LOG(debug) << "Playnite: ignoring gameStopped because no active Playnite-backed app";
                 break;
               case action_e::ignored_other_game:
-                BOOST_LOG(debug) << "Playnite: ignoring gameStopped for id='" << game_id << "' (not the active Playnite id)";
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped for id='" << game_id << "' (active Playnite id='" << guard.playnite_id << "')";
                 break;
               case action_e::ignored_no_prior_start:
                 BOOST_LOG(debug) << "Playnite: ignoring gameStopped because no prior gameStarted for this session";
@@ -704,7 +704,7 @@ namespace platf::playnite {
                 BOOST_LOG(debug) << "Playnite: ignoring gameStopped within session guard window";
                 break;
               case action_e::generation_changed:
-                BOOST_LOG(debug) << "Playnite: ignoring gameStopped because a newer launch replaced the session";
+                BOOST_LOG(debug) << "Playnite: ignoring gameStopped because the observed session is no longer active";
                 break;
               case action_e::terminated:
                 break;  // Logged before the termination started, which can take a while.

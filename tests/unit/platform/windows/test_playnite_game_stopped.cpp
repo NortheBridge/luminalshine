@@ -135,6 +135,7 @@ namespace {
     std::string terminate_uuid;
     std::vector<std::function<void()>> posted;
     std::vector<game_stopped_action_e> results;
+    std::vector<game_stopped_guard_t> result_guards;
 
     game_stopped_deps_t make_deps() {
       game_stopped_deps_t deps;
@@ -157,8 +158,9 @@ namespace {
       deps.post = [this](std::function<void()> task) {
         posted.push_back(std::move(task));
       };
-      deps.on_result = [this](game_stopped_action_e action) {
+      deps.on_result = [this](game_stopped_action_e action, const game_stopped_guard_t &observed) {
         results.push_back(action);
+        result_guards.push_back(observed);
       };
       return deps;
     }
@@ -227,6 +229,15 @@ namespace {
     // allow_stop consumes tracker state, so it must not run for any of the above.
     EXPECT_EQ(allow_stop_calls, 0);
     EXPECT_EQ(terminate_calls, 0);
+
+    // Every outcome is reported with the guard it was decided on, so the log can name the active id.
+    ASSERT_EQ(results.size(), 3u);
+    EXPECT_EQ(results[0], game_stopped_action_e::ignored_no_playnite_app);
+    EXPECT_EQ(results[1], game_stopped_action_e::ignored_no_playnite_app);
+    EXPECT_EQ(results[2], game_stopped_action_e::ignored_other_game);
+    ASSERT_EQ(result_guards.size(), 3u);
+    EXPECT_EQ(result_guards[2].playnite_id, "game-a");
+    EXPECT_EQ(result_guards[2].app_id, 7);
   }
 
   TEST_F(PlayniteGameStopped, IgnoresWithoutPriorStart) {
@@ -243,6 +254,8 @@ namespace {
     // Received 1s after launch: inside the 2s window.
     EXPECT_EQ(run_game_stopped(make_deps(), "game-a", launch + 1s), game_stopped_action_e::ignored_guard_window);
     EXPECT_EQ(terminate_calls, 0);
+    // The tracker mark is consumed before the window is checked, so the early message still used it up.
+    EXPECT_EQ(allow_stop_calls, 1);
 
     // Received 3s after launch: outside the window.
     EXPECT_EQ(run_game_stopped(make_deps(), "game-a", launch + 3s), game_stopped_action_e::terminated);
@@ -251,6 +264,7 @@ namespace {
     // The posted task runs an hour after launch, but the message was received 1s after it:
     // the receipt time decides, not the time the task runs.
     terminate_calls = 0;
+    results.clear();
     handle_game_stopped(make_deps(), "game-a", launch + 1s);
     run_posted();
     EXPECT_EQ(terminate_calls, 0);
