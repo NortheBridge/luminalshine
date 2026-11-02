@@ -3974,6 +3974,19 @@ namespace video {
    */
   static thread_local probe_suppression::codec_e probe_codec_in_flight = probe_suppression::codec_e::unattributed;
 
+  /**
+   * @brief Whether the process has been asked to stop.
+   *
+   * The probe opens one GPU encode session per codec, about a second each, so a
+   * stop that arrives mid-probe would otherwise wait for the whole matrix and
+   * everything queued behind it. The process-wide event is only ever raised on
+   * the way to exiting, so abandoning a probe for it leaves nothing for a later
+   * probe to recover from.
+   */
+  static bool probe_stop_requested() {
+    return mail::man->event<bool>(mail::shutdown)->peek();
+  }
+
   bool validate_encoder(encoder_t &encoder, bool expect_failure) {
     // During encoder probing, always use the current active display and do not
     // attempt to select/swap displays based on configured output_name. Display
@@ -4014,6 +4027,10 @@ namespace video {
       test_av1 = false;
     }
 
+    const auto previous_h264_capabilities = encoder.h264.capabilities;
+    const auto previous_hevc_capabilities = encoder.hevc.capabilities;
+    const auto previous_av1_capabilities = encoder.av1.capabilities;
+
     encoder.h264.capabilities.set();
     encoder.hevc.capabilities.set();
     encoder.av1.capabilities.set();
@@ -4023,6 +4040,30 @@ namespace video {
       encoder.hevc.capabilities.reset();
       encoder.av1.capabilities.reset();
     };
+
+    // A stop request abandons the probe between codec validations. The bits are
+    // fail-open (set() above), so put back what they held before this pass rather
+    // than leave every codec claiming support; restoring instead of clearing also
+    // keeps a re-probe of the published encoder consistent with chosen_encoder.
+    // This is not a failure of the encoder: no "failed" line, and
+    // probe_encoders_impl() leaves without recording one.
+    auto probe_interrupted = [&]() {
+      if (!probe_stop_requested()) {
+        return false;
+      }
+      encoder.h264.capabilities = previous_h264_capabilities;
+      encoder.hevc.capabilities = previous_hevc_capabilities;
+      encoder.av1.capabilities = previous_av1_capabilities;
+      fg.disable();
+      BOOST_LOG(info) << "Encoder ["sv << encoder.name << "] probe interrupted by shutdown"sv;
+      return true;
+    };
+
+    // Acquiring the display below is the slowest step of the first codec, so a
+    // stop that is already pending should not pay for it.
+    if (probe_interrupted()) {
+      return false;
+    }
 
     // First, test encoder viability
     config_t config_max_ref_frames {1920, 1080, 60, 6000, 1000, 1, 1, 1, 0, 0, 0};
@@ -4046,6 +4087,10 @@ namespace video {
       fg.disable();
       clear_capabilities();
       BOOST_LOG(info) << "Encoder ["sv << encoder.name << "] is not supported on this GPU"sv;
+      return false;
+    }
+
+    if (probe_interrupted()) {
       return false;
     }
 
@@ -4080,6 +4125,10 @@ namespace video {
     encoder.h264[encoder_t::REF_FRAMES_RESTRICT] = max_ref_frames_h264 >= 0;
     encoder.h264[encoder_t::PASSED] = true;
 
+    if (probe_interrupted()) {
+      return false;
+    }
+
     if (test_hevc) {
       probe_codec_in_flight = probe_suppression::codec_e::hevc;
       config_max_ref_frames.videoFormat = 1;
@@ -4107,6 +4156,10 @@ namespace video {
     } else {
       // Clear all cap bits for HEVC if we didn't probe it
       encoder.hevc.capabilities.reset();
+    }
+
+    if (probe_interrupted()) {
+      return false;
     }
 
     if (test_av1) {
@@ -4138,6 +4191,10 @@ namespace video {
       encoder.av1.capabilities.reset();
     }
 
+    if (probe_interrupted()) {
+      return false;
+    }
+
     // Test HDR and YUV444 support
     {
       // H.264 is special because encoders may support YUV 4:4:4 without supporting 10-bit color depth
@@ -4152,6 +4209,10 @@ namespace video {
                                           validate_config(disp, encoder, config_h264_yuv444) >= 0;
       } else {
         encoder.h264[encoder_t::YUV444] = false;
+      }
+
+      if (probe_interrupted()) {
+        return false;
       }
 
       const config_t generic_hdr_config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, 1, 1, 0};
@@ -4192,6 +4253,13 @@ namespace video {
           flag_map[encoder_t::YUV444] = false;
         }
 
+        // Each attempt can retry validate_config() several times, so look here
+        // rather than only between codecs. The flags are half-written when this
+        // returns; the caller restores them through probe_interrupted().
+        if (probe_stop_requested()) {
+          return;
+        }
+
         // Test 4:2:0 HDR
         config.chromaSamplingType = 0;
         if (disp->is_codec_supported(encoder_codec_name, config) &&
@@ -4207,9 +4275,15 @@ namespace video {
 
       probe_codec_in_flight = probe_suppression::codec_e::hevc;
       test_hdr_and_yuv444(encoder.hevc, 1);
+      if (probe_interrupted()) {
+        return false;
+      }
       probe_codec_in_flight = probe_suppression::codec_e::av1;
       test_hdr_and_yuv444(encoder.av1, 2);
       probe_codec_in_flight = probe_suppression::codec_e::unattributed;
+      if (probe_interrupted()) {
+        return false;
+      }
     }
 
     encoder.h264[encoder_t::VUI_PARAMETERS] = encoder.h264[encoder_t::VUI_PARAMETERS] && !config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE];
@@ -4381,6 +4455,15 @@ namespace video {
       return 0;
     }
 
+    // Each gate below costs a D3D11 device creation or records a negative cache
+    // entry, and the probe after them is the slow part. A stop that is already
+    // pending has no use for either, and an abandoned probe is neither a failure
+    // to remember nor an attempted probe.
+    if (probe_stop_requested()) {
+      BOOST_LOG(info) << "Encoder probe skipped: shutdown requested"sv;
+      return -1;
+    }
+
     // A dead display stack fails every encoder identically, and each
     // candidate costs ~15 s of D3D11 backoff to re-prove it — ~66 s per
     // probe pass, re-armed on every client attempt. Bail immediately with
@@ -4480,6 +4563,21 @@ namespace video {
       }
     };
 
+    // validate_encoder() reports a probe cut short by a stop request as a
+    // failure. Leave instead of treating it as one: no erase-and-continue into
+    // the next candidate, no fatal "unable to find display or encoder", no
+    // negative cache entry. restore_previous_probe_state undoes the rest on the
+    // way out. A loop body cannot hold an unparenthesised comma (KITTY_WHILE_LOOP),
+    // hence the lambda.
+    auto probe_stopped = [&]() {
+      if (!probe_stop_requested()) {
+        return false;
+      }
+      cached_probe_display.reset();
+      BOOST_LOG(info) << "Encoder probe stopped: shutdown requested"sv;
+      return true;
+    };
+
     if (!config::video.encoder.empty()) {
       // If there is a specific encoder specified, use it if it passes validation
       KITTY_WHILE_LOOP(auto pos = std::begin(encoder_list), pos != std::end(encoder_list), {
@@ -4488,6 +4586,9 @@ namespace video {
         if (encoder->name == config::video.encoder) {
           // Remove the encoder from the list entirely if it fails validation
           if (!validate_encoder_safe(*encoder, previous_encoder && previous_encoder != encoder)) {
+            if (probe_stopped()) {
+              return -1;
+            }
             pos = encoder_list.erase(pos);
             break;
           }
@@ -4516,6 +4617,9 @@ namespace video {
 
         // Remove the encoder from the list entirely if it fails validation
         if (!validate_encoder_safe(*encoder, previous_encoder && previous_encoder != encoder)) {
+          if (probe_stopped()) {
+            return -1;
+          }
           pos = encoder_list.erase(pos);
           continue;
         }
@@ -4553,6 +4657,9 @@ namespace video {
         // fail to validate. It will use a slightly different order of checks to more quickly
         // eliminate failing encoders.
         if (!validate_encoder_safe(*encoder, previous_encoder && previous_encoder != encoder)) {
+          if (probe_stopped()) {
+            return -1;
+          }
           pos = encoder_list.erase(pos);
           continue;
         }

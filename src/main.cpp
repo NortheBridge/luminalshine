@@ -868,8 +868,11 @@ int main(int argc, char *argv[]) {
     }
 
     bool encoder_probe_succeeded = false;
-    auto cleanup_encoder_probe_display = util::fail_guard([&encoder_probe_display_result, &encoder_probe_succeeded]() {
-      VDISPLAY::cleanup_ensure_display(encoder_probe_display_result, encoder_probe_succeeded, true);
+    auto cleanup_encoder_probe_display = util::fail_guard([&encoder_probe_display_result, &encoder_probe_succeeded, &shutdown_event]() {
+      // Nothing retries the probe once a stop is requested, so remove the
+      // temporary display now instead of keeping it for a retry that cannot
+      // happen and leaving it to the driver's crash backstop after exit.
+      VDISPLAY::cleanup_ensure_display(encoder_probe_display_result, encoder_probe_succeeded || shutdown_event->peek(), true);
     });
 
     if (shutdown_event->peek()) {
@@ -955,7 +958,9 @@ int main(int argc, char *argv[]) {
     encoder_probe_succeeded = !encoder_probe_failed;
 #endif
 
-    if (encoder_probe_failed) {
+    // A stop request cuts the probe short and probe_encoders() reports that as a
+    // failure; the process is on its way out, so there is nothing to report.
+    if (encoder_probe_failed && !shutdown_event->peek()) {
       BOOST_LOG(error) << "Failed to probe encoders during startup.";
     }
 
@@ -1029,7 +1034,14 @@ int main(int argc, char *argv[]) {
       std::this_thread::sleep_for(100ms);
     }
     probe_thread.join();
-    if (shutdown_event->peek()) return lifetime::desired_exit_code;
+  }
+
+  // A stop that arrived during the encoder probe or the PyroWave wait leaves
+  // nothing to start. Without this, Playnite, mDNS and UPnP come up only to be
+  // torn down again, and the UPnP thread's router discovery (seconds, with no
+  // shutdown check) is joined on the way out.
+  if (shutdown_event->peek()) {
+    return lifetime::desired_exit_code;
   }
 
   if (http::init()) {

@@ -318,6 +318,14 @@ namespace upnp {
           continue;
         }
 
+        // The discovery above blocks without watching for shutdown. If a stop arrived
+        // meanwhile, skip the mappings, the IPv6 discovery and the router round trips
+        // that follow. On the first pass nothing is mapped, so nothing is unmapped
+        // either; after an earlier pass, mapped is still set and the ports are removed.
+        if (shutdown_event->peek()) {
+          break;
+        }
+
         for (auto dev = device.get(); dev != nullptr; dev = dev->pNext) {
           BOOST_LOG(debug) << "Found device: "sv << dev->descURL;
         }
@@ -345,7 +353,7 @@ namespace upnp {
         }
 
         // If we are listening on IPv6 and the IGD has an IPv6 firewall enabled, try to create IPv6 firewall pinholes
-        if (address_family == net::af_e::BOTH) {
+        if (address_family == net::af_e::BOTH && !shutdown_event->peek()) {
           if (create_ipv6_pinholes() && !mapped) {
             // Only log the first time through
             BOOST_LOG(info) << "Successfully opened IPv6 pinholes on the IGD"sv;

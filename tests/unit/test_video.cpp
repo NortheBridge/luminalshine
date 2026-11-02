@@ -160,3 +160,78 @@ TEST_F(EncoderSnapshotTest, AFailedCodecWithNoBitsRoundTrips) {
   EXPECT_EQ(sent.supported_codec, received.supported_codec);
   EXPECT_EQ(sent.active_av1_mode, received.active_av1_mode);
 }
+
+namespace {
+  // A stop that arrives while the host is still probing encoders must end the
+  // probe at its next check instead of finishing the codec matrix (about a
+  // second per GPU encode session). The probe sets every capability bit before
+  // it validates and only corrects downward, so an abandoned pass has to put
+  // back what the bits held, not leave them claiming support. Each test runs on
+  // a fresh mailbox with the process-wide shutdown event already raised.
+  struct EncoderProbeStopTest: testing::Test {
+    safe::mail_t saved_mail = mail::man;
+    // The mailbox holds its events by weak_ptr, so an event nobody owns is
+    // recreated, unraised, on the next lookup. main() keeps its shutdown_event
+    // local alive for the same reason; the test has to keep this one alive too.
+    safe::mail_raw_t::event_t<bool> shutdown_event;
+    std::array<std::bitset<video::encoder_t::MAX_FLAGS>, 3> saved_capabilities {
+      video::software.h264.capabilities,
+      video::software.hevc.capabilities,
+      video::software.av1.capabilities,
+    };
+    int saved_hevc_mode = video::active_hevc_mode;
+    int saved_av1_mode = video::active_av1_mode;
+
+    void SetUp() override {
+      // Neither all clear nor all set, so both a fail-open set() left in place
+      // and a clear_capabilities() on the way out change what the tests compare.
+      video::software.h264.capabilities.reset();
+      video::software.hevc.capabilities.reset();
+      video::software.av1.capabilities.reset();
+      video::software.h264.capabilities.set(video::encoder_t::PASSED);
+      video::software.hevc.capabilities.set(video::encoder_t::PASSED);
+      video::software.hevc.capabilities.set(video::encoder_t::YUV444);
+      video::software.av1.capabilities.set(video::encoder_t::DYNAMIC_RANGE);
+
+      mail::man = std::make_shared<safe::mail_raw_t>();
+      shutdown_event = mail::man->event<bool>(mail::shutdown);
+      shutdown_event->raise(true);
+    }
+
+    void TearDown() override {
+      shutdown_event.reset();
+      mail::man = saved_mail;
+      video::software.h264.capabilities = saved_capabilities[0];
+      video::software.hevc.capabilities = saved_capabilities[1];
+      video::software.av1.capabilities = saved_capabilities[2];
+      video::active_hevc_mode = saved_hevc_mode;
+      video::active_av1_mode = saved_av1_mode;
+    }
+  };
+}  // namespace
+
+TEST_F(EncoderProbeStopTest, ValidateEncoderAbandonsTheProbeAndKeepsTheCapabilityBits) {
+  const auto h264_before = video::software.h264.capabilities;
+  const auto hevc_before = video::software.hevc.capabilities;
+  const auto av1_before = video::software.av1.capabilities;
+
+  EXPECT_FALSE(video::validate_encoder(video::software, false));
+
+  EXPECT_EQ(h264_before, video::software.h264.capabilities);
+  EXPECT_EQ(hevc_before, video::software.hevc.capabilities);
+  EXPECT_EQ(av1_before, video::software.av1.capabilities);
+}
+
+TEST_F(EncoderProbeStopTest, ProbeEncodersReturnsAFailureWithoutProbing) {
+  const bool attempted_before = video::has_attempted_encoder_probe();
+
+  EXPECT_NE(0, video::probe_encoders());
+
+  // An abandoned probe is not an attempted one, and it leaves the codec modes
+  // and the capability bits as they were.
+  EXPECT_EQ(attempted_before, video::has_attempted_encoder_probe());
+  EXPECT_EQ(saved_hevc_mode, video::active_hevc_mode);
+  EXPECT_EQ(saved_av1_mode, video::active_av1_mode);
+  EXPECT_TRUE(video::software.h264.capabilities.test(video::encoder_t::PASSED));
+  EXPECT_FALSE(video::software.h264.capabilities.test(video::encoder_t::YUV444));
+}
