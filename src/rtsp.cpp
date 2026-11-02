@@ -27,6 +27,7 @@ extern "C" {
 #include <boost/bind.hpp>
 
 // local includes
+#include "cancel_scope_policy.h"
 #include "config.h"
 #include "globals.h"
 #include "input.h"
@@ -682,7 +683,7 @@ namespace rtsp_stream {
       {
         std::lock_guard lg {_launch_timer_mutex};
         const auto pending = launch_event.view(0s);
-        if (!pending || (expected_id && pending->id != *expected_id)) {
+        if (!pending || !cancel_scope::is_expected_launch(expected_id, pending->id)) {
           return {};
         }
         if (rollback_unclaimed) {
@@ -849,22 +850,23 @@ namespace rtsp_stream {
       out.reserve(_session_state->sessions.size());
       for (const auto &slot : _session_state->sessions) {
         auto who = stream::session::identity(*slot);
-        out.push_back({std::move(who.client_uuid), std::move(who.client_name), stream::session::state(*slot) == stream::session::state_e::STOPPING});
+        const auto launch_session_id = who.launch_session_id;
+        out.push_back({std::move(who.client_uuid), std::move(who.client_name), stream::session::state(*slot) == stream::session::state_e::STOPPING, launch_session_id});
       }
       return out;
     }
 
     /**
-     * @brief Client UUID of the pending launch that no control stream has claimed yet, if any.
+     * @brief The pending launch that no control stream has claimed yet, if any.
      * @note Takes only the launch timer mutex. The event is viewed, never consumed.
      */
-    std::optional<std::string> pending_launch_client_uuid() {
+    std::optional<pending_launch_snapshot_t> pending_launch_snapshot() {
       std::lock_guard lg {_launch_timer_mutex};
       const auto pending = launch_event.view(0s);
       if (!pending) {
         return std::nullopt;
       }
-      return pending->client_uuid;
+      return pending_launch_snapshot_t {pending->id, pending->client_uuid};
     }
 
     bool disconnect_client(
@@ -929,6 +931,44 @@ namespace rtsp_stream {
     }
 
     /**
+     * @brief Stop and join only the tracked sessions whose launch id is in @p observed_launch_ids.
+     * @note Mirrors clear(true): select and unlink under the set lock, stop and join outside it.
+     *       A session that became tracked after the caller decided has a launch id the caller
+     *       never saw, so it is left streaming.
+     */
+    void stop_observed(
+      const std::vector<uint32_t> &observed_launch_ids,
+      stream::session::stop_reason_e reason,
+      std::source_location loc = std::source_location::current()
+    ) {
+      std::vector<std::shared_ptr<stream::session_t>> to_cleanup;
+      std::size_t left_running = 0;
+
+      {
+        auto lg = _session_state.lock();
+
+        for (auto i = _session_state->sessions.begin(); i != _session_state->sessions.end();) {
+          if (cancel_scope::was_observed(stream::session::identity(**i).launch_session_id, observed_launch_ids)) {
+            auto session = *i;
+            to_cleanup.emplace_back(session);
+
+            _session_state->client_uuids.erase(session.get());
+            i = _session_state->sessions.erase(i);
+          } else {
+            ++i;
+          }
+        }
+        left_running = _session_state->sessions.size();
+      }
+
+      if (left_running > 0) {
+        BOOST_LOG(info) << "Cancel left "sv << left_running << " session(s) running that were not visible when it decided."sv;
+      }
+
+      stop_and_join(to_cleanup, reason, loc);
+    }
+
+    /**
      * @brief Runs an iteration of the RTSP server loop
      */
     void iterate() {
@@ -982,9 +1022,13 @@ namespace rtsp_stream {
       // A prior last-session teardown may have deferred its global cleanup
       // (including RTSP/WebRTC exclusivity reconciliation) to this launch.
       // Serialize cancellation + lease release against ANNOUNCE's final
-      // admission claim/session insertion. If ANNOUNCE won, /cancel waits
-      // until the started session is visible to clear(true); if cancellation
-      // won, ANNOUNCE observes cancelled and cannot start afterward.
+      // admission claim/session insertion. This waits only for the caller that
+      // popped the launch itself (cancel, expiry or an ANNOUNCE rejection), and
+      // only on that launch's own admission. If ANNOUNCE won, that caller waits
+      // until the started session is tracked, so a stop of this launch's id
+      // sees it; if cancellation won, ANNOUNCE observes cancelled and cannot
+      // start afterward. A cancel that finds nothing pending (expiry or an
+      // ANNOUNCE rejection popped it first) never reaches this wait.
       bool retired = true;
       if (discarded->admission_state) {
         std::lock_guard admission_lock {discarded->admission_state->mutex};
@@ -1213,14 +1257,37 @@ namespace rtsp_stream {
     return server.session_snapshot();
   }
 
-  std::optional<std::string> pending_launch_client_uuid() {
-    return server.pending_launch_client_uuid();
+  std::optional<pending_launch_snapshot_t> pending_launch_snapshot() {
+    return server.pending_launch_snapshot();
   }
 
   std::shared_ptr<launch_session_t> terminate_sessions() {
     auto pending = server.cancel_pending_launch();
     server.clear(true, stream::session::stop_reason_e::explicit_cancel);
     return pending;
+  }
+
+  std::shared_ptr<launch_session_t> terminate_observed_sessions(
+    const std::optional<pending_launch_snapshot_t> &pending,
+    const std::vector<session_snapshot_t> &sessions,
+    stream::session::stop_reason_e reason
+  ) {
+    std::vector<uint32_t> observed;
+    observed.reserve(sessions.size() + 1);
+    for (const auto &session : sessions) {
+      observed.push_back(session.launch_session_id);
+    }
+
+    std::shared_ptr<launch_session_t> cancelled;
+    if (pending) {
+      // The pending launch's id covers its own session when an ANNOUNCE that
+      // already holds the launch publishes it after this pop. Pass the id: with
+      // none, cancel_pending_launch would pop whatever is pending now.
+      observed.push_back(pending->id);
+      cancelled = server.cancel_pending_launch(pending->id);
+    }
+    server.stop_observed(observed, reason);
+    return cancelled;
   }
 
   std::list<std::string> get_all_session_client_uuids() {
@@ -1847,8 +1914,10 @@ namespace rtsp_stream {
 
     // Atomically claim admission against /cancel or pending expiry. The lock
     // stays held through insertion + session::start: if cancel wins first we
-    // reject, and if ANNOUNCE wins first cancel waits until clear(true) can see
-    // and stop the fully started session. No network wait occurs in this span.
+    // reject, and if ANNOUNCE wins first the cancel that popped this launch
+    // waits until a stop by this launch's id can see the fully started session.
+    // A cancel that did not pop this launch does not wait here. No network wait
+    // occurs in this span.
     std::unique_lock<std::mutex> admission_lock;
     if (session.admission_state) {
       admission_lock = std::unique_lock<std::mutex> {session.admission_state->mutex};

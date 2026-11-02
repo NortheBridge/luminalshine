@@ -3599,11 +3599,18 @@ namespace nvhttp {
     // locks, and a joining client moves from one to the other in this order:
     // ANNOUNCE inserts its session, then its control-stream connect clears the
     // pending launch. Sessions first could miss a client that completes both
-    // steps between the reads, so a full cancel would stop a session that just
-    // connected. Pending first always sees it in at least one of the two.
+    // steps between the reads, so the decision would call a live joiner absent
+    // and choose a full cancel. Pending first sees it in at least one of the two.
+    //
+    // That ordering only keeps the decision honest; it does not keep the stop
+    // honest. A launch can be popped before its session is inserted (the expiry
+    // timer, or ANNOUNCE rejecting a stale duplicate socket), and its ANNOUNCE
+    // can then publish the session at any time, so a client can become visible
+    // after this decision. The full-scope stop below therefore acts only on the
+    // launch ids this snapshot observed and leaves anything newer streaming.
     std::string requester_name;
     const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
-    const auto pending_uuid = rtsp_stream::pending_launch_client_uuid();
+    const auto pending = rtsp_stream::pending_launch_snapshot();
     const auto tracked = rtsp_stream::session_snapshot_no_reap();
     std::vector<cancel_scope::session_t> scope_sessions;
     scope_sessions.reserve(tracked.size());
@@ -3611,15 +3618,15 @@ namespace nvhttp {
       scope_sessions.push_back({tracked_session.client_uuid, tracked_session.stopping});
     }
     const std::optional<std::string_view> pending_owner_uuid =
-      pending_uuid ? std::optional<std::string_view> {*pending_uuid} : std::nullopt;
+      pending ? std::optional<std::string_view> {pending->client_uuid} : std::nullopt;
     const bool webrtc_active = webrtc_stream::has_active_sessions();
     const auto others = cancel_scope::other_clients(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
     const auto scope = others > 0 ? cancel_scope::scope_e::requester_only : cancel_scope::scope_e::full;
     {
       std::string pending_owner = "none";
-      if (pending_uuid) {
-        const auto pending_cert = get_named_cert_by_uuid(*pending_uuid);
-        pending_owner = std::format("client='{}' uuid={}", pending_cert ? pending_cert->name : std::string {}, stream::session::short_client_id(*pending_uuid));
+      if (pending) {
+        const auto pending_cert = get_named_cert_by_uuid(pending->client_uuid);
+        pending_owner = std::format("client='{}' uuid={}", pending_cert ? pending_cert->name : std::string {}, stream::session::short_client_id(pending->client_uuid));
       }
       BOOST_LOG(info) << std::format(
         "Cancel requested by client='{}' uuid={}; tracked sessions: {}; pending launch owner: {}",
@@ -3665,22 +3672,34 @@ namespace nvhttp {
       return;
     }
 
-    const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
+    // Stop only what the decision observed: its pending launch (by id) and the
+    // sessions it listed. A client that became visible after the decision keeps
+    // streaming, and the guard below then keeps its app and display alive.
+    const auto cancelled_pending_launch = rtsp_stream::terminate_observed_sessions(pending, tracked, stream::session::stop_reason_e::explicit_cancel);
 #ifdef _WIN32
     platf::video_worker::cancel_prewarm();
 #endif
 
-    // A successor /launch may arrive after terminate_sessions() releases the
-    // old session. Whichever path obtains lifecycle ownership first wins: do
-    // not terminate its app or remove its freshly prepared VGD.
+    // A successor can still become visible after the stop above. /launch,
+    // /resume and /cancel are serialized, so it is not a new request: it is a
+    // launch that was popped before the decision (by the expiry timer, or by
+    // ANNOUNCE rejecting a stale duplicate socket) while its own ANNOUNCE was
+    // still being admitted. The stop leaves it alone. Whichever path obtains
+    // lifecycle ownership first wins: do not terminate its app or remove its
+    // freshly prepared VGD.
+    //
+    // acquire_cleanup() never waits and reports superseded_by_launch while a
+    // launch lease is held, which covers that launch until its admission has
+    // finished. The check below covers the rest: a session that is tracked but
+    // not yet RUNNING (active_sessions counts only RUNNING ones), and a
+    // pending launch.
     auto cleanup_ownership = stream::lifecycle::coordinator().acquire_cleanup(8s);
     if (cleanup_ownership.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
       BOOST_LOG(info) << "Cancel cleanup superseded by a newer launch; leaving successor state untouched.";
       return;
     }
-    if (stream::session::active_sessions.load(std::memory_order_acquire) != 0 ||
-        rtsp_stream::launch_session_pending()) {
-      BOOST_LOG(info) << "Cancel cleanup observed a successor session after ownership acquisition; skipping destructive cleanup.";
+    if (stream::session::active_sessions.load(std::memory_order_acquire) != 0 || rtsp_stream::session_count_no_reap() != 0 || rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(info) << "Cancel cleanup observed a session or launch that appeared after its decision; skipping destructive cleanup.";
       return;
     }
 

@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -68,19 +69,26 @@ namespace cancel_scope {
   /**
    * @brief Whether a session's launch id was seen by the /cancel decision.
    *
-   * RED stub: "stop everything". The fix replaces it with a membership test.
+   * A full cancel decides on a snapshot and stops afterwards. The launch id is a
+   * session's stable identity (one session per launch, assigned from a counter),
+   * so a session that became visible after the snapshot carries an id the snapshot
+   * lacks and must be left running.
+   *
+   * @param launch_id The launch id of the session being considered.
+   * @param observed The launch ids of the sessions and the pending launch the decision saw.
    */
-  constexpr bool was_observed(std::uint32_t, std::span<const std::uint32_t>) noexcept {
-    return true;
+  constexpr bool was_observed(std::uint32_t launch_id, std::span<const std::uint32_t> observed) noexcept {
+    return std::ranges::find(observed, launch_id) != observed.end();
   }
 
   /**
    * @brief Whether the pending launch is the one a cancel meant to pop.
    *
-   * RED stub: "stop everything". The fix replaces it with an identity check.
+   * @param expected_id The launch id the caller observed, or nothing to pop whatever is pending.
+   * @param pending_id The launch id that is pending now.
    */
-  constexpr bool is_expected_launch(std::optional<std::uint32_t>, std::uint32_t) noexcept {
-    return true;
+  constexpr bool is_expected_launch(std::optional<std::uint32_t> expected_id, std::uint32_t pending_id) noexcept {
+    return !expected_id || *expected_id == pending_id;
   }
 
   /**
