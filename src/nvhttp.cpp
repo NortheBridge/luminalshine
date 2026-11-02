@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 // lib includes
@@ -37,6 +38,7 @@
 #include <Simple-Web-Server/server_http.hpp>
 
 // local includes
+#include "cancel_scope_policy.h"
 #include "config.h"
 #include "display_device.h"
 #include "display_helper_integration.h"
@@ -59,12 +61,14 @@
 #include "process.h"
 #include "rtsp.h"
 #include "serial_executor.h"
+#include "step_timer.h"
 #include "stream.h"
 #include "system_tray.h"
 #include "update.h"
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#include "virtual_display_join_policy.h"
 #include "pyrowave/backend.h"
 #include "webrtc_stream.h"
 
@@ -251,13 +255,17 @@ namespace nvhttp {
       bool allow_display_changes,
       std::optional<std::string> &pending_output_override
     ) {
-      // A new launch/resume owns virtual-display state from here on: any
-      // fallback monitor armed by an EARLIER failed launch must never fire
-      // into this session's stream. At FUNCTION entry (not inside
+      // A launch/resume with no session active owns virtual-display state from
+      // here on: any fallback monitor armed by an EARLIER failed launch must
+      // never fire into this session's stream. At FUNCTION entry (not inside
       // apply_virtual_display_request) so the resume early-returns —
       // reused display, revert-on-disconnect off — supersede too
-      // (re-verify finding: the /resume path bypassed the lambda).
-      VDISPLAY::supersede_fallback_monitors();
+      // (re-verify finding: the /resume path bypassed the lambda). While
+      // another session streams, a monitor armed for it is that owner's live
+      // state, and a joining client must not cancel it.
+      if (virtual_display_join::may_supersede_fallback_monitors(no_active_sessions)) {
+        VDISPLAY::supersede_fallback_monitors();
+      }
 
       std::optional<std::string> app_output_override;
       if (launch_session->output_name_override && !launch_session->output_name_override->empty()) {
@@ -271,6 +279,7 @@ namespace nvhttp {
       }
       launch_session->virtual_display_recreated_on_demand = false;
       launch_session->virtual_display_needs_resume_apply = false;
+      launch_session->joined_existing_virtual_display = false;
 
       bool config_requests_virtual = config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled;
       if (launch_session->virtual_display_mode_override) {
@@ -303,8 +312,11 @@ namespace nvhttp {
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
             launch_session->virtual_display_needs_resume_apply = true;
-            config::set_runtime_output_name_override(*existing_device);
-            pending_output_override = *existing_device;
+            launch_session->joined_existing_virtual_display = !no_active_sessions;
+            if (virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
+              config::set_runtime_output_name_override(*existing_device);
+              pending_output_override = *existing_device;
+            }
             BOOST_LOG(info) << "Display helper: preserving virtual display capture target for resume (device_id="
                             << *existing_device << ").";
             BOOST_LOG(debug) << "Display helper: preserving capture target and refreshing display state for resume.";
@@ -315,7 +327,11 @@ namespace nvhttp {
                           << " recreating one on demand.";
           launch_session->virtual_display_recreated_on_demand = true;
         } else {
-          if (app_output_override) {
+          if (app_output_override && !virtual_display_join::may_change_output_override(!no_active_sessions)) {
+            // The streaming owner already set this app's override; a failed
+            // join must not be able to roll it back.
+            BOOST_LOG(info) << "Display helper: joining client keeps the owner's output override: " << *app_output_override;
+          } else if (app_output_override) {
             config::set_runtime_output_name_override(*app_output_override);
             pending_output_override = *app_output_override;
             BOOST_LOG(info) << "Display helper: preserving output override for resume: " << *app_output_override;
@@ -335,7 +351,9 @@ namespace nvhttp {
         }
       }
 
-      if (app_output_override) {
+      if (app_output_override && !virtual_display_join::may_change_output_override(!no_active_sessions)) {
+        BOOST_LOG(info) << "App-specific display override kept from the streaming owner: output_name=" << *app_output_override;
+      } else if (app_output_override) {
         config::set_runtime_output_name_override(*app_output_override);
         pending_output_override = *app_output_override;
         BOOST_LOG(info) << "App-specific display override requested: output_name=" << *app_output_override;
@@ -387,6 +405,7 @@ namespace nvhttp {
             launch_session->virtual_display_failed = false;
             launch_session->virtual_display_device_id = *existing_device;
             launch_session->virtual_display_ready_since = std::chrono::steady_clock::now();
+            launch_session->joined_existing_virtual_display = true;
             BOOST_LOG(info) << "Virtual display already active (device_id=" << *existing_device
                             << "). Skipping additional creation because another session is running.";
           } else {
@@ -862,7 +881,7 @@ namespace nvhttp {
       }
 
       apply_virtual_display_request(request_virtual_display);
-      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty()) {
+      if (launch_session->virtual_display && !launch_session->virtual_display_device_id.empty() && virtual_display_join::may_change_output_override(launch_session->joined_existing_virtual_display)) {
         config::set_runtime_output_name_override(launch_session->virtual_display_device_id);
         pending_output_override = launch_session->virtual_display_device_id;
       }
@@ -3548,8 +3567,15 @@ namespace nvhttp {
     revert_display_configuration = false;
   }
 
-  void cancel(resp_https_t response, req_https_t request) {
+  void cancel(resp_https_t response, req_https_t request, std::chrono::steady_clock::time_point queued_at) {
     print_req<SunshineHTTPS>(request);
+
+    // Time each teardown step: the response is written only after all of them,
+    // so the completion line below shows which step held the client's quit.
+    // The total starts when the request was queued behind /launch and /resume.
+    util::step_timer_t cancel_timer {queued_at};
+    cancel_timer.record_since("queue", queued_at);
+    auto step_started = cancel_timer.now();
 
     // Keep browser admission closed across the entire destructive cancel
     // transaction, including the interval after a pending Moonlight launch is
@@ -3571,22 +3597,150 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    const auto cancelled_pending_launch = rtsp_stream::terminate_sessions();
-#ifdef _WIN32
-    platf::video_worker::cancel_prewarm();
-#endif
+    // Attribute the cancel and decide how far it reaches before it stops anything:
+    // who asked, which sessions are tracked (including ones already stopping), and
+    // who owns a pending launch. The snapshot and the pending-launch read are both
+    // non-reaping. /launch, /resume and /cancel share one serial worker, so no new
+    // /launch or /resume can slip in between this decision and the stop below; a
+    // launch that was already pending can still be admitted by its ANNOUNCE.
+    //
+    // Read the pending launch BEFORE the sessions. The two reads take different
+    // locks, and a joining client moves from one to the other in this order:
+    // ANNOUNCE inserts its session, then its control-stream connect clears the
+    // pending launch. Sessions first could miss a client that completes both
+    // steps between the reads, so the decision would call a live joiner absent
+    // and choose a full cancel. Pending first sees it in at least one of the two.
+    //
+    // That is the only window the decision had. A launch popped while unclaimed
+    // is retired, so its ANNOUNCE gets 410 and it never starts a session: the
+    // expiry timer, a stale-socket ANNOUNCE rejection and every ANNOUNCE run on
+    // the one RTSP thread, so none can pop a launch mid-admission, and /cancel
+    // waits on the admission mutex. The full-scope stop below still acts only on
+    // the launch ids this snapshot observed, as defence in depth: it never
+    // touches a session the decision did not see.
+    std::string requester_name;
+    const auto requester_uuid = get_client_uuid_from_request(request, &requester_name);
+    const auto pending = rtsp_stream::pending_launch_snapshot();
+    const auto tracked = rtsp_stream::session_snapshot_no_reap();
+    std::vector<cancel_scope::session_t> scope_sessions;
+    scope_sessions.reserve(tracked.size());
+    for (const auto &tracked_session : tracked) {
+      scope_sessions.push_back({tracked_session.client_uuid, tracked_session.stopping});
+    }
+    const std::optional<std::string_view> pending_owner_uuid =
+      pending ? std::optional<std::string_view> {pending->client_uuid} : std::nullopt;
+    const bool webrtc_active = webrtc_stream::has_active_sessions();
+    const auto others = cancel_scope::other_clients(requester_uuid, scope_sessions, pending_owner_uuid, webrtc_active);
+    const auto scope = others > 0 ? cancel_scope::scope_e::requester_only : cancel_scope::scope_e::full;
+    {
+      std::string pending_owner = "none";
+      if (pending) {
+        const auto pending_cert = get_named_cert_by_uuid(pending->client_uuid);
+        pending_owner = std::format("client='{}' uuid={}", pending_cert ? pending_cert->name : std::string {}, stream::session::short_client_id(pending->client_uuid));
+      }
+      BOOST_LOG(info) << std::format(
+        "Cancel requested by client='{}' uuid={}; tracked sessions: {}; pending launch owner: {}",
+        requester_name,
+        requester_uuid.empty() ? std::string_view {"unknown"} : stream::session::short_client_id(requester_uuid),
+        tracked.size(),
+        pending_owner
+      );
+      if (scope == cancel_scope::scope_e::full) {
+        BOOST_LOG(info) << "Cancel scope: full";
+      } else {
+        BOOST_LOG(info) << std::format("Cancel scope: requester_only (other live sessions or launches: {})", others);
+        if (requester_uuid.empty()) {
+          BOOST_LOG(warning) << "Cancel requester could not be identified; ending no session while another client is live.";
+        }
+      }
+      for (const auto &tracked_session : tracked) {
+        const bool stops = scope == cancel_scope::scope_e::full ||
+                           (!requester_uuid.empty() && tracked_session.client_uuid == requester_uuid);
+        if (!stops) {
+          continue;
+        }
+        BOOST_LOG(info) << std::format(
+          "Cancel will stop tracked session: client='{}' uuid={} stopping={}",
+          tracked_session.client_name,
+          stream::session::short_client_id(tracked_session.client_uuid),
+          tracked_session.stopping
+        );
+      }
+    }
 
-    // A successor /launch may arrive after terminate_sessions() releases the
-    // old session. Whichever path obtains lifecycle ownership first wins: do
-    // not terminate its app or remove its freshly prepared VGD.
-    auto cleanup_ownership = stream::lifecycle::coordinator().acquire_cleanup(8s);
-    if (cleanup_ownership.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
-      BOOST_LOG(info) << "Cancel cleanup superseded by a newer launch; leaving successor state untouched.";
+    cancel_timer.record_since("setup", step_started);
+
+    // One completion line on every path, written just before the response.
+    // Stays "incomplete" if a step throws before the normal path finishes.
+    std::string_view cancel_outcome = "incomplete";
+    auto cancel_summary_guard = util::fail_guard([&]() {
+      try {
+        BOOST_LOG(info) << std::format(
+          "Cancel completed in {} ms (requester='{}' scope={} outcome={} {})",
+          cancel_timer.elapsed().count(),
+          requester_name,
+          scope == cancel_scope::scope_e::full ? "full" : "requester_only",
+          cancel_outcome,
+          cancel_timer.format()
+        );
+      } catch (...) {
+      }
+    });
+
+    if (scope == cancel_scope::scope_e::requester_only) {
+      // Another client is still streaming this app: end only the requester's own
+      // sessions and pending launch. The app, the virtual display and the display
+      // configuration stay with the other client, and the last client's normal
+      // teardown remains the one that cleans them up.
+      cancel_outcome = "scoped";
+      step_started = cancel_timer.now();
+      const auto cancelled_own_launch = rtsp_stream::end_client_sessions(requester_uuid, stream::session::stop_reason_e::explicit_cancel);
+      cancel_timer.record_since("sessions", step_started);
+#ifdef _WIN32
+      if (cancelled_own_launch) {
+        step_started = cancel_timer.now();
+        platf::video_worker::cancel_prewarm();
+        cancel_timer.record_since("prewarm", step_started);
+      } else {
+        cancel_timer.skip("prewarm");
+      }
+#endif
       return;
     }
-    if (stream::session::active_sessions.load(std::memory_order_acquire) != 0 ||
-        rtsp_stream::launch_session_pending()) {
-      BOOST_LOG(info) << "Cancel cleanup observed a successor session after ownership acquisition; skipping destructive cleanup.";
+
+    // Stop only what the decision observed: its pending launch (by id) and the
+    // sessions it listed. A client that became visible after the decision keeps
+    // streaming, and the guard below then keeps its app and display alive.
+    step_started = cancel_timer.now();
+    const auto cancelled_pending_launch = rtsp_stream::terminate_observed_sessions(pending, tracked, stream::session::stop_reason_e::explicit_cancel);
+    cancel_timer.record_since("sessions", step_started);
+#ifdef _WIN32
+    step_started = cancel_timer.now();
+    platf::video_worker::cancel_prewarm();
+    cancel_timer.record_since("prewarm", step_started);
+#endif
+
+    // Defence in depth: no client is expected to become visible after the stop
+    // above. /launch, /resume and /cancel are serialized, and a launch popped
+    // while unclaimed is retired, so it cannot start a session afterwards. Should
+    // one appear anyway, whichever path obtains lifecycle ownership first wins:
+    // do not terminate its app or remove its freshly prepared VGD.
+    //
+    // acquire_cleanup() never waits and reports superseded_by_launch while a
+    // launch lease is held. The check below covers the rest: a session that is
+    // tracked but not yet RUNNING (active_sessions counts only RUNNING ones), and
+    // a pending launch.
+    step_started = cancel_timer.now();
+    auto cleanup_ownership = stream::lifecycle::coordinator().acquire_cleanup(8s);
+    cancel_timer.record_since("cleanup_wait", step_started);
+    if (cleanup_ownership.result != stream::lifecycle::cleanup_acquire_result_e::acquired) {
+      BOOST_LOG(info) << "Cancel cleanup superseded by a newer launch; leaving successor state untouched.";
+      cancel_outcome = "superseded";
+      return;
+    }
+    if (stream::session::active_sessions.load(std::memory_order_acquire) != 0 || rtsp_stream::session_count_no_reap() != 0 || rtsp_stream::launch_session_pending()) {
+      BOOST_LOG(info) << "Cancel cleanup observed a session or launch that appeared after its decision; skipping destructive cleanup.";
+      cancel_outcome = "successor";
       return;
     }
 
@@ -3608,7 +3762,11 @@ namespace nvhttp {
 #endif
 
     if (has_running_app && !preserve_deferred_launch) {
+      step_started = cancel_timer.now();
       proc::proc.terminate();
+      cancel_timer.record_since("app", step_started);
+    } else {
+      cancel_timer.skip("app");
     }
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
 
@@ -3616,16 +3774,29 @@ namespace nvhttp {
     if (!preserve_deferred_launch) {
       // RTSP session termination above is synchronous, so by the time we reach
       // this point the old session threads have already completed their joins.
+      step_started = cancel_timer.now();
       cleanup_virtual_display_if_idle();
+      cancel_timer.record_since("display", step_started);
+    } else {
+      cancel_timer.skip("display");
     }
 #endif
     if (clear_cancelled_desktop_overrides) {
+      step_started = cancel_timer.now();
       config::clear_runtime_config_overrides();
       config::apply_config_now();
+      cancel_timer.record_since("config", step_started);
+    } else {
+      cancel_timer.skip("config");
     }
     if (cleanup_ownership.deferred_cleanup_pending) {
+      step_started = cancel_timer.now();
       stream::session::complete_deferred_global_cleanup("explicit client cancel");
+      cancel_timer.record_since("deferred_cleanup", step_started);
+    } else {
+      cancel_timer.skip("deferred_cleanup");
     }
+    cancel_outcome = preserve_deferred_launch ? "deferred_launch_preserved" : "done";
   }
 
   void appasset(resp_https_t response, req_https_t request) {
@@ -3660,14 +3831,23 @@ namespace nvhttp {
      * @param name The route name, for the log.
      * @param response The response, written by @p handler.
      * @param request The request.
-     * @param handler Called as `handler(response, request)`.
+     * @param handler Called as `handler(response, request, queued_at)` when it takes the time the
+     *                request was queued (to report its own queue wait), else as `handler(response, request)`.
      */
     template<class Handler>
     void run_on_launch_worker(util::serial_executor_t &worker, std::string_view name, resp_https_t response, req_https_t request, Handler handler) {
-      const bool queued = worker.post([name, response, request, handler = std::move(handler)]() {
+      const auto queued_at = std::chrono::steady_clock::now();
+      const bool queued = worker.post([name, response, request, queued_at, handler = std::move(handler)]() {
         // Tasks must not throw; Simple-Web-Server used to swallow handler exceptions on the io thread.
         try {
-          handler(response, request);
+          if constexpr (std::is_invocable_v<const Handler &, resp_https_t, req_https_t, std::chrono::steady_clock::time_point>) {
+            handler(response, request, queued_at);
+          } else {
+            BOOST_LOG(debug) << "/"sv << name << " waited "sv
+                             << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - queued_at).count()
+                             << " ms in the launch queue"sv;
+            handler(response, request);
+          }
         } catch (const std::exception &err) {
           BOOST_LOG(error) << "/"sv << name << " handler terminated by exception: "sv << err.what();
         } catch (...) {

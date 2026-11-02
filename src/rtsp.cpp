@@ -16,6 +16,7 @@ extern "C" {
 #include <cstdlib>
 #include <format>
 #include <set>
+#include <source_location>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -26,6 +27,7 @@ extern "C" {
 #include <boost/bind.hpp>
 
 // local includes
+#include "cancel_scope_policy.h"
 #include "config.h"
 #include "globals.h"
 #include "input.h"
@@ -39,6 +41,7 @@ extern "C" {
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
+#include "virtual_display_join_policy.h"
 #include "webrtc_stream.h"
 #include "pyrowave/backend.h"
 
@@ -497,7 +500,7 @@ namespace rtsp_stream {
   class rtsp_server_t {
   public:
     ~rtsp_server_t() {
-      clear();
+      clear(true, stream::session::stop_reason_e::rtsp_clear_all);
     }
 
     int bind(net::af_e af, std::uint16_t port, boost::system::error_code &ec) {
@@ -553,7 +556,7 @@ namespace rtsp_stream {
         BOOST_LOG(error) << "Couldn't accept incoming connections: "sv << ec.message();
 
         // Stop server
-        clear();
+        clear(true, stream::session::stop_reason_e::rtsp_clear_all);
         return;
       }
 
@@ -680,7 +683,7 @@ namespace rtsp_stream {
       {
         std::lock_guard lg {_launch_timer_mutex};
         const auto pending = launch_event.view(0s);
-        if (!pending || (expected_id && pending->id != *expected_id)) {
+        if (!pending || !cancel_scope::is_expected_launch(expected_id, pending->id)) {
           return {};
         }
         if (rollback_unclaimed) {
@@ -759,11 +762,13 @@ namespace rtsp_stream {
     /**
      * @brief Clear launch sessions.
      * @param all If true, clear all sessions. Otherwise, only clear timed out and stopped sessions.
+     * @param reason Why the sessions are being stopped; logged and passed to session::stop.
+     * @param loc The caller, logged with the reason so a stop is attributable to its real call site.
      * @examples
-     * clear(false);
+     * clear(false, stream::session::stop_reason_e::rtsp_reap);
      * @examples_end
      */
-    void clear(bool all = true) {
+    void clear(bool all, stream::session::stop_reason_e reason, std::source_location loc = std::source_location::current()) {
       // Collect sessions to stop/join first while holding the set lock,
       // but perform the potentially blocking join() outside of the lock to
       // avoid deadlocks (join() may indirectly query session_count()).
@@ -789,10 +794,7 @@ namespace rtsp_stream {
       }
 
       // Stop and join outside the lock
-      for (auto &slot : to_cleanup) {
-        stream::session::stop(*slot);
-        stream::session::join(*slot);
-      }
+      stop_and_join(to_cleanup, reason, loc);
     }
 
     /**
@@ -837,7 +839,40 @@ namespace rtsp_stream {
       return out;
     }
 
-    bool disconnect_client(const std::string &client_uuid) {
+    /**
+     * @brief Read-only snapshot of the tracked sessions, for diagnostics.
+     * @note Takes only the session-state lock, briefly. Unlike clear() it never
+     *       stops, joins or reaps anything, so it is safe while a launch lease is held.
+     */
+    std::vector<session_snapshot_t> session_snapshot() {
+      std::vector<session_snapshot_t> out;
+      auto lg = _session_state.lock();
+      out.reserve(_session_state->sessions.size());
+      for (const auto &slot : _session_state->sessions) {
+        auto who = stream::session::identity(*slot);
+        const auto launch_session_id = who.launch_session_id;
+        out.push_back({std::move(who.client_uuid), std::move(who.client_name), stream::session::state(*slot) == stream::session::state_e::STOPPING, launch_session_id});
+      }
+      return out;
+    }
+
+    /**
+     * @brief The pending launch that no control stream has claimed yet, if any.
+     * @note Takes only the launch timer mutex. The event is viewed, never consumed.
+     */
+    std::optional<pending_launch_snapshot_t> pending_launch_snapshot() {
+      std::lock_guard lg {_launch_timer_mutex};
+      const auto pending = launch_event.view(0s);
+      if (!pending) {
+        return std::nullopt;
+      }
+      return pending_launch_snapshot_t {pending->id, pending->client_uuid};
+    }
+
+    bool disconnect_client(
+      const std::string &client_uuid,
+      stream::session::stop_reason_e reason = stream::session::stop_reason_e::client_disconnect_request
+    ) {
       if (client_uuid.empty()) {
         return false;
       }
@@ -858,15 +893,79 @@ namespace rtsp_stream {
         }
       }
 
-      for (auto &slot : to_cleanup) {
-        stream::session::stop(*slot);
-        stream::session::join(*slot);
-      }
+      stop_and_join(to_cleanup, reason);
 
       if (!to_cleanup.empty()) {
         nvhttp::mark_client_last_seen(client_uuid);
       }
       return !to_cleanup.empty();
+    }
+
+    /**
+     * @brief Cancel a client's own pending launch and stop its tracked sessions.
+     * @note Pops the pending launch only when it belongs to @p client_uuid, by id,
+     *       so another client's launch is never discarded. No reap of other sessions.
+     */
+    std::shared_ptr<launch_session_t> end_client_sessions(
+      const std::string &client_uuid,
+      stream::session::stop_reason_e reason
+    ) {
+      if (client_uuid.empty()) {
+        return {};
+      }
+
+      std::optional<uint32_t> own_pending_id;
+      {
+        std::lock_guard lg {_launch_timer_mutex};
+        const auto pending = launch_event.view(0s);
+        if (pending && pending->client_uuid == client_uuid) {
+          own_pending_id = pending->id;
+        }
+      }
+      std::shared_ptr<launch_session_t> cancelled;
+      if (own_pending_id) {
+        cancelled = cancel_pending_launch(*own_pending_id);
+      }
+      (void) disconnect_client(client_uuid, reason);
+      return cancelled;
+    }
+
+    /**
+     * @brief Stop and join only the tracked sessions whose launch id is in @p observed_launch_ids.
+     * @note Mirrors clear(true): select and unlink under the set lock, stop and join outside it.
+     *       A session that became tracked after the caller decided has a launch id the caller
+     *       never saw, so it is left streaming.
+     */
+    void stop_observed(
+      const std::vector<uint32_t> &observed_launch_ids,
+      stream::session::stop_reason_e reason,
+      std::source_location loc = std::source_location::current()
+    ) {
+      std::vector<std::shared_ptr<stream::session_t>> to_cleanup;
+      std::size_t left_running = 0;
+
+      {
+        auto lg = _session_state.lock();
+
+        for (auto i = _session_state->sessions.begin(); i != _session_state->sessions.end();) {
+          if (cancel_scope::was_observed(stream::session::identity(**i).launch_session_id, observed_launch_ids)) {
+            auto session = *i;
+            to_cleanup.emplace_back(session);
+
+            _session_state->client_uuids.erase(session.get());
+            i = _session_state->sessions.erase(i);
+          } else {
+            ++i;
+          }
+        }
+        left_running = _session_state->sessions.size();
+      }
+
+      if (left_running > 0) {
+        BOOST_LOG(info) << "Cancel left "sv << left_running << " session(s) running that were not visible when it decided."sv;
+      }
+
+      stop_and_join(to_cleanup, reason, loc);
     }
 
     /**
@@ -889,10 +988,31 @@ namespace rtsp_stream {
       acceptor.close();
       io_context.stop();
       (void) cancel_pending_launch();
-      clear();
+      clear(true, stream::session::stop_reason_e::rtsp_clear_all);
     }
 
   private:
+    /**
+     * @brief Stop and join sessions already removed from the tracked set.
+     * @param loc The caller; forwarded to session::stop so its log names the real call site.
+     * @note Logs each session first, so a stop is attributable to its caller even
+     *       when the session was already stopping and session::stop has nothing to say.
+     */
+    static void stop_and_join(
+      const std::vector<std::shared_ptr<stream::session_t>> &sessions,
+      stream::session::stop_reason_e reason,
+      std::source_location loc = std::source_location::current()
+    ) {
+      for (const auto &slot : sessions) {
+        BOOST_LOG(info) << "RTSP stopping session "sv << stream::session::describe(stream::session::identity(*slot))
+                        << " reason="sv << stream::session::stop_reason_name(reason)
+                        << " at "sv << stream::session::file_basename(loc.file_name()) << ':' << loc.line()
+                        << " already_stopping="sv << (stream::session::state(*slot) == stream::session::state_e::STOPPING);
+        stream::session::stop(*slot, reason, loc);
+        stream::session::join(*slot);
+      }
+    }
+
     void reconcile_discarded_launch(
       const std::shared_ptr<launch_session_t> &discarded,
       const std::string_view reason,
@@ -902,9 +1022,13 @@ namespace rtsp_stream {
       // A prior last-session teardown may have deferred its global cleanup
       // (including RTSP/WebRTC exclusivity reconciliation) to this launch.
       // Serialize cancellation + lease release against ANNOUNCE's final
-      // admission claim/session insertion. If ANNOUNCE won, /cancel waits
-      // until the started session is visible to clear(true); if cancellation
-      // won, ANNOUNCE observes cancelled and cannot start afterward.
+      // admission claim/session insertion. This waits only for the caller that
+      // popped the launch itself (cancel, expiry or an ANNOUNCE rejection), and
+      // only on that launch's own admission. If ANNOUNCE won, that caller waits
+      // until the started session is tracked, so a stop of this launch's id
+      // sees it; if cancellation won, ANNOUNCE observes cancelled and cannot
+      // start afterward. A cancel that finds nothing pending (expiry or an
+      // ANNOUNCE rejection popped it first) never reaches this wait.
       bool retired = true;
       if (discarded->admission_state) {
         std::lock_guard admission_lock {discarded->admission_state->mutex};
@@ -1120,7 +1244,7 @@ namespace rtsp_stream {
 
   int session_count() {
     // Ensure session_count is up-to-date
-    server.clear(false);
+    server.clear(false, stream::session::stop_reason_e::rtsp_reap);
 
     return server.session_count();
   }
@@ -1129,20 +1253,49 @@ namespace rtsp_stream {
     return server.session_count();
   }
 
-  std::shared_ptr<launch_session_t> terminate_sessions() {
-    auto pending = server.cancel_pending_launch();
-    server.clear(true);
-    return pending;
+  std::vector<session_snapshot_t> session_snapshot_no_reap() {
+    return server.session_snapshot();
+  }
+
+  std::optional<pending_launch_snapshot_t> pending_launch_snapshot() {
+    return server.pending_launch_snapshot();
+  }
+
+  std::shared_ptr<launch_session_t> terminate_observed_sessions(
+    const std::optional<pending_launch_snapshot_t> &pending,
+    const std::vector<session_snapshot_t> &sessions,
+    stream::session::stop_reason_e reason
+  ) {
+    std::vector<uint32_t> observed;
+    observed.reserve(sessions.size() + 1);
+    for (const auto &session : sessions) {
+      observed.push_back(session.launch_session_id);
+    }
+
+    std::shared_ptr<launch_session_t> cancelled;
+    if (pending) {
+      // The pending launch's id covers its own session when an ANNOUNCE that
+      // already holds the launch publishes it after this pop. Pass the id: with
+      // none, cancel_pending_launch would pop whatever is pending now.
+      observed.push_back(pending->id);
+      cancelled = server.cancel_pending_launch(pending->id);
+    }
+    server.stop_observed(observed, reason);
+    return cancelled;
   }
 
   std::list<std::string> get_all_session_client_uuids() {
-    server.clear(false);
+    server.clear(false, stream::session::stop_reason_e::rtsp_reap);
     return server.get_all_client_uuids();
   }
 
   bool disconnect_client_sessions(const std::string &client_uuid) {
-    server.clear(false);
+    server.clear(false, stream::session::stop_reason_e::rtsp_reap);
     return server.disconnect_client(client_uuid);
+  }
+
+  std::shared_ptr<launch_session_t> end_client_sessions(const std::string &client_uuid, stream::session::stop_reason_e reason) {
+    return server.end_client_sessions(client_uuid, reason);
   }
 
   int send(tcp::socket &sock, const std::string_view &sv) {
@@ -1755,8 +1908,10 @@ namespace rtsp_stream {
 
     // Atomically claim admission against /cancel or pending expiry. The lock
     // stays held through insertion + session::start: if cancel wins first we
-    // reject, and if ANNOUNCE wins first cancel waits until clear(true) can see
-    // and stop the fully started session. No network wait occurs in this span.
+    // reject, and if ANNOUNCE wins first the cancel that popped this launch
+    // waits until a stop by this launch's id can see the fully started session.
+    // A cancel that did not pop this launch does not wait here. No network wait
+    // occurs in this span.
     std::unique_lock<std::mutex> admission_lock;
     if (session.admission_state) {
       admission_lock = std::unique_lock<std::mutex> {session.admission_state->mutex};
@@ -1783,7 +1938,11 @@ namespace rtsp_stream {
     const int rtsp_fps = config.monitor.framerateX100 > 0 ?
                            static_cast<int>(std::lround(config.monitor.framerateX100 / 100.0)) :
                            config.monitor.framerate;
-    if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
+    if (!virtual_display_join::may_reconcile_mode(session.joined_existing_virtual_display)) {
+      // Recreating the display would drop the owner's stream onto a new mode.
+      BOOST_LOG(info) << "Joining client keeps the owner's display mode (device_id=" << session.virtual_display_device_id
+                      << "); skipping virtual display mode reconciliation.";
+    } else if (!reconcile_virtual_display_mode(session, config.monitor.width, config.monitor.height, rtsp_fps)) {
       respond(sock, session, &option, 503, "Virtual display mode reconciliation failed", req->sequenceNumber, {});
       return;
     }
@@ -1811,7 +1970,7 @@ namespace rtsp_stream {
       // successful publication and this claim marker.
       if (!session.admission_state->policy.mark_claimed()) {
         BOOST_LOG(error) << "RTSP admission was retired while session start held the admission lock.";
-        stream::session::stop(*stream_session);
+        stream::session::stop(*stream_session, stream::session::stop_reason_e::admission_retired);
         server->remove(stream_session);
         respond(sock, session, &option, 410, "Gone", req->sequenceNumber, {});
         return;
@@ -1891,14 +2050,14 @@ namespace rtsp_stream {
           server.iterate();
 
           if (broadcast_shutdown_event->peek()) {
-            server.clear();
+            server.clear(true, stream::session::stop_reason_e::rtsp_broadcast_shutdown);
           } else {
             // cleanup all stopped sessions
-            server.clear(false);
+            server.clear(false, stream::session::stop_reason_e::rtsp_reap);
           }
         }
 
-        server.clear();
+        server.clear(true, stream::session::stop_reason_e::rtsp_clear_all);
       } catch (const std::exception &e) {
         BOOST_LOG(fatal) << "RTSP handler thread terminated by exception: "sv << e.what()
                          << "; shutting down."sv;
