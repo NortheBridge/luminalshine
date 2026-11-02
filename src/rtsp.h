@@ -162,6 +162,8 @@ namespace rtsp_stream {
     std::string client_uuid;
     std::string client_name;
     bool stopping;
+    /// The session's stable identity: the launch it was started from (one session per launch).
+    uint32_t launch_session_id;
   };
 
   /**
@@ -174,18 +176,40 @@ namespace rtsp_stream {
    */
   std::vector<session_snapshot_t> session_snapshot_no_reap();
 
-  /**
-   * @brief Client UUID of the pending launch that no control stream has claimed yet.
-   *
-   * Takes only the pending-launch mutex and never consumes the launch event.
-   * @return The UUID (possibly empty for an unidentified client), or nothing when no launch is pending.
-   */
-  std::optional<std::string> pending_launch_client_uuid();
+  /// The pending launch that no control stream has claimed yet, as reported by pending_launch_snapshot().
+  struct pending_launch_snapshot_t {
+    uint32_t id;
+    std::string client_uuid;  ///< Possibly empty for an unidentified client.
+  };
 
   /**
-   * @brief Terminates all running streaming sessions.
+   * @brief The pending launch that no control stream has claimed yet.
+   *
+   * Takes only the pending-launch mutex and never consumes the launch event.
+   * @return The launch, or nothing when no launch is pending.
    */
-  std::shared_ptr<launch_session_t> terminate_sessions();
+  std::optional<pending_launch_snapshot_t> pending_launch_snapshot();
+
+  /**
+   * @brief Stop only the pending launch and sessions an earlier snapshot observed.
+   *
+   * Pops the pending launch only while it is still @p pending (by id), then stops and
+   * joins the tracked sessions whose launch id is @p pending's or one of @p sessions'.
+   * A session that became tracked after the snapshot has a different launch id and
+   * keeps streaming; none is expected, as a launch popped while unclaimed is retired
+   * and never starts one. The pending launch's own session is covered even when its
+   * ANNOUNCE is admitting it during this call's pop: the pop waits for the admission,
+   * and the session carries the pending launch's id.
+   * @param pending The pending launch the decision observed, if any.
+   * @param sessions The tracked sessions the decision observed.
+   * @param reason Why the sessions are being stopped.
+   * @return The pending launch that was popped, or null when it was gone or replaced.
+   */
+  std::shared_ptr<launch_session_t> terminate_observed_sessions(
+    const std::optional<pending_launch_snapshot_t> &pending,
+    const std::vector<session_snapshot_t> &sessions,
+    stream::session::stop_reason_e reason
+  );
 
   /**
    * @brief Get the client UUIDs for all active sessions.
@@ -202,7 +226,7 @@ namespace rtsp_stream {
    * @brief End only the sessions that belong to one client, leaving every other client streaming.
    *
    * Cancels the pending launch only when it belongs to @p client_uuid, then stops and joins
-   * that client's tracked sessions with @p reason. Unlike terminate_sessions() it does not
+   * that client's tracked sessions with @p reason. Unlike terminate_observed_sessions() it does not
    * touch other clients' sessions or their pending launch, and unlike
    * disconnect_client_sessions() it does not reap other STOPPING sessions first.
    * An empty @p client_uuid owns nothing, so it ends nothing.
