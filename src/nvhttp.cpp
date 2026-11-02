@@ -59,6 +59,7 @@
 #include "process.h"
 #include "rtsp.h"
 #include "serial_executor.h"
+#include "server_metadata.h"
 #include "stream.h"
 #include "system_tray.h"
 #include "update.h"
@@ -2529,6 +2530,9 @@ namespace nvhttp {
   }
 
   void put_luminalshine_version(pt::ptree &tree) {
+    tree.put("root.ServerIdentity", "LuminalShine");
+    tree.put("root.ServerRel", server_metadata::release);
+    tree.put("root.ServerBuild", server_metadata::build);
     tree.put("root.LuminalShineVersion", PROJECT_VERSION);
   }
 
@@ -2635,10 +2639,8 @@ namespace nvhttp {
     tree.put("root.currentgame", current_appid);
     tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
 
-    // Only report the LuminalShine release to paired clients over HTTPS.
-    if constexpr (std::is_same_v<SunshineHTTPS, T>) {
-      put_luminalshine_version(tree);
-    }
+    // Public discovery metadata; authentication and GameStream fields stay unchanged.
+    put_luminalshine_version(tree);
 
     std::ostringstream data;
 

@@ -1,7 +1,8 @@
 /**
  * @file src/platform/windows/dir_acl.h
  * @brief Restrictive DACL + Mandatory Integrity Control hardening for the
- *        config directory under %ProgramData%\LuminalShine\.
+ *        config directory under %ProgramData%\LuminalShine\, and the DACL
+ *        restriction for the crash dump folder.
  */
 #pragma once
 
@@ -29,5 +30,22 @@ namespace platf {
    * still applied where the caller has WRITE_DAC.
    */
   bool harden_config_directory(const std::filesystem::path &dir);
+
+  /**
+   * @brief Restrict @p dir to SYSTEM and Administrators. Used for the crash
+   *        dump folder, whose files hold process memory.
+   *
+   * Target DACL (PROTECTED, OI+CI inheritance):
+   *   - NT AUTHORITY\SYSTEM             : Full
+   *   - BUILTIN\Administrators          : Full
+   *
+   * Inheritance from the parent is cut, and files and folders already inside
+   * @p dir receive the new entries as inherited ones, so dumps written before
+   * the call are covered too. No mandatory integrity label is applied.
+   *
+   * Returns true on success. A false return is logged; the caller should not
+   * rely on the folder being restricted.
+   */
+  bool restrict_crash_dump_directory(const std::filesystem::path &dir);
 
 }  // namespace platf

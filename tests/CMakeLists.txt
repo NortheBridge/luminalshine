@@ -197,6 +197,13 @@ target_link_options(${PROJECT_NAME} PRIVATE)
 # Windows-clang build doesn't gain a hard Python dependency.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    find_program(SERVER_METADATA_NINJA ninja)
+    if(SERVER_METADATA_NINJA)
+        add_test(NAME server_metadata_build
+            COMMAND "${CMAKE_COMMAND}" -E env "CMAKE_COMMAND=${CMAKE_COMMAND}"
+                "NINJA_COMMAND=${SERVER_METADATA_NINJA}"
+                "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/integration/test_server_metadata_build.py")
+    endif()
     add_test(
         NAME wix_condition_lint
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/lint_wix_conditions.py"
