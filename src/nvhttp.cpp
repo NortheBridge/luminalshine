@@ -2361,6 +2361,8 @@ namespace nvhttp {
     }
   }
 
+  template void pair<SimpleWeb::HTTP>(std::shared_ptr<safe::queue_t<crypto::x509_t>> &add_cert, resp_http_t response, req_http_t request);
+
   std::vector<pairing_request_t> get_pairing_requests() {
     const auto now = std::chrono::steady_clock::now();
     std::vector<pair_response_t> expired_responses;
