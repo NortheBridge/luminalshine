@@ -650,6 +650,37 @@ jobs:
             }
           }
 
+      - name: Verify signed executables inside portable ZIP
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archives = @(Get-ChildItem 'build/cpack_artifacts' -Filter '*.zip' -File)
+          if ($archives.Count -ne 1) { throw 'Expected exactly one portable ZIP.' }
+          $destination = Join-Path $env:RUNNER_TEMP ('portable-signature-check-' + [guid]::NewGuid())
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $destination
+          $records = @(Get-Content (Join-Path $env:RUNNER_TEMP 'luminalshine-signed-files.json') -Raw | ConvertFrom-Json)
+          $executables = @(Get-ChildItem $destination -Filter '*.exe' -Recurse -File)
+          $hosts = @($executables | Where-Object Name -eq 'luminalshine.exe')
+          if ($hosts.Count -ne 1) { throw 'Expected exactly one packaged LuminalShine host.' }
+          $checked = 0
+          foreach ($file in $executables) {
+            $sources = @($records | Where-Object { [IO.Path]::GetFileName($_.path) -ieq $file.Name })
+            # Third-party installers have their own signing policy. Validate every
+            # executable produced and signed by this build, including the host.
+            if ($sources.Count -eq 0) {
+              if ($file.Name -ieq 'luminalshine.exe') { throw 'Missing signed host hash.' }
+              continue
+            }
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            if ($hash -notin $sources.sha256) { throw "Portable ZIP changed signed payload: $($file.Name)" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid portable signature: $($file.Name): $($signature.Status)" }
+            Write-Host "Verified portable payload: $($file.Name)"
+            $checked++
+          }
+          Write-Host "Verified $checked signed portable executables against source hashes."
+
       - name: MSI upgrade-compatibility check
         if: inputs.nightly != true
         # MSI table compatibility oracle. Dumps the freshly built MSI's
