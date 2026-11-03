@@ -183,6 +183,16 @@ namespace {
     executable_path[directory_end] = L'\0';
     return ::SetCurrentDirectoryW(executable_path) != FALSE;
   }
+
+  // Undo the global profile change if this process made one (at startup or
+  // when a stream started). Must run while logging is still alive: the
+  // restore logs through Boost.Log.
+  void restore_nvprefs_global_profile() {
+    if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
+      nvprefs_instance.restore_global_profile();
+      nvprefs_instance.unload();
+    }
+  }
 }
 #endif
 
@@ -490,6 +500,17 @@ int main(int argc, char *argv[]) {
     // Unload dynamic library to survive driver re-installation
     nvprefs_instance.unload();
   }
+
+  // The early startup returns below bypass the explicit restore at the end of
+  // main(). Without this guard the global nvprefs_instance restored the
+  // profile from its destructor during static destruction, after
+  // log_deinit_guard had torn logging down, and the log call inside the
+  // restore threw out of the destructor (std::terminate). Declared after
+  // log_deinit_guard, so it runs while logging is still alive. The orderly
+  // teardown below restores at its original point and disables this guard.
+  auto nvprefs_restore_guard = util::fail_guard([]() {
+    restore_nvprefs_global_profile();
+  });
 
   // Wait as long as possible to terminate Sunshine.exe during logoff/shutdown
   SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY);
@@ -1137,11 +1158,10 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifdef WIN32
-  // Restore global NVIDIA control panel settings
-  if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
-    nvprefs_instance.restore_global_profile();
-    nvprefs_instance.unload();
-  }
+  // Restore global NVIDIA control panel settings. Disable the guard so a
+  // failed restore isn't retried; the undo file covers it on the next start.
+  restore_nvprefs_global_profile();
+  nvprefs_restore_guard.disable();
 #endif
 
   return lifetime::desired_exit_code;
