@@ -52,6 +52,7 @@
   #include "src/platform/windows/frame_limiter_nvcp.h"
   #include "src/platform/windows/display.h"
   #include "src/platform/windows/misc.h"
+  #include "src/platform/windows/nvprefs/restore_guard.h"
   #include "src/platform/windows/playnite_integration.h"
   #include "src/platform/windows/rtss_integration.h"
   #include "src/platform/windows/vgd_devnode.h"
@@ -479,6 +480,11 @@ int main(int argc, char *argv[]) {
   // Display configuration is managed by the external Windows helper; no in-process init.
 
 #ifdef WIN32
+  // Declared after logging and before any profile changes: every early return
+  // (including an interrupted startup display wait) restores while the runtime
+  // is still alive. Later guards stop platform/session users before this runs.
+  nvprefs::restore_guard nvprefs_guard {nvprefs_instance};
+
   // Modify relevant NVIDIA control panel settings if the system has corresponding gpu
   if (nvprefs_instance.load()) {
     // Restore global settings to the undo file left by improper termination of sunshine.exe
@@ -1136,13 +1142,7 @@ int main(int argc, char *argv[]) {
   system_tray::end_tray();
 #endif
 
-#ifdef WIN32
-  // Restore global NVIDIA control panel settings
-  if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
-    nvprefs_instance.restore_global_profile();
-    nvprefs_instance.unload();
-  }
-#endif
+  // nvprefs_guard restores NVIDIA settings before log_deinit_guard runs.
 
   return lifetime::desired_exit_code;
 }

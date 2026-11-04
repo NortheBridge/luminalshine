@@ -55,6 +55,8 @@ namespace video {
     int pyrowave_refresh_interval = 0;  // Certified conditional replenishment interval (0-255).
     int pyrowave_adaptive_fec = 0;  // Client-negotiated dynamic RTP FEC support (strict 0/1).
     int pyrowave_adaptive_bitrate = 0;  // Client-negotiated encoder/pacing adaptation (strict 0/1).
+    // Host-selected AV1 transport, propagated to isolated workers (IPC v12).
+    bool nvenc_av1_d3d11 = false;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

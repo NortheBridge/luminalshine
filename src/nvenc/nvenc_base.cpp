@@ -199,6 +199,8 @@ namespace nvenc {
       destroy_encoder();
     }
     encoder_initialized = false;
+    produced_frame = false;
+    video_format = client_config.videoFormat;
     auto fail_guard = util::fail_guard([this] {
       if (encoder && !encoder_initialized) {
         // The session was opened but nvEncInitializeEncoder() never succeeded,
@@ -1275,6 +1277,12 @@ namespace nvenc {
 
     if (nvenc_failed(nvenc->nvEncLockBitstream(encoder, &lock_bitstream))) {
       BOOST_LOG(error) << "NvEnc: NvEncLockBitstream() failed: " << last_nvenc_error_string;
+      if (nvenc->nvEncGetLastErrorString) {
+        if (const auto *detail = nvenc->nvEncGetLastErrorString(encoder); detail && *detail) {
+          BOOST_LOG(error) << "NvEnc: driver detail: " << detail;
+        }
+      }
+      note_bitstream_lock_failure(last_nvenc_status);
       // Wait succeeded — GPU is done with the mapped resource — so it's
       // safe to unmap synchronously here even though the bitstream lock
       // failed downstream.
@@ -1323,6 +1331,7 @@ namespace nvenc {
       encoder_state.session_start_time = now;
     }
     encoder_state.last_successful_encode_time = now;
+    produced_frame = true;
 
     // Happy path: wait succeeded, lock + read + unlock all succeeded.
     // The GPU is provably done with the mapped resource by virtue of the

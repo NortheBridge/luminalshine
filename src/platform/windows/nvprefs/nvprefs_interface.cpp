@@ -33,9 +33,10 @@ namespace nvprefs {
   }
 
   nvprefs_interface::~nvprefs_interface() {
-    if (owning_undo_file() && load()) {
-      restore_global_profile();
-    }
+    // Restoration belongs to main's restore_guard, while logging and the
+    // C++ locale are alive. This global destructor runs during CRT teardown;
+    // retrying restoration here can throw from Boost.Log's locale mutex.
+    // On failure keep the undo file for next-start recovery instead.
     unload();
   }
 
