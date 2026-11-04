@@ -103,6 +103,7 @@ namespace nvenc {
     );
 
     virtual void cleanup_rejected_initialize();
+    virtual void note_bitstream_lock_failure(NVENCSTATUS) {}
 
     /**
      * @brief Close a session that was opened but never initialized.
@@ -247,6 +248,8 @@ namespace nvenc {
      * it. See `discard_uninitialized_session()`.
      */
     bool encoder_initialized = false;
+    bool produced_frame = false;
+    int video_format = -1;
 
     struct {
       uint32_t width = 0;

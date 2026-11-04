@@ -37,6 +37,7 @@ namespace nvenc {
     void prepare_picture_resources(NV_ENC_INPUT_PTR, NV_ENC_BUFFER_FORMAT,
                                    NV_ENC_PIC_PARAMS &, NV_ENC_LOCK_BITSTREAM &) override;
     void cleanup_rejected_initialize() override;
+    void note_bitstream_lock_failure(NVENCSTATUS status) override;
     bool device_lost(std::uint32_t &out_reason) override;
 
     ID3D12DevicePtr d3d12_device_;

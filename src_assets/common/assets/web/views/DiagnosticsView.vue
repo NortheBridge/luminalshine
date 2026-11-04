@@ -188,8 +188,10 @@ async function refreshRenderStack(): Promise<void> {
   }
 }
 
-const captureEngine = computed(
-  () => metadata.value?.capture_backend_display || metadata.value?.capture_backend_active || '',
+const captureEngine = computed(() =>
+  [metadata.value?.capture_backend_active, metadata.value?.capture_backend_display]
+    .filter(Boolean)
+    .join(' · '),
 );
 const captureAge = computed(() => {
   const s = metadata.value?.capture_backend_age_seconds;

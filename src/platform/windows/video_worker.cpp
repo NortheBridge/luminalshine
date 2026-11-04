@@ -1,4 +1,6 @@
 #include "video_worker.h"
+#include "video_worker_capture_status.h"
+#include "src/nvenc/nvenc_av1_compat.h"
 #include "src/pyrowave/backend.h"
 
 #include <algorithm>
@@ -50,6 +52,7 @@ namespace platf::video_worker {
       capture_ready,
       startup_error,
       capture_reinitializing,
+      capture_status,
     };
 
 #pragma pack(push, 1)
@@ -101,7 +104,7 @@ namespace platf::video_worker {
     std::string g_child_pipe;
     std::uint32_t g_parent_pid {};
     constexpr std::uint32_t kProtocolMagic = 0x4C565750;  // LVWP
-    constexpr std::uint32_t kProtocolVersion = 10;
+    constexpr std::uint32_t kProtocolVersion = 12;
     std::atomic_bool g_capture_reinitializing {false};
     std::atomic<std::uint64_t> g_capture_generation {1};
     std::mutex g_capture_generation_mutex;
@@ -122,6 +125,7 @@ namespace platf::video_worker {
         case message_e::pyrowave_fec_scale: return size == sizeof(pyrowave_fec_scale_t);
         case message_e::capture_ready:
         case message_e::capture_reinitializing: return size == sizeof(generation_t);
+        case message_e::capture_status: return size == sizeof(capture_status_t);
         case message_e::invalidate: return size == sizeof(invalidate_t);
         case message_e::hdr: return size == sizeof(video::hdr_info_raw_t);
         case message_e::touch: return size == sizeof(input::touch_port_t);
@@ -725,6 +729,7 @@ namespace platf::video_worker {
       auto touch = session_mail->event<input::touch_port_t>(mail::touch_port);
       auto chroma = session_mail->event<bool>(mail::chroma_downgrade);
       std::uint64_t admitted_generation = 0;
+      std::uint64_t sent_capture_sequence = 0;
       // R15 egress-cycle telemetry: whether this thread spends its time
       // waiting for the encoder (queue-wait) or for the parent to drain the
       // pipe (pipe-write). One line per 30 s.
@@ -732,6 +737,16 @@ namespace platf::video_worker {
       std::uint64_t egress_queue_wait_ns = 0, egress_write_ns = 0, egress_write_max_ns = 0;
       std::uint32_t egress_packets = 0;
       while (!shutdown->peek()) {
+        // display() records the actual winner in this child, including WGC
+        // fallback. Relay changes independently of frames: startup/rebuild
+        // may not have produced a packet yet. Do not refresh the UI age on
+        // every frame when the source has not changed.
+        const auto capture_note = vgd_transition::last_capture_note();
+        if (auto status = capture_status_update(capture_note, sent_capture_sequence)) {
+          std::lock_guard lock(write_mutex);
+          if (!send(pipe, message_e::capture_status, &*status, sizeof(*status), kChildPacketSendTimeoutMs)) break;
+          sent_capture_sequence = capture_note.sequence;
+        }
         bool capture_reinitialized = false;
         generation_t reinitialized_generation {};
         {
@@ -892,6 +907,8 @@ namespace platf::video_worker {
     start_t start {};
     start.magic = kProtocolMagic;
     start.protocol_version = kProtocolVersion;
+    config.nvenc_av1_d3d11 = nvenc::av1_compatibility_state().use_d3d11(
+      config.videoFormat, config.nvenc_av1_d3d11);
     start.config = config;
     // RTSP already validated this profile against the parent's cached probe.
     // Serialize that certificate into IPC so the child can accept startup
@@ -985,7 +1002,21 @@ namespace platf::video_worker {
     header_t ready_header {};
     std::vector<std::uint8_t> ready_payload;
     bool startup_reinitializing = false;
+    const auto publish_capture_status = [](const std::vector<std::uint8_t> &body) {
+      const auto note = decode_capture_status(body);
+      if (!note) {
+        BOOST_LOG(error) << "Video worker: rejected invalid capture-backend status.";
+        return false;
+      }
+      vgd_transition::note_capture_backend(note->kind.c_str(), note->display);
+      BOOST_LOG(info) << "Video worker: active capture backend: " << note->kind
+                      << " on " << note->display;
+      return true;
+    };
     const auto publish_sideband = [&](message_e type, const std::vector<std::uint8_t> &body) {
+      if (type == message_e::capture_status) {
+        return publish_capture_status(body);
+      }
       if (type == message_e::hdr && body.size() == sizeof(video::hdr_info_raw_t)) {
         video::hdr_info_raw_t value {false};
         std::memcpy(&value, body.data(), sizeof(value));
@@ -1240,6 +1271,8 @@ namespace platf::video_worker {
               BOOST_LOG(info) << "Video worker: bootstrap packet preceded a capture reinitialization; retaining the bounded rebuild window until the replacement packet.";
             }
           }
+        } else if (header.type == message_e::capture_status) {
+          if (!publish_capture_status(body)) break;
         } else if (header.type == message_e::hdr && body.size() == sizeof(video::hdr_info_raw_t)) {
           video::hdr_info_raw_t value {false};
           std::memcpy(&value, body.data(), sizeof(value));

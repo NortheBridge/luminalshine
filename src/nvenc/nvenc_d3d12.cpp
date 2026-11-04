@@ -6,6 +6,7 @@
   #include <atomic>
   #include "nvenc_d3d12.h"
   #include "nvenc_api.h"
+  #include "nvenc_av1_compat.h"
   #include "nvenc_utils.h"
   #include "src/logging.h"
 
@@ -125,8 +126,6 @@ namespace nvenc {
     if (FAILED(d3d12_device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
           D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&output_)))) return false;
     if (FAILED(d3d12_device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&output_fence_)))) return false;
-    NV_ENC_FENCE_POINT_D3D12 reg_fence {NV_ENC_FENCE_POINT_D3D12_VER};
-    reg_fence.pFence = output_fence_.GetInterfacePtr();
     NV_ENC_REGISTER_RESOURCE rr {api::register_resource_version(selected_api_version)};
     rr.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
     rr.width = static_cast<uint32_t>(desc.Width);
@@ -134,7 +133,8 @@ namespace nvenc {
     rr.resourceToRegister = output_.GetInterfacePtr();
     rr.bufferFormat = NV_ENC_BUFFER_FORMAT_U8;
     rr.bufferUsage = NV_ENC_OUTPUT_BITSTREAM;
-    rr.pInputFencePoint = &reg_fence;
+    // pInputFencePoint is only valid for input-image registration.
+    // Output completion is signaled by the per-picture outputFencePoint.
     if (nvenc_failed(nvenc->nvEncRegisterResource(encoder, &rr))) return false;
     registered_output_ = rr.registeredResource;
     NV_ENC_MAP_INPUT_RESOURCE map {api::map_input_resource_version(selected_api_version)};
@@ -207,6 +207,12 @@ namespace nvenc {
     if (SUCCEEDED(hr)) return false;
     reason = static_cast<uint32_t>(hr);
     return true;
+  }
+
+  void nvenc_d3d12::note_bitstream_lock_failure(NVENCSTATUS status) {
+    if (av1_compatibility_state().note_lock_failure(video_format, produced_frame, status)) {
+      BOOST_LOG(warning) << "NvEnc: D3D12 AV1 first-frame retrieval rejected; subsequent AV1 attempts will use D3D11 compatibility transport.";
+    }
   }
 
   void nvenc_d3d12::cleanup_rejected_initialize() {
