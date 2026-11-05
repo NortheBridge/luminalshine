@@ -1050,18 +1050,27 @@ namespace rtsp_stream {
       // This routine itself runs on the single-thread task_pool. Its watchdog
       // must therefore own an independent thread; a delayed task queued back
       // to task_pool can never run while the cleanup below is blocked.
-      stream::session::teardown::independent_watchdog_t display_cleanup_watchdog {60s, []() {
-        BOOST_LOG(error) << "Unclaimed launch display cleanup exceeded 60 seconds; requesting a controlled host restart.";
+      // The deadline follows what run() will do, as in stream::session::join():
+      // the full recovery ladder when it restores the display, otherwise the
+      // fixed 60 s this watchdog used before the deadline was derived.
+      const bool revert_display_config = config::video.dd.config_revert_on_disconnect;
+      const auto display_cleanup_deadline = stream::session::teardown::display_cleanup_deadline(
+        platf::virtual_display_cleanup::worst_case_duration(revert_display_config),
+        60s
+      );
+      const auto on_display_cleanup_timeout = [display_cleanup_deadline]() {
+        BOOST_LOG(error) << "Unclaimed launch display cleanup exceeded " << display_cleanup_deadline.count() << " seconds; requesting a controlled host restart.";
         logging::log_flush();
         platf::restart();
         std::this_thread::sleep_for(10s);
         logging::log_flush();
         std::_Exit(1);
-      }};
+      };
+      stream::session::teardown::independent_watchdog_t display_cleanup_watchdog {display_cleanup_deadline, on_display_cleanup_timeout};
       BOOST_LOG(debug) << "Unclaimed launch rollback phase: display cleanup.";
       (void) platf::virtual_display_cleanup::run(
         "unclaimed_rtsp_launch",
-        config::video.dd.config_revert_on_disconnect
+        revert_display_config
       );
       display_cleanup_watchdog.complete();
       if (!cleanup.deferred_cleanup_pending) {
