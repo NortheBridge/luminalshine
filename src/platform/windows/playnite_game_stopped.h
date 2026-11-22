@@ -50,12 +50,18 @@ namespace platf::playnite {
 
   /**
    * @brief Remembers whether a `gameStarted` message was seen for the current session.
-   * @details Both `on_started` and `stamp` are called on the IPC pipe thread, in the order the messages arrive.
+   * @details `on_started` and `stamp` run on the IPC pipe thread, in the order the messages arrive, and each
+   *          hands out the next receipt number. `allow_stop` runs later on the stop worker, so a `gameStopped`
+   *          message can be checked after a newer `gameStarted` was recorded. Comparing receipt numbers lets a
+   *          stop use up only a mark that was recorded before the stop itself was received: a delayed stop
+   *          from an earlier launch of the same game cannot use up its successor's mark.
    */
   class playnite_session_tracker_t {
   public:
     /**
      * @brief The next receipt number; strictly increasing, and never 0.
+     * @details Take it on the IPC pipe thread when a `gameStopped` message arrives, before posting it.
+     *          The lock is held only to bump the counter, so this does not block the pipe thread.
      */
     std::uint64_t stamp() {
       std::scoped_lock lk(mtx_);
@@ -74,14 +80,15 @@ namespace platf::playnite {
 
     /**
      * @brief Consume the `gameStarted` mark for a `gameStopped` message.
+     * @details A refused stop leaves the mark as it was. A stop does not use up a mark recorded after the stop
+     *          was received, and neither does one for another game.
      * @param id The Playnite id carried by the message; may be empty.
      * @param stop_seq The receipt number the message got from `stamp`.
-     * @return true when a matching mark existed and is now used up.
+     * @return true when a matching mark, recorded before the message was received, existed and is now used up.
      */
     bool allow_stop(const std::string &id, std::uint64_t stop_seq) {
       std::scoped_lock lk(mtx_);
-      (void) stop_seq;
-      if (!seen_started_) {
+      if (!seen_started_ || mark_seq_ >= stop_seq) {
         return false;
       }
       if (!id.empty() && !last_started_id_.empty() && id != last_started_id_) {
@@ -116,7 +123,7 @@ namespace platf::playnite {
    */
   struct game_stopped_deps_t {
     std::function<game_stopped_guard_t()> get_guard;  ///< Snapshot of the active session.
-    std::function<bool(const std::string &, std::uint64_t)> allow_stop;  ///< Consumes the `gameStarted` mark; true when a stop may proceed.
+    std::function<bool(const std::string &, std::uint64_t)> allow_stop;  ///< Consumes the `gameStarted` mark received before the stop; true when a stop may proceed.
     std::function<bool(int, std::chrono::steady_clock::time_point, std::string_view)> terminate_if_current;  ///< Terminates the exact launch generation; false when it is no longer current.
     std::function<void(std::function<void()>)> post;  ///< Hands a task to the stop worker.
     std::function<void(game_stopped_action_e, const game_stopped_guard_t &)> on_result;  ///< Optional; logging and tests. Gets the guard the decision was made on.
@@ -151,14 +158,17 @@ namespace platf::playnite {
   /**
    * @brief Decide what a `gameStopped` message does and terminate the session if it should.
    * @details The checks run in this order because `allow_stop` consumes state and must only run
-   *          for a message that matches the active Playnite-backed app. The outcome is also
-   *          reported to `deps.on_result`, once, together with the guard it was decided on.
+   *          for a message that matches the active Playnite-backed app. A delayed task can run after a
+   *          newer `gameStarted` was recorded; `allow_stop` then refuses it by receipt number and leaves
+   *          that newer mark alone. The outcome is also reported to `deps.on_result`, once, together
+   *          with the guard it was decided on.
    * @param deps The process, tracker and thread seams.
    * @param game_id The Playnite id carried by the message; may be empty.
    * @param received_at When the message arrived on the IPC thread. The launch guard window is
    *                    measured from here, not from when the task runs, so a delayed task cannot
    *                    turn a message that arrived early in a launch into a termination.
-   * @param received_seq The receipt number the message got on the IPC thread.
+   * @param received_seq The receipt number the message got on the IPC thread. A stop only uses up a
+   *                     `gameStarted` mark that was received before it.
    * @return What the message ended up doing.
    */
   inline game_stopped_action_e run_game_stopped(

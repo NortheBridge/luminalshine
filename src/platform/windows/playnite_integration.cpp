@@ -635,6 +635,7 @@ namespace platf::playnite {
           // write_and_refresh_apps -> proc::refresh -> proc.running()) still runs here and can block on
           // the lifecycle lock.
           const auto received_at = std::chrono::steady_clock::now();
+          // Numbered here, in message order, so the delayed task cannot use up a later gameStarted.
           const auto received_seq = playnite_session_tracker().stamp();
           platf::playnite::game_stopped_deps_t deps;
           deps.get_guard = []() {
