@@ -55,37 +55,6 @@ namespace platf::playnite {
 
   // Time parsing helper moved to platf::playnite::sync
 
-  struct playnite_session_tracker_t {
-    std::mutex mtx;
-    std::string last_started_id;
-    bool seen_started {false};
-
-    void on_started(const std::string &id) {
-      std::scoped_lock lk(mtx);
-      last_started_id = id;
-      seen_started = true;
-    }
-
-    bool allow_stop(const std::string &id) {
-      std::scoped_lock lk(mtx);
-      if (!seen_started) {
-        return false;
-      }
-      if (!id.empty() && !last_started_id.empty() && id != last_started_id) {
-        return false;
-      }
-      seen_started = false;
-      last_started_id.clear();
-      return true;
-    }
-
-    void reset() {
-      std::scoped_lock lk(mtx);
-      seen_started = false;
-      last_started_id.clear();
-    }
-  };
-
   playnite_session_tracker_t &playnite_session_tracker() {
     static playnite_session_tracker_t tracker;
     return tracker;
@@ -666,6 +635,7 @@ namespace platf::playnite {
           // write_and_refresh_apps -> proc::refresh -> proc.running()) still runs here and can block on
           // the lifecycle lock.
           const auto received_at = std::chrono::steady_clock::now();
+          const auto received_seq = playnite_session_tracker().stamp();
           platf::playnite::game_stopped_deps_t deps;
           deps.get_guard = []() {
             const auto guard = proc::proc.active_session_guard();
@@ -678,8 +648,8 @@ namespace platf::playnite {
               guard.launch_started_at,
             };
           };
-          deps.allow_stop = [](const std::string &id) {
-            return playnite_session_tracker().allow_stop(id);
+          deps.allow_stop = [](const std::string &id, std::uint64_t seq) {
+            return playnite_session_tracker().allow_stop(id, seq);
           };
           deps.terminate_if_current = [](int app_id, std::chrono::steady_clock::time_point launch_started_at, std::string_view client_uuid) {
             BOOST_LOG(debug) << "Playnite: received gameStopped; terminating active process";
@@ -710,7 +680,7 @@ namespace platf::playnite {
                 break;  // Logged before the termination started, which can take a while.
             }
           };
-          platf::playnite::handle_game_stopped(std::move(deps), msg.status_game_id, received_at);
+          platf::playnite::handle_game_stopped(std::move(deps), msg.status_game_id, received_at, received_seq);
         }
       } else {
         // Truncate and log a preview of the raw message for diagnostics

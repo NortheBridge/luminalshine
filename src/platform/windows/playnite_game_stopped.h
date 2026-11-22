@@ -7,6 +7,7 @@
 // standard includes
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <mutex>
@@ -48,13 +49,74 @@ namespace platf::playnite {
   };
 
   /**
+   * @brief Remembers whether a `gameStarted` message was seen for the current session.
+   * @details Both `on_started` and `stamp` are called on the IPC pipe thread, in the order the messages arrive.
+   */
+  class playnite_session_tracker_t {
+  public:
+    /**
+     * @brief The next receipt number; strictly increasing, and never 0.
+     */
+    std::uint64_t stamp() {
+      std::scoped_lock lk(mtx_);
+      return ++counter_;
+    }
+
+    /**
+     * @brief Record a `gameStarted` message for `id`.
+     */
+    void on_started(const std::string &id) {
+      std::scoped_lock lk(mtx_);
+      last_started_id_ = id;
+      seen_started_ = true;
+      mark_seq_ = ++counter_;
+    }
+
+    /**
+     * @brief Consume the `gameStarted` mark for a `gameStopped` message.
+     * @param id The Playnite id carried by the message; may be empty.
+     * @param stop_seq The receipt number the message got from `stamp`.
+     * @return true when a matching mark existed and is now used up.
+     */
+    bool allow_stop(const std::string &id, std::uint64_t stop_seq) {
+      std::scoped_lock lk(mtx_);
+      (void) stop_seq;
+      if (!seen_started_) {
+        return false;
+      }
+      if (!id.empty() && !last_started_id_.empty() && id != last_started_id_) {
+        return false;
+      }
+      seen_started_ = false;
+      last_started_id_.clear();
+      return true;
+    }
+
+    /**
+     * @brief Forget the mark. The receipt numbers keep counting.
+     */
+    void reset() {
+      std::scoped_lock lk(mtx_);
+      seen_started_ = false;
+      last_started_id_.clear();
+    }
+
+  private:
+    std::mutex mtx_;  ///< Guards everything below; held only for field updates, never across a call out.
+    std::string last_started_id_;
+    bool seen_started_ {false};
+    std::uint64_t counter_ {0};  ///< The last receipt number handed out.
+    std::uint64_t mark_seq_ {0};  ///< The receipt number of the current mark.
+  };
+
+  /**
    * @brief The seams between the `gameStopped` policy and the process, tracker and thread it acts on.
    * @details Everything except `post` runs on the thread `post` hands the task to. `post` is the only
    *          member called on the IPC pipe thread, so it must not block on session state or join threads.
    */
   struct game_stopped_deps_t {
     std::function<game_stopped_guard_t()> get_guard;  ///< Snapshot of the active session.
-    std::function<bool(const std::string &)> allow_stop;  ///< Consumes the `gameStarted` mark; true when a stop may proceed.
+    std::function<bool(const std::string &, std::uint64_t)> allow_stop;  ///< Consumes the `gameStarted` mark; true when a stop may proceed.
     std::function<bool(int, std::chrono::steady_clock::time_point, std::string_view)> terminate_if_current;  ///< Terminates the exact launch generation; false when it is no longer current.
     std::function<void(std::function<void()>)> post;  ///< Hands a task to the stop worker.
     std::function<void(game_stopped_action_e, const game_stopped_guard_t &)> on_result;  ///< Optional; logging and tests. Gets the guard the decision was made on.
@@ -65,7 +127,8 @@ namespace platf::playnite {
       const game_stopped_deps_t &deps,
       const game_stopped_guard_t &guard,
       const std::string &game_id,
-      std::chrono::steady_clock::time_point received_at
+      std::chrono::steady_clock::time_point received_at,
+      std::uint64_t received_seq
     ) {
       if (!guard.has_active_app || !guard.uses_playnite) {
         return game_stopped_action_e::ignored_no_playnite_app;
@@ -73,7 +136,7 @@ namespace platf::playnite {
       if (!game_id.empty() && !guard.playnite_id.empty() && game_id != guard.playnite_id) {
         return game_stopped_action_e::ignored_other_game;
       }
-      if (!deps.allow_stop(game_id)) {
+      if (!deps.allow_stop(game_id, received_seq)) {
         return game_stopped_action_e::ignored_no_prior_start;
       }
       if (guard.launch_started_at.time_since_epoch().count() != 0 && received_at - guard.launch_started_at < kGameStoppedLaunchGuardWindow) {
@@ -95,15 +158,17 @@ namespace platf::playnite {
    * @param received_at When the message arrived on the IPC thread. The launch guard window is
    *                    measured from here, not from when the task runs, so a delayed task cannot
    *                    turn a message that arrived early in a launch into a termination.
+   * @param received_seq The receipt number the message got on the IPC thread.
    * @return What the message ended up doing.
    */
   inline game_stopped_action_e run_game_stopped(
     const game_stopped_deps_t &deps,
     const std::string &game_id,
-    std::chrono::steady_clock::time_point received_at
+    std::chrono::steady_clock::time_point received_at,
+    std::uint64_t received_seq
   ) {
     const game_stopped_guard_t guard = deps.get_guard();
-    const auto action = detail::decide_game_stopped(deps, guard, game_id, received_at);
+    const auto action = detail::decide_game_stopped(deps, guard, game_id, received_at, received_seq);
     if (deps.on_result) {
       deps.on_result(action, guard);
     }
@@ -118,15 +183,17 @@ namespace platf::playnite {
    * @param deps The process, tracker and thread seams; copied into the posted task.
    * @param game_id The Playnite id carried by the message.
    * @param received_at When the message arrived on the IPC thread.
+   * @param received_seq The receipt number the message got on the IPC thread.
    */
   inline void handle_game_stopped(
     game_stopped_deps_t deps,
     std::string game_id,
-    std::chrono::steady_clock::time_point received_at
+    std::chrono::steady_clock::time_point received_at,
+    std::uint64_t received_seq
   ) {
     auto post = deps.post;
-    post([deps = std::move(deps), game_id = std::move(game_id), received_at]() {
-      run_game_stopped(deps, game_id, received_at);
+    post([deps = std::move(deps), game_id = std::move(game_id), received_at, received_seq]() {
+      run_game_stopped(deps, game_id, received_at, received_seq);
     });
   }
 
