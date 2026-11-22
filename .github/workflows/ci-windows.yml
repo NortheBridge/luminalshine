@@ -19,6 +19,11 @@ on:
         required: false
         type: boolean
         default: false
+      server_release:
+        description: 'Build classification: 0 dev/unknown, 1 stable, 2 prerelease'
+        required: false
+        type: string
+        default: '0'
     # Secrets are forwarded from ci.yml via `secrets: inherit`. They are
     # declared optional here so the build still runs while SIGN_ARTIFACTS
     # is disabled (no values present) and only enforced inside the signing
@@ -407,6 +412,7 @@ jobs:
           MATRIX_MSYSTEM: ${{ matrix.msystem }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
           BUILD_VERSION: ${{ inputs.release_version }}
+          SUNSHINE_SERVER_RELEASE: ${{ inputs.nightly && '0' || inputs.server_release }}
           COMMIT: ${{ inputs.release_commit }}
           # Build with clang from msys2 ucrt64. -fms-extensions enables MSVC
           # SEH keywords (__try/__except/__finally) so the dxgi.dll AV
@@ -425,6 +431,9 @@ jobs:
           test -n "$release_date"
           export RELEASE_DATE="$release_date"
           echo "RELEASE_DATE=$RELEASE_DATE" >> "$GITHUB_ENV"
+          # One build-start timestamp, preserved across signing/packaging reconfiguration.
+          export SUNSHINE_SERVER_BUILD="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "SUNSHINE_SERVER_BUILD=$SUNSHINE_SERVER_BUILD" >> "$GITHUB_ENV"
           mkdir -p build
           cmake \
             -B build \
@@ -442,6 +451,12 @@ jobs:
             -DSUNSHINE_PUBLISHER_WEBSITE="https://northebridge.com/" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/NortheBridge/luminalshine"
           ninja -C build
+
+      - name: Test server discovery metadata
+        run: |
+          python tests/integration/test_server_metadata_build.py
+          cd build/tests
+          ./test_sunshine.exe --gtest_color=yes --gtest_filter='ServerInfoVersion.*'
 
       # WiX 7 toolchain restored above; the CMake driver invokes
       # `dotnet wix build` directly, so no env:WIX hint is needed.
@@ -634,6 +649,37 @@ jobs:
               throw "Packaging changed a signed payload: $($record.path). Refusing to publish a rebuilt or modified executable."
             }
           }
+
+      - name: Verify signed executables inside portable ZIP
+        if: env.SIGN_ARTIFACTS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archives = @(Get-ChildItem 'build/cpack_artifacts' -Filter '*.zip' -File)
+          if ($archives.Count -ne 1) { throw 'Expected exactly one portable ZIP.' }
+          $destination = Join-Path $env:RUNNER_TEMP ('portable-signature-check-' + [guid]::NewGuid())
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $destination
+          $records = @(Get-Content (Join-Path $env:RUNNER_TEMP 'luminalshine-signed-files.json') -Raw | ConvertFrom-Json)
+          $executables = @(Get-ChildItem $destination -Filter '*.exe' -Recurse -File)
+          $hosts = @($executables | Where-Object Name -eq 'luminalshine.exe')
+          if ($hosts.Count -ne 1) { throw 'Expected exactly one packaged LuminalShine host.' }
+          $checked = 0
+          foreach ($file in $executables) {
+            $sources = @($records | Where-Object { [IO.Path]::GetFileName($_.path) -ieq $file.Name })
+            # Third-party installers have their own signing policy. Validate every
+            # executable produced and signed by this build, including the host.
+            if ($sources.Count -eq 0) {
+              if ($file.Name -ieq 'luminalshine.exe') { throw 'Missing signed host hash.' }
+              continue
+            }
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            if ($hash -notin $sources.sha256) { throw "Portable ZIP changed signed payload: $($file.Name)" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid portable signature: $($file.Name): $($signature.Status)" }
+            Write-Host "Verified portable payload: $($file.Name)"
+            $checked++
+          }
+          Write-Host "Verified $checked signed portable executables against source hashes."
 
       - name: MSI upgrade-compatibility check
         if: inputs.nightly != true
@@ -901,12 +947,14 @@ jobs:
         # These suites are deterministic and require no display adapter. Keep
         # them blocking even though the broader hardware-sensitive run above is
         # advisory: release builds must preserve legacy client admission while
-        # adding PyroWave's separately negotiated format.
+        # adding PyroWave's separately negotiated format. The pairing suites
+        # are in the gate too: they drive the pairing handler in-process over
+        # loopback and need no display adapter or external network.
         shell: msys2 {0}
         working-directory: build/tests
         run: >-
           ./test_sunshine.exe --gtest_color=yes
-          --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*:ExactDeviceWindowRouter.*:DesktopGuardWin32.*:PlayniteGameStopped.*'
+          --gtest_filter='PyrowaveContract.*:PyrowavePacing.*:PyroWaveProbeProtocol.*:SessionLifecycleCoordinator.*:VideoPacketQueue.*:VideoPacketQos.*:Yuv444Fallback.*:PipeConnectRetry.*:VgdWorkerRingBinding.*:VgdRingLiveness.*:DisplayHelperSessionDeferral.*:RequestedDisplayMode.*:VirtualDisplayClientLabel.*:ExactDeviceWindowRouter.*:DesktopGuardWin32.*:PairingConcurrentClients.*:PairingRequestPolicy.*:*PairingTest.*:CrashHandlerMinidump.*:CrashDumpDirAcl.*:CrashBundleDumpDiscovery.*:PlayniteGameStopped.*'
 
       - name: Config consistency gate
         # Unlike the advisory run above, the config-consistency suite reads

@@ -21,7 +21,8 @@
  * records which capture backend each display open landed on, so the
  * fallback monitor can confirm the ring actually engaged and the
  * Troubleshooting page can show WGC-vs-VGD truth (nothing else in the
- * process records the winner).
+ * process records the winner). The isolated video worker relays its notes
+ * over IPC so the parent-owned API and fallback monitor see the real source.
  */
 #pragma once
 

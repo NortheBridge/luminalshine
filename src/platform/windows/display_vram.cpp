@@ -23,6 +23,7 @@ extern "C" {
 #include "src/gpu_recovery_policy.h"
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
+#include "src/nvenc/nvenc_av1_compat.h"
 #include "src/nvenc/nvenc_d3d11_native.h"
 #include "src/nvenc/nvenc_d3d12.h"
 #include "src/nvenc/nvenc_d3d11_on_cuda.h"
@@ -1214,6 +1215,24 @@ namespace platf::dxgi {
     bool init_encoder(const ::video::config_t &client_config, const ::video::sunshine_colorspace_t &colorspace) override {
       if (!nvenc_d3d) {
         return false;
+      }
+
+      if (nvenc_d3d12 && nvenc::av1_compatibility_state().use_d3d11(
+                            client_config.videoFormat, client_config.nvenc_av1_d3d11)) {
+        // No encoder session has been opened yet. Release the D3D12 graph
+        // normally and rebuild conversion on the conventional D3D11 device.
+        nvenc = nullptr;
+        nvenc_d3d12 = nullptr;
+        nvenc_d3d.reset();
+        base = d3d_base_encode_device {};
+        if (base.init(source_display, source_adapter.get(), source_pix_fmt)) return false;
+        multithread_t mt;
+        if (SUCCEEDED(base.device->QueryInterface(IID_ID3D11Multithread, (void **) &mt))) {
+          mt->SetMultithreadProtected(TRUE);
+        }
+        nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_native>(base.device.get());
+        nvenc = nvenc_d3d.get();
+        BOOST_LOG(info) << "NvEnc: AV1 retry using D3D11 compatibility transport";
       }
 
       auto nvenc_colorspace = nvenc::nvenc_colorspace_from_sunshine_colorspace(colorspace);

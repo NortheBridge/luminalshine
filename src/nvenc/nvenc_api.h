@@ -13,6 +13,11 @@ namespace nvenc::api {
     return major | (minor << 24);
   }
 
+  // GetMaxSupportedVersion uses major << 4 | minor, unlike NVENCAPI_VERSION.
+  constexpr uint32_t from_driver_max_version(uint32_t packed) {
+    return make_api_version(packed >> 4, packed & 0xFu);
+  }
+
   constexpr uint32_t compiled_api_version = make_api_version(NVENCAPI_MAJOR_VERSION, NVENCAPI_MINOR_VERSION);
 
   constexpr uint32_t api_version_major(uint32_t api_version) {

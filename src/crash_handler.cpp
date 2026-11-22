@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <exception>
+#include <fstream>
 #include <iterator>
 #include <string>
 #include <system_error>
@@ -26,6 +28,7 @@
 // clang-format on
 
   #include "platform/common.h"
+  #include "platform/windows/dir_acl.h"
 #endif
 
 namespace crash_handler {
@@ -111,6 +114,47 @@ namespace crash_handler {
       return dst;
     }
 
+    // Stack-only dump: thread stacks, the module list, thread info and the
+    // unloaded-module list. No heap, no globals, no module data. The only
+    // memory added back is the std::terminate message (see dump_callback).
+    constexpr auto kDumpType = static_cast<MINIDUMP_TYPE>(
+      MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules
+    );
+    static_assert(kDumpType == (MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules), "The crash bundle only accepts dumps of exactly this type (see is_stack_only_dump), so widening it must be deliberate.");
+
+    struct DumpCallbackState {
+      bool include_message;
+      bool added;
+    };
+
+    // Runs inside MiniDumpWriteDump, so like the filter it must not allocate or log.
+    BOOL CALLBACK dump_callback(PVOID param, const PMINIDUMP_CALLBACK_INPUT input, PMINIDUMP_CALLBACK_OUTPUT output) {
+      auto *state = static_cast<DumpCallbackState *>(param);
+      switch (input->CallbackType) {
+        case IncludeThreadCallback:
+        case IncludeModuleCallback:
+        case ThreadCallback:
+        case ThreadExCallback:
+        case ModuleCallback:
+          return TRUE;
+        case MemoryCallback:
+          // Called until it returns FALSE; each TRUE adds the region given.
+          if (state->include_message && !state->added) {
+            output->MemoryBase = static_cast<ULONG64>(reinterpret_cast<std::uintptr_t>(g_what_buffer));
+            output->MemorySize = sizeof(g_what_buffer);
+            state->added = true;
+            return TRUE;
+          }
+          return FALSE;
+        case CancelCallback:
+          output->Cancel = FALSE;
+          output->CheckCancel = FALSE;
+          return TRUE;
+        default:
+          return FALSE;
+      }
+    }
+
     LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS *exception_info) {
       // One shot. A second faulting thread — or a fault inside this filter
       // itself (the dump write, or Boost.Log against a corrupt heap) —
@@ -168,23 +212,7 @@ namespace crash_handler {
       BOOL dump_written = FALSE;
       const HANDLE dump_file = CreateFileW(g_dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
       if (dump_file != INVALID_HANDLE_VALUE) {
-        MINIDUMP_EXCEPTION_INFORMATION dump_exception {};
-        dump_exception.ThreadId = GetCurrentThreadId();
-        dump_exception.ExceptionPointers = exception_info;
-        dump_exception.ClientPointers = FALSE;
-
-        const auto dump_type = static_cast<MINIDUMP_TYPE>(
-          MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules
-        );
-        dump_written = MiniDumpWriteDump(
-          GetCurrentProcess(),
-          GetCurrentProcessId(),
-          dump_file,
-          dump_type,
-          &dump_exception,
-          nullptr,
-          nullptr
-        );
+        dump_written = write_minidump(dump_file, exception_info);
         if (!dump_written) {
           dump_error = GetLastError();
         }
@@ -216,6 +244,11 @@ namespace crash_handler {
         std::abort();
       }
 
+      // A caller can absorb kTerminateExceptionCode (see the reset before
+      // RaiseException), leaving its text behind. Clear it so it cannot end
+      // up in this dump when this terminate has no message of its own.
+      note_terminate_message(nullptr);
+
       const char *description = "no active exception";
       if (const auto active = std::current_exception()) {
         try {
@@ -223,8 +256,7 @@ namespace crash_handler {
         } catch (const std::exception &e) {
           // Copy into a static buffer: the caught object dies with this
           // catch block, and everything past here should avoid the heap.
-          std::strncpy(g_what_buffer, e.what(), sizeof(g_what_buffer) - 1);
-          g_what_buffer[sizeof(g_what_buffer) - 1] = '\0';
+          note_terminate_message(e.what());
           description = g_what_buffer;
         } catch (...) {
           description = "non-standard exception (no what() available)";
@@ -285,6 +317,58 @@ namespace crash_handler {
     g_exit_started.store(true, std::memory_order_release);
   }
 
+  void note_terminate_message(const char *message) noexcept {
+    std::memset(g_what_buffer, 0, sizeof(g_what_buffer));
+    if (message != nullptr) {
+      std::strncpy(g_what_buffer, message, sizeof(g_what_buffer) - 1);
+    }
+  }
+
+  bool write_minidump(void *file, _EXCEPTION_POINTERS *exception_info) {
+    MINIDUMP_EXCEPTION_INFORMATION dump_exception {};
+    dump_exception.ThreadId = GetCurrentThreadId();
+    dump_exception.ExceptionPointers = exception_info;
+    dump_exception.ClientPointers = FALSE;
+
+    // The message belongs in the dump only for the exception the terminate
+    // handler raises; any other crash may find stale text in the buffer.
+    DumpCallbackState callback_state {
+      exception_info != nullptr && exception_info->ExceptionRecord != nullptr && exception_info->ExceptionRecord->ExceptionCode == kTerminateExceptionCode,
+      false,
+    };
+    MINIDUMP_CALLBACK_INFORMATION callback {};
+    callback.CallbackRoutine = dump_callback;
+    callback.CallbackParam = &callback_state;
+
+    // Nothing may run after this call: the exception filter reads
+    // GetLastError() when it fails.
+    return MiniDumpWriteDump(
+             GetCurrentProcess(),
+             GetCurrentProcessId(),
+             static_cast<HANDLE>(file),
+             kDumpType,
+             &dump_exception,
+             nullptr,
+             &callback
+           ) != FALSE;
+  }
+
+  bool is_stack_only_dump(const std::filesystem::path &path) {
+    // dbghelp ORs the AVX state bit into the flags of dumps it writes on CPUs
+    // that have it. It only adds registers to the thread contexts, so it is
+    // allowed next to the requested types.
+    constexpr std::uint64_t kAllowedFlags = static_cast<std::uint64_t>(kDumpType) | MiniDumpWithAvxXStateContext;
+
+    MINIDUMP_HEADER header {};
+    std::ifstream in {path, std::ios::binary};
+    if (!in.read(reinterpret_cast<char *>(&header), sizeof(header))) {
+      return false;
+    }
+    return header.Signature == static_cast<ULONG32>(MINIDUMP_SIGNATURE) &&
+           (header.Version & 0xFFFF) == static_cast<ULONG32>(MINIDUMP_VERSION) &&
+           (header.Flags & ~kAllowedFlags) == 0;
+  }
+
   void init() {
     // Registered from main(), so it runs before any static destructor the CRT
     // registered during startup (reverse order) -- the handlers above stop
@@ -299,6 +383,13 @@ namespace crash_handler {
       if (ec) {
         BOOST_LOG(warning) << "Crash handler: could not create dump directory " << dump_dir.string()
                            << ": " << ec.message() << ". Minidumps will be unavailable (WER still applies).";
+        dump_dir.clear();
+      } else if (!platf::restrict_crash_dump_directory(dump_dir)) {
+        // Dump files are readable only by SYSTEM and Administrators; if the
+        // folder cannot be restricted, crash-handler dumps are disabled for
+        // this run.
+        BOOST_LOG(warning) << "Crash handler: could not restrict access to dump directory " << dump_dir.string()
+                           << ". Minidumps will be unavailable (WER still applies).";
         dump_dir.clear();
       }
     } catch (const std::exception &e) {

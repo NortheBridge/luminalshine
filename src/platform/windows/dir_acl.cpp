@@ -30,6 +30,10 @@ namespace platf {
       L"(A;OICI;FRFX;;;BU)"    // BUILTIN\Users read+execute, inherit
       L"S:(ML;OICI;NW;;;SI)";  // mandatory label, System IL, no-write-up
 
+    // Crash dump folder: SYSTEM and Administrators only, no label. OI+CI so
+    // dumps already in the folder and future ones inherit it.
+    constexpr auto kCrashDumpDirSddl = L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+
     struct security_descriptor_guard {
       PSECURITY_DESCRIPTOR sd {nullptr};
       ~security_descriptor_guard() {
@@ -45,14 +49,15 @@ namespace platf {
 
   }  // namespace
 
-  bool harden_config_directory(const std::filesystem::path &dir) {
+  /// Apply the DACL of @p sddl to @p dir as a protected one, and its SACL (label) when it has one.
+  static bool apply_sddl(const std::filesystem::path &dir, const wchar_t *sddl) {
     if (dir.empty()) {
       return false;
     }
 
     security_descriptor_guard sdg {};
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-          kConfigDirSddl,
+          sddl,
           SDDL_REVISION_1,
           &sdg.sd,
           nullptr)) {
@@ -111,6 +116,14 @@ namespace platf {
     }
 
     return ok;
+  }
+
+  bool harden_config_directory(const std::filesystem::path &dir) {
+    return apply_sddl(dir, kConfigDirSddl);
+  }
+
+  bool restrict_crash_dump_directory(const std::filesystem::path &dir) {
+    return apply_sddl(dir, kCrashDumpDirSddl);
   }
 
 }  // namespace platf

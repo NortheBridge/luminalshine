@@ -2,7 +2,7 @@
  * @file tests/unit/test_nvenc_api.cpp
  * @brief Test NVENC API version helpers.
  */
-#include "../tests_common.h"
+#include <gtest/gtest.h>
 
 #include <gmock/gmock.h>
 
@@ -157,4 +157,12 @@ TEST(NvencApiTest, EventParamsVersionBumpsAtSdk130AndStaysAtTwo) {
   EXPECT_EQ(nvenc::api::event_params_version(kApi12_2), nvenc::api::make_struct_version(kApi12_2, 1U));
   EXPECT_EQ(nvenc::api::event_params_version(kApi13_0), nvenc::api::make_struct_version(kApi13_0, 2U));
   EXPECT_EQ(nvenc::api::event_params_version(kApi13_1), nvenc::api::make_struct_version(kApi13_1, 2U));
+}
+
+TEST(NvencApiTest, DriverMaxVersionUsesPackedNibbleEncoding) {
+  EXPECT_EQ(nvenc::api::from_driver_max_version(0xD1), kApi13_1);
+  EXPECT_EQ(nvenc::api::version_string(nvenc::api::from_driver_max_version(209)), "13.1");
+  EXPECT_EQ(nvenc::api::from_driver_max_version(0xC2), kApi12_2);
+  EXPECT_FALSE(nvenc::api::driver_supports_api_version(nvenc::api::from_driver_max_version(0xD0), kApi13_1));
+  EXPECT_TRUE(nvenc::api::driver_supports_api_version(nvenc::api::from_driver_max_version(0xD1), kApi13_1));
 }
