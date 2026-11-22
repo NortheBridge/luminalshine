@@ -35,7 +35,7 @@ namespace {
   // does not hold the worker lock across a join fails the test instead of hanging it.
   constexpr auto kWaitLimit = 10s;
 
-  // The receipt number the fake-deps tests give a message; the fake allow_stop ignores its value.
+  // The receipt number the fake-deps tests give a message; the fake allow_stop records it but decides nothing on it.
   constexpr std::uint64_t kStopSeq = 5;
 
   /**
@@ -375,6 +375,35 @@ namespace {
 
     // And that stop used it up, exactly once.
     EXPECT_FALSE(tracker.allow_stop("game-a", tracker.stamp()));
+  }
+
+  TEST_F(PlayniteGameStopped, StaleGuardSnapshotCannotUseUpSuccessorStart) {
+    playnite_session_tracker_t tracker;
+
+    // The original launch, 10s before `launch`: its game starts and its stop is numbered on the IPC thread.
+    tracker.on_started("game-a");
+    const auto old_stop_seq = tracker.stamp();
+
+    // The worker takes its guard snapshot while the original launch is still current. The relaunch and
+    // the successor's gameStarted land right after the snapshot, before allow_stop runs.
+    auto old_guard = guard;
+    old_guard.launch_started_at = launch - 10s;
+    auto deps = make_deps_with(tracker);
+    deps.get_guard = [&]() {
+      ++get_guard_calls;
+      tracker.reset();
+      tracker.on_started("game-a");
+      return old_guard;
+    };
+
+    // Outside the old launch's guard window and terminate_if_current would agree, so only the receipt
+    // order keeps the old stop from using up the successor's mark.
+    EXPECT_EQ(run_game_stopped(deps, "game-a", launch - 1s, old_stop_seq), game_stopped_action_e::ignored_no_prior_start);
+    EXPECT_EQ(terminate_calls, 0);
+
+    // The successor's own stop still finds its mark.
+    EXPECT_EQ(run_game_stopped(make_deps_with(tracker), "game-a", launch + 3s, tracker.stamp()), game_stopped_action_e::terminated);
+    EXPECT_EQ(terminate_calls, 1);
   }
 
   TEST_F(PlayniteGameStopped, WorkerDropsPostWhileTaskInFlight) {
